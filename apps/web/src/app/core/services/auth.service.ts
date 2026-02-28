@@ -1,4 +1,4 @@
-import { Injectable } from '@angular/core';
+import { Injectable, OnDestroy } from '@angular/core';
 import { HttpInterceptorFn } from '@angular/common/http';
 import { BehaviorSubject, Observable } from 'rxjs';
 
@@ -10,8 +10,9 @@ export interface UserProfile {
 }
 
 @Injectable({ providedIn: 'root' })
-export class AuthService {
+export class AuthService implements OnDestroy {
   private keycloak: any = null;
+  private tokenRefreshInterval: ReturnType<typeof setInterval> | null = null;
 
   private readonly authenticatedSubject = new BehaviorSubject<boolean>(false);
   private readonly userProfileSubject = new BehaviorSubject<UserProfile | null>(null);
@@ -100,11 +101,23 @@ export class AuthService {
     }
   }
 
+  ngOnDestroy(): void {
+    if (this.tokenRefreshInterval) {
+      clearInterval(this.tokenRefreshInterval);
+      this.tokenRefreshInterval = null;
+    }
+  }
+
   private setupTokenRefresh(): void {
     if (!this.keycloak) return;
 
+    // Clear existing interval before creating new one
+    if (this.tokenRefreshInterval) {
+      clearInterval(this.tokenRefreshInterval);
+    }
+
     // Refresh token every 60 seconds
-    setInterval(async () => {
+    this.tokenRefreshInterval = setInterval(async () => {
       try {
         const refreshed = await this.keycloak.updateToken(70);
         if (refreshed) {

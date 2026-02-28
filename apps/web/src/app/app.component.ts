@@ -1,4 +1,5 @@
-import { Component, OnInit, signal, computed, ChangeDetectionStrategy } from '@angular/core';
+import { Component, OnInit, OnDestroy, DestroyRef, inject, signal, computed, ChangeDetectionStrategy } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { CommonModule } from '@angular/common';
 import { Router, RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
 import { WebSocketService, ConnectionStatus } from './core/services/websocket.service';
@@ -143,13 +144,14 @@ import { MapComponent } from './features/map/map.component';
     }
   `],
 })
-export class AppComponent implements OnInit {
+export class AppComponent implements OnInit, OnDestroy {
   connectionStatus = signal<ConnectionStatus>('disconnected');
   entityCount = signal<number>(0);
   unacknowledgedAlertCount = signal<number>(0);
   userProfile = signal<UserProfile | null>(null);
   currentTime = signal<string>('');
 
+  private readonly destroyRef = inject(DestroyRef);
   private timeInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -170,23 +172,36 @@ export class AppComponent implements OnInit {
     this.wsService.connect();
 
     // Subscribe to connection status
-    this.wsService.connectionStatus$.subscribe((status) => {
+    this.wsService.connectionStatus$.pipe(
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe((status) => {
       this.connectionStatus.set(status);
     });
 
     // Subscribe to user profile
-    this.authService.userProfile$.subscribe((profile) => {
+    this.authService.userProfile$.pipe(
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe((profile) => {
       this.userProfile.set(profile);
     });
 
     // Subscribe to alert count
-    this.alertService.unacknowledgedCount$.subscribe((count) => {
+    this.alertService.unacknowledgedCount$.pipe(
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe((count) => {
       this.unacknowledgedAlertCount.set(count);
     });
 
     // Update clock
     this.updateTime();
     this.timeInterval = setInterval(() => this.updateTime(), 1000);
+  }
+
+  ngOnDestroy(): void {
+    if (this.timeInterval) {
+      clearInterval(this.timeInterval);
+      this.timeInterval = null;
+    }
   }
 
   toggleSettings(): void {

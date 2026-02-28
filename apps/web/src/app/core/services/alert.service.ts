@@ -1,6 +1,6 @@
-import { Injectable } from '@angular/core';
+import { Injectable, OnDestroy } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
-import { BehaviorSubject, Observable, map, scan, startWith } from 'rxjs';
+import { BehaviorSubject, Observable, Subscription, map, scan, startWith } from 'rxjs';
 import { WebSocketService } from './websocket.service';
 import {
   Alert,
@@ -9,8 +9,9 @@ import {
 import { PaginatedResponse } from '../../shared/models/entity.model';
 
 @Injectable({ providedIn: 'root' })
-export class AlertService {
+export class AlertService implements OnDestroy {
   private readonly apiUrl = '/api/v1/alerts';
+  private readonly wsSubscription: Subscription;
 
   private readonly unacknowledgedCountSubject = new BehaviorSubject<number>(0);
 
@@ -27,7 +28,7 @@ export class AlertService {
     this.alertStream$ = this.wsService.alertStream$;
 
     // Track unacknowledged count from real-time alerts
-    this.wsService.alertStream$.pipe(
+    this.wsSubscription = this.wsService.alertStream$.pipe(
       scan((count, alert) => alert.acknowledged ? count : count + 1, 0),
       startWith(0),
     ).subscribe((count) => {
@@ -38,6 +39,10 @@ export class AlertService {
 
     // Also load initial count
     this.refreshUnacknowledgedCount();
+  }
+
+  ngOnDestroy(): void {
+    this.wsSubscription.unsubscribe();
   }
 
   getAlerts(query?: AlertQuery): Observable<PaginatedResponse<Alert>> {

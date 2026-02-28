@@ -1,6 +1,6 @@
-import { Injectable } from '@angular/core';
+import { Injectable, OnDestroy } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
-import { BehaviorSubject, Observable, tap } from 'rxjs';
+import { BehaviorSubject, Observable, Subscription, tap } from 'rxjs';
 import { WebSocketService } from './websocket.service';
 import {
   Entity,
@@ -10,9 +10,10 @@ import {
 } from '../../shared/models/entity.model';
 
 @Injectable({ providedIn: 'root' })
-export class EntityService {
+export class EntityService implements OnDestroy {
   private readonly apiUrl = '/api/v1/entities';
   private readonly searchUrl = '/api/v1/search';
+  private readonly wsSubscription: Subscription;
 
   private readonly entitiesSubject = new BehaviorSubject<Map<string, Entity>>(new Map());
 
@@ -29,9 +30,13 @@ export class EntityService {
     this.entityUpdates$ = this.wsService.entityUpdates$;
 
     // Subscribe to WebSocket entity updates and merge into state
-    this.wsService.entityUpdates$.subscribe((event) => {
+    this.wsSubscription = this.wsService.entityUpdates$.subscribe((event) => {
       this.mergeEntityEvent(event);
     });
+  }
+
+  ngOnDestroy(): void {
+    this.wsSubscription.unsubscribe();
   }
 
   getEntities(query?: EntityQuery): Observable<PaginatedResponse<Entity>> {
