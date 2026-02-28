@@ -99,7 +99,7 @@ export class TrackBatchService implements OnModuleDestroy {
       for (const point of pointsToFlush) {
         const idx = paramIndex.current;
         valuesClauses.push(
-          `($${idx}, $${idx + 1}, ST_SetSRID(ST_MakePoint($${idx + 2}, $${idx + 3}), 4326), $${idx + 4}, $${idx + 5}, $${idx + 6}, $${idx + 7}, $${idx + 8})`,
+          `($${idx}, $${idx + 1}, ST_SetSRID(ST_MakePoint($${idx + 2}, $${idx + 3}), 4326), $${idx + 4}, $${idx + 5}, $${idx + 6}, $${idx + 7})`,
         );
         params.push(
           point.entityId,
@@ -109,15 +109,14 @@ export class TrackBatchService implements OnModuleDestroy {
           point.heading,
           point.speedKnots,
           point.course,
-          point.source,
           point.timestamp,
         );
-        paramIndex.current += 9;
+        paramIndex.current += 8;
       }
 
       const sql = `
         INSERT INTO sentinel.track_points
-          ("entityId", "source", "position", "heading", "speedKnots", "course", "source", "timestamp")
+          ("entityId", "source", "position", "heading", "speedKnots", "course", "timestamp")
         VALUES ${valuesClauses.join(', ')}
       `;
 
