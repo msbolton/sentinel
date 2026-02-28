@@ -30,6 +30,7 @@ export class TrackBatchService implements OnModuleDestroy {
   private flushTimer: NodeJS.Timeout | null = null;
   private readonly BATCH_SIZE = 100;
   private readonly FLUSH_INTERVAL_MS = 1000;
+  private readonly MAX_BUFFER_SIZE = 10_000;
   private isFlushing = false;
 
   constructor(
@@ -54,6 +55,13 @@ export class TrackBatchService implements OnModuleDestroy {
    * Add a track point to the buffer. Will trigger a flush if buffer is full.
    */
   async addPoint(point: BufferedPoint): Promise<void> {
+    if (this.buffer.length >= this.MAX_BUFFER_SIZE) {
+      this.logger.warn(
+        `Buffer full (${this.MAX_BUFFER_SIZE} points), dropping incoming point`,
+      );
+      return;
+    }
+
     this.buffer.push(point);
 
     if (this.buffer.length >= this.BATCH_SIZE) {
@@ -128,8 +136,18 @@ export class TrackBatchService implements OnModuleDestroy {
         `Failed to flush ${pointsToFlush.length} track points`,
         error instanceof Error ? error.stack : String(error),
       );
-      // Re-add failed points to buffer for retry
-      this.buffer.unshift(...pointsToFlush);
+      // Re-add failed points to buffer for retry, respecting max size
+      const combinedSize = this.buffer.length + pointsToFlush.length;
+      if (combinedSize > this.MAX_BUFFER_SIZE) {
+        const dropped = combinedSize - this.MAX_BUFFER_SIZE;
+        this.logger.error(
+          `Buffer would exceed max size on retry; dropping ${dropped} oldest failed points`,
+        );
+        const keepCount = this.MAX_BUFFER_SIZE - this.buffer.length;
+        this.buffer.unshift(...pointsToFlush.slice(pointsToFlush.length - keepCount));
+      } else {
+        this.buffer.unshift(...pointsToFlush);
+      }
     } finally {
       this.isFlushing = false;
     }
