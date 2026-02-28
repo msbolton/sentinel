@@ -1,6 +1,6 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
-import { BehaviorSubject, Observable, Subscription, tap } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, Subscription, shareReplay, switchMap, tap } from 'rxjs';
 import { WebSocketService } from './websocket.service';
 import {
   Entity,
@@ -16,6 +16,11 @@ export class EntityService implements OnDestroy {
   private readonly wsSubscription: Subscription;
 
   private readonly entitiesSubject = new BehaviorSubject<Map<string, Entity>>(new Map());
+  private readonly querySubject = new Subject<EntityQuery | undefined>();
+  private readonly queryPipelineSubscription: Subscription;
+
+  /** Deduplicated entity query pipeline — each call cancels the previous in-flight request */
+  private readonly entityQuery$: Observable<PaginatedResponse<Entity>>;
 
   /** Current entities map, merged from REST + WebSocket updates */
   readonly currentEntities$ = this.entitiesSubject.asObservable();
@@ -33,13 +38,36 @@ export class EntityService implements OnDestroy {
     this.wsSubscription = this.wsService.entityUpdates$.subscribe((event) => {
       this.mergeEntityEvent(event);
     });
+
+    // Deduplicated entity query pipeline
+    this.entityQuery$ = this.querySubject.pipe(
+      switchMap((query) => {
+        const params = this.buildParams(query);
+        return this.http.get<PaginatedResponse<Entity>>(this.apiUrl, { params });
+      }),
+      tap((response) => {
+        const map = this.entitiesSubject.value;
+        response.data.forEach((entity) => map.set(entity.id, entity));
+        this.entitiesSubject.next(map);
+      }),
+      shareReplay({ bufferSize: 1, refCount: true }),
+    );
+
+    // Keep pipeline hot
+    this.queryPipelineSubscription = this.entityQuery$.subscribe();
   }
 
   ngOnDestroy(): void {
     this.wsSubscription.unsubscribe();
+    this.queryPipelineSubscription.unsubscribe();
   }
 
   getEntities(query?: EntityQuery): Observable<PaginatedResponse<Entity>> {
+    this.querySubject.next(query);
+    return this.entityQuery$;
+  }
+
+  private buildParams(query?: EntityQuery): HttpParams {
     let params = new HttpParams();
     if (query) {
       if (query.entityType) params = params.set('entityType', query.entityType);
@@ -53,20 +81,13 @@ export class EntityService implements OnDestroy {
       if (query.limit !== undefined) params = params.set('limit', query.limit.toString());
       if (query.offset !== undefined) params = params.set('offset', query.offset.toString());
     }
-
-    return this.http.get<PaginatedResponse<Entity>>(this.apiUrl, { params }).pipe(
-      tap((response) => {
-        const map = new Map(this.entitiesSubject.value);
-        response.data.forEach((entity) => map.set(entity.id, entity));
-        this.entitiesSubject.next(map);
-      }),
-    );
+    return params;
   }
 
   getEntity(id: string): Observable<Entity> {
     return this.http.get<Entity>(`${this.apiUrl}/${id}`).pipe(
       tap((entity) => {
-        const map = new Map(this.entitiesSubject.value);
+        const map = this.entitiesSubject.value;
         map.set(entity.id, entity);
         this.entitiesSubject.next(map);
       }),
@@ -76,7 +97,7 @@ export class EntityService implements OnDestroy {
   createEntity(dto: Partial<Entity>): Observable<Entity> {
     return this.http.post<Entity>(this.apiUrl, dto).pipe(
       tap((entity) => {
-        const map = new Map(this.entitiesSubject.value);
+        const map = this.entitiesSubject.value;
         map.set(entity.id, entity);
         this.entitiesSubject.next(map);
       }),
@@ -86,7 +107,7 @@ export class EntityService implements OnDestroy {
   updateEntity(id: string, dto: Partial<Entity>): Observable<Entity> {
     return this.http.patch<Entity>(`${this.apiUrl}/${id}`, dto).pipe(
       tap((entity) => {
-        const map = new Map(this.entitiesSubject.value);
+        const map = this.entitiesSubject.value;
         map.set(entity.id, entity);
         this.entitiesSubject.next(map);
       }),
@@ -107,7 +128,7 @@ export class EntityService implements OnDestroy {
   }
 
   private mergeEntityEvent(event: EntityEvent): void {
-    const map = new Map(this.entitiesSubject.value);
+    const map = this.entitiesSubject.value;
 
     switch (event.type) {
       case 'created':

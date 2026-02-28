@@ -19,8 +19,8 @@ export class WebSocketService implements OnDestroy {
   readonly connectionStatus$ = this.connectionStatusSubject.asObservable();
 
   connect(): void {
-    if (this.socket?.connected) {
-      return;
+    if (this.socket) {
+      return; // Already connected or reconnecting — prevent duplicate listeners
     }
 
     this.socket = io('/entities', {
