@@ -104,11 +104,11 @@ export class AgeService implements OnModuleInit {
     properties: Record<string, unknown>,
   ): Promise<unknown> {
     const setClause = Object.entries(properties)
-      .map(([key, value]) => `n.${key} = ${this.formatValue(value)}`)
+      .map(([key, value]) => `n.${this.escapePropertyName(key)} = ${this.formatValue(value)}`)
       .join(', ');
 
     const cypher = `
-      MATCH (n:${this.escapeLabel(label)} {${matchProperty}: ${this.formatValue(matchValue)}})
+      MATCH (n:${this.escapeLabel(label)} {${this.escapePropertyName(matchProperty)}: ${this.formatValue(matchValue)}})
       SET ${setClause}
       RETURN n
     `;
@@ -133,8 +133,8 @@ export class AgeService implements OnModuleInit {
     const propsString = this.formatProperties(properties);
 
     const cypher = `
-      MATCH (a:${this.escapeLabel(fromLabel)} {${fromMatchProp}: ${this.formatValue(fromMatchValue)}}),
-            (b:${this.escapeLabel(toLabel)} {${toMatchProp}: ${this.formatValue(toMatchValue)}})
+      MATCH (a:${this.escapeLabel(fromLabel)} {${this.escapePropertyName(fromMatchProp)}: ${this.formatValue(fromMatchValue)}}),
+            (b:${this.escapeLabel(toLabel)} {${this.escapePropertyName(toMatchProp)}: ${this.formatValue(toMatchValue)}})
       CREATE (a)-[r:${this.escapeLabel(label)} ${propsString}]->(b)
       RETURN r
     `;
@@ -152,7 +152,7 @@ export class AgeService implements OnModuleInit {
     matchValue: string,
   ): Promise<void> {
     const cypher = `
-      MATCH (n:${this.escapeLabel(label)} {${matchProperty}: ${this.formatValue(matchValue)}})
+      MATCH (n:${this.escapeLabel(label)} {${this.escapePropertyName(matchProperty)}: ${this.formatValue(matchValue)}})
       DETACH DELETE n
     `;
 
@@ -168,7 +168,7 @@ export class AgeService implements OnModuleInit {
     matchValue: string,
   ): Promise<void> {
     const cypher = `
-      MATCH ()-[r:${this.escapeLabel(label)} {${matchProperty}: ${this.formatValue(matchValue)}}]-()
+      MATCH ()-[r:${this.escapeLabel(label)} {${this.escapePropertyName(matchProperty)}: ${this.formatValue(matchValue)}}]-()
       DELETE r
     `;
 
@@ -190,7 +190,7 @@ export class AgeService implements OnModuleInit {
    */
   private formatProperties(properties: Record<string, unknown>): string {
     const entries = Object.entries(properties)
-      .map(([key, value]) => `${key}: ${this.formatValue(value)}`)
+      .map(([key, value]) => `${this.escapePropertyName(key)}: ${this.formatValue(value)}`)
       .join(', ');
 
     return `{${entries}}`;
@@ -226,5 +226,12 @@ export class AgeService implements OnModuleInit {
   private escapeLabel(label: string): string {
     // Only allow alphanumeric and underscore
     return label.replace(/[^a-zA-Z0-9_]/g, '_');
+  }
+
+  /**
+   * Escape a property name for safe use in Cypher.
+   */
+  private escapePropertyName(name: string): string {
+    return name.replace(/[^a-zA-Z0-9_]/g, '_');
   }
 }

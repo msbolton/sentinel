@@ -138,7 +138,7 @@ export class LinkService {
       }
 
       const cypher = `
-        MATCH path = (start:Entity {entity_id: '${centerEntityId}'})-[r*1..${maxDepth}]-(connected:Entity)
+        MATCH path = (start:Entity {entity_id: '${this.sanitizeUuid(centerEntityId)}'})-[r*1..${maxDepth}]-(connected:Entity)
         ${whereClause}
         RETURN path
       `;
@@ -175,7 +175,7 @@ export class LinkService {
     try {
       const cypher = `
         MATCH path = shortestPath(
-          (a:Entity {entity_id: '${entityId1}'})-[*]-(b:Entity {entity_id: '${entityId2}'})
+          (a:Entity {entity_id: '${this.sanitizeUuid(entityId1)}'})-[*]-(b:Entity {entity_id: '${this.sanitizeUuid(entityId2)}'})
         )
         RETURN path
       `;
@@ -348,6 +348,14 @@ export class LinkService {
         error instanceof Error ? error.message : String(error),
       );
     }
+  }
+
+  /**
+   * Sanitize a UUID string for safe interpolation into Cypher queries.
+   * Strips any characters that are not hex digits or dashes.
+   */
+  private sanitizeUuid(value: string): string {
+    return value.replace(/[^a-fA-F0-9-]/g, '');
   }
 
   /**
