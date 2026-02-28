@@ -53,6 +53,9 @@ libs/proto-gen/src/ts/
 libs/proto-gen/src/go/
 libs/proto-gen/src/python/
 
+# Worktrees
+.worktrees/
+
 # Nx
 .nx/
 
