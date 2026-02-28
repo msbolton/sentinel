@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Client } from '@opensearch-project/opensearch';
+import { DataSource } from 'typeorm';
 
 export interface EntityDocument {
   id: string;
@@ -63,7 +64,10 @@ export class OpenSearchService implements OnModuleInit {
   private readonly logger = new Logger(OpenSearchService.name);
   private client: Client;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly dataSource: DataSource,
+  ) {
     const host = this.configService.get<string>(
       'OPENSEARCH_HOST',
       'http://localhost:9200',
@@ -79,6 +83,7 @@ export class OpenSearchService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     await this.ensureIndex();
+    await this.warmIndex();
   }
 
   /**
@@ -151,6 +156,87 @@ export class OpenSearchService implements OnModuleInit {
       this.logger.error(
         'Failed to ensure OpenSearch index',
         error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  /**
+   * Warm the OpenSearch index from PostgreSQL on startup.
+   * Seeds data is written directly to Postgres, not via Kafka,
+   * so this ensures the search index has all existing entities.
+   */
+  async warmIndex(): Promise<void> {
+    try {
+      // Check current document count
+      const { body: countBody } = await this.client.count({ index: INDEX_NAME });
+      if (countBody.count > 0) {
+        this.logger.log(`Index ${INDEX_NAME} already has ${countBody.count} documents, skipping warm`);
+        return;
+      }
+
+      const rows = await this.dataSource.query(`
+        SELECT
+          id,
+          entity_type AS "entityType",
+          name,
+          description,
+          source,
+          classification,
+          ST_Y(position::geometry) AS latitude,
+          ST_X(position::geometry) AS longitude,
+          affiliations,
+          metadata,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          last_seen_at AS "lastSeenAt"
+        FROM sentinel.entities
+      `);
+
+      if (rows.length === 0) {
+        this.logger.log('Index warm: no entities found in Postgres');
+        return;
+      }
+
+      // Build bulk request body
+      const bulkBody: object[] = [];
+      for (const row of rows) {
+        bulkBody.push({ index: { _index: INDEX_NAME, _id: row.id } });
+
+        const doc: EntityDocument = {
+          id: row.id,
+          name: row.name,
+          entityType: row.entityType,
+          description: row.description ?? undefined,
+          source: row.source,
+          classification: row.classification,
+          affiliations: Array.isArray(row.affiliations) ? row.affiliations : [],
+          metadata: row.metadata ?? {},
+          createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+          updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
+          lastSeenAt: row.lastSeenAt instanceof Date ? row.lastSeenAt.toISOString() : row.lastSeenAt ?? undefined,
+        };
+
+        if (row.latitude != null && row.longitude != null) {
+          doc.position = { lat: parseFloat(row.latitude), lon: parseFloat(row.longitude) };
+        }
+
+        bulkBody.push(doc);
+      }
+
+      const { body: bulkResponse } = await this.client.bulk({
+        body: bulkBody,
+        refresh: 'wait_for',
+      });
+
+      if (bulkResponse.errors) {
+        const errorItems = bulkResponse.items.filter((item: { index?: { error?: unknown } }) => item.index?.error);
+        this.logger.warn(`Index warm: ${errorItems.length} documents had errors`);
+      }
+
+      this.logger.log(`Index warm: indexed ${rows.length} entities from Postgres into OpenSearch`);
+    } catch (error) {
+      this.logger.warn(
+        `Index warm failed (DB or OpenSearch may not be ready): ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
@@ -288,8 +374,8 @@ export class OpenSearchService implements OnModuleInit {
       });
 
       const hits = body.hits.hits.map((hit: { _id: string; _source: EntityDocument }) => ({
-        id: hit._id,
         ...hit._source,
+        id: hit._id,
       }));
 
       const entityTypes: Record<string, number> = {};
@@ -383,8 +469,8 @@ export class OpenSearchService implements OnModuleInit {
       });
 
       const hits = body.hits.hits.map((hit: { _id: string; _source: EntityDocument }) => ({
-        id: hit._id,
         ...hit._source,
+        id: hit._id,
       }));
 
       return {

@@ -72,7 +72,7 @@ export class SearchQueryDto {
 
 export class SuggestQueryDto {
   @IsString()
-  q: string;
+  q!: string;
 }
 
 export class NearbySearchDto {
@@ -80,19 +80,19 @@ export class NearbySearchDto {
   @IsNumber()
   @Min(-90)
   @Max(90)
-  lat: number;
+  lat!: number;
 
   @Type(() => Number)
   @IsNumber()
   @Min(-180)
   @Max(180)
-  lng: number;
+  lng!: number;
 
   @Type(() => Number)
   @IsNumber()
   @Min(0.1)
   @Max(20000)
-  radiusKm: number;
+  radiusKm!: number;
 
   @IsOptional()
   @IsString()
