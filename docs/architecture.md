@@ -152,7 +152,7 @@ sequenceDiagram
 - **JwtAuthGuard** validates tokens against Keycloak's JWKS endpoint
 - **Role-based access**: `@Roles('analyst', 'admin')` decorator requires at least one matching role
 - **Classification-based access**: `@Classification('SECRET')` decorator enforces a hierarchical clearance check (UNCLASSIFIED < CONFIDENTIAL < SECRET < TOP_SECRET)
-- **Dev mode**: When `NODE_ENV !== 'production'`, a `DevAuthGuard` injects a synthetic user with full access (username: `dev-operator`, roles: `analyst, operator, admin`, clearance: `TOP_SECRET`)
+- **Dev mode**: When `NODE_ENV !== 'production'`, `JwtAuthGuard` short-circuits JWT validation and injects a synthetic user with full access (username: `dev-operator`, roles: `analyst, operator, admin`, clearance: `TOP_SECRET`)
 
 ## Shared Libraries
 

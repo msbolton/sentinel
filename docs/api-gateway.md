@@ -114,7 +114,7 @@ The `JwtAuthGuard` (at `modules/auth/jwt-auth.guard.ts`) validates tokens, then 
 
 ### Development (Auth Bypass)
 
-When `NODE_ENV !== 'production'`, the `DevAuthGuard` (`modules/auth/dev-auth.guard.ts`) replaces `JwtAuthGuard` via a provider factory in `AuthModule`. It injects a synthetic user:
+When `NODE_ENV !== 'production'`, `JwtAuthGuard` short-circuits JWT validation and injects a synthetic dev user into the request:
 
 ```json
 {
@@ -145,9 +145,8 @@ apps/api-gateway/src/
 ├── app.module.ts                     # Root module (TypeORM, CQRS, features)
 └── modules/
     ├── auth/
-    │   ├── auth.module.ts            # Conditional JwtAuthGuard/DevAuthGuard
-    │   ├── jwt-auth.guard.ts         # Production JWT + RBAC + classification guard
-    │   ├── dev-auth.guard.ts         # Dev-mode auth bypass
+    │   ├── auth.module.ts            # Passport + guard providers
+    │   ├── jwt-auth.guard.ts         # JWT + RBAC + classification guard (dev bypass built-in)
     │   ├── jwt.strategy.ts           # Passport JWT strategy (Keycloak JWKS)
     │   └── decorators/
     │       ├── roles.decorator.ts    # @Roles() decorator
