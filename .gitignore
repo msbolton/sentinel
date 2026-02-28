@@ -1,0 +1,62 @@
+# Dependencies
+node_modules/
+.pnp.*
+
+# Build outputs
+dist/
+tmp/
+out-tsc/
+.angular/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Testing
+coverage/
+.nyc_output/
+
+# Docker
+docker-compose.override.yml
+
+# Go
+apps/ingest-service/vendor/
+apps/ingest-service/server
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
+
+# Generated protobuf code (regenerate with `make proto`)
+libs/proto-gen/src/ts/
+libs/proto-gen/src/go/
+libs/proto-gen/src/python/
+
+# Nx
+.nx/
+
+# Secrets
+*.pem
+*.key
+credentials.json

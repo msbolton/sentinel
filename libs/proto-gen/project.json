@@ -1,0 +1,24 @@
+{
+  "name": "proto-gen",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/proto-gen/src",
+  "projectType": "library",
+  "targets": {
+    "generate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "make proto",
+        "cwd": "."
+      }
+    },
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/libs/proto-gen",
+        "main": "libs/proto-gen/src/index.ts",
+        "tsConfig": "libs/proto-gen/tsconfig.lib.json"
+      }
+    }
+  }
+}

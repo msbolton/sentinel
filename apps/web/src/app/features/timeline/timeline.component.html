@@ -1,0 +1,49 @@
+<div class="timeline-strip">
+  <!-- Playback Controls -->
+  <div class="playback-controls">
+    <button class="playback-btn" (click)="skipBackward()" title="Skip Backward">
+      &#9194;
+    </button>
+    <button
+      class="playback-btn play-btn"
+      (click)="togglePlayback()"
+      [title]="playing() ? 'Pause' : 'Play'">
+      {{ playing() ? '&#9646;&#9646;' : '&#9654;' }}
+    </button>
+    <button class="playback-btn" (click)="skipForward()" title="Skip Forward">
+      &#9193;
+    </button>
+    <button class="playback-btn" (click)="resetTime()" title="Reset to Now">
+      &#9632;
+    </button>
+  </div>
+
+  <!-- Speed Selector -->
+  <div class="speed-control">
+    <span class="speed-label">Speed:</span>
+    @for (s of speeds; track s) {
+      <button
+        class="speed-btn"
+        [class.active]="speed() === s"
+        (click)="setSpeed(s)">
+        {{ s }}x
+      </button>
+    }
+  </div>
+
+  <!-- Timeline Visualization -->
+  <div class="timeline-canvas-container">
+    <canvas #timelineCanvas class="timeline-canvas"></canvas>
+    <div #brushOverlay class="brush-overlay"></div>
+  </div>
+
+  <!-- Time Display -->
+  <div class="time-display">
+    <span class="time-current mono">{{ formatTime(currentTime()) }}</span>
+    @if (brushStart() && brushEnd()) {
+      <span class="time-range mono">
+        {{ formatTime(brushStart()!) }} &mdash; {{ formatTime(brushEnd()!) }}
+      </span>
+    }
+  </div>
+</div>

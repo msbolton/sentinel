@@ -1,0 +1,144 @@
+<div class="panel search-panel">
+  <div class="panel-header">
+    <h2>Search Entities</h2>
+    <span class="text-xs text-muted font-mono" *ngIf="totalResults() > 0">
+      {{ totalResults() }} results
+    </span>
+  </div>
+
+  <div class="search-input-container">
+    <div class="search-input-wrapper">
+      <span class="search-icon">&#128269;</span>
+      <input
+        type="text"
+        class="search-input"
+        placeholder="Search entities by name, description, metadata..."
+        [value]="searchQuery()"
+        (input)="onSearchInput($any($event.target).value)"
+        autofocus
+      />
+      @if (searchQuery()) {
+        <button class="search-clear" (click)="onSearchInput('')">&times;</button>
+      }
+    </div>
+  </div>
+
+  <!-- Filters -->
+  <div class="filter-section">
+    <div class="filter-header">
+      <span class="filter-title">Filters</span>
+      @if (hasActiveFilters()) {
+        <button class="btn btn-ghost btn-sm" (click)="clearFilters()">Clear all</button>
+      }
+    </div>
+
+    <!-- Entity Type Chips -->
+    <div class="filter-group">
+      <label class="filter-group-label">Entity Type</label>
+      <div class="chip-row">
+        @for (type of entityTypes; track type) {
+          <button
+            class="filter-chip"
+            [class.active]="selectedEntityTypes().has(type)"
+            [style.--chip-color]="getEntityTypeColor(type)"
+            (click)="toggleEntityType(type)">
+            {{ type }}
+          </button>
+        }
+      </div>
+    </div>
+
+    <!-- Source Chips -->
+    <div class="filter-group">
+      <label class="filter-group-label">Source</label>
+      <div class="chip-row">
+        @for (source of entitySources; track source) {
+          <button
+            class="filter-chip"
+            [class.active]="selectedSources().has(source)"
+            (click)="toggleSource(source)">
+            {{ source }}
+          </button>
+        }
+      </div>
+    </div>
+
+    <!-- Classification -->
+    <div class="filter-group">
+      <label class="filter-group-label">Classification</label>
+      <div class="chip-row">
+        @for (cls of classifications; track cls) {
+          <button
+            class="filter-chip classification"
+            [class.active]="selectedClassification() === cls"
+            [ngClass]="cls"
+            (click)="setClassification(selectedClassification() === cls ? null : cls)">
+            {{ cls }}
+          </button>
+        }
+      </div>
+    </div>
+
+    <!-- Geo-bounded -->
+    <label class="geo-toggle">
+      <input type="checkbox" [checked]="geoBounded()" (change)="toggleGeoBounded()" />
+      <span>Search within current viewport</span>
+    </label>
+  </div>
+
+  <!-- Results -->
+  <div class="panel-content results-list">
+    @if (loading()) {
+      <div class="loading-indicator">
+        <div class="loading-spinner"></div>
+        <span>Searching...</span>
+      </div>
+    }
+
+    @if (!loading() && results().length === 0 && searchQuery()) {
+      <div class="empty-state">
+        <span class="empty-icon">&#128269;</span>
+        <p>No entities found matching "{{ searchQuery() }}"</p>
+      </div>
+    }
+
+    @if (!loading() && results().length === 0 && !searchQuery()) {
+      <div class="empty-state">
+        <span class="empty-icon">&#128269;</span>
+        <p>Enter a search term to find entities</p>
+      </div>
+    }
+
+    @for (entity of results(); track entity.id) {
+      <div class="entity-card" (click)="selectEntity(entity)">
+        <div class="entity-card-header">
+          <span
+            class="entity-dot"
+            [style.background]="getEntityTypeColor(entity.entityType)"
+          ></span>
+          <span class="entity-name">{{ entity.name }}</span>
+          <span class="chip chip-entity-type" [ngClass]="entity.entityType">
+            {{ entity.entityType }}
+          </span>
+        </div>
+        @if (entity.description) {
+          <p class="entity-description">{{ entity.description }}</p>
+        }
+        <div class="entity-card-meta">
+          <span class="meta-item">
+            <span class="meta-label">SRC:</span> {{ entity.source }}
+          </span>
+          <span class="chip chip-classification" [ngClass]="entity.classification">
+            {{ entity.classification }}
+          </span>
+          @if (entity.position) {
+            <span class="meta-item mono">
+              {{ entity.position.latitude | number:'1.2-2' }},
+              {{ entity.position.longitude | number:'1.2-2' }}
+            </span>
+          }
+        </div>
+      </div>
+    }
+  </div>
+</div>

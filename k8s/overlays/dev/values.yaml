@@ -1,0 +1,70 @@
+# Development environment overrides
+apiGateway:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+entityService:
+  replicaCount: 1
+
+trackService:
+  replicaCount: 1
+
+searchService:
+  replicaCount: 1
+
+linkAnalysisService:
+  replicaCount: 1
+
+alertService:
+  replicaCount: 1
+
+ingestService:
+  replicaCount: 1
+
+analyticsService:
+  replicaCount: 1
+
+web:
+  replicaCount: 1
+  ingress:
+    enabled: true
+    hosts:
+      - host: sentinel.dev.local
+        paths:
+          - path: /
+            pathType: Prefix
+
+postgresql:
+  primary:
+    persistence:
+      size: 10Gi
+
+kafka:
+  controller:
+    replicaCount: 1
+  provisioning:
+    topics:
+      - name: events.entity.position
+        partitions: 3
+        replicationFactor: 1
+      - name: events.entity.created
+        partitions: 3
+        replicationFactor: 1
+      - name: events.entity.updated
+        partitions: 3
+        replicationFactor: 1
+      - name: events.track.point
+        partitions: 3
+        replicationFactor: 1
+      - name: alerts.geofence
+        partitions: 1
+        replicationFactor: 1
+      - name: alerts.anomaly
+        partitions: 1
+        replicationFactor: 1

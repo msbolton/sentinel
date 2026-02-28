@@ -1,0 +1,9 @@
+version: v2
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: ../libs/proto-gen/src/go
+    opt: paths=source_relative
+  - remote: buf.build/community/timostamm-protobuf-ts
+    out: ../libs/proto-gen/src/ts
+  - local: protoc-gen-python_betterproto
+    out: ../libs/proto-gen/src/python

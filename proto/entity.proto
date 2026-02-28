@@ -1,0 +1,200 @@
+syntax = "proto3";
+
+package sentinel.v1;
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+option go_package = "buf.build/sentinel/api/sentinel/v1";
+
+// EntityType enumerates the broad categories of trackable entities within
+// the SENTINEL platform.
+enum EntityType {
+  ENTITY_TYPE_UNKNOWN = 0;
+  ENTITY_TYPE_PERSON = 1;
+  ENTITY_TYPE_VEHICLE = 2;
+  ENTITY_TYPE_VESSEL = 3;
+  ENTITY_TYPE_AIRCRAFT = 4;
+  ENTITY_TYPE_FACILITY = 5;
+  ENTITY_TYPE_EQUIPMENT = 6;
+  ENTITY_TYPE_UNIT = 7;
+  ENTITY_TYPE_SIGNAL = 8;
+  ENTITY_TYPE_CYBER = 9;
+}
+
+// EntitySource identifies the intelligence discipline that produced or
+// reported an entity.
+enum EntitySource {
+  ENTITY_SOURCE_UNSPECIFIED = 0;
+  ENTITY_SOURCE_HUMINT = 1;
+  ENTITY_SOURCE_SIGINT = 2;
+  ENTITY_SOURCE_GEOINT = 3;
+  ENTITY_SOURCE_OSINT = 4;
+  ENTITY_SOURCE_MASINT = 5;
+  ENTITY_SOURCE_CYBER = 6;
+  ENTITY_SOURCE_MANUAL = 7;
+}
+
+// Entity represents a discrete object of intelligence interest that can be
+// tracked, analyzed, and linked to other entities on the SENTINEL platform.
+message Entity {
+  // Unique identifier for the entity.
+  string id = 1;
+
+  // The broad category of this entity.
+  EntityType entity_type = 2;
+
+  // Human-readable display name.
+  string name = 3;
+
+  // Free-text description or summary of the entity.
+  string description = 4;
+
+  // The intelligence discipline that originated this entity.
+  EntitySource source = 5;
+
+  // Security classification level assigned to this entity.
+  Classification classification = 6;
+
+  // Last known geospatial position.
+  Coordinate position = 7;
+
+  // Current heading in degrees true north (0-360).
+  double heading = 8;
+
+  // Current speed in nautical knots.
+  double speed_knots = 9;
+
+  // Current course over ground in degrees true north (0-360).
+  double course = 10;
+
+  // Arbitrary key-value metadata associated with this entity.
+  map<string, string> metadata = 11;
+
+  // Affiliation labels (e.g., organization names, faction identifiers).
+  repeated string affiliations = 12;
+
+  // MIL-STD-2525D symbol identification code for rendering on tactical displays.
+  string mil_std_2525d_symbol = 13;
+
+  // Timestamp when the entity was first created.
+  google.protobuf.Timestamp created_at = 14;
+
+  // Timestamp when the entity was last modified.
+  google.protobuf.Timestamp updated_at = 15;
+
+  // Timestamp when the entity was last observed by a sensor or source.
+  google.protobuf.Timestamp last_seen_at = 16;
+}
+
+// EntityEventType describes the kind of mutation that occurred on an entity.
+enum EntityEventType {
+  ENTITY_EVENT_TYPE_UNSPECIFIED = 0;
+  ENTITY_EVENT_TYPE_CREATED = 1;
+  ENTITY_EVENT_TYPE_UPDATED = 2;
+  ENTITY_EVENT_TYPE_DELETED = 3;
+  ENTITY_EVENT_TYPE_POSITION_UPDATE = 4;
+}
+
+// EntityEvent is published whenever an entity is created, modified, removed,
+// or has its position updated. Used for real-time streaming to subscribers.
+message EntityEvent {
+  // Unique event identifier.
+  string event_id = 1;
+
+  // The full entity snapshot at the time of the event.
+  Entity entity = 2;
+
+  // The type of mutation that triggered this event.
+  EntityEventType event_type = 3;
+
+  // When the event occurred.
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// CreateEntityRequest contains the fields required to register a new entity.
+message CreateEntityRequest {
+  EntityType entity_type = 1;
+  string name = 2;
+  string description = 3;
+  EntitySource source = 4;
+  Classification classification = 5;
+  Coordinate position = 6;
+  double heading = 7;
+  double speed_knots = 8;
+  double course = 9;
+  map<string, string> metadata = 10;
+  repeated string affiliations = 11;
+  string mil_std_2525d_symbol = 12;
+}
+
+// CreateEntityResponse returns the newly created entity.
+message CreateEntityResponse {
+  Entity entity = 1;
+}
+
+// UpdateEntityRequest carries the fields to update on an existing entity.
+// Only non-default fields are applied (partial update semantics).
+message UpdateEntityRequest {
+  // The ID of the entity to update.
+  string id = 1;
+
+  EntityType entity_type = 2;
+  string name = 3;
+  string description = 4;
+  EntitySource source = 5;
+  Classification classification = 6;
+  Coordinate position = 7;
+  double heading = 8;
+  double speed_knots = 9;
+  double course = 10;
+  map<string, string> metadata = 11;
+  repeated string affiliations = 12;
+  string mil_std_2525d_symbol = 13;
+}
+
+// UpdateEntityResponse returns the entity after the update has been applied.
+message UpdateEntityResponse {
+  Entity entity = 1;
+}
+
+// GetEntityRequest retrieves a single entity by its identifier.
+message GetEntityRequest {
+  string id = 1;
+}
+
+// GetEntityResponse returns the requested entity.
+message GetEntityResponse {
+  Entity entity = 1;
+}
+
+// QueryEntitiesRequest provides spatial, type, source, classification,
+// and free-text filters for searching entities.
+message QueryEntitiesRequest {
+  // Restrict results to entities within this geographic bounding box.
+  BoundingBox bounding_box = 1;
+
+  // Filter by one or more entity types.
+  repeated EntityType entity_types = 2;
+
+  // Filter by one or more intelligence sources.
+  repeated EntitySource sources = 3;
+
+  // Maximum classification level the caller is authorized to view.
+  Classification classification_max = 4;
+
+  // Free-text search query matched against name, description, and metadata.
+  string text_query = 5;
+
+  // Pagination parameters.
+  Pagination pagination = 6;
+}
+
+// QueryEntitiesResponse contains the matching entities and pagination info.
+message QueryEntitiesResponse {
+  // The entities matching the query filters.
+  repeated Entity entities = 1;
+
+  // Pagination details including total count.
+  Pagination pagination = 2;
+}

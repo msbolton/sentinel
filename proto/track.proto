@@ -1,0 +1,143 @@
+syntax = "proto3";
+
+package sentinel.v1;
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+import "entity.proto";
+
+option go_package = "buf.build/sentinel/api/sentinel/v1";
+
+// TrackPoint represents a single time-stamped position observation for a
+// tracked entity. These are the atomic building blocks of track history.
+message TrackPoint {
+  // Unique identifier for this track point.
+  string id = 1;
+
+  // The entity this point belongs to.
+  string entity_id = 2;
+
+  // The observed geospatial position.
+  Coordinate position = 3;
+
+  // Heading in degrees true north (0-360) at time of observation.
+  double heading = 4;
+
+  // Speed in nautical knots at time of observation.
+  double speed_knots = 5;
+
+  // Course over ground in degrees true north (0-360).
+  double course = 6;
+
+  // When this position was observed.
+  google.protobuf.Timestamp timestamp = 7;
+
+  // The intelligence source that produced this observation.
+  EntitySource source = 8;
+}
+
+// TrackSegment groups a contiguous series of track points for a single entity
+// over a defined time window. Gaps in observation produce separate segments.
+message TrackSegment {
+  // Unique identifier for this segment.
+  string segment_id = 1;
+
+  // The entity this segment belongs to.
+  string entity_id = 2;
+
+  // Ordered sequence of track points within this segment.
+  repeated TrackPoint points = 3;
+
+  // Timestamp of the first point in the segment.
+  google.protobuf.Timestamp start_time = 4;
+
+  // Timestamp of the last point in the segment.
+  google.protobuf.Timestamp end_time = 5;
+}
+
+// RecordTrackPointRequest submits a new position observation for an entity.
+message RecordTrackPointRequest {
+  // The entity to record the point against.
+  string entity_id = 1;
+
+  // The observed position.
+  Coordinate position = 2;
+
+  // Heading in degrees true north.
+  double heading = 3;
+
+  // Speed in nautical knots.
+  double speed_knots = 4;
+
+  // Course over ground in degrees true north.
+  double course = 5;
+
+  // When the observation was made. If unset, server time is used.
+  google.protobuf.Timestamp timestamp = 6;
+
+  // The intelligence source that produced the observation.
+  EntitySource source = 7;
+}
+
+// RecordTrackPointResponse returns the persisted track point.
+message RecordTrackPointResponse {
+  TrackPoint point = 1;
+}
+
+// GetTrackHistoryRequest retrieves historical track data for an entity
+// within a time range.
+message GetTrackHistoryRequest {
+  // The entity whose track history to retrieve.
+  string entity_id = 1;
+
+  // Start of the time range (inclusive).
+  google.protobuf.Timestamp start_time = 2;
+
+  // End of the time range (inclusive).
+  google.protobuf.Timestamp end_time = 3;
+
+  // Maximum number of points to return. The server may downsample if the
+  // raw data exceeds this limit.
+  int32 max_points = 4;
+
+  // When true, apply line simplification (e.g., Ramer-Douglas-Peucker) to
+  // reduce point density while preserving track shape.
+  bool simplify = 5;
+}
+
+// GetTrackHistoryResponse returns track segments and a total point count.
+message GetTrackHistoryResponse {
+  // Track segments within the requested time range.
+  repeated TrackSegment segments = 1;
+
+  // Total number of raw points before any simplification or limit was applied.
+  int32 total_points = 2;
+}
+
+// TrackReplayRequest initiates a server-streamed replay of historical
+// track points at an adjustable speed.
+message TrackReplayRequest {
+  // The entity whose track to replay.
+  string entity_id = 1;
+
+  // Start of the replay window.
+  google.protobuf.Timestamp start_time = 2;
+
+  // End of the replay window.
+  google.protobuf.Timestamp end_time = 3;
+
+  // Playback speed multiplier (e.g., 1.0 = real-time, 10.0 = 10x speed).
+  double speed_multiplier = 4;
+}
+
+// TrackReplayEvent is a single frame emitted during a track replay stream.
+message TrackReplayEvent {
+  // The entity being replayed.
+  string entity_id = 1;
+
+  // The track point for this replay frame.
+  TrackPoint point = 2;
+
+  // The simulated wall-clock timestamp for this frame in replay time.
+  google.protobuf.Timestamp replay_timestamp = 3;
+}

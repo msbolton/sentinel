@@ -1,0 +1,58 @@
+{
+  "name": "web",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/web/src",
+  "projectType": "application",
+  "targets": {
+    "build": {
+      "executor": "@angular-devkit/build-angular:application",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/apps/web",
+        "index": "apps/web/src/index.html",
+        "browser": "apps/web/src/main.ts",
+        "polyfills": ["zone.js"],
+        "tsConfig": "apps/web/tsconfig.app.json",
+        "assets": [
+          "apps/web/src/favicon.ico",
+          "apps/web/src/assets",
+          { "glob": "**/*", "input": "node_modules/cesium/Build/Cesium/Workers", "output": "/assets/cesium/Workers" },
+          { "glob": "**/*", "input": "node_modules/cesium/Build/Cesium/ThirdParty", "output": "/assets/cesium/ThirdParty" },
+          { "glob": "**/*", "input": "node_modules/cesium/Build/Cesium/Assets", "output": "/assets/cesium/Assets" },
+          { "glob": "**/*", "input": "node_modules/cesium/Build/Cesium/Widgets", "output": "/assets/cesium/Widgets" }
+        ],
+        "styles": [
+          "node_modules/cesium/Build/Cesium/Widgets/widgets.css",
+          "apps/web/src/styles.scss"
+        ],
+        "scripts": []
+      },
+      "configurations": {
+        "production": {
+          "budgets": [
+            { "type": "initial", "maximumWarning": "2mb", "maximumError": "5mb" }
+          ],
+          "outputHashing": "all"
+        },
+        "development": {
+          "optimization": false,
+          "extractLicenses": false,
+          "sourceMap": true
+        }
+      },
+      "defaultConfiguration": "production"
+    },
+    "serve": {
+      "executor": "@angular-devkit/build-angular:dev-server",
+      "configurations": {
+        "production": { "buildTarget": "web:build:production" },
+        "development": { "buildTarget": "web:build:development" }
+      },
+      "defaultConfiguration": "development",
+      "options": {
+        "port": 4200,
+        "proxyConfig": "apps/web/proxy.conf.json"
+      }
+    }
+  }
+}

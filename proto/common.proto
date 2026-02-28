@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package sentinel.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "buf.build/sentinel/api/sentinel/v1";
+
+// UUID is a wrapper around a string-encoded UUID value.
+// Used to provide a typed alias for entity identifiers across services.
+message UUID {
+  string value = 1;
+}
+
+// Coordinate represents a geospatial position in a given coordinate system.
+message Coordinate {
+  // Latitude in decimal degrees (WGS84).
+  double latitude = 1;
+
+  // Longitude in decimal degrees (WGS84).
+  double longitude = 2;
+
+  // Altitude above mean sea level in meters. Optional.
+  double altitude_meters = 3;
+
+  // The coordinate reference system. Defaults to "EPSG:4326" (WGS84) if unset.
+  string coordinate_system = 4;
+}
+
+// BoundingBox defines a geographic extent using north/south/east/west bounds.
+message BoundingBox {
+  // Northern latitude boundary in decimal degrees.
+  double north = 1;
+
+  // Southern latitude boundary in decimal degrees.
+  double south = 2;
+
+  // Eastern longitude boundary in decimal degrees.
+  double east = 3;
+
+  // Western longitude boundary in decimal degrees.
+  double west = 4;
+}
+
+// Timestamp wraps google.protobuf.Timestamp for consistent usage across
+// all SENTINEL services.
+message Timestamp {
+  google.protobuf.Timestamp value = 1;
+}
+
+// Pagination carries paging parameters for list/query requests and responses.
+message Pagination {
+  // The current page number (1-indexed).
+  int32 page = 1;
+
+  // The number of items per page.
+  int32 page_size = 2;
+
+  // The total number of items matching the query. Set in responses only.
+  int32 total = 3;
+}
+
+// Classification represents the security classification level of an entity
+// or piece of intelligence.
+enum Classification {
+  CLASSIFICATION_UNSPECIFIED = 0;
+  CLASSIFICATION_UNCLASSIFIED = 1;
+  CLASSIFICATION_CONFIDENTIAL = 2;
+  CLASSIFICATION_SECRET = 3;
+  CLASSIFICATION_TOP_SECRET = 4;
+}

@@ -1,0 +1,116 @@
+<div class="panel alerts-panel">
+  <div class="panel-header">
+    <div class="header-left">
+      <h2>Alerts</h2>
+      @if (unacknowledgedCount() > 0) {
+        <span class="unack-badge">{{ unacknowledgedCount() }}</span>
+      }
+    </div>
+    <button class="btn btn-ghost btn-sm" (click)="loadAlerts()">
+      &#8635; Refresh
+    </button>
+  </div>
+
+  <!-- Filters -->
+  <div class="alert-filters">
+    <!-- Severity filter -->
+    <div class="filter-row">
+      <span class="filter-label">Severity</span>
+      <div class="chip-row">
+        <button
+          class="severity-chip"
+          [class.active]="selectedSeverity() === null"
+          (click)="filterBySeverity(null)">
+          All
+        </button>
+        @for (severity of severities; track severity) {
+          <button
+            class="severity-chip"
+            [class.active]="selectedSeverity() === severity"
+            [ngClass]="getSeverityClass(severity)"
+            (click)="filterBySeverity(severity)">
+            {{ severity }}
+          </button>
+        }
+      </div>
+    </div>
+
+    <!-- Show acknowledged toggle -->
+    <label class="ack-toggle">
+      <input
+        type="checkbox"
+        [checked]="showAcknowledged()"
+        (change)="toggleShowAcknowledged()"
+      />
+      <span>Show acknowledged</span>
+    </label>
+  </div>
+
+  <!-- Alert List -->
+  <div class="panel-content alert-list">
+    @if (loading()) {
+      <div class="loading-indicator">
+        <div class="loading-spinner"></div>
+        <span>Loading alerts...</span>
+      </div>
+    }
+
+    @if (!loading() && alerts().length === 0) {
+      <div class="empty-state">
+        <span class="empty-icon">&#128276;</span>
+        <p>No alerts to display</p>
+        <p class="text-xs text-muted">Alerts will appear here in real-time</p>
+      </div>
+    }
+
+    @for (alert of alerts(); track alert.id) {
+      <div
+        class="alert-card"
+        [ngClass]="getSeverityClass(alert.severity)"
+        [class.acknowledged]="alert.acknowledged"
+        (click)="flyToAlert(alert)">
+        <div class="alert-severity-bar"></div>
+        <div class="alert-content">
+          <div class="alert-header">
+            <span class="alert-severity-icon" [ngClass]="getSeverityClass(alert.severity)">
+              {{ getSeverityIcon(alert.severity) }}
+            </span>
+            <span class="alert-title">{{ alert.title }}</span>
+            <span class="alert-time mono">{{ getTimeAgo(alert.createdAt) }}</span>
+          </div>
+          <p class="alert-message">{{ alert.message }}</p>
+          <div class="alert-meta">
+            <span class="alert-type mono">{{ alert.alertType }}</span>
+            @if (alert.entityName) {
+              <span class="alert-entity">
+                <span class="meta-dot"></span>
+                {{ alert.entityName }}
+              </span>
+            }
+          </div>
+          <div class="alert-actions">
+            @if (!alert.acknowledged) {
+              <button
+                class="btn btn-secondary btn-sm"
+                (click)="acknowledgeAlert(alert, $event)">
+                Acknowledge
+              </button>
+            } @else {
+              <span class="ack-label mono">
+                &#10003; Acknowledged
+                @if (alert.acknowledgedBy) {
+                  by {{ alert.acknowledgedBy }}
+                }
+              </span>
+            }
+            @if (alert.position) {
+              <button class="btn btn-ghost btn-sm" (click)="flyToAlert(alert)">
+                &#127758; Go to location
+              </button>
+            }
+          </div>
+        </div>
+      </div>
+    }
+  </div>
+</div>

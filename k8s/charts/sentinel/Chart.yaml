@@ -1,0 +1,38 @@
+apiVersion: v2
+name: sentinel
+description: SENTINEL - Geospatial Intelligence Platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - geospatial
+  - intelligence
+  - c2
+  - cesium
+maintainers:
+  - name: SENTINEL Team
+dependencies:
+  - name: postgresql
+    version: "15.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: postgresql.enabled
+  - name: redis
+    version: "19.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: redis.enabled
+  - name: kafka
+    version: "28.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: kafka.enabled
+  - name: opensearch
+    version: "2.x.x"
+    repository: "https://opensearch-project.github.io/helm-charts/"
+    condition: opensearch.enabled
+  - name: keycloak
+    version: "21.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: keycloak.enabled
+  - name: minio
+    version: "14.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: minio.enabled

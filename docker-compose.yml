@@ -1,0 +1,899 @@
+# =============================================================================
+# SENTINEL - Full Application Stack
+# =============================================================================
+# Complete geospatial intelligence platform: infrastructure + application services.
+#
+# Usage:
+#   docker compose up -d                    # start everything
+#   docker compose up -d postgres redis     # start specific services
+#   docker compose down -v                  # tear down with volume removal
+#   docker compose logs -f api-gateway      # follow logs for a service
+#
+# For infrastructure only, use: docker compose -f docker-compose.infra.yml up -d
+# =============================================================================
+
+name: sentinel
+
+# =============================================================================
+# INFRASTRUCTURE SERVICES
+# =============================================================================
+# Included inline rather than via `extends` to ensure full compatibility
+# with all Docker Compose versions and avoid file-reference issues.
+# =============================================================================
+
+services:
+  # ===========================================================================
+  # PostgreSQL 16 + PostGIS 3.4 + TimescaleDB + Apache AGE
+  # ===========================================================================
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: sentinel-postgres
+    hostname: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sentinel
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: sentinel_dev
+      POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=en-US"
+      TIMESCALEDB_TELEMETRY: "off"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./config/postgres/init-extensions.sql:/docker-entrypoint-initdb.d/10-init-extensions.sql:ro
+      - ./config/postgres/install-timescaledb-age.sh:/docker-entrypoint-initdb.d/00-install-timescaledb-age.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinel -d sentinel"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "2.0"
+        reservations:
+          memory: 512m
+          cpus: "0.5"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # Keycloak PostgreSQL (dedicated instance)
+  # ===========================================================================
+  keycloak-db:
+    image: postgres:16-alpine
+    container_name: sentinel-keycloak-db
+    hostname: keycloak-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: keycloak_dev
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
+        reservations:
+          memory: 128m
+          cpus: "0.1"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # Redis 7 (with AOF + RDB persistence)
+  # ===========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: sentinel-redis
+    hostname: redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --tcp-keepalive 60
+      --timeout 300
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+          cpus: "1.0"
+        reservations:
+          memory: 128m
+          cpus: "0.1"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # Apache Kafka 3.7 (KRaft mode - no Zookeeper)
+  # ===========================================================================
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: sentinel-kafka
+    hostname: kafka
+    restart: unless-stopped
+    environment:
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_PROCESS_ROLES: "broker,controller"
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9094"
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CFG_LISTENERS: "EXTERNAL://:9092,INTERNAL://:9093,CONTROLLER://:9094"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "EXTERNAL://localhost:9092,INTERNAL://kafka:9093"
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      KAFKA_KRAFT_CLUSTER_ID: "sentinel-kafka-cluster-001"
+      KAFKA_CFG_LOG_DIRS: "/bitnami/kafka/data"
+      KAFKA_CFG_NUM_PARTITIONS: "6"
+      KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: "1"
+      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_CFG_LOG_RETENTION_HOURS: "168"
+      KAFKA_CFG_LOG_SEGMENT_BYTES: "1073741824"
+      KAFKA_CFG_LOG_RETENTION_CHECK_INTERVAL_MS: "300000"
+      KAFKA_CFG_MESSAGE_MAX_BYTES: "10485760"
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "false"
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    volumes:
+      - kafka-data:/bitnami/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9093 > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "2.0"
+        reservations:
+          memory: 512m
+          cpus: "0.25"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # Kafka Topic Initialization (runs once then exits)
+  # ===========================================================================
+  kafka-init:
+    image: bitnami/kafka:3.7
+    container_name: sentinel-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./config/kafka/create-topics.sh:/scripts/create-topics.sh:ro
+    entrypoint: ["/bin/bash", "/scripts/create-topics.sh"]
+    environment:
+      KAFKA_BROKER: "kafka:9093"
+      REPLICATION_FACTOR: "1"
+    restart: "no"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # OpenSearch 2.x (single-node, security disabled for development)
+  # ===========================================================================
+  opensearch:
+    image: opensearchproject/opensearch:2.17.1
+    container_name: sentinel-opensearch
+    hostname: opensearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx1g
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - bootstrap.memory_lock=true
+      - cluster.name=sentinel-search
+      - node.name=sentinel-os-node1
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "2.0"
+        reservations:
+          memory: 1g
+          cpus: "0.5"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # Keycloak 24 (dev mode, PostgreSQL backend)
+  # ===========================================================================
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: sentinel-keycloak
+    hostname: keycloak
+    restart: unless-stopped
+    command: start-dev
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak_dev
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin_dev
+      KC_HOSTNAME_STRICT: "false"
+      KC_PROXY: edge
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_FEATURES: "token-exchange,admin-fine-grained-authz"
+    ports:
+      - "8080:8080"
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200'"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1536m
+          cpus: "1.5"
+        reservations:
+          memory: 512m
+          cpus: "0.25"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # GeoServer 2.25
+  # ===========================================================================
+  geoserver:
+    image: kartoza/geoserver:2.25.2
+    container_name: sentinel-geoserver
+    hostname: geoserver
+    restart: unless-stopped
+    environment:
+      GEOSERVER_ADMIN_USER: admin
+      GEOSERVER_ADMIN_PASSWORD: geoserver_dev
+      GEOSERVER_DATA_DIR: /opt/geoserver/data_dir
+      INITIAL_MEMORY: 512m
+      MAXIMUM_MEMORY: 1536m
+      STABLE_EXTENSIONS: "importer,vectortiles"
+      COMMUNITY_EXTENSIONS: ""
+      GEOSERVER_CSRF_DISABLED: "true"
+      ROOT_WEBAPP_REDIRECT: "true"
+      HTTP_PORT: 8600
+    ports:
+      - "8600:8600"
+    volumes:
+      - geoserver-data:/opt/geoserver/data_dir
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8600/geoserver/web/ || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "1.5"
+        reservations:
+          memory: 512m
+          cpus: "0.25"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # MinIO (S3-compatible object storage)
+  # ===========================================================================
+  minio:
+    image: minio/minio:latest
+    container_name: sentinel-minio
+    hostname: minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: sentinel_minio
+      MINIO_ROOT_PASSWORD: minio_dev_secret
+      MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
+        reservations:
+          memory: 256m
+          cpus: "0.1"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # MinIO Bucket Initialization (runs once then exits)
+  # ===========================================================================
+  minio-init:
+    image: minio/mc:latest
+    container_name: sentinel-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set sentinel http://minio:9000 sentinel_minio minio_dev_secret;
+      mc mb --ignore-existing sentinel/sentinel-imagery;
+      mc mb --ignore-existing sentinel/sentinel-reports;
+      mc mb --ignore-existing sentinel/sentinel-tiles;
+      mc mb --ignore-existing sentinel/sentinel-exports;
+      mc anonymous set download sentinel/sentinel-tiles;
+      echo 'MinIO buckets initialized successfully.';
+      "
+    restart: "no"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  #
+  #  APPLICATION SERVICES
+  #
+  # ===========================================================================
+
+  # ===========================================================================
+  # API Gateway (NestJS - Node 22)
+  # ===========================================================================
+  api-gateway:
+    build:
+      context: .
+      dockerfile: ./apps/api-gateway/Dockerfile
+    image: sentinel/api-gateway:dev
+    container_name: sentinel-api-gateway
+    hostname: api-gateway
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: "3000"
+      # Database
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: sentinel
+      DATABASE_USER: sentinel
+      DATABASE_PASSWORD: sentinel_dev
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      # Kafka
+      KAFKA_BROKERS: kafka:9093
+      # OpenSearch
+      OPENSEARCH_URL: http://opensearch:9200
+      # Keycloak
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: sentinel
+      # Downstream services
+      ENTITY_SERVICE_URL: http://entity-service:3001
+      TRACK_SERVICE_URL: http://track-service:3002
+      SEARCH_SERVICE_URL: http://search-service:3003
+      LINK_ANALYSIS_SERVICE_URL: http://link-analysis-service:3004
+      ALERT_SERVICE_URL: http://alert-service:3005
+      INGEST_SERVICE_URL: http://ingest-service:4000
+      ANALYTICS_SERVICE_URL: http://analytics-service:5000
+      # MinIO / S3
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: sentinel_minio
+      S3_SECRET_KEY: minio_dev_secret
+      S3_REGION: us-east-1
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+        reservations:
+          memory: 128m
+          cpus: "0.1"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # Entity Service (NestJS - Node 22)
+  # ===========================================================================
+  entity-service:
+    build:
+      context: .
+      dockerfile: ./apps/entity-service/Dockerfile
+    image: sentinel/entity-service:dev
+    container_name: sentinel-entity-service
+    hostname: entity-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: "3001"
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: sentinel
+      DATABASE_USER: sentinel
+      DATABASE_PASSWORD: sentinel_dev
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      KAFKA_BROKERS: kafka:9093
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3001/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+        reservations:
+          memory: 128m
+          cpus: "0.1"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # Track Service (NestJS - Node 22)
+  # ===========================================================================
+  track-service:
+    build:
+      context: .
+      dockerfile: ./apps/track-service/Dockerfile
+    image: sentinel/track-service:dev
+    container_name: sentinel-track-service
+    hostname: track-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: "3002"
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: sentinel
+      DATABASE_USER: sentinel
+      DATABASE_PASSWORD: sentinel_dev
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      KAFKA_BROKERS: kafka:9093
+    ports:
+      - "3002:3002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3002/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+        reservations:
+          memory: 128m
+          cpus: "0.1"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # Search Service (NestJS - Node 22)
+  # ===========================================================================
+  search-service:
+    build:
+      context: .
+      dockerfile: ./apps/search-service/Dockerfile
+    image: sentinel/search-service:dev
+    container_name: sentinel-search-service
+    hostname: search-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: "3003"
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: sentinel
+      DATABASE_USER: sentinel
+      DATABASE_PASSWORD: sentinel_dev
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      KAFKA_BROKERS: kafka:9093
+      OPENSEARCH_URL: http://opensearch:9200
+    ports:
+      - "3003:3003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3003/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+        reservations:
+          memory: 128m
+          cpus: "0.1"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # Link Analysis Service (NestJS - Node 22)
+  # ===========================================================================
+  link-analysis-service:
+    build:
+      context: .
+      dockerfile: ./apps/link-analysis-service/Dockerfile
+    image: sentinel/link-analysis-service:dev
+    container_name: sentinel-link-analysis-service
+    hostname: link-analysis-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: "3004"
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: sentinel
+      DATABASE_USER: sentinel
+      DATABASE_PASSWORD: sentinel_dev
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      KAFKA_BROKERS: kafka:9093
+    ports:
+      - "3004:3004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3004/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+        reservations:
+          memory: 128m
+          cpus: "0.1"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # Alert Service (NestJS - Node 22)
+  # ===========================================================================
+  alert-service:
+    build:
+      context: .
+      dockerfile: ./apps/alert-service/Dockerfile
+    image: sentinel/alert-service:dev
+    container_name: sentinel-alert-service
+    hostname: alert-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: "3005"
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: sentinel
+      DATABASE_USER: sentinel
+      DATABASE_PASSWORD: sentinel_dev
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      KAFKA_BROKERS: kafka:9093
+    ports:
+      - "3005:3005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3005/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+        reservations:
+          memory: 128m
+          cpus: "0.1"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # Ingest Service (Go)
+  # ===========================================================================
+  ingest-service:
+    build:
+      context: ./services/ingest-service
+      dockerfile: Dockerfile
+      # Go service lives outside the Nx monorepo under services/
+    image: sentinel/ingest-service:dev
+    container_name: sentinel-ingest-service
+    hostname: ingest-service
+    restart: unless-stopped
+    environment:
+      APP_ENV: development
+      PORT: "4000"
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: sentinel
+      DATABASE_USER: sentinel
+      DATABASE_PASSWORD: sentinel_dev
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      KAFKA_BROKERS: kafka:9093
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: sentinel_minio
+      S3_SECRET_KEY: minio_dev_secret
+      S3_BUCKET_RAW: sentinel-imagery
+      S3_REGION: us-east-1
+      S3_USE_PATH_STYLE: "true"
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "2.0"
+        reservations:
+          memory: 128m
+          cpus: "0.1"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # Analytics Service (Python)
+  # ===========================================================================
+  analytics-service:
+    build:
+      context: ./services/analytics-service
+      dockerfile: Dockerfile
+      # Python service lives outside the Nx monorepo under services/
+    image: sentinel/analytics-service:dev
+    container_name: sentinel-analytics-service
+    hostname: analytics-service
+    restart: unless-stopped
+    environment:
+      APP_ENV: development
+      PORT: "5000"
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: sentinel
+      DATABASE_USER: sentinel
+      DATABASE_PASSWORD: sentinel_dev
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      KAFKA_BROKERS: kafka:9093
+      OPENSEARCH_URL: http://opensearch:9200
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: sentinel_minio
+      S3_SECRET_KEY: minio_dev_secret
+      S3_REGION: us-east-1
+      S3_USE_PATH_STYLE: "true"
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/health')\" 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "2.0"
+        reservations:
+          memory: 256m
+          cpus: "0.25"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # Web UI (Angular)
+  # ===========================================================================
+  web:
+    build:
+      context: .
+      dockerfile: ./apps/web/Dockerfile
+    image: sentinel/web:dev
+    container_name: sentinel-web
+    hostname: web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      API_GATEWAY_URL: http://api-gateway:3000
+      KEYCLOAK_URL: http://localhost:8080
+      KEYCLOAK_REALM: sentinel
+      GEOSERVER_URL: http://localhost:8600/geoserver
+    ports:
+      - "4200:4200"
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4200/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+        reservations:
+          memory: 128m
+          cpus: "0.1"
+    networks:
+      - sentinel-network
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  postgres-data:
+    driver: local
+    name: sentinel-postgres-data
+  keycloak-db-data:
+    driver: local
+    name: sentinel-keycloak-db-data
+  redis-data:
+    driver: local
+    name: sentinel-redis-data
+  kafka-data:
+    driver: local
+    name: sentinel-kafka-data
+  opensearch-data:
+    driver: local
+    name: sentinel-opensearch-data
+  geoserver-data:
+    driver: local
+    name: sentinel-geoserver-data
+  minio-data:
+    driver: local
+    name: sentinel-minio-data
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  sentinel-network:
+    driver: bridge
+    name: sentinel-network
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

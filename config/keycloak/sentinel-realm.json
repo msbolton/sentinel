@@ -1,0 +1,145 @@
+{
+  "realm": "sentinel",
+  "enabled": true,
+  "displayName": "SENTINEL Intelligence Platform",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "waitIncrementSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "maxDeltaTimeSeconds": 43200,
+  "failureFactor": 5,
+  "defaultRoles": ["sentinel-viewer"],
+  "roles": {
+    "realm": [
+      {
+        "name": "sentinel-admin",
+        "description": "Full system administration access"
+      },
+      {
+        "name": "sentinel-analyst",
+        "description": "Analyst with read/write access to entities, alerts, and analytics"
+      },
+      {
+        "name": "sentinel-viewer",
+        "description": "Read-only access to entities and map"
+      },
+      {
+        "name": "sentinel-operator",
+        "description": "Operator with entity management and alert acknowledgment"
+      },
+      {
+        "name": "classification-ts",
+        "description": "Access to TOP SECRET classified data"
+      },
+      {
+        "name": "classification-s",
+        "description": "Access to SECRET classified data"
+      },
+      {
+        "name": "classification-c",
+        "description": "Access to CONFIDENTIAL classified data"
+      },
+      {
+        "name": "classification-u",
+        "description": "Access to UNCLASSIFIED data only"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "sentinel-web",
+      "name": "SENTINEL Web Application",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "redirectUris": ["http://localhost:4200/*", "https://sentinel.local/*"],
+      "webOrigins": ["http://localhost:4200", "https://sentinel.local"],
+      "defaultClientScopes": ["openid", "profile", "email", "roles"],
+      "protocol": "openid-connect"
+    },
+    {
+      "clientId": "sentinel-api",
+      "name": "SENTINEL API Service",
+      "enabled": true,
+      "publicClient": false,
+      "bearerOnly": true,
+      "protocol": "openid-connect"
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "email": "admin@sentinel.local",
+      "firstName": "System",
+      "lastName": "Administrator",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin",
+          "temporary": true
+        }
+      ],
+      "realmRoles": [
+        "sentinel-admin",
+        "sentinel-analyst",
+        "classification-ts"
+      ]
+    },
+    {
+      "username": "analyst",
+      "enabled": true,
+      "email": "analyst@sentinel.local",
+      "firstName": "Demo",
+      "lastName": "Analyst",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "analyst",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["sentinel-analyst", "classification-s"]
+    },
+    {
+      "username": "viewer",
+      "enabled": true,
+      "email": "viewer@sentinel.local",
+      "firstName": "Demo",
+      "lastName": "Viewer",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "viewer",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["sentinel-viewer", "classification-u"]
+    }
+  ],
+  "scopeMappings": [
+    {
+      "client": "sentinel-web",
+      "roles": [
+        "sentinel-admin",
+        "sentinel-analyst",
+        "sentinel-viewer",
+        "sentinel-operator",
+        "classification-ts",
+        "classification-s",
+        "classification-c",
+        "classification-u"
+      ]
+    }
+  ]
+}

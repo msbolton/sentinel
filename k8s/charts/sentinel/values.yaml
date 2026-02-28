@@ -1,0 +1,270 @@
+# SENTINEL Helm Chart Values
+# Override these for each environment (dev, staging, prod)
+
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+# -- Application Services --
+
+apiGateway:
+  replicaCount: 2
+  image:
+    repository: sentinel/api-gateway
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  env:
+    DATABASE_HOST: "{{ .Release.Name }}-postgresql"
+    REDIS_HOST: "{{ .Release.Name }}-redis-master"
+    KAFKA_BROKERS: "{{ .Release.Name }}-kafka:9092"
+    KEYCLOAK_URL: "http://{{ .Release.Name }}-keycloak"
+
+entityService:
+  replicaCount: 2
+  image:
+    repository: sentinel/entity-service
+    tag: latest
+  service:
+    port: 3001
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+trackService:
+  replicaCount: 2
+  image:
+    repository: sentinel/track-service
+    tag: latest
+  service:
+    port: 3002
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+searchService:
+  replicaCount: 1
+  image:
+    repository: sentinel/search-service
+    tag: latest
+  service:
+    port: 3003
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+linkAnalysisService:
+  replicaCount: 1
+  image:
+    repository: sentinel/link-analysis-service
+    tag: latest
+  service:
+    port: 3004
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+alertService:
+  replicaCount: 2
+  image:
+    repository: sentinel/alert-service
+    tag: latest
+  service:
+    port: 3005
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+ingestService:
+  replicaCount: 3
+  image:
+    repository: sentinel/ingest-service
+    tag: latest
+  service:
+    port: 4000
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 256Mi
+    limits:
+      cpu: 4000m
+      memory: 512Mi
+
+analyticsService:
+  replicaCount: 1
+  image:
+    repository: sentinel/analytics-service
+    tag: latest
+  service:
+    port: 5000
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+
+web:
+  replicaCount: 2
+  image:
+    repository: sentinel/web
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: true
+    className: nginx
+    hosts:
+      - host: sentinel.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+# -- Infrastructure --
+
+postgresql:
+  enabled: true
+  auth:
+    database: sentinel
+    username: sentinel
+    password: sentinel_dev
+  primary:
+    initdb:
+      scripts:
+        init-extensions.sql: |
+          CREATE EXTENSION IF NOT EXISTS postgis;
+          CREATE EXTENSION IF NOT EXISTS postgis_topology;
+          CREATE EXTENSION IF NOT EXISTS timescaledb;
+          CREATE EXTENSION IF NOT EXISTS age;
+          LOAD 'age';
+          SET search_path = ag_catalog, "$user", public;
+          SELECT create_graph('entity_graph');
+          CREATE SCHEMA IF NOT EXISTS sentinel;
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+    persistence:
+      size: 50Gi
+
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+kafka:
+  enabled: true
+  kraft:
+    enabled: true
+  controller:
+    replicaCount: 3
+  listeners:
+    client:
+      protocol: PLAINTEXT
+  provisioning:
+    enabled: true
+    topics:
+      - name: events.entity.position
+        partitions: 12
+        replicationFactor: 3
+      - name: events.entity.created
+        partitions: 6
+        replicationFactor: 3
+      - name: events.entity.updated
+        partitions: 6
+        replicationFactor: 3
+      - name: events.track.point
+        partitions: 12
+        replicationFactor: 3
+      - name: alerts.geofence
+        partitions: 3
+        replicationFactor: 3
+      - name: alerts.anomaly
+        partitions: 3
+        replicationFactor: 3
+
+opensearch:
+  enabled: true
+  replicas: 1
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+
+keycloak:
+  enabled: true
+  auth:
+    adminUser: admin
+    adminPassword: admin
+  extraEnvVars:
+    - name: KEYCLOAK_EXTRA_ARGS
+      value: "--import-realm"
+
+minio:
+  enabled: true
+  auth:
+    rootUser: minio
+    rootPassword: minio123
+  defaultBuckets: "sentinel-imagery,sentinel-reports,sentinel-tiles,sentinel-exports"
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+
+# -- Monitoring --
+
+monitoring:
+  enabled: false
+  prometheus:
+    enabled: false
+  grafana:
+    enabled: false
+  loki:
+    enabled: false
+  jaeger:
+    enabled: false

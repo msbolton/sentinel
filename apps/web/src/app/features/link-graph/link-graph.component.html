@@ -1,0 +1,112 @@
+<div class="panel link-graph-panel">
+  <div class="panel-header">
+    <h2>Link Analysis</h2>
+    @if (graphLoaded()) {
+      <span class="graph-stats mono">
+        {{ nodeCount() }} nodes / {{ edgeCount() }} edges
+      </span>
+    }
+  </div>
+
+  <!-- Search & Controls -->
+  <div class="graph-controls">
+    <div class="input-group">
+      <input
+        type="text"
+        class="entity-input"
+        placeholder="Enter entity ID to analyze..."
+        [value]="entityIdInput()"
+        (input)="entityIdInput.set($any($event.target).value)"
+        (keyup.enter)="loadGraph()"
+      />
+      <button class="btn btn-primary btn-sm" (click)="loadGraph()" [disabled]="loading()">
+        @if (loading()) {
+          <span class="mini-spinner"></span>
+        } @else {
+          Analyze
+        }
+      </button>
+    </div>
+
+    <div class="depth-control">
+      <label class="depth-label">Depth: {{ depth() }}</label>
+      <input
+        type="range"
+        min="1"
+        max="5"
+        [value]="depth()"
+        (input)="depth.set(+$any($event.target).value)"
+      />
+    </div>
+
+    <!-- Link Type Filters -->
+    <div class="link-type-filters">
+      <span class="filter-label">Link Types</span>
+      <div class="chip-row">
+        @for (type of linkTypes; track type) {
+          <button
+            class="link-chip"
+            [class.active]="selectedLinkTypes().has(type)"
+            (click)="toggleLinkType(type)">
+            {{ type }}
+          </button>
+        }
+      </div>
+    </div>
+  </div>
+
+  <!-- Graph Visualization -->
+  <div class="graph-area">
+    <div #graphContainer class="graph-canvas"></div>
+
+    @if (!graphLoaded() && !loading()) {
+      <div class="graph-placeholder">
+        <span class="placeholder-icon">&#128304;</span>
+        <p>Enter an entity ID to visualize its link network</p>
+        <p class="text-xs text-muted">Double-click nodes to expand the graph</p>
+      </div>
+    }
+
+    @if (loading()) {
+      <div class="graph-loading">
+        <div class="loading-spinner"></div>
+        <span>Building graph...</span>
+      </div>
+    }
+
+    <!-- Graph Toolbar -->
+    @if (graphLoaded()) {
+      <div class="graph-toolbar">
+        <button class="tool-btn" (click)="zoomIn()" title="Zoom In">+</button>
+        <button class="tool-btn" (click)="zoomOut()" title="Zoom Out">-</button>
+        <button class="tool-btn" (click)="fitGraph()" title="Fit Graph">&#8690;</button>
+        <button class="tool-btn" (click)="togglePhysics()" title="Toggle Physics">&#9881;</button>
+      </div>
+    }
+
+    <!-- Selected Node Info -->
+    @if (selectedNode(); as node) {
+      <div class="node-info">
+        <div class="node-info-header">
+          <span class="node-dot" [style.background]="node.color?.background || '#6b7280'"></span>
+          <span class="node-label">{{ node.label }}</span>
+        </div>
+        <div class="node-info-meta">
+          <span class="chip chip-entity-type" [ngClass]="node.entityType">{{ node.entityType }}</span>
+          <span class="mono text-xs">{{ node.id }}</span>
+        </div>
+        @if (node.title) {
+          <p class="node-info-title">{{ node.title }}</p>
+        }
+        <div class="node-info-actions">
+          <button class="btn btn-secondary btn-sm" (click)="entityIdInput.set(node.id); loadGraph()">
+            Expand
+          </button>
+          <button class="btn btn-ghost btn-sm" (click)="selectedNode.set(null)">
+            Dismiss
+          </button>
+        </div>
+      </div>
+    }
+  </div>
+</div>

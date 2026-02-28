@@ -1,0 +1,24 @@
+{
+  "name": "entity-service",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/entity-service/src",
+  "projectType": "application",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/apps/entity-service",
+        "main": "apps/entity-service/src/main.ts",
+        "tsConfig": "apps/entity-service/tsconfig.app.json",
+        "assets": []
+      }
+    },
+    "serve": {
+      "executor": "@nx/js:node",
+      "options": {
+        "buildTarget": "entity-service:build"
+      }
+    }
+  }
+}

@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+package sentinel.v1;
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+import "entity.proto";
+
+option go_package = "buf.build/sentinel/api/sentinel/v1";
+
+// LinkType categorizes the nature of the relationship between two entities.
+enum LinkType {
+  LINK_TYPE_UNSPECIFIED = 0;
+  LINK_TYPE_COMMUNICATION = 1;
+  LINK_TYPE_ASSOCIATION = 2;
+  LINK_TYPE_COLOCATION = 3;
+  LINK_TYPE_FINANCIAL = 4;
+  LINK_TYPE_ORGANIZATIONAL = 5;
+  LINK_TYPE_MOVEMENT_PATTERN = 6;
+  LINK_TYPE_COMMAND_CONTROL = 7;
+}
+
+// Link represents a directed relationship between two entities, along with
+// confidence scoring and supporting evidence references.
+message Link {
+  // Unique identifier for this link.
+  string link_id = 1;
+
+  // The originating entity of the relationship.
+  string source_entity_id = 2;
+
+  // The target entity of the relationship.
+  string target_entity_id = 3;
+
+  // The nature of the relationship.
+  LinkType link_type = 4;
+
+  // Confidence score for this link, from 0.0 (no confidence) to 1.0 (certain).
+  float confidence = 5;
+
+  // Human-readable description of the link.
+  string description = 6;
+
+  // References to supporting evidence (e.g., report IDs, intercept IDs).
+  repeated string evidence = 7;
+
+  // When this relationship was first observed.
+  google.protobuf.Timestamp first_observed = 8;
+
+  // When this relationship was most recently observed.
+  google.protobuf.Timestamp last_observed = 9;
+
+  // Arbitrary key-value metadata associated with this link.
+  map<string, string> metadata = 10;
+}
+
+// LinkEventType describes the kind of mutation that occurred on a link.
+enum LinkEventType {
+  LINK_EVENT_TYPE_UNSPECIFIED = 0;
+  LINK_EVENT_TYPE_CREATED = 1;
+  LINK_EVENT_TYPE_UPDATED = 2;
+  LINK_EVENT_TYPE_DELETED = 3;
+}
+
+// LinkEvent is published when a link is created, updated, or deleted.
+// Used for real-time streaming to subscribers.
+message LinkEvent {
+  // The full link snapshot at the time of the event.
+  Link link = 1;
+
+  // The type of mutation that triggered this event.
+  LinkEventType event_type = 2;
+}
+
+// GetLinksRequest retrieves links associated with an entity, optionally
+// filtered by type, confidence, and traversal depth.
+message GetLinksRequest {
+  // The entity to find links for.
+  string entity_id = 1;
+
+  // Filter by one or more link types.
+  repeated LinkType link_types = 2;
+
+  // Minimum confidence threshold (0.0 to 1.0). Links below this are excluded.
+  float min_confidence = 3;
+
+  // Maximum number of hops from the source entity to traverse. A value of 1
+  // returns only direct links; higher values follow transitive relationships.
+  int32 max_hops = 4;
+
+  // Pagination parameters.
+  Pagination pagination = 5;
+}
+
+// GetLinksResponse contains matching links and pagination details.
+message GetLinksResponse {
+  // Links matching the query filters.
+  repeated Link links = 1;
+
+  // Pagination details including total count.
+  Pagination pagination = 2;
+}
+
+// GetGraphRequest retrieves a subgraph centered on a specific entity,
+// expanding outward to the specified depth.
+message GetGraphRequest {
+  // The entity at the center of the graph query.
+  string center_entity_id = 1;
+
+  // Maximum traversal depth from the center entity.
+  int32 max_depth = 2;
+
+  // Filter by one or more link types. If empty, all types are included.
+  repeated LinkType link_types = 3;
+
+  // Minimum confidence threshold for included links.
+  float min_confidence = 4;
+}
+
+// GraphNode represents an entity as a node in the graph response.
+message GraphNode {
+  // The entity identifier.
+  string entity_id = 1;
+
+  // The entity type for display and filtering.
+  EntityType entity_type = 2;
+
+  // The entity display name.
+  string name = 3;
+
+  // The entity position for geospatial graph rendering.
+  Coordinate position = 4;
+}
+
+// GraphEdge represents a link as an edge in the graph response.
+message GraphEdge {
+  // The full link data for this edge.
+  Link link = 1;
+}
+
+// GetGraphResponse contains the nodes and edges forming the requested subgraph.
+message GetGraphResponse {
+  // All entity nodes in the subgraph.
+  repeated GraphNode nodes = 1;
+
+  // All link edges in the subgraph.
+  repeated GraphEdge edges = 2;
+}
