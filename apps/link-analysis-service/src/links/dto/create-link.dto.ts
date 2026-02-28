@@ -7,6 +7,7 @@ import {
   IsArray,
   IsDateString,
   IsObject,
+  MaxLength,
   Min,
   Max,
 } from 'class-validator';
@@ -30,11 +31,13 @@ export class CreateLinkDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(2000)
   description?: string;
 
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @MaxLength(2000, { each: true })
   evidence?: string[];
 
   @IsOptional()

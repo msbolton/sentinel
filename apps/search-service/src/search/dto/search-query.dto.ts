@@ -3,6 +3,7 @@ import {
   IsString,
   IsNumber,
   IsArray,
+  MaxLength,
   Min,
   Max,
 } from 'class-validator';
@@ -11,6 +12,7 @@ import { Type } from 'class-transformer';
 export class SearchQueryDto {
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   q?: string;
 
   @IsOptional()
@@ -72,6 +74,7 @@ export class SearchQueryDto {
 
 export class SuggestQueryDto {
   @IsString()
+  @MaxLength(500)
   q!: string;
 }
 
@@ -96,6 +99,7 @@ export class NearbySearchDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   q?: string;
 
   @IsOptional()

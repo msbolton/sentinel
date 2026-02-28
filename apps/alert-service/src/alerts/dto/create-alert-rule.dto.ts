@@ -5,11 +5,13 @@ import {
   IsOptional,
   IsArray,
   IsBoolean,
+  MaxLength,
 } from 'class-validator';
 import { AlertSeverity, RuleType } from '../alert-type.enum';
 
 export class CreateAlertRuleDto {
   @IsString()
+  @MaxLength(255)
   name: string;
 
   @IsEnum(RuleType)
@@ -21,6 +23,7 @@ export class CreateAlertRuleDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   monitoredEntityTypes?: string[];
 
   @IsOptional()
@@ -35,6 +38,7 @@ export class CreateAlertRuleDto {
 export class UpdateAlertRuleDto {
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   name?: string;
 
   @IsOptional()
@@ -48,6 +52,7 @@ export class UpdateAlertRuleDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   monitoredEntityTypes?: string[];
 
   @IsOptional()

@@ -4,6 +4,7 @@ import {
   IsOptional,
   IsString,
   IsDateString,
+  MaxLength,
   Min,
   Max,
 } from 'class-validator';
@@ -41,6 +42,7 @@ export class RecordTrackPointDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   source?: string;
 
   @IsDateString()

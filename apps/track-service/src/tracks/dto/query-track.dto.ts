@@ -29,6 +29,7 @@ export class QueryTrackDto {
   @Type(() => Number)
   @IsNumber()
   @Min(0)
+  @Max(1)
   simplify?: number;
 }
 

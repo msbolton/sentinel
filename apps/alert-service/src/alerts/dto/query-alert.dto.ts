@@ -6,6 +6,7 @@ import {
   IsBoolean,
   IsNumber,
   IsString,
+  MaxLength,
   Min,
   Max,
 } from 'class-validator';
@@ -47,5 +48,6 @@ export class QueryAlertDto {
 
 export class AcknowledgeAlertDto {
   @IsString()
+  @MaxLength(255)
   userId: string;
 }
