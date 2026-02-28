@@ -10,8 +10,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Subscription } from 'rxjs';
-import { debounceTime, Subject } from 'rxjs';
+import { Subscription, debounceTime, Subject, throttleTime } from 'rxjs';
 import {
   Entity,
   EntityType,
@@ -36,6 +35,36 @@ interface LayerConfig {
   entityType: EntityType;
   visible: boolean;
   color: string;
+}
+
+class CircularBuffer<T> {
+  private buffer: (T | undefined)[];
+  private head = 0;
+  private count = 0;
+
+  constructor(private readonly capacity: number) {
+    this.buffer = new Array(capacity);
+  }
+
+  push(item: T): void {
+    this.buffer[this.head] = item;
+    this.head = (this.head + 1) % this.capacity;
+    if (this.count < this.capacity) this.count++;
+  }
+
+  get length(): number {
+    return this.count;
+  }
+
+  toArray(): T[] {
+    if (this.count === 0) return [];
+    const result: T[] = new Array(this.count);
+    const start = this.count < this.capacity ? 0 : this.head;
+    for (let i = 0; i < this.count; i++) {
+      result[i] = this.buffer[(start + i) % this.capacity] as T;
+    }
+    return result;
+  }
 }
 
 @Component({
@@ -69,9 +98,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   private Cesium: any;
   private entityMap = new Map<string, any>(); // Cesium entity references
-  private trackTrails = new Map<string, Array<{ lat: number; lon: number }>>();
+  private trackTrails = new Map<string, CircularBuffer<{ lat: number; lon: number }>>();
   private subscriptions = new Subscription();
   private cameraMovedSubject = new Subject<void>();
+  private cesiumColorCache = new Map<string, any>();
+  private renderScheduled = false;
 
   constructor(
     private readonly ngZone: NgZone,
@@ -226,8 +257,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     });
     this.subscriptions.add(sub);
 
-    // Subscribe to the full entity state
-    const entityStateSub = this.entityService.currentEntities$.subscribe((entities) => {
+    // Subscribe to the full entity state — throttle to at most once/sec
+    const entityStateSub = this.entityService.currentEntities$.pipe(
+      throttleTime(1000),
+    ).subscribe((entities) => {
       this.ngZone.runOutsideAngular(() => {
         entities.forEach((entity, id) => {
           if (!this.entityMap.has(id)) {
@@ -258,12 +291,12 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const layer = this.layers.find((l) => l.entityType === entity.entityType);
     if (layer && !layer.visible) return;
 
-    const color = ENTITY_TYPE_COLORS[entity.entityType] ?? ENTITY_TYPE_COLORS[EntityType.UNKNOWN];
-    const cesiumColor = new Cesium.Color(color.red, color.green, color.blue, color.alpha);
+    const cesiumColor = this.getCesiumColor(entity.entityType);
 
     // Track trail
     this.updateTrackTrail(entity);
-    const trail = this.trackTrails.get(entity.id) ?? [];
+    const trailBuffer = this.trackTrails.get(entity.id);
+    const trail = trailBuffer ? trailBuffer.toArray() : [];
 
     const position = Cesium.Cartesian3.fromDegrees(
       entity.position.longitude,
@@ -334,7 +367,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.entityMap.get(entity.id)._sentinelEntity = entity;
     }
 
-    this.viewer.scene.requestRender();
+    this.scheduleRender();
   }
 
   private removeCesiumEntity(entityId: string): void {
@@ -343,7 +376,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.viewer.entities.remove(cesiumEntity);
       this.entityMap.delete(entityId);
       this.trackTrails.delete(entityId);
-      this.viewer.scene.requestRender();
+      this.scheduleRender();
     }
   }
 
@@ -352,7 +385,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
     let trail = this.trackTrails.get(entity.id);
     if (!trail) {
-      trail = [];
+      trail = new CircularBuffer<{ lat: number; lon: number }>(TRACK_TRAIL_CONFIG.maxPoints);
       this.trackTrails.set(entity.id, trail);
     }
 
@@ -360,11 +393,6 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       lat: entity.position.latitude,
       lon: entity.position.longitude,
     });
-
-    // Limit trail length
-    if (trail.length > TRACK_TRAIL_CONFIG.maxPoints) {
-      trail.splice(0, trail.length - TRACK_TRAIL_CONFIG.maxPoints);
-    }
   }
 
   /**
@@ -414,9 +442,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         cesiumEntity.show = layer.visible;
       }
     });
-    if (this.viewer) {
-      this.viewer.scene.requestRender();
-    }
+    this.scheduleRender();
   }
 
   resetView(): void {
@@ -463,5 +489,26 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   closeEntityPopup(): void {
     this.selectedEntity.set(null);
+  }
+
+  private getCesiumColor(entityType: EntityType): any {
+    let cached = this.cesiumColorCache.get(entityType);
+    if (!cached && this.Cesium) {
+      const color = ENTITY_TYPE_COLORS[entityType] ?? ENTITY_TYPE_COLORS[EntityType.UNKNOWN];
+      cached = new this.Cesium.Color(color.red, color.green, color.blue, color.alpha);
+      this.cesiumColorCache.set(entityType, cached);
+    }
+    return cached;
+  }
+
+  private scheduleRender(): void {
+    if (this.renderScheduled || !this.viewer) return;
+    this.renderScheduled = true;
+    requestAnimationFrame(() => {
+      this.renderScheduled = false;
+      if (this.viewer && !this.viewer.isDestroyed()) {
+        this.viewer.scene.requestRender();
+      }
+    });
   }
 }
