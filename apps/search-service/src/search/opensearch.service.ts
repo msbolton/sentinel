@@ -73,12 +73,20 @@ export class OpenSearchService implements OnModuleInit {
       'http://localhost:9200',
     );
 
-    this.client = new Client({
+    const sslVerify =
+      this.configService.get<string>('OPENSEARCH_SSL_VERIFY', 'false') === 'true';
+
+    const clientOptions: ConstructorParameters<typeof Client>[0] = {
       node: host,
-      ssl: {
-        rejectUnauthorized: false,
-      },
-    });
+    };
+
+    if (host.startsWith('https://')) {
+      clientOptions.ssl = {
+        rejectUnauthorized: sslVerify,
+      };
+    }
+
+    this.client = new Client(clientOptions);
   }
 
   async onModuleInit(): Promise<void> {

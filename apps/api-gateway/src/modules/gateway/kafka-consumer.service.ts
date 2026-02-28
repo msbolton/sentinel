@@ -41,6 +41,9 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
   private consumer!: Consumer;
   private readonly kafka: Kafka;
 
+  private kafkaConnected = false;
+  private deserializationFailures = 0;
+
   private static readonly ENTITY_POSITION_TOPIC = 'events.entity.position';
   private static readonly ENTITY_CREATED_TOPIC = 'events.entity.created';
   private static readonly ENTITY_DELETED_TOPIC = 'events.entity.deleted';
@@ -73,6 +76,7 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
 
     try {
       await this.consumer.connect();
+      this.kafkaConnected = true;
       this.logger.log('Kafka consumer connected');
 
       await this.consumer.subscribe({
@@ -94,6 +98,7 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
         `Subscribed to topics: ${KafkaConsumerService.ENTITY_POSITION_TOPIC}, ${KafkaConsumerService.ENTITY_CREATED_TOPIC}, ${KafkaConsumerService.ENTITY_DELETED_TOPIC}`,
       );
     } catch (error) {
+      this.kafkaConnected = false;
       this.logger.error(`Failed to initialize Kafka consumer: ${error}`);
       // Don't throw - allow the service to start without Kafka for development
     }
@@ -106,6 +111,13 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.logger.error(`Error disconnecting Kafka consumer: ${error}`);
     }
+  }
+
+  /**
+   * Whether the Kafka consumer is currently connected.
+   */
+  isKafkaConnected(): boolean {
+    return this.kafkaConnected;
   }
 
   /**
@@ -226,11 +238,16 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
       const jsonString = value.toString('utf-8');
       return JSON.parse(jsonString) as T;
     } catch {
-      this.logger.warn(
-        'Failed to deserialize message as JSON. Protobuf deserialization not yet implemented.',
+      this.deserializationFailures++;
+      const hexPreview = value.subarray(0, 32).toString('hex');
+      this.logger.debug(
+        `Failed to deserialize message as JSON (size=${value.length}, hex=${hexPreview}). Protobuf deserialization not yet implemented.`,
       );
-      // TODO: Add protobuf deserialization using @sentinel/proto-gen
-      // const decoded = EntityPositionEvent.decode(value);
+      if (this.deserializationFailures % 100 === 0) {
+        this.logger.warn(
+          `Deserialization failures total: ${this.deserializationFailures}`,
+        );
+      }
       return null;
     }
   }
