@@ -82,6 +82,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.setupEventHandlers();
     this.subscribeToEntities();
     this.setupCameraMoveHandler();
+
+    // Initial entity fetch — computeViewRectangle() returns undefined at high
+    // altitude (view covers more than a hemisphere), so the camera moveEnd
+    // handler won't trigger a fetch.  Load all entities eagerly.
+    this.entityService.getEntities({ limit: 500 }).subscribe();
   }
 
   ngOnDestroy(): void {
@@ -95,10 +100,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const Cesium = await import('cesium');
     this.Cesium = Cesium;
 
+    // Wait until the container has non-zero dimensions.  Angular may not have
+    // completed style application / layout by ngAfterViewInit, which causes
+    // Cesium's "Expected width to be greater than 0" DeveloperError.
+    const container = this.cesiumContainer.nativeElement;
+    await this.waitForLayout(container);
+
     // Create a hidden credit container
     const creditContainer = document.createElement('div');
     creditContainer.style.display = 'none';
-    this.cesiumContainer.nativeElement.appendChild(creditContainer);
+    container.appendChild(creditContainer);
 
     const viewerOptions = {
       ...CESIUM_VIEWER_OPTIONS,
@@ -106,7 +117,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     };
 
     this.ngZone.runOutsideAngular(() => {
-      this.viewer = new Cesium.Viewer(this.cesiumContainer.nativeElement, viewerOptions);
+      this.viewer = new Cesium.Viewer(container, viewerOptions);
 
       // Set dark atmosphere
       this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
@@ -194,6 +205,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         this.entityService
           .getEntities({ ...bounds, limit: 500 })
           .subscribe();
+      } else {
+        // computeViewRectangle() returns undefined when the camera sees the
+        // full globe — fetch all entities without bounding-box filter.
+        this.entityService.getEntities({ limit: 500 }).subscribe();
       }
     } catch {
       // Camera may not have a valid view rectangle (e.g., looking at sky)
@@ -348,6 +363,43 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (trail.length > TRACK_TRAIL_CONFIG.maxPoints) {
       trail.splice(0, trail.length - TRACK_TRAIL_CONFIG.maxPoints);
     }
+  }
+
+  /**
+   * Wait until an element has non-zero clientWidth and clientHeight.
+   * Uses a ResizeObserver for efficiency, with a rAF-polling fallback.
+   */
+  private waitForLayout(el: HTMLElement): Promise<void> {
+    if (el.clientWidth > 0 && el.clientHeight > 0) {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve) => {
+      // Prefer ResizeObserver — fires as soon as the element gains dimensions.
+      if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            const { width, height } = entry.contentRect;
+            if (width > 0 && height > 0) {
+              ro.disconnect();
+              resolve();
+              return;
+            }
+          }
+        });
+        ro.observe(el);
+      } else {
+        // Fallback: poll via rAF
+        const check = () => {
+          if (el.clientWidth > 0 && el.clientHeight > 0) {
+            resolve();
+          } else {
+            requestAnimationFrame(check);
+          }
+        };
+        requestAnimationFrame(check);
+      }
+    });
   }
 
   // --- Public methods for template ---
