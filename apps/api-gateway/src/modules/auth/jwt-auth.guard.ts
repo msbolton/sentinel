@@ -15,6 +15,19 @@ import {
 } from './decorators/classification.decorator';
 import type { AuthenticatedUser } from './jwt.strategy';
 
+const IS_PRODUCTION = process.env['NODE_ENV'] === 'production';
+
+const DEV_USER: AuthenticatedUser = {
+  userId: '00000000-0000-0000-0000-000000000001',
+  username: 'dev-operator',
+  email: 'operator@sentinel.local',
+  name: 'Dev Operator',
+  roles: ['analyst', 'operator', 'admin'],
+  realmRoles: ['analyst', 'operator', 'admin'],
+  clientRoles: [],
+  classificationLevel: 'TOP_SECRET',
+};
+
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
   private readonly logger = new Logger(JwtAuthGuard.name);
@@ -26,6 +39,13 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
   override canActivate(
     context: ExecutionContext,
   ): boolean | Promise<boolean> | Observable<boolean> {
+    // In non-production environments, bypass JWT and inject a dev user
+    if (!IS_PRODUCTION) {
+      const request = context.switchToHttp().getRequest();
+      request.user = DEV_USER;
+      return true;
+    }
+
     // First, run the parent JWT validation
     const canActivate = super.canActivate(context);
 
