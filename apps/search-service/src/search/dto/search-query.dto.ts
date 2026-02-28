@@ -6,8 +6,26 @@ import {
   MaxLength,
   Min,
   Max,
+  Validate,
+  ValidateIf,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
+  ValidationArguments,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+
+@ValidatorConstraint({ name: 'boundingBox', async: false })
+class BoundingBoxConstraint implements ValidatorConstraintInterface {
+  validate(_: unknown, args: ValidationArguments) {
+    const o = args.object as SearchQueryDto;
+    if (o.north != null && o.south != null && o.south >= o.north) return false;
+    if (o.east != null && o.west != null && o.west >= o.east) return false;
+    return true;
+  }
+  defaultMessage() {
+    return 'Invalid bounding box: south must be less than north and west must be less than east';
+  }
+}
 
 export class SearchQueryDto {
   @IsOptional()
@@ -20,6 +38,8 @@ export class SearchQueryDto {
   @IsNumber()
   @Min(-90)
   @Max(90)
+  @ValidateIf(o => o.north != null && o.south != null)
+  @Validate(BoundingBoxConstraint)
   north?: number;
 
   @IsOptional()
