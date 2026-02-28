@@ -7,6 +7,7 @@ import {
   ElementRef,
   signal,
   NgZone,
+  ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -27,6 +28,7 @@ type DataSet = any;
 @Component({
   selector: 'app-link-graph',
   standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CommonModule, FormsModule],
   templateUrl: './link-graph.component.html',
   styleUrls: ['./link-graph.component.scss'],

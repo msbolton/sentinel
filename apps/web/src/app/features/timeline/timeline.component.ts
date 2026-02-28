@@ -7,6 +7,7 @@ import {
   ElementRef,
   signal,
   NgZone,
+  ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -17,6 +18,7 @@ import { PlaybackState, TimelineEvent } from '../../shared/models/track.model';
 @Component({
   selector: 'app-timeline',
   standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CommonModule, FormsModule],
   templateUrl: './timeline.component.html',
   styleUrls: ['./timeline.component.scss'],
