@@ -19,6 +19,13 @@
       "options": {
         "buildTarget": "api-gateway:build"
       }
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/apps/api-gateway"],
+      "options": {
+        "jestConfig": "apps/api-gateway/jest.config.ts"
+      }
     }
   }
 }
