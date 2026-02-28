@@ -16,22 +16,25 @@ import { QueryEntitiesDto } from './dto/query-entities.dto';
 
 /**
  * Represents an entity as returned from the service layer.
+ * Shape matches the frontend Entity interface for zero-transform passthrough.
  */
 export interface EntityRecord {
   id: string;
   entityType: string;
   name: string;
-  latitude: number;
-  longitude: number;
-  altitude?: number;
-  heading?: number;
-  speed?: number;
-  classification: string;
+  description?: string;
   source: string;
-  affiliation?: string;
-  metadata?: Record<string, unknown>;
+  classification: string;
+  position?: { latitude: number; longitude: number; altitude?: number };
+  heading?: number;
+  speedKnots?: number;
+  course?: number;
+  milStd2525dSymbol?: string;
+  metadata: Record<string, unknown>;
+  affiliations: string[];
   createdAt: string;
   updatedAt: string;
+  lastSeenAt?: string;
 }
 
 /**
@@ -139,16 +142,20 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
           id,
           entity_type AS "entityType",
           name,
+          description,
           ST_Y(position::geometry) AS latitude,
           ST_X(position::geometry) AS longitude,
           heading,
-          speed_knots AS speed,
+          speed_knots AS "speedKnots",
+          course,
+          mil_std_2525d_symbol AS "milStd2525dSymbol",
           classification,
           source,
-          affiliations AS affiliation,
+          affiliations,
           metadata,
           created_at AS "createdAt",
-          updated_at AS "updatedAt"
+          updated_at AS "updatedAt",
+          last_seen_at AS "lastSeenAt"
         FROM sentinel.entities
         WHERE position IS NOT NULL
       `);
@@ -161,24 +168,12 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
       const pipeline = this.redis.pipeline();
 
       for (const row of rows) {
-        const entity: EntityRecord = {
-          id: row.id,
-          entityType: row.entityType,
-          name: row.name,
-          latitude: parseFloat(row.latitude),
-          longitude: parseFloat(row.longitude),
-          heading: row.heading != null ? parseFloat(row.heading) : undefined,
-          speed: row.speed != null ? parseFloat(row.speed) : undefined,
-          classification: row.classification,
-          source: row.source,
-          affiliation: Array.isArray(row.affiliation) ? row.affiliation.join(',') : row.affiliation,
-          metadata: row.metadata ?? {},
-          createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
-          updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt),
-        };
+        const entity = this.rowToEntity(row);
 
         // GEOADD for spatial queries
-        pipeline.geoadd(ENTITY_GEO_KEY, entity.longitude, entity.latitude, entity.id);
+        if (entity.position) {
+          pipeline.geoadd(ENTITY_GEO_KEY, entity.position.longitude, entity.position.latitude, entity.id);
+        }
 
         // Cache full entity JSON
         const cacheKey = `${ENTITY_CACHE_PREFIX}:${entity.id}`;
@@ -335,16 +330,20 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
           id,
           entity_type AS "entityType",
           name,
+          description,
           ST_Y(position::geometry) AS latitude,
           ST_X(position::geometry) AS longitude,
           heading,
-          speed_knots AS speed,
+          speed_knots AS "speedKnots",
+          course,
+          mil_std_2525d_symbol AS "milStd2525dSymbol",
           classification,
           source,
-          affiliations AS affiliation,
+          affiliations,
           metadata,
           created_at AS "createdAt",
-          updated_at AS "updatedAt"
+          updated_at AS "updatedAt",
+          last_seen_at AS "lastSeenAt"
         FROM sentinel.entities
         WHERE position IS NOT NULL
       `;
@@ -366,10 +365,13 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
       if (rows.length > 0) {
         const pipeline = this.redis.pipeline();
         for (const row of rows) {
-          pipeline.geoadd(ENTITY_GEO_KEY, parseFloat(row.longitude), parseFloat(row.latitude), row.id);
+          const entity = this.rowToEntity(row);
+          if (entity.position) {
+            pipeline.geoadd(ENTITY_GEO_KEY, entity.position.longitude, entity.position.latitude, entity.id);
+          }
           pipeline.set(
-            `${ENTITY_CACHE_PREFIX}:${row.id}`,
-            JSON.stringify(this.rowToEntity(row)),
+            `${ENTITY_CACHE_PREFIX}:${entity.id}`,
+            JSON.stringify(entity),
             'EX',
             CACHE_TTL,
           );
@@ -390,20 +392,27 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
    * Converts a raw DB row to an EntityRecord.
    */
   private rowToEntity(row: Record<string, unknown>): EntityRecord {
+    const lat = row['latitude'] != null ? parseFloat(String(row['latitude'])) : undefined;
+    const lng = row['longitude'] != null ? parseFloat(String(row['longitude'])) : undefined;
+    const rawAffiliations = row['affiliations'];
+
     return {
       id: String(row['id']),
       entityType: String(row['entityType']),
       name: String(row['name']),
-      latitude: parseFloat(String(row['latitude'])),
-      longitude: parseFloat(String(row['longitude'])),
-      heading: row['heading'] != null ? parseFloat(String(row['heading'])) : undefined,
-      speed: row['speed'] != null ? parseFloat(String(row['speed'])) : undefined,
-      classification: String(row['classification']),
+      description: row['description'] != null ? String(row['description']) : undefined,
       source: String(row['source']),
-      affiliation: Array.isArray(row['affiliation']) ? (row['affiliation'] as string[]).join(',') : row['affiliation'] as string | undefined,
+      classification: String(row['classification']),
+      position: lat != null && lng != null ? { latitude: lat, longitude: lng } : undefined,
+      heading: row['heading'] != null ? parseFloat(String(row['heading'])) : undefined,
+      speedKnots: row['speedKnots'] != null ? parseFloat(String(row['speedKnots'])) : undefined,
+      course: row['course'] != null ? parseFloat(String(row['course'])) : undefined,
+      milStd2525dSymbol: row['milStd2525dSymbol'] != null ? String(row['milStd2525dSymbol']) : undefined,
       metadata: (row['metadata'] as Record<string, unknown>) ?? {},
+      affiliations: Array.isArray(rawAffiliations) ? rawAffiliations as string[] : [],
       createdAt: row['createdAt'] instanceof Date ? (row['createdAt'] as Date).toISOString() : String(row['createdAt']),
       updatedAt: row['updatedAt'] instanceof Date ? (row['updatedAt'] as Date).toISOString() : String(row['updatedAt']),
+      lastSeenAt: row['lastSeenAt'] instanceof Date ? (row['lastSeenAt'] as Date).toISOString() : row['lastSeenAt'] != null ? String(row['lastSeenAt']) : undefined,
     };
   }
 
@@ -424,16 +433,20 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
           id,
           entity_type AS "entityType",
           name,
+          description,
           ST_Y(position::geometry) AS latitude,
           ST_X(position::geometry) AS longitude,
           heading,
-          speed_knots AS speed,
+          speed_knots AS "speedKnots",
+          course,
+          mil_std_2525d_symbol AS "milStd2525dSymbol",
           classification,
           source,
-          affiliations AS affiliation,
+          affiliations,
           metadata,
           created_at AS "createdAt",
-          updated_at AS "updatedAt"
+          updated_at AS "updatedAt",
+          last_seen_at AS "lastSeenAt"
         FROM sentinel.entities
         WHERE id = $1`,
         [id],
@@ -475,15 +488,13 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
       id: entityId,
       entityType: dto.entityType,
       name: dto.name,
-      latitude: dto.latitude,
-      longitude: dto.longitude,
-      altitude: dto.altitude,
-      heading: dto.heading,
-      speed: dto.speed,
-      classification: dto.classification ?? 'UNCLASSIFIED',
       source: dto.source,
-      affiliation: dto.affiliation,
-      metadata: dto.metadata,
+      classification: dto.classification ?? 'UNCLASSIFIED',
+      position: { latitude: dto.latitude, longitude: dto.longitude, altitude: dto.altitude },
+      heading: dto.heading,
+      speedKnots: dto.speed,
+      metadata: dto.metadata ?? {},
+      affiliations: dto.affiliation ? [dto.affiliation] : [],
       createdAt: now,
       updatedAt: now,
     };
@@ -498,12 +509,12 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
         entity_id: entityId,
         entity_type: entity.entityType,
         name: entity.name,
-        latitude: entity.latitude,
-        longitude: entity.longitude,
-        altitude_meters: entity.altitude,
+        latitude: entity.position?.latitude,
+        longitude: entity.position?.longitude,
+        altitude_meters: entity.position?.altitude,
         classification: entity.classification,
         source: entity.source,
-        affiliation: entity.affiliation,
+        affiliations: entity.affiliations,
         metadata: entity.metadata,
         timestamp: now,
       },
@@ -530,9 +541,29 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
     }
 
     const now = new Date().toISOString();
+
+    // Apply partial updates preserving nested position
+    const updatedPosition = dto.latitude != null || dto.longitude != null
+      ? {
+          latitude: dto.latitude ?? existing.position?.latitude ?? 0,
+          longitude: dto.longitude ?? existing.position?.longitude ?? 0,
+          altitude: dto.altitude ?? existing.position?.altitude,
+        }
+      : dto.altitude != null
+        ? { ...existing.position!, altitude: dto.altitude }
+        : existing.position;
+
     const updated: EntityRecord = {
       ...existing,
-      ...this.stripUndefined(dto as unknown as Record<string, unknown>),
+      entityType: dto.entityType ?? existing.entityType,
+      name: dto.name ?? existing.name,
+      source: dto.source ?? existing.source,
+      classification: dto.classification ?? existing.classification,
+      position: updatedPosition,
+      heading: dto.heading ?? existing.heading,
+      speedKnots: dto.speed ?? existing.speedKnots,
+      metadata: dto.metadata ?? existing.metadata,
+      affiliations: dto.affiliation ? [dto.affiliation] : existing.affiliations,
       id, // Ensure ID is not overwritten
       updatedAt: now,
     };
@@ -547,11 +578,11 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
         entity_id: id,
         entity_type: updated.entityType,
         name: updated.name,
-        latitude: updated.latitude,
-        longitude: updated.longitude,
-        altitude_meters: updated.altitude,
+        latitude: updated.position?.latitude,
+        longitude: updated.position?.longitude,
+        altitude_meters: updated.position?.altitude,
         heading: updated.heading,
-        speed_knots: updated.speed,
+        speed_knots: updated.speedKnots,
         classification: updated.classification,
         source: updated.source,
         timestamp: now,
@@ -565,11 +596,11 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
         value: {
           entity_id: id,
           entity_type: updated.entityType,
-          latitude: updated.latitude,
-          longitude: updated.longitude,
-          altitude_meters: updated.altitude,
+          latitude: updated.position?.latitude,
+          longitude: updated.position?.longitude,
+          altitude_meters: updated.position?.altitude,
           heading: updated.heading,
-          speed_knots: updated.speed,
+          speed_knots: updated.speedKnots,
           classification: updated.classification,
           source: updated.source,
           timestamp: now,
@@ -612,12 +643,14 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
   private async cacheEntityPosition(entity: EntityRecord): Promise<void> {
     try {
       // GEOADD for spatial queries
-      await this.redis.geoadd(
-        ENTITY_GEO_KEY,
-        entity.longitude,
-        entity.latitude,
-        entity.id,
-      );
+      if (entity.position) {
+        await this.redis.geoadd(
+          ENTITY_GEO_KEY,
+          entity.position.longitude,
+          entity.position.latitude,
+          entity.id,
+        );
+      }
 
       // Store full entity data
       const cacheKey = `${ENTITY_CACHE_PREFIX}:${entity.id}`;

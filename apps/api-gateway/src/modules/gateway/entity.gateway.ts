@@ -30,6 +30,32 @@ export interface EntityPositionUpdate {
 }
 
 /**
+ * Frontend-compatible entity event shape.
+ */
+export interface EntityEvent {
+  type: 'created' | 'updated' | 'deleted';
+  entity: {
+    id: string;
+    entityType: string;
+    name?: string;
+    description?: string;
+    source: string;
+    classification: string;
+    position?: { latitude: number; longitude: number; altitude?: number };
+    heading?: number;
+    speedKnots?: number;
+    course?: number;
+    milStd2525dSymbol?: string;
+    metadata: Record<string, unknown>;
+    affiliations: string[];
+    createdAt: string;
+    updatedAt: string;
+    lastSeenAt?: string;
+  };
+  timestamp: string;
+}
+
+/**
  * Subscription request for a specific entity's updates.
  */
 interface EntitySubscribePayload {
@@ -217,10 +243,31 @@ export class EntityGateway
    * This is the core viewport-filtering broadcast method called by the
    * Kafka consumer when new entity positions arrive.
    */
-  async broadcastEntityUpdate(entity: EntityPositionUpdate): Promise<void> {
+  async broadcastEntityUpdate(entity: EntityPositionUpdate, eventType: 'created' | 'updated' = 'updated'): Promise<void> {
     if (!this.server) {
       return;
     }
+
+    // Transform to frontend EntityEvent shape
+    const event: EntityEvent = {
+      type: eventType,
+      entity: {
+        id: entity.entityId,
+        entityType: entity.entityType,
+        source: entity.source,
+        classification: entity.classification,
+        position: { latitude: entity.latitude, longitude: entity.longitude, altitude: entity.altitude },
+        heading: entity.heading,
+        speedKnots: entity.speed,
+        metadata: entity.metadata ?? {},
+        affiliations: [],
+        createdAt: entity.timestamp,
+        updatedAt: entity.timestamp,
+      },
+      timestamp: entity.timestamp,
+    };
+
+    const eventChannel = `entity:${eventType}`;
 
     const sockets = await this.server.fetchSockets();
     let sentCount = 0;
@@ -230,18 +277,27 @@ export class EntityGateway
       const shouldSend = await this.shouldSendToClient(clientId, entity);
 
       if (shouldSend) {
-        socket.emit('entity:update', entity);
+        socket.emit(eventChannel, event);
         sentCount++;
       }
     }
 
     // Also emit to the entity-specific room for explicit subscribers
     // who may be outside the viewport
-    this.server.to(`entity:${entity.entityId}`).emit('entity:update', entity);
+    this.server.to(`entity:${entity.entityId}`).emit(eventChannel, event);
 
     this.logger.verbose(
       `Broadcast entity ${entity.entityId} to ${sentCount} viewport-matched clients`,
     );
+  }
+
+  /**
+   * Broadcasts a full EntityEvent directly (used when the event is already shaped).
+   */
+  broadcastEntityEvent(event: EntityEvent): void {
+    if (!this.server) return;
+    const eventChannel = `entity:${event.type}`;
+    this.server.emit(eventChannel, event);
   }
 
   /**

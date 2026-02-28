@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Kafka, Consumer, EachMessagePayload } from 'kafkajs';
-import { EntityGateway, EntityPositionUpdate } from './entity.gateway';
+import { EntityGateway, EntityPositionUpdate, EntityEvent } from './entity.gateway';
 
 /**
  * Raw entity position event as received from the Kafka topic.
@@ -184,26 +184,36 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
       classification: raw.classification,
       source: raw.source,
       timestamp: raw.timestamp,
-      metadata: { ...raw.metadata, event: 'created' },
+      metadata: raw.metadata,
     };
 
-    await this.entityGateway.broadcastEntityUpdate(update);
+    await this.entityGateway.broadcastEntityUpdate(update, 'created');
   }
 
   /**
    * Handles entity deletion events - broadcasts removal to all clients.
    */
   private async handleEntityDeletedEvent(value: Buffer): Promise<void> {
-    const raw = this.deserializeMessage<{ entity_id: string }>(value);
+    const raw = this.deserializeMessage<{ entity_id: string; timestamp?: string }>(value);
     if (!raw) return;
 
-    // Broadcast a deletion event to the entity-specific room
-    // The gateway server emits directly since deleted entities have no position
-    if (this.entityGateway.server) {
-      this.entityGateway.server
-        .to(`entity:${raw.entity_id}`)
-        .emit('entity:deleted', { entityId: raw.entity_id });
-    }
+    // Broadcast EntityEvent-shaped deletion to all clients
+    const event: EntityEvent = {
+      type: 'deleted',
+      entity: {
+        id: raw.entity_id,
+        entityType: '',
+        source: '',
+        classification: '',
+        metadata: {},
+        affiliations: [],
+        createdAt: '',
+        updatedAt: '',
+      },
+      timestamp: raw.timestamp ?? new Date().toISOString(),
+    };
+
+    this.entityGateway.broadcastEntityEvent(event);
   }
 
   /**
