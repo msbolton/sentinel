@@ -1,9 +1,11 @@
 package ingest
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -99,6 +101,15 @@ func (p *Parser) ParseGeneric(sourceType string, data []byte) (*models.EntityPos
 			}
 		}
 		entity, err := p.ParseNMEA(data)
+		if err == nil {
+			entity.Source = sourceType
+			return entity, nil
+		}
+	}
+
+	// Check for JREAP-C / Link 16 binary data (falls through all text checks).
+	if len(data) >= 16 && isJREAPCHeader(data) {
+		entity, err := p.ParseLink16(data)
 		if err == nil {
 			entity.Source = sourceType
 			return entity, nil
@@ -701,6 +712,102 @@ func parseADSBTimestamp(dateStr, timeStr string) time.Time {
 	}
 
 	return time.Now().UTC()
+}
+
+// ParseLink16 parses a JREAP-C encapsulated Link 16 binary message containing
+// J-series track data. Extracts position, kinematics, and entity classification
+// from the J-series label.
+func (p *Parser) ParseLink16(data []byte) (*models.EntityPosition, error) {
+	if len(data) < 16 {
+		return nil, fmt.Errorf("JREAP-C message too short for header: %d bytes", len(data))
+	}
+
+	if !isJREAPCHeader(data) {
+		return nil, fmt.Errorf("invalid JREAP-C header")
+	}
+
+	totalLen := binary.BigEndian.Uint16(data[2:4])
+
+	// J-series track data starts at byte 16.
+	trackOffset := 16
+	if int(totalLen) < trackOffset+20 || len(data) < trackOffset+20 {
+		return nil, fmt.Errorf("JREAP-C payload too short for track data: need %d bytes at offset %d", 20, trackOffset)
+	}
+
+	trackData := data[trackOffset:]
+
+	jLabel := binary.BigEndian.Uint16(trackData[0:2])
+	trackNumber := binary.BigEndian.Uint16(trackData[4:6])
+
+	latRaw := int32(binary.BigEndian.Uint32(trackData[6:10]))
+	lonRaw := int32(binary.BigEndian.Uint32(trackData[10:14]))
+	altRaw := int16(binary.BigEndian.Uint16(trackData[14:16]))
+	spdRaw := binary.BigEndian.Uint16(trackData[16:18])
+	hdgRaw := binary.BigEndian.Uint16(trackData[18:20])
+
+	lat := float64(latRaw) * 90.0 / math.Pow(2, 23)
+	lon := float64(lonRaw) * 180.0 / math.Pow(2, 23)
+	alt := float64(altRaw) * 3.048
+	speed := float64(spdRaw) * 0.1
+	heading := float64(hdgRaw) * 360.0 / 65536.0
+
+	entityType := classifyJSeriesLabel(jLabel)
+
+	return &models.EntityPosition{
+		EntityID:   fmt.Sprintf("JTN-%d", trackNumber),
+		EntityType: entityType,
+		Name:       fmt.Sprintf("JTN %d", trackNumber),
+		Latitude:   lat,
+		Longitude:  lon,
+		Altitude:   alt,
+		Heading:    heading,
+		SpeedKnots: speed,
+		Course:     heading,
+		Timestamp:  time.Now().UTC(),
+		RawData:    data,
+	}, nil
+}
+
+// isJREAPCHeader validates a byte slice as a plausible JREAP-C header.
+// Checks version (1-2), message type (1-16), and length field consistency.
+func isJREAPCHeader(data []byte) bool {
+	if len(data) < 16 {
+		return false
+	}
+
+	version := data[0]
+	if version < 1 || version > 2 {
+		return false
+	}
+
+	msgType := data[1]
+	if msgType < 1 || msgType > 16 {
+		return false
+	}
+
+	totalLen := binary.BigEndian.Uint16(data[2:4])
+	if totalLen < 16 || int(totalLen) > len(data) {
+		return false
+	}
+
+	return true
+}
+
+// classifyJSeriesLabel maps a J-series label to an entity type.
+// Major byte 0x02 = air, 0x03 with minor 0x02 = surface, 0x03 with minor 0x05 = land.
+func classifyJSeriesLabel(label uint16) string {
+	majorByte := label >> 8
+
+	switch {
+	case majorByte == 0x02:
+		return models.EntityTypeAircraft
+	case label == 0x0302:
+		return models.EntityTypeVessel
+	case label == 0x0305:
+		return models.EntityTypeVehicle
+	default:
+		return models.EntityTypeUnknown
+	}
 }
 
 // truncate shortens a string to maxLen characters, appending "..." if truncated.
