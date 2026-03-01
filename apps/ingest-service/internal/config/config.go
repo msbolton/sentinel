@@ -27,7 +27,7 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		KafkaBrokers:    envOrDefault("KAFKA_BROKERS", "localhost:9092"),
-		KafkaEntityTopic: envOrDefault("KAFKA_ENTITY_TOPIC", "events.entity.position"),
+		KafkaEntityTopic: envOrDefault("KAFKA_ENTITY_TOPIC", "ingest.raw"),
 		KafkaIngestTopic: envOrDefault("KAFKA_INGEST_TOPIC", "ingest.raw"),
 		MQTTBroker:      envOrDefault("MQTT_BROKER", "tcp://localhost:1883"),
 		MQTTTopics:      envOrDefault("MQTT_TOPICS", "sensors/#"),

@@ -6,6 +6,7 @@ import { EntityRecord } from './entity.entity';
 import { EntityRepository } from './entity.repository';
 import { EntityService } from './entity.service';
 import { EntityController } from './entity.controller';
+import { IngestConsumer } from './ingest.consumer';
 
 @Module({
   imports: [
@@ -31,7 +32,7 @@ import { EntityController } from './entity.controller';
       },
     ]),
   ],
-  controllers: [EntityController],
+  controllers: [EntityController, IngestConsumer],
   providers: [EntityService, EntityRepository],
   exports: [EntityService, EntityRepository],
 })

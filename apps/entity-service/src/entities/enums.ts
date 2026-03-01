@@ -19,6 +19,11 @@ export enum EntitySource {
   MASINT = 'MASINT',
   CYBER = 'CYBER',
   MANUAL = 'MANUAL',
+  AIS = 'AIS',
+  ADS_B = 'ADS_B',
+  LINK16 = 'LINK16',
+  GPS = 'GPS',
+  RADAR = 'RADAR',
 }
 
 export enum Classification {

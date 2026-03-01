@@ -19,6 +19,7 @@ import { EntityType, EntitySource, Classification } from './enums';
 @Index('idx_entities_classification', ['classification'])
 @Index('idx_entities_last_seen_at', ['lastSeenAt'])
 @Index('idx_entities_position', ['position'], { spatial: true })
+@Index('idx_entities_source_entity_id', { synchronize: false })
 export class EntityRecord {
   @PrimaryGeneratedColumn('uuid')
   id: string;
