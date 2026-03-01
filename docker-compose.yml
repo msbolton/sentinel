@@ -411,11 +411,11 @@ services:
       NODE_ENV: development
       PORT: "3000"
       # Database
-      DATABASE_HOST: postgres
-      DATABASE_PORT: "5432"
-      DATABASE_NAME: sentinel
-      DATABASE_USER: sentinel
-      DATABASE_PASSWORD: sentinel_dev
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: sentinel
+      DB_USERNAME: sentinel
+      DB_PASSWORD: sentinel_dev
       # Redis
       REDIS_HOST: redis
       REDIS_PORT: "6379"
@@ -481,11 +481,11 @@ services:
     environment:
       NODE_ENV: development
       PORT: "3001"
-      DATABASE_HOST: postgres
-      DATABASE_PORT: "5432"
-      DATABASE_NAME: sentinel
-      DATABASE_USER: sentinel
-      DATABASE_PASSWORD: sentinel_dev
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: sentinel
+      DB_USERNAME: sentinel
+      DB_PASSWORD: sentinel_dev
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
@@ -529,11 +529,11 @@ services:
     environment:
       NODE_ENV: development
       PORT: "3002"
-      DATABASE_HOST: postgres
-      DATABASE_PORT: "5432"
-      DATABASE_NAME: sentinel
-      DATABASE_USER: sentinel
-      DATABASE_PASSWORD: sentinel_dev
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: sentinel
+      DB_USERNAME: sentinel
+      DB_PASSWORD: sentinel_dev
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
@@ -577,11 +577,11 @@ services:
     environment:
       NODE_ENV: development
       PORT: "3003"
-      DATABASE_HOST: postgres
-      DATABASE_PORT: "5432"
-      DATABASE_NAME: sentinel
-      DATABASE_USER: sentinel
-      DATABASE_PASSWORD: sentinel_dev
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: sentinel
+      DB_USERNAME: sentinel
+      DB_PASSWORD: sentinel_dev
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
@@ -626,11 +626,11 @@ services:
     environment:
       NODE_ENV: development
       PORT: "3004"
-      DATABASE_HOST: postgres
-      DATABASE_PORT: "5432"
-      DATABASE_NAME: sentinel
-      DATABASE_USER: sentinel
-      DATABASE_PASSWORD: sentinel_dev
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: sentinel
+      DB_USERNAME: sentinel
+      DB_PASSWORD: sentinel_dev
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
@@ -674,11 +674,11 @@ services:
     environment:
       NODE_ENV: development
       PORT: "3005"
-      DATABASE_HOST: postgres
-      DATABASE_PORT: "5432"
-      DATABASE_NAME: sentinel
-      DATABASE_USER: sentinel
-      DATABASE_PASSWORD: sentinel_dev
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: sentinel
+      DB_USERNAME: sentinel
+      DB_PASSWORD: sentinel_dev
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
@@ -723,11 +723,11 @@ services:
     environment:
       APP_ENV: development
       PORT: "4000"
-      DATABASE_HOST: postgres
-      DATABASE_PORT: "5432"
-      DATABASE_NAME: sentinel
-      DATABASE_USER: sentinel
-      DATABASE_PASSWORD: sentinel_dev
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: sentinel
+      DB_USERNAME: sentinel
+      DB_PASSWORD: sentinel_dev
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
@@ -780,11 +780,11 @@ services:
     environment:
       APP_ENV: development
       PORT: "5000"
-      DATABASE_HOST: postgres
-      DATABASE_PORT: "5432"
-      DATABASE_NAME: sentinel
-      DATABASE_USER: sentinel
-      DATABASE_PASSWORD: sentinel_dev
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: sentinel
+      DB_USERNAME: sentinel
+      DB_PASSWORD: sentinel_dev
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093

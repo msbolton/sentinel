@@ -21,7 +21,7 @@ import { EntityController } from './entity.controller';
           options: {
             client: {
               clientId: 'sentinel-entity-service-producer',
-              brokers: [config.get<string>('KAFKA_BROKER', 'localhost:9092')],
+              brokers: [config.get<string>('KAFKA_BROKERS', 'localhost:9092')],
             },
             producer: {
               allowAutoTopicCreation: true,

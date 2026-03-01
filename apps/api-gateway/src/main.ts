@@ -56,7 +56,7 @@ async function bootstrap(): Promise<void> {
   SwaggerModule.setup('api/docs', app, document);
 
   // Kafka microservice transport
-  const kafkaBroker = process.env['KAFKA_BROKER'] ?? 'localhost:9092';
+  const kafkaBroker = process.env['KAFKA_BROKERS'] ?? 'localhost:9092';
   app.connectMicroservice<MicroserviceOptions>({
     transport: Transport.KAFKA,
     options: {

@@ -53,7 +53,7 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     private readonly entityGateway: EntityGateway,
   ) {
     const broker = this.configService.get<string>(
-      'KAFKA_BROKER',
+      'KAFKA_BROKERS',
       'localhost:9092',
     );
 
