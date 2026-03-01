@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,12 +16,39 @@ import (
 
 // Parser converts raw sensor data from multiple formats into the canonical
 // EntityPosition model. It supports JSON, NMEA 0183, Cursor on Target (CoT),
-// and AIS message formats.
-type Parser struct{}
+// AIS, ADS-B, and Link 16 message formats.
+type Parser struct {
+	mu              sync.Mutex
+	aisFragments    map[string][]string   // keyed by sequential message ID
+	aisFragmentTime map[string]time.Time  // arrival time for eviction
+}
 
-// NewParser creates a new multi-format message parser.
+// NewParser creates a new multi-format message parser and starts a background
+// goroutine to evict stale AIS fragment buffers.
 func NewParser() *Parser {
-	return &Parser{}
+	p := &Parser{
+		aisFragments:    make(map[string][]string),
+		aisFragmentTime: make(map[string]time.Time),
+	}
+	go p.evictStaleFragments()
+	return p
+}
+
+// evictStaleFragments removes AIS fragment buffers older than 10 seconds.
+func (p *Parser) evictStaleFragments() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		p.mu.Lock()
+		now := time.Now()
+		for k, t := range p.aisFragmentTime {
+			if now.Sub(t) > 10*time.Second {
+				delete(p.aisFragments, k)
+				delete(p.aisFragmentTime, k)
+			}
+		}
+		p.mu.Unlock()
+	}
 }
 
 // ParseGeneric attempts auto-detection of the message format and delegates
@@ -355,8 +383,9 @@ func classifyCoTType(cotType string) string {
 }
 
 // ParseAIS parses AIS (Automatic Identification System) maritime messages.
-// This handles the common VDM/VDO sentence wrapper and extracts basic
-// position report data from message types 1, 2, and 3.
+// Supports single-fragment messages (types 1-3) and multi-fragment messages
+// (type 5 static/voyage data). Multi-fragment messages are buffered and
+// reassembled before parsing.
 func (p *Parser) ParseAIS(data []byte) (*models.EntityPosition, error) {
 	line := strings.TrimSpace(string(data))
 
@@ -376,27 +405,88 @@ func (p *Parser) ParseAIS(data []byte) (*models.EntityPosition, error) {
 		return nil, fmt.Errorf("not an AIS VDM/VDO sentence: %s", sentenceType)
 	}
 
-	// Multi-sentence messages are not supported in this basic parser.
 	totalFragments := fields[1]
-	if totalFragments != "1" {
-		return nil, fmt.Errorf("multi-fragment AIS messages not supported (fragment count: %s)", totalFragments)
-	}
-
-	// Decode the AIS payload (6-bit ASCII armored).
+	fragmentNum := fields[2]
+	seqMsgID := fields[3]
 	payload := fields[5]
+
 	if len(payload) == 0 {
 		return nil, fmt.Errorf("empty AIS payload")
 	}
 
-	bits := decodeAISPayload(payload)
-	if len(bits) < 168 {
-		return nil, fmt.Errorf("AIS payload too short for position report: %d bits", len(bits))
+	// Single-fragment message: parse immediately.
+	if totalFragments == "1" {
+		return p.parseAISPayload(payload, data)
 	}
 
-	// Message type is first 6 bits.
+	// Multi-fragment message: buffer and reassemble.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	total, err := strconv.Atoi(totalFragments)
+	if err != nil || total < 2 {
+		return nil, fmt.Errorf("invalid AIS fragment count: %s", totalFragments)
+	}
+
+	fragIdx, err := strconv.Atoi(fragmentNum)
+	if err != nil || fragIdx < 1 || fragIdx > total {
+		return nil, fmt.Errorf("invalid AIS fragment number: %s", fragmentNum)
+	}
+
+	key := seqMsgID
+	if _, exists := p.aisFragments[key]; !exists {
+		p.aisFragments[key] = make([]string, total)
+		p.aisFragmentTime[key] = time.Now()
+	}
+
+	frags := p.aisFragments[key]
+	if len(frags) != total {
+		// Fragment count mismatch — discard old buffer and start fresh.
+		frags = make([]string, total)
+		p.aisFragments[key] = frags
+		p.aisFragmentTime[key] = time.Now()
+	}
+
+	frags[fragIdx-1] = payload
+
+	// Check if all fragments have arrived.
+	for _, f := range frags {
+		if f == "" {
+			return nil, fmt.Errorf("AIS fragment %d/%d buffered, waiting for remaining", fragIdx, total)
+		}
+	}
+
+	// All fragments received — reassemble and parse.
+	fullPayload := strings.Join(frags, "")
+	delete(p.aisFragments, key)
+	delete(p.aisFragmentTime, key)
+
+	return p.parseAISPayload(fullPayload, data)
+}
+
+// parseAISPayload decodes an AIS payload and dispatches by message type.
+func (p *Parser) parseAISPayload(payload string, rawData []byte) (*models.EntityPosition, error) {
+	bits := decodeAISPayload(payload)
+	if len(bits) < 6 {
+		return nil, fmt.Errorf("AIS payload too short: %d bits", len(bits))
+	}
+
 	msgType := bitsToUint(bits, 0, 6)
-	if msgType < 1 || msgType > 3 {
-		return nil, fmt.Errorf("unsupported AIS message type: %d (only types 1-3 supported)", msgType)
+
+	switch {
+	case msgType >= 1 && msgType <= 3:
+		return p.parseAISPositionReport(bits, rawData)
+	case msgType == 5:
+		return p.parseAISType5(bits, rawData)
+	default:
+		return nil, fmt.Errorf("unsupported AIS message type: %d", msgType)
+	}
+}
+
+// parseAISPositionReport extracts position data from AIS message types 1-3.
+func (p *Parser) parseAISPositionReport(bits []byte, rawData []byte) (*models.EntityPosition, error) {
+	if len(bits) < 168 {
+		return nil, fmt.Errorf("AIS position report too short: %d bits (need 168)", len(bits))
 	}
 
 	mmsi := bitsToUint(bits, 8, 30)
@@ -420,8 +510,64 @@ func (p *Parser) ParseAIS(data []byte) (*models.EntityPosition, error) {
 		SpeedKnots: sog,
 		Course:     cog,
 		Timestamp:  time.Now().UTC(),
-		RawData:    data,
+		RawData:    rawData,
 	}, nil
+}
+
+// parseAISType5 extracts static and voyage data from AIS message type 5.
+// Type 5 messages are 424 bits and always span 2 fragments. They contain
+// vessel name and callsign but no position data.
+func (p *Parser) parseAISType5(bits []byte, rawData []byte) (*models.EntityPosition, error) {
+	if len(bits) < 424 {
+		return nil, fmt.Errorf("AIS type 5 too short: %d bits (need 424)", len(bits))
+	}
+
+	mmsi := bitsToUint(bits, 8, 30)
+	callsign := decodeAIS6BitText(bits, 70, 42)
+	vesselName := decodeAIS6BitText(bits, 112, 120)
+
+	name := vesselName
+	if name == "" {
+		name = callsign
+	}
+	if name == "" {
+		name = fmt.Sprintf("MMSI %d", mmsi)
+	}
+
+	return &models.EntityPosition{
+		EntityID:   fmt.Sprintf("MMSI-%d", mmsi),
+		EntityType: models.EntityTypeVessel,
+		Name:       name,
+		Latitude:   0,
+		Longitude:  0,
+		Timestamp:  time.Now().UTC(),
+		RawData:    rawData,
+	}, nil
+}
+
+// decodeAIS6BitText decodes AIS 6-bit ASCII text from a bit array.
+// Values 0-31 map to @A-Z[\]^_, values 32-63 map to  !"#$...0-9:;<=>?.
+func decodeAIS6BitText(bits []byte, start, bitLength int) string {
+	numChars := bitLength / 6
+	result := make([]byte, 0, numChars)
+
+	for i := 0; i < numChars; i++ {
+		offset := start + i*6
+		if offset+6 > len(bits) {
+			break
+		}
+		val := bitsToUint(bits, offset, 6)
+		var ch byte
+		if val < 32 {
+			ch = byte(val) + '@' // 0→@, 1→A, ... 26→Z
+		} else {
+			ch = byte(val) + ' ' - 32 // 32→ , 33→!, ... 48→0, ... 57→9
+		}
+		result = append(result, ch)
+	}
+
+	// Trim trailing @ and spaces.
+	return strings.TrimRight(string(result), "@ ")
 }
 
 // decodeAISPayload converts 6-bit ASCII armored AIS payload to a bit array.
