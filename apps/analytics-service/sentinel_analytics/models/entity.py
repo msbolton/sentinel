@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -76,6 +77,7 @@ class PatternOfLife(BaseModel):
     description: str
     locations: list[LocationCluster]
     time_patterns: list[TimePattern]
+    travel_patterns: list[dict[str, Any]] = []
     computed_at: datetime
 
 

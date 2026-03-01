@@ -58,8 +58,9 @@ class PatternOfLifeAnalyzer:
 
         locations = self._cluster_locations(points)
         time_patterns = self._analyze_temporal_patterns(points)
+        travel_patterns = self._identify_travel_patterns(points, locations)
         confidence = self._calculate_confidence(points, locations)
-        description = self._generate_description(locations, time_patterns)
+        description = self._generate_description(locations, time_patterns, travel_patterns)
 
         return PatternOfLife(
             entity_id=entity_id,
@@ -68,6 +69,7 @@ class PatternOfLifeAnalyzer:
             description=description,
             locations=locations,
             time_patterns=time_patterns,
+            travel_patterns=travel_patterns,
             computed_at=datetime.utcnow(),
         )
 
@@ -157,7 +159,7 @@ class PatternOfLifeAnalyzer:
         return [d for d in durations if d > 1.0]
 
     # ------------------------------------------------------------------
-    # Travel-pattern identification (placeholder for future work)
+    # Travel-pattern identification
     # ------------------------------------------------------------------
 
     def _identify_travel_patterns(
@@ -167,9 +169,69 @@ class PatternOfLifeAnalyzer:
     ) -> list[dict[str, Any]]:
         """Identify common routes between clustered locations.
 
-        TODO: implement transition-matrix approach.
+        Uses a transition-matrix approach: assign each point to its nearest
+        cluster, then count consecutive transitions between different clusters.
         """
-        return []
+        if len(locations) < 2:
+            return []
+
+        # Build cluster centroids in radians for haversine comparison
+        centroids = np.array(
+            [[np.radians(loc.latitude), np.radians(loc.longitude)] for loc in locations]
+        )
+
+        # Sort points chronologically
+        sorted_points = sorted(points, key=lambda p: p["timestamp"])
+
+        # Assign each point to its nearest cluster (within 200 m ≈ 0.002 rad)
+        threshold = 0.002
+        assignments: list[int | None] = []
+        for p in sorted_points:
+            p_rad = np.array([np.radians(p["latitude"]), np.radians(p["longitude"])])
+            diffs = centroids - p_rad
+            # Haversine approximation: sqrt(dlat^2 + dlon^2) for small distances
+            dists = np.sqrt(diffs[:, 0] ** 2 + diffs[:, 1] ** 2)
+            min_idx = int(np.argmin(dists))
+            assignments.append(min_idx if dists[min_idx] <= threshold else None)
+
+        # Count transitions between different clusters
+        transitions: dict[tuple[int, int], int] = defaultdict(int)
+        prev_cluster: int | None = None
+        for cluster_idx in assignments:
+            if cluster_idx is not None:
+                if prev_cluster is not None and prev_cluster != cluster_idx:
+                    transitions[(prev_cluster, cluster_idx)] += 1
+                prev_cluster = cluster_idx
+
+        if not transitions:
+            return []
+
+        # Compute total outgoing transitions per source for probabilities
+        outgoing_totals: dict[int, int] = defaultdict(int)
+        for (src, _dst), count in transitions.items():
+            outgoing_totals[src] += count
+
+        # Extract patterns (require count >= 2)
+        patterns: list[dict[str, Any]] = []
+        for (src, dst), count in transitions.items():
+            if count < 2:
+                continue
+            patterns.append(
+                {
+                    "from_location": locations[src].label,
+                    "from_lat": locations[src].latitude,
+                    "from_lng": locations[src].longitude,
+                    "to_location": locations[dst].label,
+                    "to_lat": locations[dst].latitude,
+                    "to_lng": locations[dst].longitude,
+                    "frequency": count,
+                    "probability": round(count / outgoing_totals[src], 3),
+                }
+            )
+
+        # Sort by frequency descending, limit to top 20
+        patterns.sort(key=lambda p: p["frequency"], reverse=True)
+        return patterns[:20]
 
     # ------------------------------------------------------------------
     # Confidence & description helpers
@@ -189,6 +251,7 @@ class PatternOfLifeAnalyzer:
     def _generate_description(
         locations: list[LocationCluster],
         time_patterns: list[TimePattern],
+        travel_patterns: list[dict[str, Any]] | None = None,
     ) -> str:
         day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         n_locs = len(locations)
@@ -196,4 +259,6 @@ class PatternOfLifeAnalyzer:
         if time_patterns:
             top = time_patterns[0]
             desc += f" Most active: {day_names[top.day_of_week]} at {top.hour:02d}:00."
+        if travel_patterns:
+            desc += f" {len(travel_patterns)} recurring travel route(s) identified."
         return desc
