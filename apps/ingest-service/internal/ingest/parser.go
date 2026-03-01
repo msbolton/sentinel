@@ -51,6 +51,15 @@ func (p *Parser) ParseGeneric(sourceType string, data []byte) (*models.EntityPos
 		}
 	}
 
+	// Check for ADS-B SBS/BaseStation format (from dump1090 / FlightAware).
+	if strings.HasPrefix(trimmed, "MSG,") {
+		entity, err := p.ParseADSB(data)
+		if err == nil {
+			entity.Source = sourceType
+			return entity, nil
+		}
+	}
+
 	// Check for NMEA 0183 sentence.
 	if strings.HasPrefix(trimmed, "$") || strings.HasPrefix(trimmed, "!") {
 		// NMEA starts with $ for standard sentences, ! for AIS/VDM.
@@ -450,6 +459,102 @@ func bitsToInt(bits []byte, start, length int) int32 {
 		val |= ^((1 << length) - 1)
 	}
 	return int32(val)
+}
+
+// ParseADSB parses ADS-B messages in SBS/BaseStation format (dump1090 output).
+// Only transmission types 2 (surface position) and 3 (airborne position) carry
+// latitude/longitude and are supported.
+func (p *Parser) ParseADSB(data []byte) (*models.EntityPosition, error) {
+	line := strings.TrimSpace(string(data))
+	fields := strings.Split(line, ",")
+	if len(fields) < 22 {
+		return nil, fmt.Errorf("ADS-B SBS message too short: %d fields (need 22)", len(fields))
+	}
+
+	// Transmission type must be 2 (surface) or 3 (airborne) for position data.
+	txType := strings.TrimSpace(fields[1])
+	if txType != "2" && txType != "3" {
+		return nil, fmt.Errorf("ADS-B transmission type %s has no position data (only types 2/3 supported)", txType)
+	}
+
+	icaoHex := strings.TrimSpace(fields[4])
+	if icaoHex == "" {
+		return nil, fmt.Errorf("ADS-B message missing ICAO hex address")
+	}
+
+	lat, err := strconv.ParseFloat(strings.TrimSpace(fields[14]), 64)
+	if err != nil {
+		return nil, fmt.Errorf("parsing ADS-B latitude: %w", err)
+	}
+
+	lon, err := strconv.ParseFloat(strings.TrimSpace(fields[15]), 64)
+	if err != nil {
+		return nil, fmt.Errorf("parsing ADS-B longitude: %w", err)
+	}
+
+	// Altitude in feet → meters.
+	var altitude float64
+	if alt := strings.TrimSpace(fields[11]); alt != "" {
+		if v, err := strconv.ParseFloat(alt, 64); err == nil {
+			altitude = v * 0.3048
+		}
+	}
+
+	// Speed (already in knots).
+	var speedKnots float64
+	if spd := strings.TrimSpace(fields[12]); spd != "" {
+		speedKnots, _ = strconv.ParseFloat(spd, 64)
+	}
+
+	// Track angle (heading/course).
+	var heading float64
+	if trk := strings.TrimSpace(fields[13]); trk != "" {
+		heading, _ = strconv.ParseFloat(trk, 64)
+	}
+
+	// Callsign for name, fallback to ICAO hex.
+	name := strings.TrimSpace(fields[10])
+	if name == "" {
+		name = fmt.Sprintf("ICAO %s", icaoHex)
+	}
+
+	ts := parseADSBTimestamp(strings.TrimSpace(fields[6]), strings.TrimSpace(fields[7]))
+
+	return &models.EntityPosition{
+		EntityID:   fmt.Sprintf("ICAO-%s", icaoHex),
+		EntityType: models.EntityTypeAircraft,
+		Name:       name,
+		Latitude:   lat,
+		Longitude:  lon,
+		Altitude:   altitude,
+		Heading:    heading,
+		SpeedKnots: speedKnots,
+		Course:     heading,
+		Timestamp:  ts,
+		RawData:    data,
+	}, nil
+}
+
+// parseADSBTimestamp parses SBS date and time fields ("2006/01/02" + "15:04:05.000").
+// Falls back to current time if parsing fails.
+func parseADSBTimestamp(dateStr, timeStr string) time.Time {
+	if dateStr == "" || timeStr == "" {
+		return time.Now().UTC()
+	}
+
+	combined := dateStr + " " + timeStr
+
+	// Try with milliseconds first.
+	if t, err := time.Parse("2006/01/02 15:04:05.000", combined); err == nil {
+		return t.UTC()
+	}
+
+	// Try without milliseconds.
+	if t, err := time.Parse("2006/01/02 15:04:05", combined); err == nil {
+		return t.UTC()
+	}
+
+	return time.Now().UTC()
 }
 
 // truncate shortens a string to maxLen characters, appending "..." if truncated.
