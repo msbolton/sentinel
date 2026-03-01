@@ -19,6 +19,14 @@
       "options": {
         "buildTarget": "entity-service:build"
       }
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/apps/entity-service"],
+      "options": {
+        "jestConfig": "apps/entity-service/jest.config.ts",
+        "passWithNoTests": true
+      }
     }
   }
 }
