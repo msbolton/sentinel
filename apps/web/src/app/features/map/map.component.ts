@@ -18,6 +18,7 @@ import {
 } from '../../shared/models/entity.model';
 import { EntityService } from '../../core/services/entity.service';
 import { WebSocketService } from '../../core/services/websocket.service';
+import { ThemeService, ThemePreset } from '../../core/services/theme.service';
 import {
   configureCesium,
   CESIUM_VIEWER_OPTIONS,
@@ -29,6 +30,17 @@ import {
 
 // Configure Cesium before imports
 configureCesium();
+
+const CRT_AMBER_SHADER = `
+  uniform sampler2D colorTexture;
+  in vec2 v_textureCoordinates;
+  void main() {
+    vec4 color = texture(colorTexture, v_textureCoordinates);
+    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+    vec3 amber = vec3(gray * 1.0, gray * 0.7, gray * 0.2);
+    out_FragColor = vec4(amber * 0.7, color.a);
+  }
+`;
 
 interface LayerConfig {
   name: string;
@@ -103,11 +115,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private cameraMovedSubject = new Subject<void>();
   private cesiumColorCache = new Map<string, any>();
   private renderScheduled = false;
+  private crtPostProcessStage: any = null;
 
   constructor(
     private readonly ngZone: NgZone,
     private readonly entityService: EntityService,
     private readonly wsService: WebSocketService,
+    private readonly themeService: ThemeService,
   ) {}
 
   async ngAfterViewInit(): Promise<void> {
@@ -120,6 +134,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // altitude (view covers more than a hemisphere), so the camera moveEnd
     // handler won't trigger a fetch.  Load all entities eagerly.
     this.entityService.getEntities({ limit: 500 }).subscribe();
+
+    this.subscribeToThemeChanges();
   }
 
   ngOnDestroy(): void {
@@ -270,6 +286,45 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       });
     });
     this.subscriptions.add(entityStateSub);
+  }
+
+  private subscribeToThemeChanges(): void {
+    const sub = this.themeService.activeTheme$.subscribe((theme) => {
+      this.ngZone.runOutsideAngular(() => {
+        this.applyThemeToGlobe(theme);
+      });
+    });
+    this.subscriptions.add(sub);
+  }
+
+  private applyThemeToGlobe(theme: ThemePreset): void {
+    if (!this.viewer || !this.Cesium) return;
+
+    const Cesium = this.Cesium;
+
+    if (theme === ThemePreset.CRT) {
+      // Tint globe amber
+      this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0d0a00');
+      this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0d0a00');
+
+      if (!this.crtPostProcessStage) {
+        this.crtPostProcessStage = new Cesium.PostProcessStage({
+          fragmentShader: CRT_AMBER_SHADER,
+        });
+        this.viewer.scene.postProcessStages.add(this.crtPostProcessStage);
+      }
+    } else {
+      // Restore normal colors
+      this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
+      this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a0e17');
+
+      if (this.crtPostProcessStage) {
+        this.viewer.scene.postProcessStages.remove(this.crtPostProcessStage);
+        this.crtPostProcessStage = null;
+      }
+    }
+
+    this.viewer.scene.requestRender();
   }
 
   private handleEntityEvent(event: EntityEvent): void {
