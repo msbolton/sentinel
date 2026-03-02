@@ -47,7 +47,7 @@ describe('ThemePickerComponent', () => {
   });
 
   it('should show checkmark on the active theme', () => {
-    let checks = fixture.nativeElement.querySelectorAll('.theme-check');
+    let checks = fixture.nativeElement.querySelectorAll('.swatch-check');
     expect(checks.length).toBe(1);
 
     const activeButton = fixture.nativeElement.querySelector('.theme-option.active');
@@ -56,7 +56,7 @@ describe('ThemePickerComponent', () => {
     themeService.setTheme(ThemePreset.FLIR);
     fixture.detectChanges();
 
-    checks = fixture.nativeElement.querySelectorAll('.theme-check');
+    checks = fixture.nativeElement.querySelectorAll('.swatch-check');
     expect(checks.length).toBe(1);
 
     const newActive = fixture.nativeElement.querySelector('.theme-option.active');
@@ -76,7 +76,7 @@ describe('ThemePickerComponent', () => {
     let closedEmitted = false;
     component.closed.subscribe(() => (closedEmitted = true));
 
-    fixture.nativeElement.querySelector('.theme-panel').click();
+    fixture.nativeElement.querySelector('.theme-card').click();
 
     expect(closedEmitted).toBe(false);
   });

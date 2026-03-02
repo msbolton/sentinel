@@ -94,10 +94,6 @@ import { MapComponent } from './features/map/map.component';
         </button>
       </div>
 
-      @if (showThemePicker()) {
-        <app-theme-picker (closed)="showThemePicker.set(false)"></app-theme-picker>
-      }
-
       <div class="sidebar-footer">
         <button
           class="sidebar-btn"
@@ -124,6 +120,14 @@ import { MapComponent } from './features/map/map.component';
     <main class="main-content">
       <!-- Map is always rendered in the background -->
       <app-map class="map-background"></app-map>
+
+      <!-- Floating theme picker card -->
+      @if (showThemePicker()) {
+        <app-theme-picker
+          class="floating-theme-picker"
+          (closed)="showThemePicker.set(false)">
+        </app-theme-picker>
+      }
 
       <!-- Feature panels render on top of the map -->
       <div class="panel-overlay">
@@ -174,6 +178,13 @@ import { MapComponent } from './features/map/map.component';
       width: 100%;
       height: 100%;
       z-index: 1;
+    }
+
+    .floating-theme-picker {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      z-index: 50;
     }
 
     .panel-overlay {
