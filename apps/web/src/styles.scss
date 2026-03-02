@@ -3,29 +3,8 @@
 // Geospatial Intelligence Platform - Dark Military Theme
 // =============================================================================
 
-// --- CSS Variables ---
+// --- Structural Variables (theme-independent) ---
 :root {
-  --bg-primary: #0a0e17;
-  --bg-secondary: #111827;
-  --bg-tertiary: #1a2332;
-  --bg-panel: rgba(17, 24, 39, 0.92);
-  --bg-panel-hover: rgba(26, 35, 50, 0.95);
-
-  --text-primary: #e0e6ed;
-  --text-secondary: #8b9ab5;
-  --text-muted: #5a6a80;
-
-  --accent-blue: #3b82f6;
-  --accent-cyan: #06b6d4;
-  --accent-green: #10b981;
-  --accent-yellow: #f59e0b;
-  --accent-orange: #f97316;
-  --accent-red: #ef4444;
-  --accent-purple: #8b5cf6;
-
-  --border-color: rgba(255, 255, 255, 0.08);
-  --border-active: rgba(59, 130, 246, 0.5);
-
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
@@ -44,6 +23,47 @@
 
   --transition-fast: 150ms ease;
   --transition-normal: 250ms ease;
+}
+
+// --- Color Tokens (Normal theme / default) ---
+:root,
+body[data-theme="normal"] {
+  // Backgrounds
+  --bg-primary: #0a0e17;
+  --bg-secondary: #111827;
+  --bg-tertiary: #1a2332;
+  --bg-panel: rgba(17, 24, 39, 0.92);
+  --bg-panel-hover: rgba(26, 35, 50, 0.95);
+
+  // Text
+  --text-primary: #e0e6ed;
+  --text-secondary: #8b9ab5;
+  --text-muted: #5a6a80;
+
+  // Accents
+  --accent-blue: #3b82f6;
+  --accent-cyan: #06b6d4;
+  --accent-green: #10b981;
+  --accent-yellow: #f59e0b;
+  --accent-orange: #f97316;
+  --accent-red: #ef4444;
+  --accent-purple: #8b5cf6;
+
+  // Borders
+  --border-color: rgba(255, 255, 255, 0.08);
+  --border-active: rgba(59, 130, 246, 0.5);
+
+  // Entity type colors
+  --entity-person: var(--accent-blue);
+  --entity-vehicle: var(--accent-green);
+  --entity-vessel: var(--accent-cyan);
+  --entity-aircraft: var(--accent-yellow);
+  --entity-facility: var(--accent-red);
+  --entity-signal: var(--accent-purple);
+  --entity-equipment: #9ca3af;
+  --entity-unit: var(--accent-green);
+  --entity-cyber: var(--accent-purple);
+  --entity-unknown: var(--text-muted);
 }
 
 // --- Reset & Base ---
@@ -67,6 +87,7 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background-color 300ms ease, color 300ms ease;
 }
 
 // --- Typography ---
@@ -436,24 +457,24 @@ textarea {
     }
 
     &.critical {
-      border-color: rgba(239, 68, 68, 0.5);
-      .toast-icon { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
+      border-color: color-mix(in srgb, var(--accent-red) 50%, transparent);
+      .toast-icon { background: color-mix(in srgb, var(--accent-red) 20%, transparent); color: var(--accent-red); }
     }
     &.high {
-      border-color: rgba(249, 115, 22, 0.5);
-      .toast-icon { background: rgba(249, 115, 22, 0.2); color: var(--accent-orange); }
+      border-color: color-mix(in srgb, var(--accent-orange) 50%, transparent);
+      .toast-icon { background: color-mix(in srgb, var(--accent-orange) 20%, transparent); color: var(--accent-orange); }
     }
     &.medium {
-      border-color: rgba(245, 158, 11, 0.5);
-      .toast-icon { background: rgba(245, 158, 11, 0.2); color: var(--accent-yellow); }
+      border-color: color-mix(in srgb, var(--accent-yellow) 50%, transparent);
+      .toast-icon { background: color-mix(in srgb, var(--accent-yellow) 20%, transparent); color: var(--accent-yellow); }
     }
     &.low {
-      border-color: rgba(59, 130, 246, 0.5);
-      .toast-icon { background: rgba(59, 130, 246, 0.2); color: var(--accent-blue); }
+      border-color: color-mix(in srgb, var(--accent-blue) 50%, transparent);
+      .toast-icon { background: color-mix(in srgb, var(--accent-blue) 20%, transparent); color: var(--accent-blue); }
     }
     &.info {
-      border-color: rgba(107, 114, 128, 0.5);
-      .toast-icon { background: rgba(107, 114, 128, 0.2); color: var(--text-muted); }
+      border-color: color-mix(in srgb, var(--text-muted) 50%, transparent);
+      .toast-icon { background: color-mix(in srgb, var(--text-muted) 20%, transparent); color: var(--text-muted); }
     }
   }
 }
@@ -507,16 +528,16 @@ textarea {
   border: 1px solid transparent;
 
   &-entity-type {
-    &.PERSON { background: rgba(59, 130, 246, 0.15); color: var(--accent-blue); border-color: rgba(59, 130, 246, 0.3); }
-    &.VEHICLE { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border-color: rgba(16, 185, 129, 0.3); }
-    &.VESSEL { background: rgba(6, 182, 212, 0.15); color: var(--accent-cyan); border-color: rgba(6, 182, 212, 0.3); }
-    &.AIRCRAFT { background: rgba(245, 158, 11, 0.15); color: var(--accent-yellow); border-color: rgba(245, 158, 11, 0.3); }
-    &.FACILITY { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); border-color: rgba(239, 68, 68, 0.3); }
-    &.SIGNAL { background: rgba(139, 92, 246, 0.15); color: var(--accent-purple); border-color: rgba(139, 92, 246, 0.3); }
-    &.EQUIPMENT { background: rgba(107, 114, 128, 0.15); color: #9ca3af; border-color: rgba(107, 114, 128, 0.3); }
-    &.UNIT { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border-color: rgba(16, 185, 129, 0.3); }
-    &.CYBER { background: rgba(139, 92, 246, 0.15); color: var(--accent-purple); border-color: rgba(139, 92, 246, 0.3); }
-    &.UNKNOWN { background: rgba(107, 114, 128, 0.15); color: var(--text-muted); border-color: rgba(107, 114, 128, 0.3); }
+    &.PERSON { background: color-mix(in srgb, var(--entity-person) 15%, transparent); color: var(--entity-person); border-color: color-mix(in srgb, var(--entity-person) 30%, transparent); }
+    &.VEHICLE { background: color-mix(in srgb, var(--entity-vehicle) 15%, transparent); color: var(--entity-vehicle); border-color: color-mix(in srgb, var(--entity-vehicle) 30%, transparent); }
+    &.VESSEL { background: color-mix(in srgb, var(--entity-vessel) 15%, transparent); color: var(--entity-vessel); border-color: color-mix(in srgb, var(--entity-vessel) 30%, transparent); }
+    &.AIRCRAFT { background: color-mix(in srgb, var(--entity-aircraft) 15%, transparent); color: var(--entity-aircraft); border-color: color-mix(in srgb, var(--entity-aircraft) 30%, transparent); }
+    &.FACILITY { background: color-mix(in srgb, var(--entity-facility) 15%, transparent); color: var(--entity-facility); border-color: color-mix(in srgb, var(--entity-facility) 30%, transparent); }
+    &.SIGNAL { background: color-mix(in srgb, var(--entity-signal) 15%, transparent); color: var(--entity-signal); border-color: color-mix(in srgb, var(--entity-signal) 30%, transparent); }
+    &.EQUIPMENT { background: color-mix(in srgb, var(--entity-equipment) 15%, transparent); color: var(--entity-equipment); border-color: color-mix(in srgb, var(--entity-equipment) 30%, transparent); }
+    &.UNIT { background: color-mix(in srgb, var(--entity-unit) 15%, transparent); color: var(--entity-unit); border-color: color-mix(in srgb, var(--entity-unit) 30%, transparent); }
+    &.CYBER { background: color-mix(in srgb, var(--entity-cyber) 15%, transparent); color: var(--entity-cyber); border-color: color-mix(in srgb, var(--entity-cyber) 30%, transparent); }
+    &.UNKNOWN { background: color-mix(in srgb, var(--entity-unknown) 15%, transparent); color: var(--entity-unknown); border-color: color-mix(in srgb, var(--entity-unknown) 30%, transparent); }
   }
 
   &-classification {
@@ -526,10 +547,10 @@ textarea {
     letter-spacing: 0.05em;
     text-transform: uppercase;
 
-    &.UNCLASSIFIED { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); }
-    &.CONFIDENTIAL { background: rgba(59, 130, 246, 0.15); color: var(--accent-blue); }
-    &.SECRET { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); }
-    &.TOP_SECRET { background: rgba(245, 158, 11, 0.15); color: var(--accent-yellow); }
+    &.UNCLASSIFIED { background: color-mix(in srgb, var(--accent-green) 15%, transparent); color: var(--accent-green); }
+    &.CONFIDENTIAL { background: color-mix(in srgb, var(--accent-blue) 15%, transparent); color: var(--accent-blue); }
+    &.SECRET { background: color-mix(in srgb, var(--accent-red) 15%, transparent); color: var(--accent-red); }
+    &.TOP_SECRET { background: color-mix(in srgb, var(--accent-yellow) 15%, transparent); color: var(--accent-yellow); }
   }
 }
 

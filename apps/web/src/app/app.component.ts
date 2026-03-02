@@ -5,13 +5,15 @@ import { Router, RouterOutlet, RouterLink, RouterLinkActive } from '@angular/rou
 import { WebSocketService, ConnectionStatus } from './core/services/websocket.service';
 import { AuthService, UserProfile } from './core/services/auth.service';
 import { AlertService } from './core/services/alert.service';
+import { ThemeService } from './core/services/theme.service';
+import { ThemePickerComponent } from './shared/components/theme-picker.component';
 import { MapComponent } from './features/map/map.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent],
+  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, ThemePickerComponent],
   template: `
     <!-- Sidebar Navigation -->
     <nav class="sidebar">
@@ -105,6 +107,9 @@ import { MapComponent } from './features/map/map.component';
       <!-- Map is always rendered in the background -->
       <app-map class="map-background"></app-map>
 
+      <!-- Floating pills -->
+      <app-theme-picker class="floating-pill floating-pill-bottom-left"></app-theme-picker>
+
       <!-- Feature panels render on top of the map -->
       <div class="panel-overlay">
         <router-outlet></router-outlet>
@@ -156,6 +161,13 @@ import { MapComponent } from './features/map/map.component';
       z-index: 1;
     }
 
+    .floating-pill-bottom-left {
+      position: absolute;
+      bottom: 16px;
+      left: 16px;
+      z-index: 50;
+    }
+
     .panel-overlay {
       position: absolute;
       top: 0;
@@ -176,8 +188,8 @@ export class AppComponent implements OnInit, OnDestroy {
   unacknowledgedAlertCount = signal<number>(0);
   userProfile = signal<UserProfile | null>(null);
   currentTime = signal<string>('');
-
   private readonly destroyRef = inject(DestroyRef);
+  private readonly themeService = inject(ThemeService);
   private timeInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
