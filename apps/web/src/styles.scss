@@ -123,6 +123,40 @@ body[data-theme="crt"] {
   --text-glow: 0 0 4px currentColor, 0 0 8px rgba(255, 176, 0, 0.3);
 }
 
+// --- CRT Overlay Effects ---
+body[data-theme="crt"]::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.15) 2px,
+    rgba(0, 0, 0, 0.15) 4px
+  );
+}
+
+body[data-theme="crt"]::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(0, 0, 0, 0.6) 100%);
+}
+
+body[data-theme="crt"] {
+  h1, h2, h3, h4, h5, h6,
+  .sidebar-logo,
+  .card-title,
+  .toast-title,
+  .chip {
+    text-shadow: var(--text-glow);
+  }
+}
+
 // --- Reset & Base ---
 *,
 *::before,
