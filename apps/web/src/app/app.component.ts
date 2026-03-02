@@ -5,13 +5,15 @@ import { Router, RouterOutlet, RouterLink, RouterLinkActive } from '@angular/rou
 import { WebSocketService, ConnectionStatus } from './core/services/websocket.service';
 import { AuthService, UserProfile } from './core/services/auth.service';
 import { AlertService } from './core/services/alert.service';
+import { ThemeService } from './core/services/theme.service';
+import { ThemePickerComponent } from './shared/components/theme-picker.component';
 import { MapComponent } from './features/map/map.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent],
+  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, ThemePickerComponent],
   template: `
     <!-- Sidebar Navigation -->
     <nav class="sidebar">
@@ -79,15 +81,20 @@ import { MapComponent } from './features/map/map.component';
       </div>
 
       <div class="sidebar-footer">
-        <button
-          class="sidebar-btn"
-          (click)="toggleSettings()"
-          title="Settings">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"/>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-          </svg>
-        </button>
+        <div class="settings-container">
+          @if (showThemePicker()) {
+            <app-theme-picker (closed)="showThemePicker.set(false)"></app-theme-picker>
+          }
+          <button
+            class="sidebar-btn"
+            (click)="toggleSettings($event)"
+            title="Settings">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </button>
+        </div>
         <button
           class="sidebar-btn"
           (click)="handleAuth()"
@@ -156,6 +163,10 @@ import { MapComponent } from './features/map/map.component';
       z-index: 1;
     }
 
+    .settings-container {
+      position: relative;
+    }
+
     .panel-overlay {
       position: absolute;
       top: 0;
@@ -176,8 +187,10 @@ export class AppComponent implements OnInit, OnDestroy {
   unacknowledgedAlertCount = signal<number>(0);
   userProfile = signal<UserProfile | null>(null);
   currentTime = signal<string>('');
+  showThemePicker = signal(false);
 
   private readonly destroyRef = inject(DestroyRef);
+  private readonly themeService = inject(ThemeService);
   private timeInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -230,9 +243,9 @@ export class AppComponent implements OnInit, OnDestroy {
     }
   }
 
-  toggleSettings(): void {
-    // Future: open settings panel
-    console.log('Settings panel - not yet implemented');
+  toggleSettings(event: MouseEvent): void {
+    event.stopPropagation();
+    this.showThemePicker.update((v) => !v);
   }
 
   handleAuth(): void {
