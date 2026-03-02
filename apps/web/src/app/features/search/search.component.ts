@@ -137,9 +137,9 @@ export class SearchComponent implements OnInit, OnDestroy {
       FACILITY: 'var(--accent-red)',
       SIGNAL: 'var(--accent-purple)',
       CYBER: 'var(--accent-purple)',
-      EQUIPMENT: '#9ca3af',
+      EQUIPMENT: 'var(--entity-equipment)',
       UNIT: 'var(--accent-green)',
-      UNKNOWN: 'var(--text-muted)',
+      UNKNOWN: 'var(--entity-unknown)',
     };
     return colorMap[type] ?? 'var(--text-muted)';
   }
