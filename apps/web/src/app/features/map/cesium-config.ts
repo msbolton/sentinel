@@ -47,7 +47,7 @@ export const ENTITY_TYPE_COLORS: Record<string, { red: number; green: number; bl
   [EntityType.UNIT]: { red: 0.063, green: 0.725, blue: 0.506, alpha: 1.0 },         // Green
   [EntityType.SIGNAL]: { red: 0.545, green: 0.361, blue: 0.965, alpha: 1.0 },       // Purple
   [EntityType.CYBER]: { red: 0.545, green: 0.361, blue: 0.965, alpha: 1.0 },        // Purple
-  [EntityType.UNKNOWN]: { red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0 },            // White
+  [EntityType.UNKNOWN]: { red: 0.353, green: 0.416, blue: 0.502, alpha: 1.0 },       // Muted (#5a6a80)
 };
 
 /** Entity type to icon/symbol character mapping (fallback when MIL-STD-2525D not available) */
@@ -75,7 +75,7 @@ export const ENTITY_TYPE_PIN_COLORS: Record<string, string> = {
   [EntityType.UNIT]: '#10b981',
   [EntityType.SIGNAL]: '#8b5cf6',
   [EntityType.CYBER]: '#8b5cf6',
-  [EntityType.UNKNOWN]: '#ffffff',
+  [EntityType.UNKNOWN]: '#5a6a80',
 };
 
 /** Default camera position (centered on world) */

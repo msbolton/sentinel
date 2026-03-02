@@ -293,10 +293,10 @@ export class LinkGraphComponent implements OnInit, OnDestroy, AfterViewInit {
       [EntityType.UNIT]: '#10b981',
       [EntityType.SIGNAL]: '#8b5cf6',
       [EntityType.CYBER]: '#8b5cf6',
-      [EntityType.UNKNOWN]: '#6b7280',
+      [EntityType.UNKNOWN]: '#5a6a80',
     };
 
-    const base = colorMap[entityType] ?? '#6b7280';
+    const base = colorMap[entityType] ?? '#5a6a80';
     return {
       background: base,
       border: base,

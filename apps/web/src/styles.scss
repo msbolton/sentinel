@@ -63,7 +63,14 @@ body[data-theme="normal"] {
   --entity-equipment: #9ca3af;
   --entity-unit: var(--accent-green);
   --entity-cyber: var(--accent-purple);
-  --entity-unknown: var(--text-muted);
+  --entity-unknown: #5a6a80;
+
+  // Utility colors (used in Canvas/vis-network/Cesium contexts)
+  --color-white: #ffffff;
+  --color-gray: #6b7280;
+  --color-gray-dark: #4b5563;
+  --accent-pink: #ec4899;
+  --shadow-node: rgba(0, 0, 0, 0.3);
 }
 
 // --- Reset & Base ---
