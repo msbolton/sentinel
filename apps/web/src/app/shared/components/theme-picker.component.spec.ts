@@ -27,11 +27,24 @@ describe('ThemePickerComponent', () => {
     TestBed.resetTestingModule();
   });
 
-  it('should render all 4 theme options', () => {
-    const buttons = fixture.nativeElement.querySelectorAll('.theme-option');
-    expect(buttons.length).toBe(4);
+  it('should render collapsed pill with "STYLE PRESETS" label', () => {
+    const pill = fixture.nativeElement.querySelector('.pill-header');
+    expect(pill).toBeTruthy();
+    expect(pill.querySelector('.pill-label').textContent.trim()).toBe('STYLE PRESETS');
 
-    const labels = Array.from(buttons).map(
+    const options = fixture.nativeElement.querySelectorAll('.theme-option');
+    expect(options.length).toBe(0);
+  });
+
+  it('should show theme options when pill is clicked', () => {
+    const pill = fixture.nativeElement.querySelector('.pill-header');
+    pill.click();
+    fixture.detectChanges();
+
+    const options = fixture.nativeElement.querySelectorAll('.theme-option');
+    expect(options.length).toBe(4);
+
+    const labels = Array.from(options).map(
       (btn: any) => btn.querySelector('.theme-name').textContent.trim(),
     );
     expect(labels).toEqual(['Normal', 'CRT', 'Night Vision', 'FLIR']);
@@ -39,14 +52,20 @@ describe('ThemePickerComponent', () => {
 
   it('should call ThemeService.setTheme when an option is clicked', () => {
     const spy = jest.spyOn(themeService, 'setTheme');
-    const buttons = fixture.nativeElement.querySelectorAll('.theme-option');
 
+    component.expanded.set(true);
+    fixture.detectChanges();
+
+    const buttons = fixture.nativeElement.querySelectorAll('.theme-option');
     buttons[1].click();
 
     expect(spy).toHaveBeenCalledWith(ThemePreset.CRT);
   });
 
   it('should show checkmark on the active theme', () => {
+    component.expanded.set(true);
+    fixture.detectChanges();
+
     let checks = fixture.nativeElement.querySelectorAll('.swatch-check');
     expect(checks.length).toBe(1);
 
@@ -63,21 +82,34 @@ describe('ThemePickerComponent', () => {
     expect(newActive.querySelector('.theme-name').textContent.trim()).toBe('FLIR');
   });
 
-  it('should emit closed when clicking outside the component', () => {
-    let closedEmitted = false;
-    component.closed.subscribe(() => (closedEmitted = true));
+  it('should collapse when clicking outside the component', () => {
+    component.expanded.set(true);
+    fixture.detectChanges();
+
+    expect(component.expanded()).toBe(true);
 
     document.body.click();
 
-    expect(closedEmitted).toBe(true);
+    expect(component.expanded()).toBe(false);
   });
 
-  it('should not emit closed when clicking inside the component', () => {
-    let closedEmitted = false;
-    component.closed.subscribe(() => (closedEmitted = true));
+  it('should not collapse when clicking inside the component', () => {
+    component.expanded.set(true);
+    fixture.detectChanges();
 
-    fixture.nativeElement.querySelector('.theme-card').click();
+    fixture.nativeElement.querySelector('.pill-container').click();
 
-    expect(closedEmitted).toBe(false);
+    expect(component.expanded()).toBe(true);
+  });
+
+  it('should rotate the plus icon when expanded', () => {
+    const icon = fixture.nativeElement.querySelector('.pill-icon');
+    expect(icon.classList.contains('rotated')).toBe(false);
+
+    component.expanded.set(true);
+    fixture.detectChanges();
+
+    const iconAfter = fixture.nativeElement.querySelector('.pill-icon');
+    expect(iconAfter.classList.contains('rotated')).toBe(true);
   });
 });

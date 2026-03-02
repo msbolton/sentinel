@@ -78,20 +78,6 @@ import { MapComponent } from './features/map/map.component';
             <polyline points="12 6 12 12 16 14"/>
           </svg>
         </button>
-        <button
-          class="sidebar-btn"
-          [class.active]="showThemePicker()"
-          (click)="toggleThemePicker($event)"
-          title="Display Theme">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="13.5" cy="6.5" r="2.5"/>
-            <circle cx="19" cy="13" r="2"/>
-            <circle cx="16" cy="19" r="2"/>
-            <circle cx="8" cy="19" r="2"/>
-            <circle cx="5" cy="13" r="2"/>
-            <path d="M12 2a10 10 0 0 0 0 20 2 2 0 0 0 2-2v-1a2 2 0 0 1 2-2h1a2 2 0 0 0 2-2 10 10 0 0 0-7-13z"/>
-          </svg>
-        </button>
       </div>
 
       <div class="sidebar-footer">
@@ -121,13 +107,8 @@ import { MapComponent } from './features/map/map.component';
       <!-- Map is always rendered in the background -->
       <app-map class="map-background"></app-map>
 
-      <!-- Floating theme picker card -->
-      @if (showThemePicker()) {
-        <app-theme-picker
-          class="floating-theme-picker"
-          (closed)="showThemePicker.set(false)">
-        </app-theme-picker>
-      }
+      <!-- Floating pills -->
+      <app-theme-picker class="floating-pill floating-pill-bottom-left"></app-theme-picker>
 
       <!-- Feature panels render on top of the map -->
       <div class="panel-overlay">
@@ -180,9 +161,9 @@ import { MapComponent } from './features/map/map.component';
       z-index: 1;
     }
 
-    .floating-theme-picker {
+    .floating-pill-bottom-left {
       position: absolute;
-      top: 16px;
+      bottom: 16px;
       left: 16px;
       z-index: 50;
     }
@@ -207,8 +188,6 @@ export class AppComponent implements OnInit, OnDestroy {
   unacknowledgedAlertCount = signal<number>(0);
   userProfile = signal<UserProfile | null>(null);
   currentTime = signal<string>('');
-  showThemePicker = signal(false);
-
   private readonly destroyRef = inject(DestroyRef);
   private readonly themeService = inject(ThemeService);
   private timeInterval: ReturnType<typeof setInterval> | null = null;
@@ -266,11 +245,6 @@ export class AppComponent implements OnInit, OnDestroy {
   toggleSettings(): void {
     // Future: open settings panel
     console.log('Settings panel - not yet implemented');
-  }
-
-  toggleThemePicker(event: MouseEvent): void {
-    event.stopPropagation();
-    this.showThemePicker.update((v) => !v);
   }
 
   handleAuth(): void {
