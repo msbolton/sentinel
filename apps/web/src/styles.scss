@@ -73,6 +73,56 @@ body[data-theme="normal"] {
   --shadow-node: rgba(0, 0, 0, 0.3);
 }
 
+// --- Color Tokens (CRT theme) ---
+body[data-theme="crt"] {
+  // Backgrounds
+  --bg-primary: #0d0a00;
+  --bg-secondary: #1a1200;
+  --bg-tertiary: #2a1f00;
+  --bg-panel: rgba(26, 18, 0, 0.92);
+  --bg-panel-hover: rgba(42, 31, 0, 0.95);
+
+  // Text (amber phosphor)
+  --text-primary: #ffb000;
+  --text-secondary: #cc8800;
+  --text-muted: #805500;
+
+  // Accents (warm-shifted)
+  --accent-blue: #d4a017;
+  --accent-cyan: #daa520;
+  --accent-green: #b8860b;
+  --accent-yellow: #ff8c00;
+  --accent-orange: #e07000;
+  --accent-red: #cd5c00;
+  --accent-purple: #e8a000;
+
+  // Borders (amber-tinted)
+  --border-color: rgba(255, 176, 0, 0.12);
+  --border-active: rgba(255, 176, 0, 0.4);
+
+  // Entity type colors (warm-shifted distinct)
+  --entity-person: #d4a017;
+  --entity-vehicle: #b8860b;
+  --entity-vessel: #daa520;
+  --entity-aircraft: #ff8c00;
+  --entity-facility: #cd5c00;
+  --entity-signal: #e8a000;
+  --entity-equipment: #8b7500;
+  --entity-unit: #b8860b;
+  --entity-cyber: #e8a000;
+  --entity-unknown: #6b5000;
+
+  // Utility colors
+  --color-white: #ffb000;
+  --color-gray: #805500;
+  --color-gray-dark: #6b4500;
+  --accent-pink: #e07000;
+  --shadow-node: rgba(255, 176, 0, 0.15);
+
+  // CRT-specific token
+  --text-glow: 0 0 4px currentColor, 0 0 8px rgba(255, 176, 0, 0.3);
+}
+
 // --- Reset & Base ---
 *,
 *::before,
