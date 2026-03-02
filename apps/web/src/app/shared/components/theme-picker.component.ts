@@ -19,51 +19,88 @@ interface ThemeOption {
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="theme-picker">
-      <div class="theme-picker-header">Display Theme</div>
-      @for (option of themeOptions; track option.value) {
-        <button
-          class="theme-option"
-          [class.active]="currentTheme() === option.value"
-          (click)="selectTheme(option.value)">
-          <span class="theme-swatch" [style.background]="option.swatch"></span>
-          <span class="theme-name">{{ option.label }}</span>
-          @if (currentTheme() === option.value) {
-            <svg class="theme-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="20 6 9 17 4 12"/>
-            </svg>
-          }
+    <div class="theme-panel">
+      <div class="theme-panel-header">
+        <span class="theme-panel-title">Display Theme</span>
+        <button class="theme-panel-close" (click)="closed.emit()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 6L6 18"/><path d="M6 6l12 12"/>
+          </svg>
         </button>
-      }
+      </div>
+      <div class="theme-options">
+        @for (option of themeOptions; track option.value) {
+          <button
+            class="theme-option"
+            [class.active]="currentTheme() === option.value"
+            (click)="selectTheme(option.value)">
+            <span class="theme-swatch" [style.background]="option.swatch"></span>
+            <span class="theme-name">{{ option.label }}</span>
+            @if (currentTheme() === option.value) {
+              <svg class="theme-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            }
+          </button>
+        }
+      </div>
     </div>
   `,
   styles: [`
     :host {
       display: block;
-      position: absolute;
-      bottom: 4px;
-      left: calc(100% + 8px);
-      z-index: 1100;
+      position: fixed;
+      top: 0;
+      left: var(--sidebar-width);
+      height: calc(100% - var(--status-bar-height));
+      z-index: 950;
     }
 
-    .theme-picker {
-      width: 200px;
+    .theme-panel {
+      width: 220px;
+      height: 100%;
       background: var(--bg-secondary);
-      border: 1px solid var(--border-color);
-      border-radius: var(--radius-md);
-      box-shadow: var(--shadow-lg);
-      padding: 8px 0;
-      animation: fadeIn 150ms ease;
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      animation: slideIn 200ms ease;
     }
 
-    .theme-picker-header {
-      padding: 6px 14px 8px;
-      font-size: 0.7rem;
+    .theme-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .theme-panel-title {
+      font-size: 0.8rem;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.06em;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       font-family: var(--font-mono);
+    }
+
+    .theme-panel-close {
+      background: transparent;
+      color: var(--text-muted);
+      padding: 4px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--transition-fast);
+
+      &:hover {
+        color: var(--text-primary);
+        background: color-mix(in srgb, var(--text-muted) 15%, transparent);
+      }
+    }
+
+    .theme-options {
+      padding: 8px 0;
     }
 
     .theme-option {
@@ -71,27 +108,28 @@ interface ThemeOption {
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 8px 14px;
+      padding: 10px 16px;
       background: transparent;
       color: var(--text-secondary);
       font-size: 0.85rem;
       transition: all var(--transition-fast);
 
       &:hover {
-        background: rgba(255, 255, 255, 0.05);
+        background: color-mix(in srgb, var(--text-muted) 10%, transparent);
         color: var(--text-primary);
       }
 
       &.active {
         color: var(--accent-blue);
+        background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
       }
     }
 
     .theme-swatch {
-      width: 16px;
-      height: 16px;
+      width: 20px;
+      height: 20px;
       border-radius: var(--radius-sm);
-      border: 1px solid rgba(255, 255, 255, 0.15);
+      border: 1px solid var(--border-color);
       flex-shrink: 0;
     }
 
@@ -105,9 +143,9 @@ interface ThemeOption {
       color: var(--accent-blue);
     }
 
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateX(-4px); }
-      to { opacity: 1; transform: translateX(0); }
+    @keyframes slideIn {
+      from { transform: translateX(-100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
     }
   `],
 })

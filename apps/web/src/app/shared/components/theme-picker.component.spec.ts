@@ -76,7 +76,7 @@ describe('ThemePickerComponent', () => {
     let closedEmitted = false;
     component.closed.subscribe(() => (closedEmitted = true));
 
-    fixture.nativeElement.querySelector('.theme-picker').click();
+    fixture.nativeElement.querySelector('.theme-panel').click();
 
     expect(closedEmitted).toBe(false);
   });
