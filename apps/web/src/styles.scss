@@ -457,24 +457,24 @@ textarea {
     }
 
     &.critical {
-      border-color: rgba(239, 68, 68, 0.5);
-      .toast-icon { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
+      border-color: color-mix(in srgb, var(--accent-red) 50%, transparent);
+      .toast-icon { background: color-mix(in srgb, var(--accent-red) 20%, transparent); color: var(--accent-red); }
     }
     &.high {
-      border-color: rgba(249, 115, 22, 0.5);
-      .toast-icon { background: rgba(249, 115, 22, 0.2); color: var(--accent-orange); }
+      border-color: color-mix(in srgb, var(--accent-orange) 50%, transparent);
+      .toast-icon { background: color-mix(in srgb, var(--accent-orange) 20%, transparent); color: var(--accent-orange); }
     }
     &.medium {
-      border-color: rgba(245, 158, 11, 0.5);
-      .toast-icon { background: rgba(245, 158, 11, 0.2); color: var(--accent-yellow); }
+      border-color: color-mix(in srgb, var(--accent-yellow) 50%, transparent);
+      .toast-icon { background: color-mix(in srgb, var(--accent-yellow) 20%, transparent); color: var(--accent-yellow); }
     }
     &.low {
-      border-color: rgba(59, 130, 246, 0.5);
-      .toast-icon { background: rgba(59, 130, 246, 0.2); color: var(--accent-blue); }
+      border-color: color-mix(in srgb, var(--accent-blue) 50%, transparent);
+      .toast-icon { background: color-mix(in srgb, var(--accent-blue) 20%, transparent); color: var(--accent-blue); }
     }
     &.info {
-      border-color: rgba(107, 114, 128, 0.5);
-      .toast-icon { background: rgba(107, 114, 128, 0.2); color: var(--text-muted); }
+      border-color: color-mix(in srgb, var(--text-muted) 50%, transparent);
+      .toast-icon { background: color-mix(in srgb, var(--text-muted) 20%, transparent); color: var(--text-muted); }
     }
   }
 }
@@ -547,10 +547,10 @@ textarea {
     letter-spacing: 0.05em;
     text-transform: uppercase;
 
-    &.UNCLASSIFIED { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); }
-    &.CONFIDENTIAL { background: rgba(59, 130, 246, 0.15); color: var(--accent-blue); }
-    &.SECRET { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); }
-    &.TOP_SECRET { background: rgba(245, 158, 11, 0.15); color: var(--accent-yellow); }
+    &.UNCLASSIFIED { background: color-mix(in srgb, var(--accent-green) 15%, transparent); color: var(--accent-green); }
+    &.CONFIDENTIAL { background: color-mix(in srgb, var(--accent-blue) 15%, transparent); color: var(--accent-blue); }
+    &.SECRET { background: color-mix(in srgb, var(--accent-red) 15%, transparent); color: var(--accent-red); }
+    &.TOP_SECRET { background: color-mix(in srgb, var(--accent-yellow) 15%, transparent); color: var(--accent-yellow); }
   }
 }
 

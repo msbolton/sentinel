@@ -13,6 +13,7 @@ describe('ThemeService', () => {
   afterEach(() => {
     localStorage.clear();
     document.body.removeAttribute('data-theme');
+    TestBed.resetTestingModule();
   });
 
   function createService(): ThemeService {
