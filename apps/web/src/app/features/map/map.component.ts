@@ -42,6 +42,17 @@ const CRT_AMBER_SHADER = `
   }
 `;
 
+const NVG_GREEN_SHADER = `
+  uniform sampler2D colorTexture;
+  in vec2 v_textureCoordinates;
+  void main() {
+    vec4 color = texture(colorTexture, v_textureCoordinates);
+    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+    vec3 green = vec3(gray * 0.05, gray * 0.6, gray * 0.05);
+    out_FragColor = vec4(green, color.a);
+  }
+`;
+
 interface LayerConfig {
   name: string;
   entityType: EntityType;
@@ -115,7 +126,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private cameraMovedSubject = new Subject<void>();
   private cesiumColorCache = new Map<string, any>();
   private renderScheduled = false;
-  private crtPostProcessStage: any = null;
+  private themePostProcessStage: any = null;
 
   constructor(
     private readonly ngZone: NgZone,
@@ -302,26 +313,29 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
     const Cesium = this.Cesium;
 
+    // Remove any existing theme post-process stage
+    if (this.themePostProcessStage) {
+      this.viewer.scene.postProcessStages.remove(this.themePostProcessStage);
+      this.themePostProcessStage = null;
+    }
+
     if (theme === ThemePreset.CRT) {
-      // Tint globe amber
       this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0d0a00');
       this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0d0a00');
-
-      if (!this.crtPostProcessStage) {
-        this.crtPostProcessStage = new Cesium.PostProcessStage({
-          fragmentShader: CRT_AMBER_SHADER,
-        });
-        this.viewer.scene.postProcessStages.add(this.crtPostProcessStage);
-      }
+      this.themePostProcessStage = new Cesium.PostProcessStage({
+        fragmentShader: CRT_AMBER_SHADER,
+      });
+      this.viewer.scene.postProcessStages.add(this.themePostProcessStage);
+    } else if (theme === ThemePreset.NIGHT_VISION) {
+      this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#010a01');
+      this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#010a01');
+      this.themePostProcessStage = new Cesium.PostProcessStage({
+        fragmentShader: NVG_GREEN_SHADER,
+      });
+      this.viewer.scene.postProcessStages.add(this.themePostProcessStage);
     } else {
-      // Restore normal colors
       this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
       this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a0e17');
-
-      if (this.crtPostProcessStage) {
-        this.viewer.scene.postProcessStages.remove(this.crtPostProcessStage);
-        this.crtPostProcessStage = null;
-      }
     }
 
     this.viewer.scene.requestRender();
