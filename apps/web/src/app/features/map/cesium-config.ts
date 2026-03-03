@@ -6,6 +6,13 @@ import { EntityType } from '../../shared/models/entity.model';
  */
 export function configureCesium(): void {
   (window as any).CESIUM_BASE_URL = '/assets/cesium';
+
+  // Disable optional WASM features to reduce memory usage
+  // This prevents WebAssembly out-of-memory errors in some browsers
+  if (typeof window !== 'undefined') {
+    (window as any).CESIUM_DISABLE_DRACO = true;
+    (window as any).CESIUM_DISABLE_BASIS = true;
+  }
 }
 
 /** Default Cesium Viewer configuration options */
