@@ -1,3 +1,6 @@
+import { LinkType } from '@sentinel/proto-gen';
+export { LinkType };
+
 export interface Link {
   id: string;
   sourceEntityId: string;
@@ -8,18 +11,6 @@ export interface Link {
   metadata: Record<string, string>;
   createdAt: string;
   updatedAt: string;
-}
-
-export enum LinkType {
-  ASSOCIATED = 'ASSOCIATED',
-  COMMUNICATION = 'COMMUNICATION',
-  FINANCIAL = 'FINANCIAL',
-  ORGANIZATIONAL = 'ORGANIZATIONAL',
-  GEOGRAPHIC = 'GEOGRAPHIC',
-  FAMILIAL = 'FAMILIAL',
-  LOGISTIC = 'LOGISTIC',
-  OPERATIONAL = 'OPERATIONAL',
-  IDENTITY = 'IDENTITY',
 }
 
 export interface GraphNode {

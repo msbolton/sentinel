@@ -19,20 +19,24 @@ proto: proto-ts proto-go proto-python ## Generate all protobuf code
 proto-ts: ## Generate TypeScript protobuf types
 	@echo "Generating TypeScript protobuf types..."
 	@mkdir -p libs/proto-gen/src/ts
-	@cd proto && npx buf generate --template buf.gen.yaml 2>/dev/null || \
+	@cd proto && PATH="../node_modules/.bin:$$PATH" buf generate --template buf.gen.ts.yaml 2>/dev/null || \
 		echo "Install buf CLI: https://buf.build/docs/installation"
+	@echo "Stripping proto enum prefixes from generated TS..."
+	@for f in libs/proto-gen/src/ts/*.ts; do \
+		sed -i '' -E 's/^(  )([A-Z][A-Z_0-9]*) = "[A-Z_0-9]+",$$/\1\2 = "\2",/' "$$f"; \
+	done
 
 proto-go: ## Generate Go protobuf types
 	@echo "Generating Go protobuf types..."
 	@mkdir -p libs/proto-gen/src/go
-	@cd proto && buf generate --template buf.gen.yaml 2>/dev/null || \
-		echo "Install buf CLI and protoc-gen-go"
+	@cd proto && buf generate --template buf.gen.go.yaml 2>/dev/null || \
+		echo "Install buf CLI: https://buf.build/docs/installation"
 
 proto-python: ## Generate Python protobuf types
 	@echo "Generating Python protobuf types..."
 	@mkdir -p libs/proto-gen/src/python
-	@cd proto && buf generate --template buf.gen.yaml 2>/dev/null || \
-		echo "Install buf CLI and betterproto"
+	@cd proto && buf generate --template buf.gen.python.yaml 2>/dev/null || \
+		echo "Install buf CLI and betterproto: pip install betterproto[compiler]"
 
 proto-lint: ## Lint protobuf definitions
 	@cd proto && buf lint
