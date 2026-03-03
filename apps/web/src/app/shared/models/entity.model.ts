@@ -1,3 +1,6 @@
+import { EntityType, EntitySource, Classification } from '@sentinel/proto-gen';
+export { EntityType, EntitySource, Classification };
+
 export interface Entity {
   id: string;
   entityType: EntityType;
@@ -19,36 +22,6 @@ export interface Entity {
   createdAt: string;
   updatedAt: string;
   lastSeenAt?: string;
-}
-
-export enum EntityType {
-  UNKNOWN = 'UNKNOWN',
-  PERSON = 'PERSON',
-  VEHICLE = 'VEHICLE',
-  VESSEL = 'VESSEL',
-  AIRCRAFT = 'AIRCRAFT',
-  FACILITY = 'FACILITY',
-  EQUIPMENT = 'EQUIPMENT',
-  UNIT = 'UNIT',
-  SIGNAL = 'SIGNAL',
-  CYBER = 'CYBER',
-}
-
-export enum EntitySource {
-  HUMINT = 'HUMINT',
-  SIGINT = 'SIGINT',
-  GEOINT = 'GEOINT',
-  OSINT = 'OSINT',
-  MASINT = 'MASINT',
-  CYBER = 'CYBER',
-  MANUAL = 'MANUAL',
-}
-
-export enum Classification {
-  UNCLASSIFIED = 'UNCLASSIFIED',
-  CONFIDENTIAL = 'CONFIDENTIAL',
-  SECRET = 'SECRET',
-  TOP_SECRET = 'TOP_SECRET',
 }
 
 export interface EntityEvent {

@@ -1,37 +1,5 @@
-export enum EntityType {
-  UNKNOWN = 'UNKNOWN',
-  PERSON = 'PERSON',
-  VEHICLE = 'VEHICLE',
-  VESSEL = 'VESSEL',
-  AIRCRAFT = 'AIRCRAFT',
-  FACILITY = 'FACILITY',
-  EQUIPMENT = 'EQUIPMENT',
-  UNIT = 'UNIT',
-  SIGNAL = 'SIGNAL',
-  CYBER = 'CYBER',
-}
-
-export enum EntitySource {
-  HUMINT = 'HUMINT',
-  SIGINT = 'SIGINT',
-  GEOINT = 'GEOINT',
-  OSINT = 'OSINT',
-  MASINT = 'MASINT',
-  CYBER = 'CYBER',
-  MANUAL = 'MANUAL',
-  AIS = 'AIS',
-  ADS_B = 'ADS_B',
-  LINK16 = 'LINK16',
-  GPS = 'GPS',
-  RADAR = 'RADAR',
-}
-
-export enum Classification {
-  UNCLASSIFIED = 'UNCLASSIFIED',
-  CONFIDENTIAL = 'CONFIDENTIAL',
-  SECRET = 'SECRET',
-  TOP_SECRET = 'TOP_SECRET',
-}
+export { EntityType, EntitySource, Classification } from '@sentinel/proto-gen';
+import { Classification } from '@sentinel/proto-gen';
 
 /**
  * Ordered classification levels for comparison queries.

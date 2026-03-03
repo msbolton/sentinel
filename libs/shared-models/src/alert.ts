@@ -1,6 +1,7 @@
 import { BoundingBox, Coordinate, PaginationRequest, PaginationResponse } from './common';
 import { EntityType } from './entity';
 
+// Canonical definitions in @sentinel/proto-gen (proto/alert.proto)
 export enum AlertSeverity {
   INFO = 'INFO',
   LOW = 'LOW',
@@ -17,6 +18,23 @@ export enum AlertType {
   COMMUNICATION_ANOMALY = 'COMMUNICATION_ANOMALY',
   NEW_ENTITY = 'NEW_ENTITY',
   ENTITY_CLASSIFICATION_CHANGE = 'ENTITY_CLASSIFICATION_CHANGE',
+  GEOFENCE_ENTRY = 'GEOFENCE_ENTRY',
+  GEOFENCE_EXIT = 'GEOFENCE_EXIT',
+  PATTERN_MATCH = 'PATTERN_MATCH',
+  CUSTOM = 'CUSTOM',
+  PROXIMITY_ALERT = 'PROXIMITY_ALERT',
+  ENTITY_LOST = 'ENTITY_LOST',
+  PATTERN_DETECTED = 'PATTERN_DETECTED',
+  LINK_CHANGE = 'LINK_CHANGE',
+  CLASSIFICATION_CHANGE = 'CLASSIFICATION_CHANGE',
+  SYSTEM = 'SYSTEM',
+}
+
+export enum RuleType {
+  GEOFENCE = 'GEOFENCE',
+  SPEED_THRESHOLD = 'SPEED_THRESHOLD',
+  PROXIMITY = 'PROXIMITY',
+  PATTERN = 'PATTERN',
 }
 
 export interface GeofenceRule {

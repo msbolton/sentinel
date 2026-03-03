@@ -54,6 +54,7 @@ export const ENTITY_TYPE_COLORS: Record<string, { red: number; green: number; bl
   [EntityType.UNIT]: { red: 0.063, green: 0.725, blue: 0.506, alpha: 1.0 },         // Green
   [EntityType.SIGNAL]: { red: 0.545, green: 0.361, blue: 0.965, alpha: 1.0 },       // Purple
   [EntityType.CYBER]: { red: 0.545, green: 0.361, blue: 0.965, alpha: 1.0 },        // Purple
+  [EntityType.SENSOR]: { red: 0.545, green: 0.361, blue: 0.965, alpha: 1.0 },        // Purple
   [EntityType.UNKNOWN]: { red: 0.353, green: 0.416, blue: 0.502, alpha: 1.0 },       // Muted (#5a6a80)
 };
 
@@ -68,6 +69,7 @@ export const ENTITY_TYPE_ICONS: Record<string, string> = {
   [EntityType.UNIT]: '\u{1F396}',        // military medal
   [EntityType.SIGNAL]: '\u{1F4E1}',      // satellite antenna
   [EntityType.CYBER]: '\u{1F4BB}',       // laptop
+  [EntityType.SENSOR]: '\u{1F4E1}',      // satellite antenna
   [EntityType.UNKNOWN]: '\u{2753}',      // question mark
 };
 
@@ -82,6 +84,7 @@ export const ENTITY_TYPE_PIN_COLORS: Record<string, string> = {
   [EntityType.UNIT]: '#10b981',
   [EntityType.SIGNAL]: '#8b5cf6',
   [EntityType.CYBER]: '#8b5cf6',
+  [EntityType.SENSOR]: '#8b5cf6',
   [EntityType.UNKNOWN]: '#5a6a80',
 };
 

@@ -1,0 +1,15 @@
+version: v2
+plugins:
+  - local: protoc-gen-ts_proto
+    out: ../libs/proto-gen/src/ts
+    opt:
+      - stringEnums=true
+      - removeEnumPrefix=true
+      - outputServices=false
+      - outputClientImpl=false
+      - unrecognizedEnum=false
+      - useOptionals=messages
+      - exportCommonSymbols=false
+      - esModuleInterop=true
+      - useDate=string
+      - forceLong=number

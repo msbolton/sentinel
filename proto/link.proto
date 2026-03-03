@@ -18,6 +18,11 @@ enum LinkType {
   LINK_TYPE_ORGANIZATIONAL = 5;
   LINK_TYPE_MOVEMENT_PATTERN = 6;
   LINK_TYPE_COMMAND_CONTROL = 7;
+  LINK_TYPE_GEOGRAPHIC = 8;
+  LINK_TYPE_FAMILIAL = 9;
+  LINK_TYPE_LOGISTIC = 10;
+  LINK_TYPE_OPERATIONAL = 11;
+  LINK_TYPE_IDENTITY = 12;
 }
 
 // Link represents a directed relationship between two entities, along with

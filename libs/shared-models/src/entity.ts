@@ -1,5 +1,6 @@
 import { BoundingBox, Classification, Coordinate, PaginationRequest, PaginationResponse } from './common';
 
+// Canonical definitions in @sentinel/proto-gen (proto/entity.proto)
 export enum EntityType {
   UNKNOWN = 'UNKNOWN',
   PERSON = 'PERSON',
@@ -11,6 +12,7 @@ export enum EntityType {
   UNIT = 'UNIT',
   SIGNAL = 'SIGNAL',
   CYBER = 'CYBER',
+  SENSOR = 'SENSOR',
 }
 
 export enum EntitySource {
@@ -21,6 +23,21 @@ export enum EntitySource {
   MASINT = 'MASINT',
   CYBER = 'CYBER',
   MANUAL = 'MANUAL',
+  AIS = 'AIS',
+  ADS_B = 'ADS_B',
+  LINK16 = 'LINK16',
+  GPS = 'GPS',
+  RADAR = 'RADAR',
+}
+
+export enum Affiliation {
+  FRIENDLY = 'FRIENDLY',
+  HOSTILE = 'HOSTILE',
+  NEUTRAL = 'NEUTRAL',
+  UNKNOWN = 'UNKNOWN',
+  ASSUMED_FRIENDLY = 'ASSUMED_FRIENDLY',
+  SUSPECT = 'SUSPECT',
+  PENDING = 'PENDING',
 }
 
 export interface Entity {
