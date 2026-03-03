@@ -88,8 +88,22 @@ export class EntityService implements OnModuleInit {
 
     const saved = await this.entityRepository.save(entity);
 
-    // Publish to Kafka
-    this.emitKafka(TOPIC_ENTITY_CREATED, saved.id, saved);
+    // Publish to Kafka in api-gateway compatible format
+    if (dto.position) {
+      this.emitKafka(TOPIC_ENTITY_CREATED, saved.id, {
+        entity_id: saved.id,
+        entity_type: saved.entityType,
+        latitude: dto.position.lat,
+        longitude: dto.position.lng,
+        altitude_meters: undefined,
+        heading: saved.heading,
+        speed_knots: saved.speedKnots,
+        classification: saved.classification,
+        source: saved.source,
+        timestamp: saved.lastSeenAt?.toISOString() ?? new Date().toISOString(),
+        metadata: saved.metadata,
+      });
+    }
 
     // Cache in Redis geospatial index
     if (dto.position) {
@@ -131,8 +145,23 @@ export class EntityService implements OnModuleInit {
     Object.assign(existing, updates);
     const saved = await this.entityRepository.save(existing);
 
-    // Publish to Kafka
-    this.emitKafka(TOPIC_ENTITY_UPDATED, saved.id, saved);
+    // Publish to Kafka in api-gateway compatible format (only if position is available)
+    const coords = saved.position as any;
+    if (coords?.coordinates && Array.isArray(coords.coordinates)) {
+      this.emitKafka(TOPIC_ENTITY_UPDATED, saved.id, {
+        entity_id: saved.id,
+        entity_type: saved.entityType,
+        latitude: coords.coordinates[1],
+        longitude: coords.coordinates[0],
+        altitude_meters: undefined,
+        heading: saved.heading,
+        speed_knots: saved.speedKnots,
+        classification: saved.classification,
+        source: saved.source,
+        timestamp: saved.lastSeenAt?.toISOString() ?? new Date().toISOString(),
+        metadata: saved.metadata,
+      });
+    }
 
     // Update Redis geospatial index if position changed
     if (dto.position) {
@@ -208,16 +237,19 @@ export class EntityService implements OnModuleInit {
       throw new NotFoundException(`Entity ${id} not found after position update`);
     }
 
-    // Publish position event to Kafka
+    // Publish position event to Kafka in api-gateway compatible format
     this.emitKafka(TOPIC_ENTITY_POSITION, updated.id, {
-      entityId: updated.id,
-      entityType: updated.entityType,
-      lat: dto.lat,
-      lng: dto.lng,
+      entity_id: updated.id,
+      entity_type: updated.entityType,
+      latitude: dto.lat,
+      longitude: dto.lng,
+      altitude_meters: undefined,
       heading: dto.heading,
-      speedKnots: dto.speedKnots,
-      course: dto.course,
-      timestamp: updated.lastSeenAt,
+      speed_knots: dto.speedKnots,
+      classification: updated.classification,
+      source: updated.source,
+      timestamp: updated.lastSeenAt?.toISOString() ?? new Date().toISOString(),
+      metadata: updated.metadata,
     });
 
     // Update Redis geospatial index
@@ -235,13 +267,16 @@ export class EntityService implements OnModuleInit {
       throw new NotFoundException(`Entity with ID "${id}" not found`);
     }
 
-    const deleted = await this.entityRepository.softDelete(id);
+    const deleted = await this.entityRepository.softDeleteEntity(id);
     if (!deleted) {
       throw new NotFoundException(`Entity with ID "${id}" could not be deleted`);
     }
 
-    // Publish to Kafka
-    this.emitKafka(TOPIC_ENTITY_DELETED, id, { entityId: id, deletedAt: new Date() });
+    // Publish to Kafka in api-gateway compatible format
+    this.emitKafka(TOPIC_ENTITY_DELETED, id, {
+      entity_id: id,
+      timestamp: new Date().toISOString()
+    });
 
     // Remove from Redis geospatial index
     await this.redisGeoRemove(id);

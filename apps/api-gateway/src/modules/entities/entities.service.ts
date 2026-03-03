@@ -140,22 +140,22 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
       const rows = await this.dataSource.query(`
         SELECT
           id,
-          entity_type AS "entityType",
+          "entityType",
           name,
           description,
           ST_Y(position::geometry) AS latitude,
           ST_X(position::geometry) AS longitude,
           heading,
-          speed_knots AS "speedKnots",
+          "speedKnots",
           course,
-          mil_std_2525d_symbol AS "milStd2525dSymbol",
+          "milStd2525dSymbol",
           classification,
           source,
           affiliations,
           metadata,
-          created_at AS "createdAt",
-          updated_at AS "updatedAt",
-          last_seen_at AS "lastSeenAt"
+          "createdAt",
+          "updatedAt",
+          "lastSeenAt"
         FROM sentinel.entities
         WHERE position IS NOT NULL
       `);
@@ -328,22 +328,22 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
       let sql = `
         SELECT
           id,
-          entity_type AS "entityType",
+          "entityType",
           name,
           description,
           ST_Y(position::geometry) AS latitude,
           ST_X(position::geometry) AS longitude,
           heading,
-          speed_knots AS "speedKnots",
+          "speedKnots",
           course,
-          mil_std_2525d_symbol AS "milStd2525dSymbol",
+          "milStd2525dSymbol",
           classification,
           source,
           affiliations,
           metadata,
-          created_at AS "createdAt",
-          updated_at AS "updatedAt",
-          last_seen_at AS "lastSeenAt"
+          "createdAt",
+          "updatedAt",
+          "lastSeenAt"
         FROM sentinel.entities
         WHERE position IS NOT NULL
       `;
@@ -355,7 +355,7 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
         sql += ` AND ST_Within(position, ST_MakeEnvelope($1, $2, $3, $4, 4326))`;
       }
 
-      sql += ' ORDER BY updated_at DESC LIMIT 500';
+      sql += ' ORDER BY "updatedAt" DESC LIMIT 500';
 
       const rows = await this.dataSource.query(sql, params);
 
@@ -431,22 +431,22 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
       const rows = await this.dataSource.query(
         `SELECT
           id,
-          entity_type AS "entityType",
+          "entityType",
           name,
           description,
           ST_Y(position::geometry) AS latitude,
           ST_X(position::geometry) AS longitude,
           heading,
-          speed_knots AS "speedKnots",
+          "speedKnots",
           course,
-          mil_std_2525d_symbol AS "milStd2525dSymbol",
+          "milStd2525dSymbol",
           classification,
           source,
           affiliations,
           metadata,
-          created_at AS "createdAt",
-          updated_at AS "updatedAt",
-          last_seen_at AS "lastSeenAt"
+          "createdAt",
+          "updatedAt",
+          "lastSeenAt"
         FROM sentinel.entities
         WHERE id = $1`,
         [id],
