@@ -123,6 +123,56 @@ body[data-theme="crt"] {
   --text-glow: 0 0 4px currentColor, 0 0 8px rgba(255, 176, 0, 0.3);
 }
 
+// --- Color Tokens (Night Vision theme) ---
+body[data-theme="night-vision"] {
+  // Backgrounds (near-black with green tint)
+  --bg-primary: #010a01;
+  --bg-secondary: #021a04;
+  --bg-tertiary: #032a06;
+  --bg-panel: rgba(2, 26, 4, 0.92);
+  --bg-panel-hover: rgba(3, 42, 6, 0.95);
+
+  // Text (dim green)
+  --text-primary: #33cc33;
+  --text-secondary: #228822;
+  --text-muted: #115511;
+
+  // Accents (green-shifted)
+  --accent-blue: #33cc33;
+  --accent-cyan: #33bb33;
+  --accent-green: #22aa22;
+  --accent-yellow: #44dd44;
+  --accent-orange: #44cc44;
+  --accent-red: #33aa33;
+  --accent-purple: #33bb33;
+
+  // Borders (faint green)
+  --border-color: rgba(51, 204, 51, 0.10);
+  --border-active: rgba(51, 204, 51, 0.35);
+
+  // Entity type colors (varying green intensity)
+  --entity-person: #33bb33;
+  --entity-vehicle: #22aa22;
+  --entity-vessel: #33cc33;
+  --entity-aircraft: #44dd44;
+  --entity-facility: #22aa22;
+  --entity-signal: #44cc44;
+  --entity-equipment: #228822;
+  --entity-unit: #22aa22;
+  --entity-cyber: #33bb33;
+  --entity-unknown: #115511;
+
+  // Utility colors
+  --color-white: #33cc33;
+  --color-gray: #228822;
+  --color-gray-dark: #115511;
+  --accent-pink: #44cc44;
+  --shadow-node: rgba(51, 204, 51, 0.15);
+
+  // NVG-specific token
+  --text-glow: 0 0 4px currentColor, 0 0 10px rgba(51, 204, 51, 0.4);
+}
+
 // --- CRT Overlay Effects ---
 body[data-theme="crt"]::before {
   content: '';
@@ -148,6 +198,40 @@ body[data-theme="crt"]::after {
 }
 
 body[data-theme="crt"] {
+  h1, h2, h3, h4, h5, h6,
+  .sidebar-logo,
+  .card-title,
+  .toast-title,
+  .chip {
+    text-shadow: var(--text-glow);
+  }
+}
+
+// --- Night Vision Overlay Effects ---
+// Grain/noise overlay (simulates NVG tube artifacts)
+body[data-theme="night-vision"]::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background: repeating-conic-gradient(#33cc33 0.00005%, transparent 0.0001%) 50% / 200px 200px;
+  opacity: 0.04;
+  mix-blend-mode: overlay;
+}
+
+// Vignette (simulates NVG tube circular FOV)
+body[data-theme="night-vision"]::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 40%, rgba(0, 10, 0, 0.7) 100%);
+}
+
+// Glow on headings and prominent elements
+body[data-theme="night-vision"] {
   h1, h2, h3, h4, h5, h6,
   .sidebar-logo,
   .card-title,
