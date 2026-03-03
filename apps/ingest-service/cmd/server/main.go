@@ -42,6 +42,8 @@ func main() {
 		zap.Int("worker_pool_size", cfg.WorkerPoolSize),
 		zap.Int("batch_size", cfg.BatchSize),
 		zap.Int("flush_interval_ms", cfg.FlushIntervalMs),
+		zap.Bool("opensky_enabled", cfg.OpenSkyEnabled),
+		zap.Bool("adsblol_enabled", cfg.ADSBLolEnabled),
 	)
 
 	// Initialize Prometheus metrics.
@@ -82,6 +84,24 @@ func main() {
 		logger.Fatal("failed to start tcp listener", zap.Error(err))
 	}
 
+	// OpenSky Network listener (if enabled).
+	var openSkyListener *sources.OpenSkyListener
+	if cfg.OpenSkyEnabled {
+		openSkyListener = sources.NewOpenSkyListener(cfg, pipelineInput, logger, m)
+		if err := openSkyListener.Start(); err != nil {
+			logger.Error("failed to start opensky listener (will retry)", zap.Error(err))
+		}
+	}
+
+	// adsb.lol military aircraft listener (if enabled).
+	var adsbLolListener *sources.ADSBLolListener
+	if cfg.ADSBLolEnabled {
+		adsbLolListener = sources.NewADSBLolListener(cfg, pipelineInput, logger, m)
+		if err := adsbLolListener.Start(); err != nil {
+			logger.Error("failed to start adsblol listener (will retry)", zap.Error(err))
+		}
+	}
+
 	// Start HTTP health/metrics server.
 	healthHandler := health.NewHandler(producer, logger)
 	mux := http.NewServeMux()
@@ -118,6 +138,12 @@ func main() {
 	mqttListener.Stop()
 	stompListener.Stop()
 	tcpListener.Stop()
+	if openSkyListener != nil {
+		openSkyListener.Stop()
+	}
+	if adsbLolListener != nil {
+		adsbLolListener.Stop()
+	}
 
 	// Stop the pipeline (drains remaining messages).
 	pipeline.Stop()
