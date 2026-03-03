@@ -46,6 +46,7 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
 
   private static readonly ENTITY_POSITION_TOPIC = 'events.entity.position';
   private static readonly ENTITY_CREATED_TOPIC = 'events.entity.created';
+  private static readonly ENTITY_UPDATED_TOPIC = 'events.entity.updated';
   private static readonly ENTITY_DELETED_TOPIC = 'events.entity.deleted';
 
   constructor(
@@ -83,6 +84,7 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
         topics: [
           KafkaConsumerService.ENTITY_POSITION_TOPIC,
           KafkaConsumerService.ENTITY_CREATED_TOPIC,
+          KafkaConsumerService.ENTITY_UPDATED_TOPIC,
           KafkaConsumerService.ENTITY_DELETED_TOPIC,
         ],
         fromBeginning: false,
@@ -95,7 +97,7 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
       });
 
       this.logger.log(
-        `Subscribed to topics: ${KafkaConsumerService.ENTITY_POSITION_TOPIC}, ${KafkaConsumerService.ENTITY_CREATED_TOPIC}, ${KafkaConsumerService.ENTITY_DELETED_TOPIC}`,
+        `Subscribed to topics: ${KafkaConsumerService.ENTITY_POSITION_TOPIC}, ${KafkaConsumerService.ENTITY_CREATED_TOPIC}, ${KafkaConsumerService.ENTITY_UPDATED_TOPIC}, ${KafkaConsumerService.ENTITY_DELETED_TOPIC}`,
       );
     } catch (error) {
       this.kafkaConnected = false;
@@ -140,6 +142,9 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
           break;
         case KafkaConsumerService.ENTITY_CREATED_TOPIC:
           await this.handleEntityCreatedEvent(message.value);
+          break;
+        case KafkaConsumerService.ENTITY_UPDATED_TOPIC:
+          await this.handleEntityUpdatedEvent(message.value);
           break;
         case KafkaConsumerService.ENTITY_DELETED_TOPIC:
           await this.handleEntityDeletedEvent(message.value);
@@ -193,6 +198,8 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
       latitude: raw.latitude,
       longitude: raw.longitude,
       altitude: raw.altitude_meters,
+      heading: raw.heading,
+      speed: raw.speed_knots,
       classification: raw.classification,
       source: raw.source,
       timestamp: raw.timestamp,
@@ -200,6 +207,30 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     };
 
     await this.entityGateway.broadcastEntityUpdate(update, 'created');
+  }
+
+  /**
+   * Handles entity update events - broadcasts to all clients.
+   */
+  private async handleEntityUpdatedEvent(value: Buffer): Promise<void> {
+    const raw = this.deserializeMessage<RawEntityPositionEvent>(value);
+    if (!raw) return;
+
+    const update: EntityPositionUpdate = {
+      entityId: raw.entity_id,
+      entityType: raw.entity_type,
+      latitude: raw.latitude,
+      longitude: raw.longitude,
+      altitude: raw.altitude_meters,
+      heading: raw.heading,
+      speed: raw.speed_knots,
+      classification: raw.classification,
+      source: raw.source,
+      timestamp: raw.timestamp,
+      metadata: raw.metadata,
+    };
+
+    await this.entityGateway.broadcastEntityUpdate(update, 'updated');
   }
 
   /**
