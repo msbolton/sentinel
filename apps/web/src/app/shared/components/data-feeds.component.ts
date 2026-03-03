@@ -10,6 +10,21 @@ import {
 } from '@angular/core';
 import { DataFeedService, DataFeed } from '../../core/services/data-feed.service';
 
+interface DataLayerConfig {
+  id: string;
+  name: string;
+  source: string;
+}
+
+interface DataLayer {
+  id: string;
+  name: string;
+  source: string;
+  count: number | null;
+  enabled: boolean;
+  lastUpdated: string;
+}
+
 @Component({
   selector: 'app-data-feeds',
   standalone: true,
@@ -18,43 +33,42 @@ import { DataFeedService, DataFeed } from '../../core/services/data-feed.service
     <div class="pill-container" [class.expanded]="expanded()">
       <!-- Pill / Header bar -->
       <button class="pill-header" (click)="toggle()">
-        <span class="pill-label">DATA FEEDS</span>
-        @if (activeCount() > 0) {
+        <span class="pill-label">DATA LAYERS</span>
+        @if (!expanded() && activeCount() > 0) {
           <span class="feed-badge">{{ activeCount() }}</span>
         }
-        <svg class="pill-icon" [class.rotated]="expanded()"
-             width="14" height="14" viewBox="0 0 24 24"
-             fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round">
-          <line x1="12" y1="5" x2="12" y2="19"/>
-          <line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
+        <span class="pill-rule" [class.visible]="expanded()"></span>
+        <span class="pill-toggle-btn">{{ expanded() ? '−' : '+' }}</span>
       </button>
 
       <!-- Expanded panel -->
       @if (expanded()) {
         <div class="pill-panel">
-          @for (feed of feeds(); track feed.id) {
-            <div class="feed-row">
-              <div class="feed-info">
-                <span class="feed-name">{{ feed.name }}</span>
-                <span class="feed-type">{{ feed.sourceType }}</span>
+          @for (layer of layers(); track layer.id) {
+            <div class="layer-row">
+              <div class="layer-content">
+                <div class="layer-main">
+                  <span class="layer-name">{{ layer.name }}</span>
+                  <span class="layer-count">{{ layer.count !== null ? formatCount(layer.count) : '—' }}</span>
+                  <button
+                    class="layer-toggle"
+                    [class.on]="layer.enabled"
+                    [class.busy]="toggling() === layer.id"
+                    [disabled]="toggling() === layer.id"
+                    (click)="toggleLayer(layer)">
+                    {{ layer.enabled ? 'ON' : 'OFF' }}
+                  </button>
+                </div>
+                <div class="layer-meta">
+                  {{ layer.source }} · {{ layer.lastUpdated }}
+                </div>
               </div>
-              <button
-                class="toggle-switch"
-                [class.on]="feed.enabled"
-                [class.busy]="toggling() === feed.id"
-                [disabled]="toggling() === feed.id"
-                (click)="toggleFeed(feed)"
-                [attr.aria-label]="(feed.enabled ? 'Disable' : 'Enable') + ' ' + feed.name">
-                <span class="toggle-thumb"></span>
-              </button>
             </div>
           }
-          @if (feeds().length === 0) {
-            <div class="feed-empty">
+          @if (layers().length === 0) {
+            <div class="layer-empty">
               @if (feedService.hasLoaded) {
-                No feeds configured
+                No layers configured
               } @else {
                 Ingest service offline
               }
@@ -75,22 +89,23 @@ import { DataFeedService, DataFeed } from '../../core/services/data-feed.service
     }
 
     .pill-container.expanded {
-      width: 260px;
+      width: 340px;
     }
 
     .pill-header {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      padding: 8px 14px;
-      border-radius: 20px;
+      gap: 10px;
+      padding: 10px 18px;
+      min-width: 200px;
+      border-radius: 24px;
       background: var(--bg-panel);
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
       border: 1px solid var(--border-color);
       cursor: pointer;
       font-family: var(--font-mono);
-      font-size: 0.7rem;
+      font-size: 0.75rem;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--text-secondary);
@@ -108,13 +123,28 @@ import { DataFeedService, DataFeed } from '../../core/services/data-feed.service
       border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     }
 
-    .pill-icon {
-      transition: transform 200ms ease;
-      flex-shrink: 0;
+    .pill-rule {
+      flex: 1;
+      height: 1px;
+
+      &.visible {
+        background: var(--border-color);
+      }
     }
 
-    .pill-icon.rotated {
-      transform: rotate(45deg);
+    .pill-toggle-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-color);
+      font-size: 0.85rem;
+      line-height: 1;
+      flex-shrink: 0;
+      color: var(--text-muted);
     }
 
     .feed-badge {
@@ -143,11 +173,9 @@ import { DataFeedService, DataFeed } from '../../core/services/data-feed.service
       animation: floatIn 200ms cubic-bezier(0.16, 1, 0.3, 1);
     }
 
-    .feed-row {
+    .layer-row {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 10px;
       padding: 8px 10px;
       border-radius: var(--radius-sm);
       transition: background var(--transition-fast);
@@ -157,56 +185,58 @@ import { DataFeedService, DataFeed } from '../../core/services/data-feed.service
       }
     }
 
-    .feed-info {
+    .layer-content {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+      width: 100%;
+    }
+
+    .layer-main {
       display: flex;
       align-items: center;
       gap: 8px;
-      min-width: 0;
     }
 
-    .feed-name {
+    .layer-name {
       font-size: 0.8rem;
       font-weight: 500;
       color: var(--text-primary);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      flex: 1;
+      min-width: 0;
     }
 
-    .feed-type {
+    .layer-count {
       font-family: var(--font-mono);
-      font-size: 0.6rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      padding: 2px 5px;
-      border-radius: 3px;
-      background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+      font-size: 0.7rem;
       color: var(--text-muted);
       white-space: nowrap;
+      min-width: 32px;
+      text-align: right;
     }
 
-    .feed-empty {
-      padding: 12px 10px;
-      font-size: 0.75rem;
+    .layer-toggle {
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      background: rgba(255, 255, 255, 0.05);
       color: var(--text-muted);
-      text-align: center;
-    }
-
-    /* Hardware-style toggle switch */
-    .toggle-switch {
-      position: relative;
-      width: 36px;
-      height: 18px;
-      border-radius: 9px;
-      background: transparent;
-      border: 1.5px solid var(--bg-primary);
+      border: 1px solid var(--border-color);
       cursor: pointer;
       flex-shrink: 0;
-      padding: 0;
-      transition: border-color 200ms ease;
+      transition: all 150ms ease;
 
       &.on {
-        border-color: var(--accent-green);
+        color: var(--accent-cyan, var(--accent-blue));
+        border-color: var(--accent-cyan, var(--accent-blue));
+        background: rgba(6, 182, 212, 0.1);
       }
 
       &.busy {
@@ -219,21 +249,21 @@ import { DataFeedService, DataFeed } from '../../core/services/data-feed.service
       }
     }
 
-    .toggle-thumb {
-      position: absolute;
-      top: 2px;
-      left: 2px;
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      background: var(--text-muted);
-      transition: transform 200ms ease, background 200ms ease, box-shadow 200ms ease;
+    .layer-meta {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
 
-      .toggle-switch.on & {
-        transform: translateX(18px);
-        background: var(--accent-green);
-        box-shadow: 0 0 6px var(--accent-green);
-      }
+    .layer-empty {
+      padding: 12px 10px;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-align: center;
     }
 
     @keyframes floatIn {
@@ -254,9 +284,59 @@ export class DataFeedsComponent implements OnInit {
 
   readonly expanded = signal(false);
   readonly toggling = signal<string | null>(null);
-  readonly feeds = this.feedService.feeds;
+  private readonly localOverrides = signal<Map<string, boolean>>(new Map());
+
+  private readonly LAYER_CONFIG: DataLayerConfig[] = [
+    { id: 'opensky',     name: 'Live Flights',      source: 'OpenSky Network' },
+    { id: 'adsb-lol',    name: 'Military Flights',   source: 'adsb.lol' },
+    { id: 'usgs',        name: 'Earthquakes (24h)',  source: 'USGS' },
+    { id: 'celestrak',   name: 'Satellites',          source: 'CelesTrak' },
+    { id: 'osm-traffic', name: 'Street Traffic',      source: 'OpenStreetMap' },
+    { id: 'nexrad',      name: 'Weather Radar',       source: 'NOAA NEXRAD (globe overlay)' },
+    { id: 'cctv',        name: 'CCTV Mesh',           source: 'CCTV Mesh + Street View fallback' },
+    { id: 'bikeshare',   name: 'Bikeshare',           source: 'GBFS' },
+  ];
+
+  readonly layers = computed<DataLayer[]>(() => {
+    const feeds = this.feedService.feeds();
+    const overrides = this.localOverrides();
+    const feedMap = new Map(feeds.map((f) => [f.id, f]));
+
+    // Start with configured layers, merging live feed data
+    const layers: DataLayer[] = this.LAYER_CONFIG.map((config) => {
+      const feed = feedMap.get(config.id);
+      const baseEnabled = feed?.enabled ?? false;
+      return {
+        id: config.id,
+        name: config.name,
+        source: config.source,
+        count: feed ? this.extractCount(feed) : null,
+        enabled: overrides.has(config.id) ? overrides.get(config.id)! : baseEnabled,
+        lastUpdated: feed ? this.getRelativeTime(feed) : 'never',
+      };
+    });
+
+    // Append any feeds not in the static config
+    const configIds = new Set(this.LAYER_CONFIG.map((c) => c.id));
+    for (const feed of feeds) {
+      if (!configIds.has(feed.id)) {
+        const baseEnabled = feed.enabled;
+        layers.push({
+          id: feed.id,
+          name: feed.name,
+          source: feed.sourceType,
+          count: this.extractCount(feed),
+          enabled: overrides.has(feed.id) ? overrides.get(feed.id)! : baseEnabled,
+          lastUpdated: this.getRelativeTime(feed),
+        });
+      }
+    }
+
+    return layers;
+  });
+
   readonly activeCount = computed(() =>
-    this.feeds().filter((f) => f.enabled).length,
+    this.layers().filter((l) => l.enabled).length,
   );
 
   ngOnInit(): void {
@@ -270,15 +350,46 @@ export class DataFeedsComponent implements OnInit {
     }
   }
 
-  toggleFeed(feed: DataFeed): void {
-    this.toggling.set(feed.id);
-    this.feedService.toggleFeed(feed.id, !feed.enabled).subscribe({
-      next: () => this.toggling.set(null),
+  toggleLayer(layer: DataLayer): void {
+    const newEnabled = !layer.enabled;
+
+    // Optimistic update — immediately reflect in UI
+    this.localOverrides.update((m) => {
+      const next = new Map(m);
+      next.set(layer.id, newEnabled);
+      return next;
+    });
+
+    this.toggling.set(layer.id);
+    this.feedService.toggleFeed(layer.id, newEnabled).subscribe({
+      next: () => {
+        // API succeeded — clear override so computed uses service state
+        this.localOverrides.update((m) => {
+          const next = new Map(m);
+          next.delete(layer.id);
+          return next;
+        });
+        this.toggling.set(null);
+      },
       error: (err) => {
-        console.error('Failed to toggle feed:', err);
+        console.error('Failed to toggle layer:', err);
+        // API failed — revert override
+        this.localOverrides.update((m) => {
+          const next = new Map(m);
+          next.delete(layer.id);
+          return next;
+        });
         this.toggling.set(null);
       },
     });
+  }
+
+  formatCount(count: number): string {
+    if (count >= 1000) {
+      const k = count / 1000;
+      return k % 1 === 0 ? `${k}K` : `${k.toFixed(1)}K`;
+    }
+    return String(count);
   }
 
   @HostListener('document:click', ['$event'])
@@ -286,5 +397,17 @@ export class DataFeedsComponent implements OnInit {
     if (!this.elementRef.nativeElement.contains(event.target)) {
       this.expanded.set(false);
     }
+  }
+
+  private extractCount(feed: DataFeed): number | null {
+    // DataFeed doesn't have count — return null for now
+    // Will be enriched when API supports entity counts per feed
+    return null;
+  }
+
+  private getRelativeTime(feed: DataFeed): string {
+    // DataFeed doesn't have timestamps — return a placeholder
+    // Will be enriched when API supports last-updated timestamps
+    return feed.enabled ? 'just now' : 'never';
   }
 }

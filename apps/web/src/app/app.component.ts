@@ -7,13 +7,14 @@ import { AuthService, UserProfile } from './core/services/auth.service';
 import { AlertService } from './core/services/alert.service';
 import { ThemeService } from './core/services/theme.service';
 import { ThemePickerComponent } from './shared/components/theme-picker.component';
+import { DataFeedsComponent } from './shared/components/data-feeds.component';
 import { MapComponent } from './features/map/map.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, ThemePickerComponent],
+  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, ThemePickerComponent, DataFeedsComponent],
   template: `
     <!-- Sidebar Navigation -->
     <nav class="sidebar">
@@ -108,7 +109,10 @@ import { MapComponent } from './features/map/map.component';
       <app-map class="map-background"></app-map>
 
       <!-- Floating pills -->
-      <app-theme-picker class="floating-pill floating-pill-bottom-left"></app-theme-picker>
+      <div class="floating-pills">
+        <app-data-feeds></app-data-feeds>
+        <app-theme-picker></app-theme-picker>
+      </div>
 
       <!-- Feature panels render on top of the map -->
       <div class="panel-overlay">
@@ -161,11 +165,17 @@ import { MapComponent } from './features/map/map.component';
       z-index: 1;
     }
 
-    .floating-pill-bottom-left {
+    .floating-pills {
       position: absolute;
-      bottom: 16px;
       left: 16px;
+      bottom: 16px;
       z-index: 50;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+      max-height: calc(100% - 32px);
+      overflow-y: auto;
     }
 
     .panel-overlay {

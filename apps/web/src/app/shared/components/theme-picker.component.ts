@@ -23,13 +23,8 @@ interface ThemeOption {
       <!-- Pill / Header bar -->
       <button class="pill-header" (click)="toggle()">
         <span class="pill-label">STYLE PRESETS</span>
-        <svg class="pill-icon" [class.rotated]="expanded()"
-             width="14" height="14" viewBox="0 0 24 24"
-             fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round">
-          <line x1="12" y1="5" x2="12" y2="19"/>
-          <line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
+        <span class="pill-rule" [class.visible]="expanded()"></span>
+        <span class="pill-toggle-btn">{{ expanded() ? '−' : '+' }}</span>
       </button>
 
       <!-- Expanded panel -->
@@ -73,16 +68,17 @@ interface ThemeOption {
     .pill-header {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      padding: 8px 14px;
-      border-radius: 20px;
+      gap: 10px;
+      padding: 10px 18px;
+      min-width: 200px;
+      border-radius: 24px;
       background: var(--bg-panel);
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
       border: 1px solid var(--border-color);
       cursor: pointer;
       font-family: var(--font-mono);
-      font-size: 0.7rem;
+      font-size: 0.75rem;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--text-secondary);
@@ -100,13 +96,28 @@ interface ThemeOption {
       border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     }
 
-    .pill-icon {
-      transition: transform 200ms ease;
-      flex-shrink: 0;
+    .pill-rule {
+      flex: 1;
+      height: 1px;
+
+      &.visible {
+        background: var(--border-color);
+      }
     }
 
-    .pill-icon.rotated {
-      transform: rotate(45deg);
+    .pill-toggle-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-color);
+      font-size: 0.85rem;
+      line-height: 1;
+      flex-shrink: 0;
+      color: var(--text-muted);
     }
 
     .pill-panel {
