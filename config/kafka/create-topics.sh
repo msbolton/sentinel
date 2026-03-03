@@ -36,6 +36,7 @@ TOPICS=(
   "events.entity.position|12|604800000"
   "events.entity.created|6|2592000000"
   "events.entity.updated|6|2592000000"
+  "events.entity.deleted|6|2592000000"
   "events.track.point|12|604800000"
   "alerts.geofence|3|2592000000"
   "alerts.anomaly|3|2592000000"
