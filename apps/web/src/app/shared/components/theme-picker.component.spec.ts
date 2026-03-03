@@ -102,14 +102,14 @@ describe('ThemePickerComponent', () => {
     expect(component.expanded()).toBe(true);
   });
 
-  it('should rotate the plus icon when expanded', () => {
-    const icon = fixture.nativeElement.querySelector('.pill-icon');
-    expect(icon.classList.contains('rotated')).toBe(false);
+  it('should show + when collapsed and − when expanded', () => {
+    const btn = fixture.nativeElement.querySelector('.pill-toggle-btn');
+    expect(btn.textContent.trim()).toBe('+');
 
     component.expanded.set(true);
     fixture.detectChanges();
 
-    const iconAfter = fixture.nativeElement.querySelector('.pill-icon');
-    expect(iconAfter.classList.contains('rotated')).toBe(true);
+    const btnAfter = fixture.nativeElement.querySelector('.pill-toggle-btn');
+    expect(btnAfter.textContent.trim()).toBe('−');
   });
 });
