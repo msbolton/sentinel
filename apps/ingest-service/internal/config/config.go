@@ -20,6 +20,18 @@ type Config struct {
 	WorkerPoolSize  int    // WORKER_POOL_SIZE (default: 100)
 	BatchSize       int    // BATCH_SIZE (default: 500)
 	FlushIntervalMs int    // FLUSH_INTERVAL_MS (default: 100)
+
+	// OpenSky Network polling adapter.
+	OpenSkyEnabled     bool
+	OpenSkyIntervalSec int
+	OpenSkyBBox        string // Format: "lamin,lomin,lamax,lomax"
+	OpenSkyUsername    string
+	OpenSkyPassword    string
+
+	// adsb.lol military aircraft polling adapter.
+	ADSBLolEnabled     bool
+	ADSBLolIntervalSec int
+	ADSBLolEndpoint    string
 }
 
 // Load reads configuration from environment variables, applying defaults
@@ -38,6 +50,16 @@ func Load() *Config {
 		WorkerPoolSize:  envOrDefaultInt("WORKER_POOL_SIZE", 100),
 		BatchSize:       envOrDefaultInt("BATCH_SIZE", 500),
 		FlushIntervalMs: envOrDefaultInt("FLUSH_INTERVAL_MS", 100),
+
+		OpenSkyEnabled:     envOrDefaultBool("OPENSKY_ENABLED", false),
+		OpenSkyIntervalSec: envOrDefaultInt("OPENSKY_INTERVAL_SEC", 15),
+		OpenSkyBBox:        envOrDefault("OPENSKY_BBOX", ""),
+		OpenSkyUsername:    envOrDefault("OPENSKY_USERNAME", ""),
+		OpenSkyPassword:    envOrDefault("OPENSKY_PASSWORD", ""),
+
+		ADSBLolEnabled:     envOrDefaultBool("ADSBLOL_ENABLED", false),
+		ADSBLolIntervalSec: envOrDefaultInt("ADSBLOL_INTERVAL_SEC", 10),
+		ADSBLolEndpoint:    envOrDefault("ADSBLOL_ENDPOINT", "https://api.adsb.lol/v2/mil"),
 	}
 }
 
@@ -54,6 +76,18 @@ func envOrDefaultInt(key string, defaultVal int) int {
 		return defaultVal
 	}
 	parsed, err := strconv.Atoi(val)
+	if err != nil {
+		return defaultVal
+	}
+	return parsed
+}
+
+func envOrDefaultBool(key string, defaultVal bool) bool {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+	parsed, err := strconv.ParseBool(val)
 	if err != nil {
 		return defaultVal
 	}
