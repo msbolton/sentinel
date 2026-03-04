@@ -42,12 +42,12 @@ describe('ThemePickerComponent', () => {
     fixture.detectChanges();
 
     const options = fixture.nativeElement.querySelectorAll('.theme-option');
-    expect(options.length).toBe(4);
+    expect(options.length).toBe(5);
 
     const labels = Array.from(options).map(
       (btn: any) => btn.querySelector('.theme-name').textContent.trim(),
     );
-    expect(labels).toEqual(['Normal', 'CRT', 'Night Vision', 'FLIR']);
+    expect(labels).toEqual(['Normal', 'CRT', 'Night Vision', 'FLIR White Hot', 'FLIR Iron Bow']);
   });
 
   it('should call ThemeService.setTheme when an option is clicked', () => {
@@ -79,7 +79,7 @@ describe('ThemePickerComponent', () => {
     expect(checks.length).toBe(1);
 
     const newActive = fixture.nativeElement.querySelector('.theme-option.active');
-    expect(newActive.querySelector('.theme-name').textContent.trim()).toBe('FLIR');
+    expect(newActive.querySelector('.theme-name').textContent.trim()).toBe('FLIR White Hot');
   });
 
   it('should collapse when clicking outside the component', () => {

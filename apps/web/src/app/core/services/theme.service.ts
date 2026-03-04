@@ -7,6 +7,7 @@ export enum ThemePreset {
   CRT = 'crt',
   NIGHT_VISION = 'night-vision',
   FLIR = 'flir',
+  FLIR_IRON_BOW = 'flir-iron-bow',
 }
 
 const STORAGE_KEY = 'sentinel-theme';
