@@ -4,6 +4,7 @@ package sentinel.v1;
 
 import "google/protobuf/timestamp.proto";
 import "common.proto";
+import "entity.proto";
 
 option go_package = "buf.build/sentinel/api/sentinel/v1";
 
@@ -27,6 +28,16 @@ enum AlertType {
   ALERT_TYPE_COMMUNICATION_ANOMALY = 5;
   ALERT_TYPE_NEW_ENTITY = 6;
   ALERT_TYPE_ENTITY_CLASSIFICATION_CHANGE = 7;
+  ALERT_TYPE_GEOFENCE_ENTRY = 8;
+  ALERT_TYPE_GEOFENCE_EXIT = 9;
+  ALERT_TYPE_PATTERN_MATCH = 10;
+  ALERT_TYPE_CUSTOM = 11;
+  ALERT_TYPE_PROXIMITY_ALERT = 12;
+  ALERT_TYPE_ENTITY_LOST = 13;
+  ALERT_TYPE_PATTERN_DETECTED = 14;
+  ALERT_TYPE_LINK_CHANGE = 15;
+  ALERT_TYPE_CLASSIFICATION_CHANGE = 16;
+  ALERT_TYPE_SYSTEM = 17;
 }
 
 // GeofenceRule defines a geographic polygon boundary and the conditions
@@ -174,6 +185,15 @@ enum AlertEventType {
   ALERT_EVENT_TYPE_TRIGGERED = 1;
   ALERT_EVENT_TYPE_ACKNOWLEDGED = 2;
   ALERT_EVENT_TYPE_RESOLVED = 3;
+}
+
+// RuleType categorizes the kind of automated rule that may generate alerts.
+enum RuleType {
+  RULE_TYPE_UNSPECIFIED = 0;
+  RULE_TYPE_GEOFENCE = 1;
+  RULE_TYPE_SPEED_THRESHOLD = 2;
+  RULE_TYPE_PROXIMITY = 3;
+  RULE_TYPE_PATTERN = 4;
 }
 
 // AlertEvent is published when an alert is triggered, acknowledged, or

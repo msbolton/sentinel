@@ -12,7 +12,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   EntityType,
   Affiliation,
-  ClassificationEnum,
+  Classification,
 } from './create-entity.dto';
 
 /**
@@ -90,11 +90,11 @@ export class UpdateEntityDto {
 
   @ApiPropertyOptional({
     description: 'Data classification level',
-    enum: ClassificationEnum,
+    enum: Classification,
   })
   @IsOptional()
-  @IsEnum(ClassificationEnum)
-  classification?: ClassificationEnum;
+  @IsEnum(Classification)
+  classification?: Classification;
 
   @ApiPropertyOptional({
     description: 'Intelligence source or sensor',

@@ -23,6 +23,7 @@ export interface PaginationResponse {
   totalPages: number;
 }
 
+// Canonical definition in @sentinel/proto-gen (proto/common.proto)
 export enum Classification {
   UNCLASSIFIED = 'UNCLASSIFIED',
   CONFIDENTIAL = 'CONFIDENTIAL',

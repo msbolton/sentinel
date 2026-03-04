@@ -20,6 +20,7 @@ enum EntityType {
   ENTITY_TYPE_UNIT = 7;
   ENTITY_TYPE_SIGNAL = 8;
   ENTITY_TYPE_CYBER = 9;
+  ENTITY_TYPE_SENSOR = 10;
 }
 
 // EntitySource identifies the intelligence discipline that produced or
@@ -33,6 +34,24 @@ enum EntitySource {
   ENTITY_SOURCE_MASINT = 5;
   ENTITY_SOURCE_CYBER = 6;
   ENTITY_SOURCE_MANUAL = 7;
+  ENTITY_SOURCE_AIS = 8;
+  ENTITY_SOURCE_ADS_B = 9;
+  ENTITY_SOURCE_LINK16 = 10;
+  ENTITY_SOURCE_GPS = 11;
+  ENTITY_SOURCE_RADAR = 12;
+}
+
+// Affiliation identifies the disposition or allegiance of an entity relative
+// to the operating force.
+enum Affiliation {
+  AFFILIATION_UNSPECIFIED = 0;
+  AFFILIATION_FRIENDLY = 1;
+  AFFILIATION_HOSTILE = 2;
+  AFFILIATION_NEUTRAL = 3;
+  AFFILIATION_UNKNOWN = 4;
+  AFFILIATION_ASSUMED_FRIENDLY = 5;
+  AFFILIATION_SUSPECT = 6;
+  AFFILIATION_PENDING = 7;
 }
 
 // Entity represents a discrete object of intelligence interest that can be

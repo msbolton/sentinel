@@ -10,43 +10,9 @@ import {
   MaxLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { EntityType, Affiliation, Classification } from '@sentinel/proto-gen';
 
-/**
- * Supported entity types in the SENTINEL platform.
- */
-export enum EntityType {
-  AIRCRAFT = 'AIRCRAFT',
-  VESSEL = 'VESSEL',
-  VEHICLE = 'VEHICLE',
-  PERSON = 'PERSON',
-  FACILITY = 'FACILITY',
-  UNIT = 'UNIT',
-  SENSOR = 'SENSOR',
-  UNKNOWN = 'UNKNOWN',
-}
-
-/**
- * Entity affiliation categories (MIL-STD-2525 compatible).
- */
-export enum Affiliation {
-  FRIENDLY = 'FRIENDLY',
-  HOSTILE = 'HOSTILE',
-  NEUTRAL = 'NEUTRAL',
-  UNKNOWN = 'UNKNOWN',
-  ASSUMED_FRIENDLY = 'ASSUMED_FRIENDLY',
-  SUSPECT = 'SUSPECT',
-  PENDING = 'PENDING',
-}
-
-/**
- * Classification levels for entity data.
- */
-export enum ClassificationEnum {
-  UNCLASSIFIED = 'UNCLASSIFIED',
-  CONFIDENTIAL = 'CONFIDENTIAL',
-  SECRET = 'SECRET',
-  TOP_SECRET = 'TOP_SECRET',
-}
+export { EntityType, Affiliation, Classification };
 
 /**
  * DTO for creating a new tracked entity.
@@ -127,12 +93,12 @@ export class CreateEntityDto {
 
   @ApiPropertyOptional({
     description: 'Data classification level',
-    enum: ClassificationEnum,
-    default: ClassificationEnum.UNCLASSIFIED,
+    enum: Classification,
+    default: Classification.UNCLASSIFIED,
   })
   @IsOptional()
-  @IsEnum(ClassificationEnum)
-  classification?: ClassificationEnum;
+  @IsEnum(Classification)
+  classification?: Classification;
 
   @ApiProperty({
     description: 'Intelligence source or sensor providing this entity',

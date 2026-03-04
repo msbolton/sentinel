@@ -309,7 +309,7 @@ export class LinkGraphComponent implements OnInit, OnDestroy, AfterViewInit {
 
   private getEdgeColor(linkType: string): { color: string; highlight: string; opacity: number } {
     const colorMap: Record<string, string> = {
-      [LinkType.ASSOCIATED]: '#6b7280',
+      [LinkType.ASSOCIATION]: '#6b7280',
       [LinkType.COMMUNICATION]: '#3b82f6',
       [LinkType.FINANCIAL]: '#f59e0b',
       [LinkType.ORGANIZATIONAL]: '#10b981',

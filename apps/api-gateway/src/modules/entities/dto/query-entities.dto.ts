@@ -9,7 +9,7 @@ import {
 } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { EntityType, ClassificationEnum } from './create-entity.dto';
+import { EntityType, Classification } from './create-entity.dto';
 
 /**
  * DTO for querying entities with geospatial bounding box,
@@ -115,12 +115,12 @@ export class QueryEntitiesDto {
   @ApiPropertyOptional({
     description:
       'Maximum classification level to include in results',
-    enum: ClassificationEnum,
-    example: ClassificationEnum.SECRET,
+    enum: Classification,
+    example: Classification.SECRET,
   })
   @IsOptional()
-  @IsEnum(ClassificationEnum)
-  classification?: ClassificationEnum;
+  @IsEnum(Classification)
+  classification?: Classification;
 
   // --- Pagination ---
 

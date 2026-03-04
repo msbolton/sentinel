@@ -3,7 +3,18 @@ plugins:
   - remote: buf.build/protocolbuffers/go
     out: ../libs/proto-gen/src/go
     opt: paths=source_relative
-  - remote: buf.build/community/timostamm-protobuf-ts
+  - local: protoc-gen-ts_proto
     out: ../libs/proto-gen/src/ts
+    opt:
+      - stringEnums=true
+      - removeEnumPrefix=true
+      - outputServices=false
+      - outputClientImpl=false
+      - unrecognizedEnum=false
+      - useOptionals=messages
+      - exportCommonSymbols=false
+      - esModuleInterop=true
+      - useDate=string
+      - forceLong=number
   - local: protoc-gen-python_betterproto
     out: ../libs/proto-gen/src/python
