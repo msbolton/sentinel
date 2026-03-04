@@ -1,8 +1,5 @@
 version: v2
 plugins:
-  - remote: buf.build/protocolbuffers/go
-    out: ../libs/proto-gen/src/go
-    opt: paths=source_relative
   - local: protoc-gen-ts_proto
     out: ../libs/proto-gen/src/ts
     opt:
@@ -16,5 +13,3 @@ plugins:
       - esModuleInterop=true
       - useDate=string
       - forceLong=number
-  - local: protoc-gen-python_betterproto
-    out: ../libs/proto-gen/src/python

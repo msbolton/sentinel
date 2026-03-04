@@ -1,6 +1,7 @@
 import { Coordinate, PaginationRequest, PaginationResponse } from './common';
 import { EntityType } from './entity';
 
+// Canonical definition in @sentinel/proto-gen (proto/link.proto)
 export enum LinkType {
   COMMUNICATION = 'COMMUNICATION',
   ASSOCIATION = 'ASSOCIATION',
@@ -9,6 +10,17 @@ export enum LinkType {
   ORGANIZATIONAL = 'ORGANIZATIONAL',
   MOVEMENT_PATTERN = 'MOVEMENT_PATTERN',
   COMMAND_CONTROL = 'COMMAND_CONTROL',
+  GEOGRAPHIC = 'GEOGRAPHIC',
+  FAMILIAL = 'FAMILIAL',
+  LOGISTIC = 'LOGISTIC',
+  OPERATIONAL = 'OPERATIONAL',
+  IDENTITY = 'IDENTITY',
+}
+
+export enum LinkEventType {
+  CREATED = 'CREATED',
+  UPDATED = 'UPDATED',
+  DELETED = 'DELETED',
 }
 
 export interface Link {

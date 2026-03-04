@@ -1,0 +1,4 @@
+version: v2
+plugins:
+  - local: protoc-gen-python_betterproto
+    out: ../libs/proto-gen/src/python
