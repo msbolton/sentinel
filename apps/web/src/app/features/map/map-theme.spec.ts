@@ -54,6 +54,16 @@ describe('Map CRT post-processing', () => {
       viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#010a01');
       stageRef.current = new Cesium.PostProcessStage({ fragmentShader: 'nvg-green' });
       viewer.scene.postProcessStages.add(stageRef.current);
+    } else if (theme === ThemePreset.FLIR) {
+      viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#08081a');
+      viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#08081a');
+      stageRef.current = new Cesium.PostProcessStage({ fragmentShader: 'flir-white-hot' });
+      viewer.scene.postProcessStages.add(stageRef.current);
+    } else if (theme === ThemePreset.FLIR_IRON_BOW) {
+      viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#08081a');
+      viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#08081a');
+      stageRef.current = new Cesium.PostProcessStage({ fragmentShader: 'flir-iron-bow' });
+      viewer.scene.postProcessStages.add(stageRef.current);
     } else {
       viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
       viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a0e17');
@@ -153,6 +163,57 @@ describe('Map CRT post-processing', () => {
 
     applyThemeToGlobe(ThemePreset.CRT, viewer, mockCesium, stageRef);
     expect(stageRef.current.fragmentShader).toBe('crt-amber');
+    expect(stages.length).toBe(1);
+  });
+
+  it('should add a PostProcessStage when switching to FLIR', () => {
+    const viewer = { scene: mockScene };
+    const stageRef = { current: null as any };
+
+    applyThemeToGlobe(ThemePreset.FLIR, viewer, mockCesium, stageRef);
+
+    expect(mockPostProcessStages.add).toHaveBeenCalledTimes(1);
+    expect(stageRef.current).toBeTruthy();
+    expect(stageRef.current.fragmentShader).toBe('flir-white-hot');
+    expect(stages.length).toBe(1);
+    expect(mockScene.backgroundColor.css).toBe('#08081a');
+  });
+
+  it('should add a PostProcessStage when switching to FLIR_IRON_BOW', () => {
+    const viewer = { scene: mockScene };
+    const stageRef = { current: null as any };
+
+    applyThemeToGlobe(ThemePreset.FLIR_IRON_BOW, viewer, mockCesium, stageRef);
+
+    expect(mockPostProcessStages.add).toHaveBeenCalledTimes(1);
+    expect(stageRef.current).toBeTruthy();
+    expect(stageRef.current.fragmentShader).toBe('flir-iron-bow');
+    expect(stages.length).toBe(1);
+    expect(mockScene.backgroundColor.css).toBe('#08081a');
+  });
+
+  it('should remove the PostProcessStage when switching from FLIR to NORMAL', () => {
+    const viewer = { scene: mockScene };
+    const stageRef = { current: null as any };
+
+    applyThemeToGlobe(ThemePreset.FLIR, viewer, mockCesium, stageRef);
+    applyThemeToGlobe(ThemePreset.NORMAL, viewer, mockCesium, stageRef);
+
+    expect(mockPostProcessStages.remove).toHaveBeenCalledTimes(1);
+    expect(stageRef.current).toBeNull();
+    expect(stages.length).toBe(0);
+    expect(mockScene.backgroundColor.css).toBe('#0a0e17');
+  });
+
+  it('should swap post-process stage when switching from FLIR to FLIR_IRON_BOW', () => {
+    const viewer = { scene: mockScene };
+    const stageRef = { current: null as any };
+
+    applyThemeToGlobe(ThemePreset.FLIR, viewer, mockCesium, stageRef);
+    expect(stageRef.current.fragmentShader).toBe('flir-white-hot');
+
+    applyThemeToGlobe(ThemePreset.FLIR_IRON_BOW, viewer, mockCesium, stageRef);
+    expect(stageRef.current.fragmentShader).toBe('flir-iron-bow');
     expect(stages.length).toBe(1);
   });
 });
