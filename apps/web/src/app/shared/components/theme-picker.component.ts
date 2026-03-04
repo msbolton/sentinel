@@ -194,10 +194,11 @@ export class ThemePickerComponent {
   readonly currentTheme = this.themeService.currentTheme;
 
   readonly themeOptions: ThemeOption[] = [
-    { value: ThemePreset.NORMAL,       label: 'Normal',       swatch: '#0a0e17' },
-    { value: ThemePreset.CRT,          label: 'CRT',          swatch: '#001a00' },
-    { value: ThemePreset.NIGHT_VISION, label: 'Night Vision',  swatch: '#001000' },
-    { value: ThemePreset.FLIR,         label: 'FLIR',         swatch: '#0a0a1a' },
+    { value: ThemePreset.NORMAL,        label: 'Normal',         swatch: '#0a0e17' },
+    { value: ThemePreset.CRT,           label: 'CRT',            swatch: '#001a00' },
+    { value: ThemePreset.NIGHT_VISION,  label: 'Night Vision',   swatch: '#001000' },
+    { value: ThemePreset.FLIR,          label: 'FLIR White Hot', swatch: '#0a0a1a' },
+    { value: ThemePreset.FLIR_IRON_BOW, label: 'FLIR Iron Bow',  swatch: '#1a0a0a' },
   ];
 
   toggle(): void {
