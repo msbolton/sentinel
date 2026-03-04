@@ -53,6 +53,34 @@ const NVG_GREEN_SHADER = `
   }
 `;
 
+const FLIR_WHITE_HOT_SHADER = `
+  uniform sampler2D colorTexture;
+  in vec2 v_textureCoordinates;
+  void main() {
+    vec4 color = texture(colorTexture, v_textureCoordinates);
+    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+    float thermal = gray * 0.9;
+    vec3 whiteHot = vec3(thermal + 0.02, thermal + 0.02, thermal * 0.95 + 0.04);
+    out_FragColor = vec4(whiteHot, color.a);
+  }
+`;
+
+const FLIR_IRON_BOW_SHADER = `
+  uniform sampler2D colorTexture;
+  in vec2 v_textureCoordinates;
+  void main() {
+    vec4 color = texture(colorTexture, v_textureCoordinates);
+    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+    vec3 cold = vec3(0.15, 0.05, 0.30);
+    vec3 mid  = vec3(0.85, 0.25, 0.05);
+    vec3 hot  = vec3(1.00, 0.85, 0.30);
+    vec3 ironBow = gray < 0.5
+      ? mix(cold, mid, gray * 2.0)
+      : mix(mid, hot, (gray - 0.5) * 2.0);
+    out_FragColor = vec4(ironBow * 0.85, color.a);
+  }
+`;
+
 interface LayerConfig {
   name: string;
   entityType: EntityType;
@@ -331,6 +359,20 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#010a01');
       this.themePostProcessStage = new Cesium.PostProcessStage({
         fragmentShader: NVG_GREEN_SHADER,
+      });
+      this.viewer.scene.postProcessStages.add(this.themePostProcessStage);
+    } else if (theme === ThemePreset.FLIR) {
+      this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#08081a');
+      this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#08081a');
+      this.themePostProcessStage = new Cesium.PostProcessStage({
+        fragmentShader: FLIR_WHITE_HOT_SHADER,
+      });
+      this.viewer.scene.postProcessStages.add(this.themePostProcessStage);
+    } else if (theme === ThemePreset.FLIR_IRON_BOW) {
+      this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#08081a');
+      this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#08081a');
+      this.themePostProcessStage = new Cesium.PostProcessStage({
+        fragmentShader: FLIR_IRON_BOW_SHADER,
       });
       this.viewer.scene.postProcessStages.add(this.themePostProcessStage);
     } else {

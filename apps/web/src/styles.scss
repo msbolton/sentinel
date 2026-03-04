@@ -173,6 +173,106 @@ body[data-theme="night-vision"] {
   --text-glow: 0 0 4px currentColor, 0 0 10px rgba(51, 204, 51, 0.4);
 }
 
+// --- Color Tokens (FLIR White Hot theme) ---
+body[data-theme="flir"] {
+  // Backgrounds (deep indigo-black)
+  --bg-primary: #08081a;
+  --bg-secondary: #12122a;
+  --bg-tertiary: #1c1c3a;
+  --bg-panel: rgba(18, 18, 42, 0.92);
+  --bg-panel-hover: rgba(28, 28, 58, 0.95);
+
+  // Text (white-hot)
+  --text-primary: #f0f0ff;
+  --text-secondary: #a0a0c0;
+  --text-muted: #606080;
+
+  // Accents (thermal warm)
+  --accent-blue: #4488cc;
+  --accent-cyan: #44aacc;
+  --accent-green: #88cc88;
+  --accent-yellow: #ffd866;
+  --accent-orange: #ff9944;
+  --accent-red: #ff5544;
+  --accent-purple: #9977cc;
+
+  // Borders (faint warm white)
+  --border-color: rgba(240, 240, 255, 0.10);
+  --border-active: rgba(240, 240, 255, 0.35);
+
+  // Entity type colors (thermal heat scale)
+  --entity-person: #ddaa55;
+  --entity-vehicle: #ff9944;
+  --entity-vessel: #ffbb44;
+  --entity-aircraft: #f0f0ff;
+  --entity-facility: #5577aa;
+  --entity-signal: #cc8855;
+  --entity-equipment: #887766;
+  --entity-unit: #ff9944;
+  --entity-cyber: #cc8855;
+  --entity-unknown: #3a3a5a;
+
+  // Utility colors
+  --color-white: #f0f0ff;
+  --color-gray: #606080;
+  --color-gray-dark: #404060;
+  --accent-pink: #ff7766;
+  --shadow-node: rgba(240, 240, 255, 0.15);
+
+  // FLIR-specific token
+  --text-glow: 0 0 4px currentColor, 0 0 8px rgba(240, 240, 255, 0.3);
+}
+
+// --- Color Tokens (FLIR Iron Bow theme) ---
+body[data-theme="flir-iron-bow"] {
+  // Backgrounds (same deep indigo-black as White Hot)
+  --bg-primary: #08081a;
+  --bg-secondary: #12122a;
+  --bg-tertiary: #1c1c3a;
+  --bg-panel: rgba(18, 18, 42, 0.92);
+  --bg-panel-hover: rgba(28, 28, 58, 0.95);
+
+  // Text (warm amber)
+  --text-primary: #ffcc66;
+  --text-secondary: #cc8844;
+  --text-muted: #805530;
+
+  // Accents (iron bow spectrum)
+  --accent-blue: #4466aa;
+  --accent-cyan: #44aaaa;
+  --accent-green: #88aa44;
+  --accent-yellow: #ffcc44;
+  --accent-orange: #ff8833;
+  --accent-red: #dd4422;
+  --accent-purple: #9944aa;
+
+  // Borders (faint warm amber)
+  --border-color: rgba(255, 204, 102, 0.10);
+  --border-active: rgba(255, 204, 102, 0.35);
+
+  // Entity type colors (iron bow heat scale)
+  --entity-person: #aa4488;
+  --entity-vehicle: #ff8833;
+  --entity-vessel: #dd5533;
+  --entity-aircraft: #ffcc44;
+  --entity-facility: #4466aa;
+  --entity-signal: #cc6633;
+  --entity-equipment: #886644;
+  --entity-unit: #ff8833;
+  --entity-cyber: #cc6633;
+  --entity-unknown: #2a2a4a;
+
+  // Utility colors
+  --color-white: #ffcc66;
+  --color-gray: #805530;
+  --color-gray-dark: #604020;
+  --accent-pink: #dd4466;
+  --shadow-node: rgba(255, 136, 51, 0.15);
+
+  // FLIR Iron Bow-specific token
+  --text-glow: 0 0 4px currentColor, 0 0 8px rgba(255, 136, 51, 0.3);
+}
+
 // --- CRT Overlay Effects ---
 body[data-theme="crt"]::before {
   content: '';
@@ -232,6 +332,62 @@ body[data-theme="night-vision"]::after {
 
 // Glow on headings and prominent elements
 body[data-theme="night-vision"] {
+  h1, h2, h3, h4, h5, h6,
+  .sidebar-logo,
+  .card-title,
+  .toast-title,
+  .chip {
+    text-shadow: var(--text-glow);
+  }
+}
+
+// --- FLIR Overlay Effects ---
+// Heat shimmer (simulates thermal air distortion)
+body[data-theme="flir"]::before,
+body[data-theme="flir-iron-bow"]::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0px,
+    transparent 3px,
+    rgba(255, 255, 255, 0.02) 3px,
+    rgba(255, 255, 255, 0.02) 6px
+  );
+  animation: thermalShimmer 8s ease-in-out infinite;
+}
+
+@keyframes thermalShimmer {
+  0%, 100% { opacity: 0.3; transform: translateY(0); }
+  50% { opacity: 0.5; transform: translateY(-2px); }
+}
+
+// Vignette — White Hot (cool dark edge)
+body[data-theme="flir"]::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(8, 8, 26, 0.6) 100%);
+}
+
+// Vignette — Iron Bow (warm dark edge)
+body[data-theme="flir-iron-bow"]::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(26, 8, 8, 0.6) 100%);
+}
+
+// Glow on headings and prominent elements
+body[data-theme="flir"],
+body[data-theme="flir-iron-bow"] {
   h1, h2, h3, h4, h5, h6,
   .sidebar-logo,
   .card-title,
