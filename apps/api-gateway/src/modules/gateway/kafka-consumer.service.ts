@@ -44,6 +44,11 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
   private kafkaConnected = false;
   private deserializationFailures = 0;
 
+  /** Buffer for batching position updates before broadcast. */
+  private updateBuffer: Array<{ entity: EntityPositionUpdate; eventType: 'created' | 'updated' }> = [];
+  private flushTimer: ReturnType<typeof setInterval> | null = null;
+  private static readonly FLUSH_INTERVAL_MS = 200;
+
   private static readonly ENTITY_POSITION_TOPIC = 'events.entity.position';
   private static readonly ENTITY_CREATED_TOPIC = 'events.entity.created';
   private static readonly ENTITY_UPDATED_TOPIC = 'events.entity.updated';
@@ -99,6 +104,11 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(
         `Subscribed to topics: ${KafkaConsumerService.ENTITY_POSITION_TOPIC}, ${KafkaConsumerService.ENTITY_CREATED_TOPIC}, ${KafkaConsumerService.ENTITY_UPDATED_TOPIC}, ${KafkaConsumerService.ENTITY_DELETED_TOPIC}`,
       );
+
+      // Start batch flush timer
+      this.flushTimer = setInterval(() => {
+        this.flushUpdateBuffer();
+      }, KafkaConsumerService.FLUSH_INTERVAL_MS);
     } catch (error) {
       this.kafkaConnected = false;
       this.logger.error(`Failed to initialize Kafka consumer: ${error}`);
@@ -107,6 +117,13 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
+    if (this.flushTimer) {
+      clearInterval(this.flushTimer);
+      this.flushTimer = null;
+    }
+    // Flush any remaining buffered updates
+    this.flushUpdateBuffer();
+
     try {
       await this.consumer?.disconnect();
       this.logger.log('Kafka consumer disconnected');
@@ -160,62 +177,43 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Handles entity position update events. Deserializes the message
-   * and forwards to the gateway for viewport-filtered broadcast.
+   * Handles entity position update events. Buffers the update for
+   * batched broadcast to reduce WebSocket frame count.
    */
   private async handlePositionEvent(value: Buffer): Promise<void> {
     const raw = this.deserializeMessage<RawEntityPositionEvent>(value);
     if (!raw) return;
 
-    const update: EntityPositionUpdate = {
-      entityId: raw.entity_id,
-      entityType: raw.entity_type,
-      latitude: raw.latitude,
-      longitude: raw.longitude,
-      altitude: raw.altitude_meters,
-      heading: raw.heading,
-      speed: raw.speed_knots,
-      classification: raw.classification,
-      source: raw.source,
-      timestamp: raw.timestamp,
-      metadata: raw.metadata,
-    };
-
-    await this.entityGateway.broadcastEntityUpdate(update);
+    this.bufferUpdate(raw, 'updated');
   }
 
   /**
-   * Handles entity creation events - broadcasts to all clients as a
-   * new entity appearing on the map.
+   * Handles entity creation events — buffered for batch broadcast.
    */
   private async handleEntityCreatedEvent(value: Buffer): Promise<void> {
     const raw = this.deserializeMessage<RawEntityPositionEvent>(value);
     if (!raw) return;
 
-    const update: EntityPositionUpdate = {
-      entityId: raw.entity_id,
-      entityType: raw.entity_type,
-      latitude: raw.latitude,
-      longitude: raw.longitude,
-      altitude: raw.altitude_meters,
-      heading: raw.heading,
-      speed: raw.speed_knots,
-      classification: raw.classification,
-      source: raw.source,
-      timestamp: raw.timestamp,
-      metadata: raw.metadata,
-    };
-
-    await this.entityGateway.broadcastEntityUpdate(update, 'created');
+    this.bufferUpdate(raw, 'created');
   }
 
   /**
-   * Handles entity update events - broadcasts to all clients.
+   * Handles entity update events — buffered for batch broadcast.
    */
   private async handleEntityUpdatedEvent(value: Buffer): Promise<void> {
     const raw = this.deserializeMessage<RawEntityPositionEvent>(value);
     if (!raw) return;
 
+    this.bufferUpdate(raw, 'updated');
+  }
+
+  /**
+   * Adds an entity update to the buffer for the next flush cycle.
+   */
+  private bufferUpdate(
+    raw: RawEntityPositionEvent,
+    eventType: 'created' | 'updated',
+  ): void {
     const update: EntityPositionUpdate = {
       entityId: raw.entity_id,
       entityType: raw.entity_type,
@@ -230,7 +228,22 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
       metadata: raw.metadata,
     };
 
-    await this.entityGateway.broadcastEntityUpdate(update, 'updated');
+    this.updateBuffer.push({ entity: update, eventType });
+  }
+
+  /**
+   * Flushes buffered entity updates as a single batch broadcast.
+   * Called on a 200ms interval to coalesce rapid-fire Kafka messages.
+   */
+  private flushUpdateBuffer(): void {
+    if (this.updateBuffer.length === 0) return;
+
+    const batch = this.updateBuffer;
+    this.updateBuffer = [];
+
+    this.entityGateway.broadcastEntityBatch(batch).catch((err) => {
+      this.logger.error(`Failed to broadcast entity batch: ${err}`);
+    });
   }
 
   /**
