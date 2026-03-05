@@ -27,6 +27,7 @@ type Pipeline struct {
 	flushInterval time.Duration
 	entityTopic   string
 	workerCount   int
+	workerWg      sync.WaitGroup
 	wg            sync.WaitGroup
 	stop          chan struct{}
 }
@@ -67,7 +68,7 @@ func (p *Pipeline) Start() {
 
 	// Start worker pool for parsing and correlation.
 	for i := 0; i < p.workerCount; i++ {
-		p.wg.Add(1)
+		p.workerWg.Add(1)
 		go p.worker(i)
 	}
 
@@ -85,6 +86,12 @@ func (p *Pipeline) Stop() {
 	p.logger.Info("stopping ingestion pipeline")
 	close(p.stop)
 	close(p.input)
+
+	// Wait for workers to finish processing, then close the output channel
+	// so the batcher can drain remaining items and exit.
+	p.workerWg.Wait()
+	close(p.output)
+
 	p.wg.Wait()
 	p.logger.Info("ingestion pipeline stopped")
 }
@@ -92,7 +99,7 @@ func (p *Pipeline) Stop() {
 // worker is a goroutine that reads from the input channel, parses and normalizes
 // each message, runs track correlation, and forwards the result to the output channel.
 func (p *Pipeline) worker(id int) {
-	defer p.wg.Done()
+	defer p.workerWg.Done()
 
 	p.logger.Debug("pipeline worker started", zap.Int("worker_id", id))
 

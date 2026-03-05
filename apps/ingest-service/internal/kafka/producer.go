@@ -34,7 +34,7 @@ func NewProducer(brokers string, logger *zap.Logger, m *metrics.Metrics) (*Produ
 		"linger.ms":               10,
 		"batch.num.messages":       500,
 		"queue.buffering.max.messages": 100000,
-		"compression.type":        "lz4",
+		"compression.type":        "gzip",
 		"enable.idempotence":      true,
 	})
 	if err != nil {
