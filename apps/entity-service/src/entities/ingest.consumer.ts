@@ -112,6 +112,7 @@ function mapEntityType(raw: string): EntityType {
     vessel: EntityType.VESSEL,
     vehicle: EntityType.VEHICLE,
     person: EntityType.PERSON,
+    satellite: EntityType.SATELLITE,
     sensor: EntityType.EQUIPMENT,
     platform: EntityType.EQUIPMENT,
   };
@@ -122,5 +123,6 @@ function inferEntitySource(entityId: string): EntitySource {
   if (entityId.startsWith('ICAO-')) return EntitySource.ADS_B;
   if (entityId.startsWith('MMSI-')) return EntitySource.AIS;
   if (entityId.startsWith('JTN-')) return EntitySource.LINK16;
+  if (entityId.startsWith('SAT-')) return EntitySource.CELESTRAK;
   return EntitySource.GPS;
 }
