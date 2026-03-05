@@ -13,10 +13,12 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/sentinel/ingest-service/internal/config"
+	"github.com/sentinel/ingest-service/internal/feeds"
 	"github.com/sentinel/ingest-service/internal/health"
 	"github.com/sentinel/ingest-service/internal/ingest"
 	kafkaproducer "github.com/sentinel/ingest-service/internal/kafka"
 	"github.com/sentinel/ingest-service/internal/metrics"
+	"github.com/sentinel/ingest-service/internal/models"
 	"github.com/sentinel/ingest-service/internal/sources"
 )
 
@@ -82,10 +84,39 @@ func main() {
 		logger.Fatal("failed to start tcp listener", zap.Error(err))
 	}
 
-	// Start HTTP health/metrics server.
+	// Feed manager for runtime-toggleable data sources.
+	feedManager := feeds.NewManager(logger)
+
+	// Register OpenSky feed (toggleable via /feeds API).
+	if err := feedManager.Register(
+		"opensky", "OpenSky Network", models.SourceOpenSky,
+		"Global ADS-B aircraft positions from OpenSky Network",
+		func() (sources.Listener, error) {
+			return sources.NewOpenSkyListener(cfg, pipelineInput, logger, m), nil
+		},
+		cfg.OpenSkyEnabled,
+	); err != nil {
+		logger.Error("failed to register opensky feed", zap.Error(err))
+	}
+
+	// Register adsb.lol military flights feed (toggleable via /feeds API).
+	if err := feedManager.Register(
+		"adsb-lol", "Military Flights", models.SourceADSBLol,
+		"Military/government aircraft positions from adsb.lol",
+		func() (sources.Listener, error) {
+			return sources.NewADSBLolListener(cfg, pipelineInput, logger, m), nil
+		},
+		cfg.ADSBLolEnabled,
+	); err != nil {
+		logger.Error("failed to register adsb-lol feed", zap.Error(err))
+	}
+
+	// Start HTTP health/metrics/feeds server.
 	healthHandler := health.NewHandler(producer, logger)
+	feedsHandler := feeds.NewHandler(feedManager, logger)
 	mux := http.NewServeMux()
 	healthHandler.RegisterRoutes(mux)
+	feedsHandler.RegisterRoutes(mux)
 
 	httpServer := &http.Server{
 		Addr:         cfg.HTTPAddr,
@@ -118,6 +149,7 @@ func main() {
 	mqttListener.Stop()
 	stompListener.Stop()
 	tcpListener.Stop()
+	feedManager.StopAll()
 
 	// Stop the pipeline (drains remaining messages).
 	pipeline.Stop()

@@ -164,7 +164,11 @@ func (l *STOMPListener) reconnect() {
 			zap.Duration("backoff", backoff),
 		)
 
-		time.Sleep(backoff)
+		select {
+		case <-l.stop:
+			return
+		case <-time.After(backoff):
+		}
 
 		if err := l.connect(); err != nil {
 			l.logger.Error("stomp reconnection failed", zap.Error(err))
@@ -197,9 +201,12 @@ func (l *STOMPListener) Stop() {
 				l.logger.Error("stomp disconnect failed", zap.Error(err))
 			}
 			l.metrics.ActiveConnections.WithLabelValues(models.SourceSTOMP).Dec()
+
+			// Only wait for consumeLoop if it was started (conn != nil
+			// means Start() succeeded and launched the goroutine).
+			<-l.done
 		}
 
-		<-l.done
 		l.logger.Info("stomp listener stopped")
 	})
 }

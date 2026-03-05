@@ -22,26 +22,26 @@ import { EntityType, EntitySource, Classification } from './enums';
 @Index('idx_entities_source_entity_id', { synchronize: false })
 export class EntityRecord {
   @PrimaryGeneratedColumn('uuid')
-  id: string;
+  id!: string;
 
   @Column({ type: 'enum', enum: EntityType })
-  entityType: EntityType;
+  entityType!: EntityType;
 
   @Column()
-  name: string;
+  name!: string;
 
   @Column({ nullable: true })
-  description: string;
+  description!: string;
 
   @Column({ type: 'enum', enum: EntitySource })
-  source: EntitySource;
+  source!: EntitySource;
 
   @Column({
     type: 'enum',
     enum: Classification,
     default: Classification.UNCLASSIFIED,
   })
-  classification: Classification;
+  classification!: Classification;
 
   @Column({
     type: 'geometry',
@@ -49,38 +49,38 @@ export class EntityRecord {
     srid: 4326,
     nullable: true,
   })
-  position: object | null; // GeoJSON Point { type: 'Point', coordinates: [lng, lat] }
+  position!: object | null; // GeoJSON Point { type: 'Point', coordinates: [lng, lat] }
 
   @Column({ type: 'float', nullable: true })
-  heading: number | null;
+  heading!: number | null;
 
   @Column({ type: 'float', nullable: true })
-  speedKnots: number | null;
+  speedKnots!: number | null;
 
   @Column({ type: 'float', nullable: true })
-  course: number | null;
+  course!: number | null;
 
-  @Column({ nullable: true })
-  milStd2525dSymbol: string | null;
+  @Column({ type: 'varchar', nullable: true })
+  milStd2525dSymbol!: string | null;
 
   @Column({ type: 'jsonb', default: () => "'{}'" })
-  metadata: Record<string, unknown>;
+  metadata!: Record<string, unknown>;
 
   @Column({ type: 'text', array: true, default: () => "ARRAY[]::text[]" })
-  affiliations: string[];
+  affiliations!: string[];
 
   @CreateDateColumn()
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn()
-  updatedAt: Date;
+  updatedAt!: Date;
 
   @Column({ type: 'timestamptz', nullable: true })
-  lastSeenAt: Date | null;
+  lastSeenAt!: Date | null;
 
   @Column({ type: 'boolean', default: false })
-  deleted: boolean;
+  deleted!: boolean;
 
   @Column({ type: 'timestamptz', nullable: true })
-  deletedAt: Date | null;
+  deletedAt!: Date | null;
 }

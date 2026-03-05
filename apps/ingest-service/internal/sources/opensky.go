@@ -189,7 +189,7 @@ func (l *OpenSkyListener) poll() error {
 	}
 
 	l.metrics.MessagesReceived.WithLabelValues(models.SourceOpenSky).Add(float64(sent))
-	l.logger.Debug("opensky poll complete", zap.Int("aircraft", sent))
+	l.logger.Info("opensky poll complete", zap.Int("aircraft", sent), zap.Int("total_states", len(states)))
 
 	return nil
 }

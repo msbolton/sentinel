@@ -138,7 +138,7 @@ export class EntityRepository extends Repository<EntityRecord> {
   /**
    * Soft-delete an entity by marking it as deleted.
    */
-  async softDelete(id: string): Promise<boolean> {
+  async softDeleteEntity(id: string): Promise<boolean> {
     const result = await this.createQueryBuilder()
       .update(EntityRecord)
       .set({ deleted: true, deletedAt: new Date() })

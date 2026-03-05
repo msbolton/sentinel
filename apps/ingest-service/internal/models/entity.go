@@ -44,7 +44,9 @@ const (
 
 // Source type constants for labeling ingest origins.
 const (
-	SourceMQTT  = "mqtt"
-	SourceSTOMP = "stomp"
-	SourceTCP   = "tcp"
+	SourceMQTT    = "mqtt"
+	SourceSTOMP   = "stomp"
+	SourceTCP     = "tcp"
+	SourceOpenSky  = "opensky"
+	SourceADSBLol  = "adsblol"
 )

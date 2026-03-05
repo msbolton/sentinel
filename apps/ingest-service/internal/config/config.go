@@ -20,6 +20,15 @@ type Config struct {
 	WorkerPoolSize  int    // WORKER_POOL_SIZE (default: 100)
 	BatchSize       int    // BATCH_SIZE (default: 500)
 	FlushIntervalMs int    // FLUSH_INTERVAL_MS (default: 100)
+
+	OpenSkyEnabled     bool   // OPENSKY_ENABLED (default: false)
+	OpenSkyIntervalSec int    // OPENSKY_INTERVAL_SEC (default: 15)
+	OpenSkyBBox        string // OPENSKY_BBOX (default: "" = global)
+	OpenSkyUsername    string // OPENSKY_USERNAME (default: "")
+	OpenSkyPassword    string // OPENSKY_PASSWORD (default: "")
+
+	ADSBLolEnabled     bool // ADSBLOL_ENABLED (default: false)
+	ADSBLolIntervalSec int  // ADSBLOL_INTERVAL_SEC (default: 10)
 }
 
 // Load reads configuration from environment variables, applying defaults
@@ -38,6 +47,15 @@ func Load() *Config {
 		WorkerPoolSize:  envOrDefaultInt("WORKER_POOL_SIZE", 100),
 		BatchSize:       envOrDefaultInt("BATCH_SIZE", 500),
 		FlushIntervalMs: envOrDefaultInt("FLUSH_INTERVAL_MS", 100),
+
+		OpenSkyEnabled:     os.Getenv("OPENSKY_ENABLED") == "true",
+		OpenSkyIntervalSec: envOrDefaultInt("OPENSKY_INTERVAL_SEC", 15),
+		OpenSkyBBox:        envOrDefault("OPENSKY_BBOX", ""),
+		OpenSkyUsername:    envOrDefault("OPENSKY_USERNAME", ""),
+		OpenSkyPassword:    envOrDefault("OPENSKY_PASSWORD", ""),
+
+		ADSBLolEnabled:     os.Getenv("ADSBLOL_ENABLED") == "true",
+		ADSBLolIntervalSec: envOrDefaultInt("ADSBLOL_INTERVAL_SEC", 10),
 	}
 }
 

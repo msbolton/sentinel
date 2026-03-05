@@ -72,6 +72,13 @@ export class WebSocketService implements OnDestroy {
       this.entityUpdatesSubject.next(event);
     });
 
+    // Batched entity events (coalesced server-side for performance)
+    this.socket.on('entity:batch', (events: EntityEvent[]) => {
+      for (const event of events) {
+        this.entityUpdatesSubject.next(event);
+      }
+    });
+
     // Alert events
     this.socket.on('alert:new', (alert: Alert) => {
       this.alertSubject.next(alert);

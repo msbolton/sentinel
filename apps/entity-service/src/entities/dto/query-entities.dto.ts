@@ -90,13 +90,13 @@ export class NearbyQueryDto {
   @IsNumber()
   @Min(-90)
   @Max(90)
-  lat: number;
+  lat!: number;
 
   @ApiPropertyOptional({ description: 'Center longitude', example: -77.0365 })
   @IsNumber()
   @Min(-180)
   @Max(180)
-  lng: number;
+  lng!: number;
 
   @ApiPropertyOptional({
     description: 'Search radius in meters',
