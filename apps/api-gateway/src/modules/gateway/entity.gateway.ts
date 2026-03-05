@@ -8,7 +8,7 @@ import {
   ConnectedSocket,
   WsException,
 } from '@nestjs/websockets';
-import { Logger, UseFilters } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { ViewportService, ViewportBounds } from './viewport.service';
 
@@ -77,6 +77,7 @@ interface EntitySubscribePayload {
     credentials: true,
   },
   transports: ['websocket', 'polling'],
+  maxHttpBufferSize: 5e6, // 5 MB — default 1 MB is too small for bulk ADS-B batches
 })
 export class EntityGateway
   implements OnGatewayConnection, OnGatewayDisconnect
@@ -239,55 +240,82 @@ export class EntityGateway
    * Broadcasts an entity position update to all clients whose viewport
    * contains the entity's position, plus any clients explicitly subscribed
    * to the entity.
-   *
-   * This is the core viewport-filtering broadcast method called by the
-   * Kafka consumer when new entity positions arrive.
    */
   async broadcastEntityUpdate(entity: EntityPositionUpdate, eventType: 'created' | 'updated' = 'updated'): Promise<void> {
-    if (!this.server) {
+    return this.broadcastEntityBatch([{ entity, eventType }]);
+  }
+
+  /**
+   * Broadcasts a batch of entity updates in a single pass over connected
+   * sockets. This avoids calling fetchSockets() per entity and dramatically
+   * reduces WebSocket frame count when bulk data arrives (e.g. adsb.lol
+   * dumping hundreds of aircraft every poll cycle).
+   *
+   * Each socket receives a single 'entity:batch' event containing only the
+   * entities that match its viewport or explicit subscriptions.
+   */
+  async broadcastEntityBatch(
+    updates: Array<{ entity: EntityPositionUpdate; eventType: 'created' | 'updated' }>,
+  ): Promise<void> {
+    if (!this.server || updates.length === 0) {
       return;
     }
 
-    // Transform to frontend EntityEvent shape
-    const event: EntityEvent = {
-      type: eventType,
-      entity: {
-        id: entity.entityId,
-        entityType: entity.entityType,
-        source: entity.source,
-        classification: entity.classification,
-        position: { latitude: entity.latitude, longitude: entity.longitude, altitude: entity.altitude },
-        heading: entity.heading,
-        speedKnots: entity.speed,
-        metadata: entity.metadata ?? {},
-        affiliations: [],
-        createdAt: entity.timestamp,
-        updatedAt: entity.timestamp,
-      },
-      timestamp: entity.timestamp,
-    };
+    // Pre-build EntityEvents for all updates
+    const events: Array<{ update: EntityPositionUpdate; event: EntityEvent }> = updates.map(
+      ({ entity, eventType }) => ({
+        update: entity,
+        event: {
+          type: eventType,
+          entity: {
+            id: entity.entityId,
+            entityType: entity.entityType,
+            source: entity.source,
+            classification: entity.classification,
+            position: { latitude: entity.latitude, longitude: entity.longitude, altitude: entity.altitude },
+            heading: entity.heading,
+            speedKnots: entity.speed,
+            metadata: entity.metadata ?? {},
+            affiliations: [],
+            createdAt: entity.timestamp,
+            updatedAt: entity.timestamp,
+          },
+          timestamp: entity.timestamp,
+        },
+      }),
+    );
 
-    const eventChannel = `entity:${eventType}`;
-
+    // Single fetchSockets() call for the entire batch
     const sockets = await this.server.fetchSockets();
-    let sentCount = 0;
+    let totalSent = 0;
 
     for (const socket of sockets) {
       const clientId = socket.id;
-      const shouldSend = await this.shouldSendToClient(clientId, entity);
+      const subscriptions = this.entitySubscriptions.get(clientId);
+      const viewport = await this.viewportService.getViewport(clientId);
 
-      if (shouldSend) {
-        socket.emit(eventChannel, event);
-        sentCount++;
+      // Filter events to those matching this client's viewport or subscriptions
+      const matching: EntityEvent[] = [];
+
+      for (const { update, event } of events) {
+        const isSubscribed = subscriptions?.has(update.entityId) ?? false;
+        const inViewport = viewport
+          ? this.isPointInViewport(update.latitude, update.longitude, viewport)
+          : false;
+
+        if (isSubscribed || inViewport) {
+          matching.push(event);
+        }
+      }
+
+      if (matching.length > 0) {
+        socket.emit('entity:batch', matching);
+        totalSent++;
       }
     }
 
-    // Also emit to the entity-specific room for explicit subscribers
-    // who may be outside the viewport
-    this.server.to(`entity:${entity.entityId}`).emit(eventChannel, event);
-
     this.logger.verbose(
-      `Broadcast entity ${entity.entityId} to ${sentCount} viewport-matched clients`,
+      `Broadcast batch of ${updates.length} entities to ${totalSent} clients`,
     );
   }
 
@@ -301,25 +329,22 @@ export class EntityGateway
   }
 
   /**
-   * Determines whether a given client should receive an entity update
-   * based on viewport containment or explicit subscription.
+   * Synchronous point-in-viewport check using already-fetched bounds.
+   * Handles antimeridian crossing where west > east.
    */
-  private async shouldSendToClient(
-    clientId: string,
-    entity: EntityPositionUpdate,
-  ): Promise<boolean> {
-    // Check explicit subscription first (fast path)
-    const subscriptions = this.entitySubscriptions.get(clientId);
-    if (subscriptions?.has(entity.entityId)) {
-      return true;
+  private isPointInViewport(
+    latitude: number,
+    longitude: number,
+    bounds: ViewportBounds,
+  ): boolean {
+    if (latitude > bounds.north || latitude < bounds.south) {
+      return false;
     }
-
-    // Check viewport containment
-    return this.viewportService.isEntityInViewport(
-      clientId,
-      entity.latitude,
-      entity.longitude,
-    );
+    if (bounds.west <= bounds.east) {
+      return longitude >= bounds.west && longitude <= bounds.east;
+    }
+    // Antimeridian crossing
+    return longitude >= bounds.west || longitude <= bounds.east;
   }
 
   /**
