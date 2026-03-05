@@ -233,9 +233,133 @@
 // Cesium widget overrides
 :host ::ng-deep {
   .cesium-viewer {
-    .cesium-viewer-toolbar,
     .cesium-viewer-bottom {
       display: none !important;
+    }
+
+    // Position toolbar in top-right
+    .cesium-viewer-toolbar {
+      top: 16px;
+      right: 16px;
+    }
+
+    // Style toolbar buttons to match SENTINEL dark theme
+    .cesium-button {
+      background: var(--bg-panel, rgba(10, 14, 23, 0.85));
+      border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+      border-radius: var(--radius-sm, 6px);
+      color: var(--text-secondary, #8b95a5);
+      backdrop-filter: blur(12px);
+      box-shadow: none;
+
+      &:hover {
+        background: var(--bg-panel-hover, rgba(30, 40, 60, 0.9));
+        color: var(--text-primary, #e2e8f0);
+        border-color: var(--border-active, rgba(255, 255, 255, 0.2));
+      }
+
+      &:focus {
+        outline: none;
+        border-color: var(--accent-blue, #3b82f6);
+      }
+    }
+
+    // Geocoder search box
+    .cesium-geocoder-input {
+      background: var(--bg-panel, rgba(10, 14, 23, 0.85));
+      border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+      border-radius: var(--radius-sm, 6px);
+      color: var(--text-primary, #e2e8f0);
+      backdrop-filter: blur(12px);
+      font-family: var(--font-mono, 'JetBrains Mono', monospace);
+      font-size: 0.85rem;
+
+      &:focus {
+        border-color: var(--accent-blue, #3b82f6);
+        outline: none;
+      }
+    }
+
+    .cesium-geocoder-searchButton {
+      background: var(--bg-panel, rgba(10, 14, 23, 0.85));
+      border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+      fill: var(--text-secondary, #8b95a5);
+
+      &:hover {
+        background: var(--bg-panel-hover, rgba(30, 40, 60, 0.9));
+      }
+    }
+
+    // Base layer picker dropdown
+    .cesium-baseLayerPicker-dropDown {
+      background: var(--bg-panel, rgba(10, 14, 23, 0.95));
+      border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+      border-radius: var(--radius-md, 8px);
+      backdrop-filter: blur(16px);
+      box-shadow: var(--shadow-lg, 0 8px 32px rgba(0, 0, 0, 0.4));
+      padding: 8px;
+    }
+
+    .cesium-baseLayerPicker-categoryTitle {
+      color: var(--text-muted, #5a6a80);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .cesium-baseLayerPicker-item {
+      border-radius: var(--radius-sm, 6px);
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.05);
+      }
+    }
+
+    .cesium-baseLayerPicker-itemLabel {
+      color: var(--text-secondary, #8b95a5);
+      font-size: 0.8rem;
+    }
+
+    .cesium-baseLayerPicker-selectedItem .cesium-baseLayerPicker-itemLabel {
+      color: var(--text-primary, #e2e8f0);
+    }
+
+    // Scene mode picker dropdown
+    .cesium-sceneModePicker-wrapper .cesium-sceneModePicker-dropDown-icon {
+      background: var(--bg-panel, rgba(10, 14, 23, 0.85));
+      border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+      border-radius: var(--radius-sm, 6px);
+
+      &:hover {
+        background: var(--bg-panel-hover, rgba(30, 40, 60, 0.9));
+        border-color: var(--border-active, rgba(255, 255, 255, 0.2));
+      }
+    }
+
+    // Geocoder suggestions dropdown
+    .cesium-geocoder-resultsSeparator {
+      background: var(--border-color, rgba(255, 255, 255, 0.1));
+    }
+
+    .search-results {
+      background: var(--bg-panel, rgba(10, 14, 23, 0.95));
+      border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+      border-radius: var(--radius-sm, 6px);
+
+      li {
+        color: var(--text-secondary, #8b95a5);
+
+        &:hover {
+          background: rgba(255, 255, 255, 0.05);
+          color: var(--text-primary, #e2e8f0);
+        }
+
+        &.active {
+          background: rgba(59, 130, 246, 0.15);
+          color: var(--accent-blue, #3b82f6);
+        }
+      }
     }
   }
 }

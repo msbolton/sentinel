@@ -14,6 +14,7 @@ export enum EntityType {
   CYBER = 'CYBER',
   SENSOR = 'SENSOR',
   SATELLITE = 'SATELLITE',
+  DRONE = 'DRONE',
 }
 
 export enum EntitySource {

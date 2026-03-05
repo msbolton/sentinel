@@ -14,14 +14,15 @@ const EXPECTED_PIN_COLORS: Record<string, string> = {
   [EntityType.PERSON]: '#3b82f6',
   [EntityType.VEHICLE]: '#10b981',
   [EntityType.VESSEL]: '#06b6d4',
-  [EntityType.AIRCRAFT]: '#f59e0b',
+  [EntityType.AIRCRAFT]: '#f5f5f5',
   [EntityType.FACILITY]: '#ef4444',
   [EntityType.EQUIPMENT]: '#9ca3af',
   [EntityType.UNIT]: '#10b981',
   [EntityType.SIGNAL]: '#8b5cf6',
   [EntityType.CYBER]: '#8b5cf6',
   [EntityType.SENSOR]: '#8b5cf6',
-  [EntityType.SATELLITE]: '#f5f5f5',
+  [EntityType.SATELLITE]: '#9ca3af',
+  [EntityType.DRONE]: '#f5892a',
   [EntityType.UNKNOWN]: '#5a6a80',
 };
 

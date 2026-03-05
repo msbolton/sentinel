@@ -33,4 +33,9 @@ export class UpdatePositionDto {
   @Min(0)
   @Max(360)
   course?: number;
+
+  @ApiPropertyOptional({ description: 'Altitude in meters MSL' })
+  @IsOptional()
+  @IsNumber()
+  altitude?: number;
 }

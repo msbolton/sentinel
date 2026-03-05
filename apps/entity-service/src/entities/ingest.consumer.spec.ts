@@ -98,7 +98,8 @@ describe('IngestConsumer', () => {
           entityType: EntityType.AIRCRAFT,
           source: EntitySource.ADS_B,
           name: 'BAW123',
-          position: { lat: 51.5, lng: -0.1 },
+          altitude: 10000,
+          position: { lat: 51.5, lng: -0.1, altitude: 10000 },
           metadata: { sourceEntityId: 'ICAO-A1B2C3' },
         }),
       );
@@ -215,6 +216,7 @@ describe('IngestConsumer', () => {
       ['vessel', EntityType.VESSEL],
       ['vehicle', EntityType.VEHICLE],
       ['person', EntityType.PERSON],
+      ['drone', EntityType.DRONE],
       ['unknown', EntityType.UNKNOWN],
       ['sensor', EntityType.EQUIPMENT],
     ];
