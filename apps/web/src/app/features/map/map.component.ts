@@ -144,12 +144,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     { name: 'Units', entityType: EntityType.UNIT, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.UNIT] },
     { name: 'Signals', entityType: EntityType.SIGNAL, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.SIGNAL] },
     { name: 'Cyber', entityType: EntityType.CYBER, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.CYBER] },
+    { name: 'Satellites', entityType: EntityType.SATELLITE, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.SATELLITE] },
     { name: 'Unknown', entityType: EntityType.UNKNOWN, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.UNKNOWN] },
   ];
 
   private Cesium: any;
   private entityMap = new Map<string, any>(); // Cesium entity references
-  private trackTrails = new Map<string, CircularBuffer<{ lat: number; lon: number }>>();
+  private trackTrails = new Map<string, CircularBuffer<{ lat: number; lon: number; alt: number }>>();
   private subscriptions = new Subscription();
   private cameraMovedSubject = new Subject<void>();
   private cesiumColorCache = new Map<string, any>();
@@ -415,6 +416,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       entity.position.altitude ?? 0,
     );
 
+    const hasAltitude = entity.position.altitude != null && entity.position.altitude > 0;
+    const heightRef = hasAltitude
+      ? Cesium.HeightReference.NONE
+      : Cesium.HeightReference.CLAMP_TO_GROUND;
+
     const existing = this.entityMap.get(entity.id);
 
     if (existing) {
@@ -425,7 +431,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       // Update polyline trail
       if (trail.length >= 2) {
         const trailPositions = trail.map((p) =>
-          Cesium.Cartesian3.fromDegrees(p.lon, p.lat),
+          Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt),
         );
         existing.polyline.positions = trailPositions;
       }
@@ -439,7 +445,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
           outlineColor: Cesium.Color.WHITE.withAlpha(0.5),
           outlineWidth: 1,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          heightReference: heightRef,
         },
         label: {
           text: entity.name,
@@ -454,16 +460,17 @@ export class MapComponent implements AfterViewInit, OnDestroy {
           showBackground: true,
           backgroundColor: Cesium.Color.fromCssColorString('#0a0e17').withAlpha(0.7),
           backgroundPadding: new Cesium.Cartesian2(6, 4),
+          heightReference: heightRef,
         },
         polyline:
           trail.length >= 2
             ? {
                 positions: trail.map((p) =>
-                  Cesium.Cartesian3.fromDegrees(p.lon, p.lat),
+                  Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt),
                 ),
                 width: TRACK_TRAIL_CONFIG.width,
                 material: cesiumColor.withAlpha(TRACK_TRAIL_CONFIG.trailOpacity),
-                clampToGround: true,
+                clampToGround: !hasAltitude,
               }
             : undefined,
       });
@@ -496,13 +503,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
     let trail = this.trackTrails.get(entity.id);
     if (!trail) {
-      trail = new CircularBuffer<{ lat: number; lon: number }>(TRACK_TRAIL_CONFIG.maxPoints);
+      trail = new CircularBuffer<{ lat: number; lon: number; alt: number }>(TRACK_TRAIL_CONFIG.maxPoints);
       this.trackTrails.set(entity.id, trail);
     }
 
     trail.push({
       lat: entity.position.latitude,
       lon: entity.position.longitude,
+      alt: entity.position.altitude ?? 0,
     });
   }
 

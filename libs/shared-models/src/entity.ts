@@ -13,6 +13,7 @@ export enum EntityType {
   SIGNAL = 'SIGNAL',
   CYBER = 'CYBER',
   SENSOR = 'SENSOR',
+  SATELLITE = 'SATELLITE',
 }
 
 export enum EntitySource {
@@ -28,6 +29,7 @@ export enum EntitySource {
   LINK16 = 'LINK16',
   GPS = 'GPS',
   RADAR = 'RADAR',
+  CELESTRAK = 'CELESTRAK',
 }
 
 export enum Affiliation {
