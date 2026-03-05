@@ -72,6 +72,7 @@ export class EntityService implements OnModuleInit {
       heading: dto.heading ?? null,
       speedKnots: dto.speedKnots ?? null,
       course: dto.course ?? null,
+      altitude: dto.altitude ?? null,
       milStd2525dSymbol: dto.milStd2525dSymbol ?? null,
       metadata: dto.metadata ?? {},
       affiliations: dto.affiliations ?? [],
@@ -95,7 +96,7 @@ export class EntityService implements OnModuleInit {
         entity_type: saved.entityType,
         latitude: dto.position.lat,
         longitude: dto.position.lng,
-        altitude_meters: undefined,
+        altitude_meters: dto.altitude ?? dto.position.altitude ?? undefined,
         heading: saved.heading,
         speed_knots: saved.speedKnots,
         classification: saved.classification,
@@ -130,6 +131,7 @@ export class EntityService implements OnModuleInit {
     if (dto.heading !== undefined) updates.heading = dto.heading;
     if (dto.speedKnots !== undefined) updates.speedKnots = dto.speedKnots;
     if (dto.course !== undefined) updates.course = dto.course;
+    if (dto.altitude !== undefined) updates.altitude = dto.altitude;
     if (dto.milStd2525dSymbol !== undefined) updates.milStd2525dSymbol = dto.milStd2525dSymbol;
     if (dto.metadata !== undefined) updates.metadata = dto.metadata;
     if (dto.affiliations !== undefined) updates.affiliations = dto.affiliations;
@@ -153,7 +155,7 @@ export class EntityService implements OnModuleInit {
         entity_type: saved.entityType,
         latitude: coords.coordinates[1],
         longitude: coords.coordinates[0],
-        altitude_meters: undefined,
+        altitude_meters: saved.altitude ?? undefined,
         heading: saved.heading,
         speed_knots: saved.speedKnots,
         classification: saved.classification,
@@ -231,6 +233,7 @@ export class EntityService implements OnModuleInit {
       dto.heading,
       dto.speedKnots,
       dto.course,
+      dto.altitude,
     );
 
     if (!updated) {
@@ -243,7 +246,7 @@ export class EntityService implements OnModuleInit {
       entity_type: updated.entityType,
       latitude: dto.lat,
       longitude: dto.lng,
-      altitude_meters: undefined,
+      altitude_meters: dto.altitude ?? updated.altitude ?? undefined,
       heading: dto.heading,
       speed_knots: dto.speedKnots,
       classification: updated.classification,

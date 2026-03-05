@@ -26,6 +26,11 @@ export class GeoPointDto {
   @Min(-180)
   @Max(180)
   lng!: number;
+
+  @ApiPropertyOptional({ description: 'Altitude in meters MSL' })
+  @IsOptional()
+  @IsNumber()
+  altitude?: number;
 }
 
 export class CreateEntityDto {
@@ -82,6 +87,11 @@ export class CreateEntityDto {
   @Min(0)
   @Max(360)
   course?: number;
+
+  @ApiPropertyOptional({ description: 'Altitude in meters MSL' })
+  @IsOptional()
+  @IsNumber()
+  altitude?: number;
 
   @ApiPropertyOptional({
     description: 'MIL-STD-2525D symbol identification code',

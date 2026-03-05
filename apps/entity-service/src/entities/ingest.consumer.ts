@@ -58,6 +58,7 @@ export class IngestConsumer implements OnModuleInit {
             heading: message.heading || undefined,
             speedKnots: message.speed_knots || undefined,
             course: message.course || undefined,
+            altitude: message.altitude || undefined,
           });
         }
 
@@ -76,11 +77,12 @@ export class IngestConsumer implements OnModuleInit {
         source: entitySource,
         classification: Classification.UNCLASSIFIED,
         position: hasPosition
-          ? { lat: message.latitude, lng: message.longitude }
+          ? { lat: message.latitude, lng: message.longitude, altitude: message.altitude || undefined }
           : undefined,
         heading: message.heading || undefined,
         speedKnots: message.speed_knots || undefined,
         course: message.course || undefined,
+        altitude: message.altitude || undefined,
         metadata: { sourceEntityId: message.entity_id },
       });
     } catch (error) {
@@ -113,6 +115,7 @@ function mapEntityType(raw: string): EntityType {
     vehicle: EntityType.VEHICLE,
     person: EntityType.PERSON,
     satellite: EntityType.SATELLITE,
+    drone: EntityType.DRONE,
     sensor: EntityType.EQUIPMENT,
     platform: EntityType.EQUIPMENT,
   };

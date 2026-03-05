@@ -69,6 +69,11 @@ export class UpdateEntityDto {
   @Max(360)
   course?: number;
 
+  @ApiPropertyOptional({ description: 'Altitude in meters MSL' })
+  @IsOptional()
+  @IsNumber()
+  altitude?: number;
+
   @ApiPropertyOptional({ description: 'MIL-STD-2525D symbol identification code' })
   @IsOptional()
   @IsString()

@@ -24,6 +24,9 @@ import {
   CESIUM_VIEWER_OPTIONS,
   ENTITY_TYPE_COLORS,
   ENTITY_TYPE_PIN_COLORS,
+  ENTITY_TYPE_BILLBOARD_SVGS,
+  HEADING_ROTATED_TYPES,
+  svgToDataUrl,
   DEFAULT_CAMERA_POSITION,
   TRACK_TRAIL_CONFIG,
 } from './cesium-config';
@@ -139,6 +142,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     { name: 'Vehicles', entityType: EntityType.VEHICLE, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.VEHICLE] },
     { name: 'Vessels', entityType: EntityType.VESSEL, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.VESSEL] },
     { name: 'Aircraft', entityType: EntityType.AIRCRAFT, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.AIRCRAFT] },
+    { name: 'Drones', entityType: EntityType.DRONE, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.DRONE] },
     { name: 'Facilities', entityType: EntityType.FACILITY, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.FACILITY] },
     { name: 'Equipment', entityType: EntityType.EQUIPMENT, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.EQUIPMENT] },
     { name: 'Units', entityType: EntityType.UNIT, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.UNIT] },
@@ -154,6 +158,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private subscriptions = new Subscription();
   private cameraMovedSubject = new Subject<void>();
   private cesiumColorCache = new Map<string, any>();
+  private billboardImageCache = new Map<string, string>();
   private renderScheduled = false;
   private themePostProcessStage: any = null;
 
@@ -421,12 +426,20 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       ? Cesium.HeightReference.NONE
       : Cesium.HeightReference.CLAMP_TO_GROUND;
 
+    const shouldRotate = HEADING_ROTATED_TYPES.has(entity.entityType);
+    const rotation = shouldRotate && entity.heading != null
+      ? -Cesium.Math.toRadians(entity.heading)
+      : 0;
+
     const existing = this.entityMap.get(entity.id);
 
     if (existing) {
       // Update existing entity
       existing.position = position;
       existing.label.text = entity.name;
+      if (existing.billboard) {
+        existing.billboard.rotation = rotation;
+      }
 
       // Update polyline trail
       if (trail.length >= 2) {
@@ -439,13 +452,15 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       // Create new entity
       const cesiumEntity = this.viewer.entities.add({
         position,
-        point: {
-          pixelSize: 10,
+        billboard: {
+          image: this.getBillboardImage(entity.entityType),
+          scale: 0.5,
           color: cesiumColor,
-          outlineColor: Cesium.Color.WHITE.withAlpha(0.5),
-          outlineWidth: 1,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
           heightReference: heightRef,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+          rotation,
+          alignedAxis: Cesium.Cartesian3.UNIT_Z,
         },
         label: {
           text: entity.name,
@@ -618,6 +633,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.cesiumColorCache.set(entityType, cached);
     }
     return cached;
+  }
+
+  private getBillboardImage(entityType: string): string {
+    if (!this.billboardImageCache.has(entityType)) {
+      const svg = ENTITY_TYPE_BILLBOARD_SVGS[entityType] ?? ENTITY_TYPE_BILLBOARD_SVGS[EntityType.UNKNOWN];
+      this.billboardImageCache.set(entityType, svgToDataUrl(svg));
+    }
+    return this.billboardImageCache.get(entityType)!;
   }
 
   private scheduleRender(): void {

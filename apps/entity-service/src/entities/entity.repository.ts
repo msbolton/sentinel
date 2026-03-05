@@ -119,6 +119,7 @@ export class EntityRepository extends Repository<EntityRecord> {
     heading?: number,
     speedKnots?: number,
     course?: number,
+    altitude?: number,
   ): Promise<EntityRecord | null> {
     await this.createQueryBuilder()
       .update(EntityRecord)
@@ -127,6 +128,7 @@ export class EntityRepository extends Repository<EntityRecord> {
         heading: heading ?? null,
         speedKnots: speedKnots ?? null,
         course: course ?? null,
+        altitude: altitude ?? null,
         lastSeenAt: new Date(),
       })
       .where('id = :id AND deleted = :deleted', { id, deleted: false })

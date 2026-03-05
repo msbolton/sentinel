@@ -22,6 +22,7 @@ enum EntityType {
   ENTITY_TYPE_CYBER = 9;
   ENTITY_TYPE_SENSOR = 10;
   ENTITY_TYPE_SATELLITE = 11;
+  ENTITY_TYPE_DRONE = 12;
 }
 
 // EntitySource identifies the intelligence discipline that produced or

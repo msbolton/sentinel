@@ -60,6 +60,9 @@ export class EntityRecord {
   @Column({ type: 'float', nullable: true })
   course!: number | null;
 
+  @Column({ type: 'float', nullable: true })
+  altitude!: number | null;
+
   @Column({ type: 'varchar', nullable: true })
   milStd2525dSymbol!: string | null;
 
