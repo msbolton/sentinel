@@ -21,6 +21,7 @@ const EXPECTED_PIN_COLORS: Record<string, string> = {
   [EntityType.SIGNAL]: '#8b5cf6',
   [EntityType.CYBER]: '#8b5cf6',
   [EntityType.SENSOR]: '#8b5cf6',
+  [EntityType.SATELLITE]: '#f5f5f5',
   [EntityType.UNKNOWN]: '#5a6a80',
 };
 
