@@ -6,13 +6,13 @@ export class UpdatePositionDto {
   @IsNumber()
   @Min(-90)
   @Max(90)
-  lat: number;
+  lat!: number;
 
   @ApiProperty({ description: 'Longitude (WGS84)', example: -77.0365, minimum: -180, maximum: 180 })
   @IsNumber()
   @Min(-180)
   @Max(180)
-  lng: number;
+  lng!: number;
 
   @ApiPropertyOptional({ description: 'Heading in degrees (0-360)', example: 45.0 })
   @IsOptional()

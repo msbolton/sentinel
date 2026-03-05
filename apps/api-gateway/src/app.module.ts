@@ -6,6 +6,7 @@ import { EntityGatewayModule } from './modules/gateway/entity-gateway.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
 import { EntitiesModule } from './modules/entities/entities.module';
+import { FeedsModule } from './modules/feeds/feeds.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { EntitiesModule } from './modules/entities/entities.module';
     HealthModule,
     EntitiesModule,
     EntityGatewayModule,
+    FeedsModule,
   ],
 })
 export class AppModule {}

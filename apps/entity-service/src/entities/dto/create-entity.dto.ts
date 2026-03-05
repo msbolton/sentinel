@@ -19,24 +19,24 @@ export class GeoPointDto {
   @IsNumber()
   @Min(-90)
   @Max(90)
-  lat: number;
+  lat!: number;
 
   @ApiProperty({ description: 'Longitude (WGS84)', example: -77.0365, minimum: -180, maximum: 180 })
   @IsNumber()
   @Min(-180)
   @Max(180)
-  lng: number;
+  lng!: number;
 }
 
 export class CreateEntityDto {
   @ApiProperty({ enum: EntityType, description: 'Type of the tracked entity' })
   @IsEnum(EntityType)
-  entityType: EntityType;
+  entityType!: EntityType;
 
   @ApiProperty({ description: 'Display name of the entity', example: 'Alpha-7' })
   @IsString()
   @MaxLength(255)
-  name: string;
+  name!: string;
 
   @ApiPropertyOptional({ description: 'Free-text description', example: 'Cargo vessel heading north' })
   @IsOptional()
@@ -46,7 +46,7 @@ export class CreateEntityDto {
 
   @ApiProperty({ enum: EntitySource, description: 'Intelligence source' })
   @IsEnum(EntitySource)
-  source: EntitySource;
+  source!: EntitySource;
 
   @ApiPropertyOptional({
     enum: Classification,
