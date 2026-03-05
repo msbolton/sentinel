@@ -44,7 +44,7 @@ export class IngestConsumer implements OnModuleInit {
   async handleIngestMessage(@Payload() message: IngestMessage): Promise<void> {
     try {
       const entityType = mapEntityType(message.entity_type);
-      const entitySource = inferEntitySource(message.entity_id);
+      const entitySource = inferEntitySource(message.entity_id, message.source);
       const hasPosition = message.latitude !== 0 || message.longitude !== 0;
 
       const existing = await this.findBySourceEntityId(message.entity_id);
@@ -122,7 +122,21 @@ function mapEntityType(raw: string): EntityType {
   return mapping[raw?.toLowerCase()] ?? EntityType.UNKNOWN;
 }
 
-function inferEntitySource(entityId: string): EntitySource {
+function inferEntitySource(entityId: string, source?: string): EntitySource {
+  // Prefer explicit source from ingest adapter when available.
+  if (source) {
+    const sourceMapping: Record<string, EntitySource> = {
+      opensky: EntitySource.OPENSKY,
+      adsblol: EntitySource.ADSB_LOL,
+      celestrak: EntitySource.CELESTRAK,
+      ais: EntitySource.AIS,
+      adsb: EntitySource.ADS_B,
+    };
+    const mapped = sourceMapping[source.toLowerCase()];
+    if (mapped) return mapped;
+  }
+
+  // Fall back to entity ID prefix inference.
   if (entityId.startsWith('ICAO-')) return EntitySource.ADS_B;
   if (entityId.startsWith('MMSI-')) return EntitySource.AIS;
   if (entityId.startsWith('JTN-')) return EntitySource.LINK16;

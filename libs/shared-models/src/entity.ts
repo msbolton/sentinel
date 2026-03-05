@@ -31,6 +31,8 @@ export enum EntitySource {
   GPS = 'GPS',
   RADAR = 'RADAR',
   CELESTRAK = 'CELESTRAK',
+  OPENSKY = 'OPENSKY',
+  ADSB_LOL = 'ADSB_LOL',
 }
 
 export enum Affiliation {

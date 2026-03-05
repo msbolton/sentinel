@@ -42,6 +42,8 @@ enum EntitySource {
   ENTITY_SOURCE_GPS = 11;
   ENTITY_SOURCE_RADAR = 12;
   ENTITY_SOURCE_CELESTRAK = 13;
+  ENTITY_SOURCE_OPENSKY = 14;
+  ENTITY_SOURCE_ADSB_LOL = 15;
 }
 
 // Affiliation identifies the disposition or allegiance of an entity relative
