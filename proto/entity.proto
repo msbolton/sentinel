@@ -21,6 +21,7 @@ enum EntityType {
   ENTITY_TYPE_SIGNAL = 8;
   ENTITY_TYPE_CYBER = 9;
   ENTITY_TYPE_SENSOR = 10;
+  ENTITY_TYPE_SATELLITE = 11;
 }
 
 // EntitySource identifies the intelligence discipline that produced or
@@ -39,6 +40,7 @@ enum EntitySource {
   ENTITY_SOURCE_LINK16 = 10;
   ENTITY_SOURCE_GPS = 11;
   ENTITY_SOURCE_RADAR = 12;
+  ENTITY_SOURCE_CELESTRAK = 13;
 }
 
 // Affiliation identifies the disposition or allegiance of an entity relative

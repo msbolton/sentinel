@@ -81,6 +81,12 @@
             </span>
           </div>
         }
+        @if (entity.position?.altitude) {
+          <div class="popup-row">
+            <span class="popup-label">Altitude</span>
+            <span class="popup-value mono">{{ entity.position.altitude | number:'1.0-0' }} m</span>
+          </div>
+        }
         @if (entity.speedKnots !== undefined && entity.speedKnots !== null) {
           <div class="popup-row">
             <span class="popup-label">Speed</span>

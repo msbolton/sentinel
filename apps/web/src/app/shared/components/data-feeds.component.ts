@@ -7,8 +7,12 @@ import {
   HostListener,
   ElementRef,
   OnInit,
+  OnDestroy,
 } from '@angular/core';
+import { Subscription } from 'rxjs';
 import { DataFeedService, DataFeed } from '../../core/services/data-feed.service';
+import { EntityService } from '../../core/services/entity.service';
+import { EntityType } from '../../shared/models/entity.model';
 
 interface DataLayerConfig {
   id: string;
@@ -48,6 +52,7 @@ interface DataLayer {
             <div class="layer-row">
               <div class="layer-content">
                 <div class="layer-main">
+                  <span class="freshness-dot" [attr.data-status]="getFreshnessStatus(layer.id)"></span>
                   <span class="layer-name">{{ layer.name }}</span>
                   <span class="layer-count">{{ layer.count !== null ? formatCount(layer.count) : '—' }}</span>
                   <button
@@ -199,6 +204,18 @@ interface DataLayer {
       gap: 8px;
     }
 
+    .freshness-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+
+      &[data-status="green"]  { background: var(--accent-green); }
+      &[data-status="yellow"] { background: #eab308; }
+      &[data-status="red"]    { background: #ef4444; }
+      &[data-status="none"]   { background: transparent; }
+    }
+
     .layer-name {
       font-size: 0.8rem;
       font-weight: 500;
@@ -278,13 +295,16 @@ interface DataLayer {
     }
   `],
 })
-export class DataFeedsComponent implements OnInit {
+export class DataFeedsComponent implements OnInit, OnDestroy {
   readonly feedService = inject(DataFeedService);
   private readonly elementRef = inject(ElementRef);
+  private readonly entityService = inject(EntityService);
 
   readonly expanded = signal(false);
   readonly toggling = signal<string | null>(null);
   private readonly localOverrides = signal<Map<string, boolean>>(new Map());
+  private feedFreshness = signal<Map<string, Date>>(new Map());
+  private entitySub?: Subscription;
 
   private readonly LAYER_CONFIG: DataLayerConfig[] = [
     { id: 'opensky',     name: 'Live Flights',      source: 'OpenSky Network' },
@@ -339,8 +359,38 @@ export class DataFeedsComponent implements OnInit {
     this.layers().filter((l) => l.enabled).length,
   );
 
+  private readonly FEED_ENTITY_TYPE_MAP: Record<string, string> = {
+    'opensky': EntityType.AIRCRAFT,
+    'adsb-lol': EntityType.AIRCRAFT,
+    'celestrak': EntityType.SATELLITE,
+  };
+
   ngOnInit(): void {
     this.feedService.loadFeeds();
+
+    this.entitySub = this.entityService.entityUpdates$.subscribe(event => {
+      const entityType = event.entity.entityType;
+      this.feedFreshness.update(m => {
+        const next = new Map(m);
+        next.set(entityType, new Date());
+        return next;
+      });
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.entitySub?.unsubscribe();
+  }
+
+  getFreshnessStatus(feedId: string): 'green' | 'yellow' | 'red' | 'none' {
+    const entityType = this.FEED_ENTITY_TYPE_MAP[feedId];
+    if (!entityType) return 'none';
+    const lastSeen = this.feedFreshness().get(entityType);
+    if (!lastSeen) return 'red';
+    const ageMs = Date.now() - lastSeen.getTime();
+    if (ageMs < 120_000) return 'green';
+    if (ageMs < 300_000) return 'yellow';
+    return 'red';
   }
 
   toggle(): void {
@@ -406,8 +456,14 @@ export class DataFeedsComponent implements OnInit {
   }
 
   private getRelativeTime(feed: DataFeed): string {
-    // DataFeed doesn't have timestamps — return a placeholder
-    // Will be enriched when API supports last-updated timestamps
-    return feed.enabled ? 'just now' : 'never';
+    const entityType = this.FEED_ENTITY_TYPE_MAP[feed.id];
+    if (!entityType) return feed.enabled ? 'active' : 'never';
+    const lastSeen = this.feedFreshness().get(entityType);
+    if (!lastSeen) return feed.enabled ? 'waiting...' : 'never';
+    const ageSec = Math.floor((Date.now() - lastSeen.getTime()) / 1000);
+    if (ageSec < 5) return 'just now';
+    if (ageSec < 60) return `${ageSec}s ago`;
+    if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m ago`;
+    return `${Math.floor(ageSec / 3600)}h ago`;
   }
 }
