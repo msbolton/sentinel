@@ -40,13 +40,15 @@ const (
 	EntityTypeUnknown   = "unknown"
 	EntityTypeSensor    = "sensor"
 	EntityTypePlatform  = "platform"
+	EntityTypeSatellite = "satellite"
 )
 
 // Source type constants for labeling ingest origins.
 const (
-	SourceMQTT    = "mqtt"
-	SourceSTOMP   = "stomp"
-	SourceTCP     = "tcp"
-	SourceOpenSky  = "opensky"
-	SourceADSBLol  = "adsblol"
+	SourceMQTT      = "mqtt"
+	SourceSTOMP     = "stomp"
+	SourceTCP       = "tcp"
+	SourceOpenSky   = "opensky"
+	SourceADSBLol   = "adsblol"
+	SourceCelesTrak = "celestrak"
 )

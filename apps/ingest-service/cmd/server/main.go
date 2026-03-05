@@ -111,6 +111,18 @@ func main() {
 		logger.Error("failed to register adsb-lol feed", zap.Error(err))
 	}
 
+	// Register CelesTrak satellite feed (toggleable via /feeds API).
+	if err := feedManager.Register(
+		"celestrak", "CelesTrak Satellites", models.SourceCelesTrak,
+		"Satellite positions computed from CelesTrak TLE data via SGP4",
+		func() (sources.Listener, error) {
+			return sources.NewCelesTrakListener(cfg, pipelineInput, logger, m), nil
+		},
+		cfg.CelesTrakEnabled,
+	); err != nil {
+		logger.Error("failed to register celestrak feed", zap.Error(err))
+	}
+
 	// Start HTTP health/metrics/feeds server.
 	healthHandler := health.NewHandler(producer, logger)
 	feedsHandler := feeds.NewHandler(feedManager, logger)

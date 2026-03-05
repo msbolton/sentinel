@@ -29,6 +29,11 @@ type Config struct {
 
 	ADSBLolEnabled     bool // ADSBLOL_ENABLED (default: false)
 	ADSBLolIntervalSec int  // ADSBLOL_INTERVAL_SEC (default: 10)
+
+	CelesTrakEnabled                bool   // CELESTRAK_ENABLED (default: false)
+	CelesTrakGroups                 string // CELESTRAK_GROUPS (default: "active")
+	CelesTrakTLERefreshHours        int    // CELESTRAK_TLE_REFRESH_HOURS (default: 6)
+	CelesTrakPropagationIntervalSec int    // CELESTRAK_PROPAGATION_INTERVAL_SEC (default: 60)
 }
 
 // Load reads configuration from environment variables, applying defaults
@@ -56,6 +61,11 @@ func Load() *Config {
 
 		ADSBLolEnabled:     os.Getenv("ADSBLOL_ENABLED") == "true",
 		ADSBLolIntervalSec: envOrDefaultInt("ADSBLOL_INTERVAL_SEC", 10),
+
+		CelesTrakEnabled:                os.Getenv("CELESTRAK_ENABLED") == "true",
+		CelesTrakGroups:                 envOrDefault("CELESTRAK_GROUPS", "active"),
+		CelesTrakTLERefreshHours:        envOrDefaultInt("CELESTRAK_TLE_REFRESH_HOURS", 6),
+		CelesTrakPropagationIntervalSec: envOrDefaultInt("CELESTRAK_PROPAGATION_INTERVAL_SEC", 60),
 	}
 }
 
