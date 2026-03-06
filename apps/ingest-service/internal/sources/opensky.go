@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,10 @@ type OpenSkyListener struct {
 	metrics *metrics.Metrics
 	client  *http.Client
 
+	mu          sync.Mutex
+	accessToken string
+	tokenExpiry time.Time
+
 	stopOnce sync.Once
 	stop     chan struct{}
 	wg       sync.WaitGroup
@@ -56,7 +61,7 @@ func (l *OpenSkyListener) Start() error {
 	l.logger.Info("starting opensky listener",
 		zap.Int("interval_sec", l.cfg.OpenSkyIntervalSec),
 		zap.String("bbox", l.cfg.OpenSkyBBox),
-		zap.Bool("authenticated", l.cfg.OpenSkyUsername != ""),
+		zap.Bool("authenticated", l.cfg.OpenSkyClientID != ""),
 	)
 
 	l.metrics.ActiveConnections.WithLabelValues(models.SourceOpenSky).Inc()
@@ -132,8 +137,12 @@ func (l *OpenSkyListener) poll() error {
 		return fmt.Errorf("build request: %w", err)
 	}
 
-	if l.cfg.OpenSkyUsername != "" && l.cfg.OpenSkyPassword != "" {
-		req.SetBasicAuth(l.cfg.OpenSkyUsername, l.cfg.OpenSkyPassword)
+	if l.cfg.OpenSkyClientID != "" && l.cfg.OpenSkyClientSecret != "" {
+		token, err := l.getAccessToken()
+		if err != nil {
+			return fmt.Errorf("oauth2 token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := l.client.Do(req)
@@ -192,6 +201,52 @@ func (l *OpenSkyListener) poll() error {
 	l.logger.Info("opensky poll complete", zap.Int("aircraft", sent), zap.Int("total_states", len(states)))
 
 	return nil
+}
+
+// getAccessToken returns a cached OAuth2 access token, refreshing it if expired.
+func (l *OpenSkyListener) getAccessToken() (string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// Return cached token if still valid (with 30s buffer)
+	if l.accessToken != "" && time.Now().Before(l.tokenExpiry.Add(-30*time.Second)) {
+		return l.accessToken, nil
+	}
+
+	data := url.Values{
+		"grant_type":    {"client_credentials"},
+		"client_id":     {l.cfg.OpenSkyClientID},
+		"client_secret": {l.cfg.OpenSkyClientSecret},
+	}
+
+	resp, err := l.client.PostForm(l.cfg.OpenSkyTokenURL, data)
+	if err != nil {
+		return "", fmt.Errorf("token request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+		TokenType   string `json:"token_type"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return "", fmt.Errorf("decode token response: %w", err)
+	}
+
+	l.accessToken = tokenResp.AccessToken
+	l.tokenExpiry = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+
+	l.logger.Info("opensky oauth2 token refreshed",
+		zap.Int("expires_in_sec", tokenResp.ExpiresIn),
+	)
+
+	return l.accessToken, nil
 }
 
 // buildURL constructs the OpenSky API URL with optional bounding-box params.

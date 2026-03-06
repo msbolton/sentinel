@@ -343,51 +343,84 @@ func TestPollWithTestServer(t *testing.T) {
 	}
 }
 
-func TestBasicAuthHeader(t *testing.T) {
-	var gotUser, gotPass string
-	var gotAuth bool
+func TestOAuth2TokenFetch(t *testing.T) {
+	var gotAuthHeader string
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotUser, gotPass, gotAuth = r.BasicAuth()
+	// Token endpoint
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("token request method = %s, want POST", r.Method)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if r.FormValue("grant_type") != "client_credentials" {
+			t.Errorf("grant_type = %q, want client_credentials", r.FormValue("grant_type"))
+		}
+		if r.FormValue("client_id") != "test-client-id" {
+			t.Errorf("client_id = %q, want test-client-id", r.FormValue("client_id"))
+		}
+		if r.FormValue("client_secret") != "test-client-secret" {
+			t.Errorf("client_secret = %q, want test-client-secret", r.FormValue("client_secret"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"access_token":"test-token-123","expires_in":3600,"token_type":"Bearer"}`))
+	}))
+	defer tokenServer.Close()
+
+	// API endpoint that captures the auth header
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuthHeader = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(openSkyFixtureEmpty))
 	}))
-	defer server.Close()
+	defer apiServer.Close()
 
 	logger := zap.NewNop()
 	m := newTestMetrics()
 	input := make(chan *models.IngestMessage, 100)
 
 	cfg := &config.Config{
-		OpenSkyEnabled:     true,
-		OpenSkyIntervalSec: 15,
-		OpenSkyUsername:    "testuser",
-		OpenSkyPassword:    "testpass",
+		OpenSkyEnabled:      true,
+		OpenSkyIntervalSec:  15,
+		OpenSkyClientID:     "test-client-id",
+		OpenSkyClientSecret: "test-client-secret",
+		OpenSkyTokenURL:     tokenServer.URL,
 	}
 	l := NewOpenSkyListener(cfg, input, logger, m)
-	l.client = server.Client()
 
-	// Build and send a request with Basic Auth to verify the header.
-	req, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	// Fetch a token
+	token, err := l.getAccessToken()
+	if err != nil {
+		t.Fatalf("getAccessToken() error: %v", err)
+	}
+	if token != "test-token-123" {
+		t.Errorf("token = %q, want test-token-123", token)
+	}
+
+	// Verify token is cached (second call should not hit server)
+	token2, err := l.getAccessToken()
+	if err != nil {
+		t.Fatalf("getAccessToken() cached error: %v", err)
+	}
+	if token2 != token {
+		t.Errorf("cached token = %q, want %q", token2, token)
+	}
+
+	// Make an API request with the token
+	req, err := http.NewRequest(http.MethodGet, apiServer.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.SetBasicAuth(cfg.OpenSkyUsername, cfg.OpenSkyPassword)
-
+	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := l.client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 
-	if !gotAuth {
-		t.Fatal("expected Basic Auth header to be present")
-	}
-	if gotUser != "testuser" {
-		t.Errorf("username = %q, want %q", gotUser, "testuser")
-	}
-	if gotPass != "testpass" {
-		t.Errorf("password = %q, want %q", gotPass, "testpass")
+	if gotAuthHeader != "Bearer test-token-123" {
+		t.Errorf("Authorization header = %q, want %q", gotAuthHeader, "Bearer test-token-123")
 	}
 }
 
