@@ -300,15 +300,23 @@ export class EntityService implements OnModuleInit {
     speedKnots: number | null;
     course: number | null;
     altitude: number | null;
+    entityType?: string;
+    classification?: string;
+    source?: string;
+    metadata?: Record<string, unknown>;
   }): void {
     this.emitKafka(TOPIC_ENTITY_POSITION, update.id, {
       entity_id: update.id,
+      entity_type: update.entityType,
       latitude: update.lat,
       longitude: update.lng,
       altitude_meters: update.altitude ?? undefined,
       heading: update.heading,
       speed_knots: update.speedKnots,
+      classification: update.classification,
+      source: update.source,
       timestamp: new Date().toISOString(),
+      metadata: update.metadata,
     });
   }
 

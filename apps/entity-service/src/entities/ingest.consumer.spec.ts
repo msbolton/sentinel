@@ -76,9 +76,9 @@ describe('IngestConsumer', () => {
   describe('batch processing', () => {
     it('should partition batch into new, position updates, and name updates', async () => {
       const existingMap = new Map([
-        ['MMSI-111', { id: 'uuid-1', name: 'Old Name 1' }],
-        ['MMSI-222', { id: 'uuid-2', name: 'Old Name 2' }],
-        ['MMSI-333', { id: 'uuid-3', name: 'Old Name 3' }],
+        ['MMSI-111', { id: 'uuid-1', name: 'Old Name 1', entityType: 'VESSEL', classification: 'UNCLASSIFIED', source: 'AIS', metadata: { sourceEntityId: 'MMSI-111' } }],
+        ['MMSI-222', { id: 'uuid-2', name: 'Old Name 2', entityType: 'VESSEL', classification: 'UNCLASSIFIED', source: 'AIS', metadata: { sourceEntityId: 'MMSI-222' } }],
+        ['MMSI-333', { id: 'uuid-3', name: 'Old Name 3', entityType: 'VESSEL', classification: 'UNCLASSIFIED', source: 'AIS', metadata: { sourceEntityId: 'MMSI-333' } }],
       ]);
       entityRepository.findBySourceEntityIds.mockResolvedValue(existingMap);
 
@@ -196,7 +196,7 @@ describe('IngestConsumer', () => {
 
     it('should skip position update for zero lat/lon messages', async () => {
       const existingMap = new Map([
-        ['MMSI-111', { id: 'uuid-1', name: 'Test' }],
+        ['MMSI-111', { id: 'uuid-1', name: 'Test', entityType: 'VESSEL', classification: 'UNCLASSIFIED', source: 'AIS', metadata: { sourceEntityId: 'MMSI-111' } }],
       ]);
       entityRepository.findBySourceEntityIds.mockResolvedValue(existingMap);
 
@@ -294,7 +294,7 @@ describe('IngestConsumer', () => {
   describe('existing entity with position', () => {
     it('should bulk update position', async () => {
       const existingMap = new Map([
-        ['MMSI-123456789', { id: 'existing-uuid', name: 'MMSI 123456789' }],
+        ['MMSI-123456789', { id: 'existing-uuid', name: 'MMSI 123456789', entityType: 'VESSEL', classification: 'UNCLASSIFIED', source: 'AIS', metadata: { sourceEntityId: 'MMSI-123456789' } }],
       ]);
       entityRepository.findBySourceEntityIds.mockResolvedValue(existingMap);
 
@@ -334,7 +334,7 @@ describe('IngestConsumer', () => {
   describe('existing entity with name change', () => {
     it('should call update with new name', async () => {
       const existingMap = new Map([
-        ['MMSI-123456789', { id: 'existing-uuid', name: 'MMSI 123456789' }],
+        ['MMSI-123456789', { id: 'existing-uuid', name: 'MMSI 123456789', entityType: 'VESSEL', classification: 'UNCLASSIFIED', source: 'AIS', metadata: { sourceEntityId: 'MMSI-123456789' } }],
       ]);
       entityRepository.findBySourceEntityIds.mockResolvedValue(existingMap);
 
@@ -366,7 +366,7 @@ describe('IngestConsumer', () => {
   describe('AIS Type 5 with zero lat/lon', () => {
     it('should skip position update but still update name', async () => {
       const existingMap = new Map([
-        ['MMSI-123456789', { id: 'existing-uuid', name: 'MMSI 123456789' }],
+        ['MMSI-123456789', { id: 'existing-uuid', name: 'MMSI 123456789', entityType: 'VESSEL', classification: 'UNCLASSIFIED', source: 'AIS', metadata: { sourceEntityId: 'MMSI-123456789' } }],
       ]);
       entityRepository.findBySourceEntityIds.mockResolvedValue(existingMap);
 

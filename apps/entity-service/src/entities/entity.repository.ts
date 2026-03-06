@@ -31,6 +31,15 @@ export interface EntityCountByType {
   count: number;
 }
 
+export interface ExistingEntityInfo {
+  id: string;
+  name: string;
+  entityType: EntityType;
+  classification: Classification;
+  source: EntitySource;
+  metadata: Record<string, unknown>;
+}
+
 @Injectable()
 export class EntityRepository extends Repository<EntityRecord> {
   constructor(private readonly dataSource: DataSource) {
@@ -165,18 +174,33 @@ export class EntityRepository extends Repository<EntityRecord> {
    */
   async findBySourceEntityIds(
     sourceEntityIds: string[],
-  ): Promise<Map<string, { id: string; name: string }>> {
+  ): Promise<Map<string, ExistingEntityInfo>> {
     if (sourceEntityIds.length === 0) return new Map();
 
     const results = await this.createQueryBuilder('e')
-      .select(['e.id', 'e.name', "e.metadata->>'sourceEntityId' as source_entity_id"])
+      .select([
+        'e.id',
+        'e.name',
+        'e.entityType',
+        'e.classification',
+        'e.source',
+        'e.metadata',
+        "e.metadata->>'sourceEntityId' as source_entity_id",
+      ])
       .where('e.deleted = :deleted', { deleted: false })
       .andWhere("e.metadata->>'sourceEntityId' IN (:...sourceEntityIds)", { sourceEntityIds })
       .getRawMany();
 
-    const map = new Map<string, { id: string; name: string }>();
+    const map = new Map<string, ExistingEntityInfo>();
     for (const row of results) {
-      map.set(row.source_entity_id, { id: row.e_id, name: row.e_name });
+      map.set(row.source_entity_id, {
+        id: row.e_id,
+        name: row.e_name,
+        entityType: row.e_entityType,
+        classification: row.e_classification,
+        source: row.e_source,
+        metadata: row.e_metadata,
+      });
     }
     return map;
   }
