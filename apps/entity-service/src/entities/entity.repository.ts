@@ -161,6 +161,68 @@ export class EntityRepository extends Repository<EntityRecord> {
   }
 
   /**
+   * Bulk lookup of entities by their sourceEntityId metadata field.
+   */
+  async findBySourceEntityIds(
+    sourceEntityIds: string[],
+  ): Promise<Map<string, { id: string; name: string }>> {
+    if (sourceEntityIds.length === 0) return new Map();
+
+    const results = await this.createQueryBuilder('e')
+      .select(['e.id', 'e.name', "e.metadata->>'sourceEntityId' as source_entity_id"])
+      .where('e.deleted = :deleted', { deleted: false })
+      .andWhere("e.metadata->>'sourceEntityId' IN (:...sourceEntityIds)", { sourceEntityIds })
+      .getRawMany();
+
+    const map = new Map<string, { id: string; name: string }>();
+    for (const row of results) {
+      map.set(row.source_entity_id, { id: row.e_id, name: row.e_name });
+    }
+    return map;
+  }
+
+  /**
+   * Bulk update positions for multiple entities in a single SQL statement.
+   */
+  async bulkUpdatePositions(
+    updates: Array<{
+      id: string;
+      lat: number;
+      lng: number;
+      heading: number | null;
+      speedKnots: number | null;
+      course: number | null;
+      altitude: number | null;
+    }>,
+  ): Promise<void> {
+    if (updates.length === 0) return;
+
+    const params: unknown[] = [];
+    const valueClauses: string[] = [];
+    for (let i = 0; i < updates.length; i++) {
+      const u = updates[i];
+      const offset = i * 7;
+      valueClauses.push(
+        `($${offset + 1}::uuid, $${offset + 2}::double precision, $${offset + 3}::double precision, $${offset + 4}::double precision, $${offset + 5}::double precision, $${offset + 6}::double precision, $${offset + 7}::double precision)`,
+      );
+      params.push(u.id, u.lng, u.lat, u.heading, u.speedKnots, u.course, u.altitude);
+    }
+
+    await this.query(
+      `UPDATE sentinel.entities AS e
+       SET position = ST_SetSRID(ST_MakePoint(b.lng, b.lat), 4326),
+           heading = b.heading,
+           speed_knots = b.speed_knots,
+           course = b.course,
+           altitude = b.altitude,
+           last_seen_at = NOW()
+       FROM (VALUES ${valueClauses.join(',')}) AS b(id, lng, lat, heading, speed_knots, course, altitude)
+       WHERE e.id = b.id AND e.deleted = false`,
+      params,
+    );
+  }
+
+  /**
    * Soft-delete an entity by marking it as deleted.
    */
   async softDeleteEntity(id: string): Promise<boolean> {

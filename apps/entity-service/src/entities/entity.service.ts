@@ -290,6 +290,32 @@ export class EntityService implements OnModuleInit {
     return this.entityRepository.getEntityCounts();
   }
 
+  // ─── Batch helpers (used by IngestConsumer) ──────────────────────────
+
+  emitPositionEvent(update: {
+    id: string;
+    lat: number;
+    lng: number;
+    heading: number | null;
+    speedKnots: number | null;
+    course: number | null;
+    altitude: number | null;
+  }): void {
+    this.emitKafka(TOPIC_ENTITY_POSITION, update.id, {
+      entity_id: update.id,
+      latitude: update.lat,
+      longitude: update.lng,
+      altitude_meters: update.altitude ?? undefined,
+      heading: update.heading,
+      speed_knots: update.speedKnots,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  async updateRedisGeo(entityId: string, lng: number, lat: number): Promise<void> {
+    await this.redisGeoAdd(entityId, lng, lat);
+  }
+
   // ─── Private helpers ─────────────────────────────────────────────────
 
   private async findByIdOrThrow(id: string): Promise<EntityRecord> {
