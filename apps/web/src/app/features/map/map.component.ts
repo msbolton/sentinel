@@ -420,7 +420,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         const trailPositions = trail.map((p) =>
           Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt),
         );
-        existing.polyline.positions = trailPositions;
+        if (existing.polyline) {
+          existing.polyline.positions = trailPositions;
+        } else {
+          existing.polyline = new Cesium.PolylineGraphics({
+            positions: trailPositions,
+            width: TRACK_TRAIL_CONFIG.width,
+            material: cesiumColor.withAlpha(TRACK_TRAIL_CONFIG.trailOpacity),
+            clampToGround: !hasAltitude,
+          });
+        }
       }
     } else {
       // Create new entity
