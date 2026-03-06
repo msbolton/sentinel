@@ -1,6 +1,6 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
-import { BehaviorSubject, Observable, Subject, Subscription, shareReplay, switchMap, tap } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, Subscription, shareReplay, switchMap, tap, interval } from 'rxjs';
 import { WebSocketService } from './websocket.service';
 import {
   Entity,
@@ -11,13 +11,19 @@ import {
 
 @Injectable({ providedIn: 'root' })
 export class EntityService implements OnDestroy {
+  private static readonly STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+  private static readonly MAX_ENTITIES = 5000;
+  private static readonly EVICTION_INTERVAL_MS = 30_000;
+
   private readonly apiUrl = '/api/v1/entities';
   private readonly searchUrl = '/api/v1/search';
   private readonly wsSubscription: Subscription;
+  private readonly evictionSubscription: Subscription;
 
   private readonly entitiesSubject = new BehaviorSubject<Map<string, Entity>>(new Map());
   private readonly querySubject = new Subject<EntityQuery | undefined>();
   private readonly queryPipelineSubscription: Subscription;
+  private readonly entityEvictionsSubject = new Subject<string[]>();
 
   /** Deduplicated entity query pipeline — each call cancels the previous in-flight request */
   private readonly entityQuery$: Observable<PaginatedResponse<Entity>>;
@@ -27,6 +33,9 @@ export class EntityService implements OnDestroy {
 
   /** Real-time entity updates from WebSocket */
   readonly entityUpdates$: Observable<EntityEvent>;
+
+  /** Emits arrays of entity IDs that were evicted due to staleness */
+  readonly entityEvictions$ = this.entityEvictionsSubject.asObservable();
 
   constructor(
     private readonly http: HttpClient,
@@ -55,11 +64,16 @@ export class EntityService implements OnDestroy {
 
     // Keep pipeline hot
     this.queryPipelineSubscription = this.entityQuery$.subscribe();
+
+    // Periodic eviction of stale entities
+    this.evictionSubscription = interval(EntityService.EVICTION_INTERVAL_MS)
+      .subscribe(() => this.evictStaleEntities());
   }
 
   ngOnDestroy(): void {
     this.wsSubscription.unsubscribe();
     this.queryPipelineSubscription.unsubscribe();
+    this.evictionSubscription.unsubscribe();
   }
 
   getEntities(query?: EntityQuery): Observable<PaginatedResponse<Entity>> {
@@ -125,6 +139,43 @@ export class EntityService implements OnDestroy {
 
   clearEntities(): void {
     this.entitiesSubject.next(new Map());
+  }
+
+  private evictStaleEntities(): void {
+    const map = this.entitiesSubject.value;
+    if (map.size === 0) return;
+
+    const now = Date.now();
+    const evictedIds: string[] = [];
+
+    for (const [id, entity] of map) {
+      if (entity.lastSeenAt) {
+        const age = now - new Date(entity.lastSeenAt).getTime();
+        if (age > EntityService.STALE_THRESHOLD_MS) {
+          map.delete(id);
+          evictedIds.push(id);
+        }
+      }
+    }
+
+    // If still over max, remove oldest by lastSeenAt
+    if (map.size > EntityService.MAX_ENTITIES) {
+      const sorted = [...map.entries()].sort((a, b) => {
+        const aTime = a[1].lastSeenAt ? new Date(a[1].lastSeenAt).getTime() : 0;
+        const bTime = b[1].lastSeenAt ? new Date(b[1].lastSeenAt).getTime() : 0;
+        return aTime - bTime;
+      });
+      const excess = map.size - EntityService.MAX_ENTITIES;
+      for (let i = 0; i < excess; i++) {
+        map.delete(sorted[i][0]);
+        evictedIds.push(sorted[i][0]);
+      }
+    }
+
+    if (evictedIds.length > 0) {
+      this.entitiesSubject.next(map);
+      this.entityEvictionsSubject.next(evictedIds);
+    }
   }
 
   private mergeEntityEvent(event: EntityEvent): void {
