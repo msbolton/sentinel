@@ -341,6 +341,23 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       });
     });
     this.subscriptions.add(entityStateSub);
+
+    // Subscribe to entity evictions — remove stale entities from the globe
+    const evictionSub = this.entityService.entityEvictions$.subscribe((ids) => {
+      this.ngZone.runOutsideAngular(() => {
+        if (!this.viewer) return;
+        this.viewer.entities.suspendEvents();
+        try {
+          for (const id of ids) {
+            this.removeCesiumEntity(id);
+          }
+        } finally {
+          this.viewer.entities.resumeEvents();
+        }
+        this.scheduleRender();
+      });
+    });
+    this.subscriptions.add(evictionSub);
   }
 
   private processCesiumBatch(events: EntityEvent[]): void {
