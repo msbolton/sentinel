@@ -10,7 +10,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Subscription, debounceTime, Subject, throttleTime } from 'rxjs';
+import { Subscription, debounceTime, Subject, throttleTime, bufferTime, filter } from 'rxjs';
 import {
   Entity,
   EntityType,
@@ -310,10 +310,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   private subscribeToEntities(): void {
-    // Subscribe to real-time entity updates
-    const sub = this.entityService.entityUpdates$.subscribe((event) => {
+    // Subscribe to real-time entity updates — batch within 100ms windows
+    const sub = this.entityService.entityUpdates$.pipe(
+      bufferTime(100),
+      filter((batch) => batch.length > 0),
+    ).subscribe((batch) => {
       this.ngZone.runOutsideAngular(() => {
-        this.handleEntityEvent(event);
+        this.processCesiumBatch(batch);
       });
     });
     this.subscriptions.add(sub);
@@ -323,14 +326,36 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       throttleTime(1000),
     ).subscribe((entities) => {
       this.ngZone.runOutsideAngular(() => {
-        entities.forEach((entity, id) => {
-          if (!this.entityMap.has(id)) {
-            this.addOrUpdateCesiumEntity(entity);
-          }
-        });
+        if (!this.viewer) return;
+        this.viewer.entities.suspendEvents();
+        try {
+          entities.forEach((entity, id) => {
+            if (!this.entityMap.has(id)) {
+              this.addOrUpdateCesiumEntity(entity);
+            }
+          });
+        } finally {
+          this.viewer.entities.resumeEvents();
+        }
+        this.scheduleRender();
       });
     });
     this.subscriptions.add(entityStateSub);
+  }
+
+  private processCesiumBatch(events: EntityEvent[]): void {
+    if (!this.viewer) return;
+
+    this.viewer.entities.suspendEvents();
+    try {
+      for (const event of events) {
+        this.handleEntityEvent(event);
+      }
+    } finally {
+      this.viewer.entities.resumeEvents();
+    }
+
+    this.scheduleRender();
   }
 
   private subscribeToThemeChanges(): void {
