@@ -124,8 +124,8 @@ export class EntityRepository extends Repository<EntityRecord> {
     const result = await this.query(
       `UPDATE sentinel.entities
        SET position = ST_SetSRID(ST_MakePoint($1, $2), 4326),
-           heading = $3, speed_knots = $4, course = $5, altitude = $6,
-           last_seen_at = NOW()
+           heading = $3, speedknots = $4, course = $5, altitude = $6,
+           lastseenat = NOW()
        WHERE id = $7 AND deleted = false
        RETURNING *`,
       [lng, lat, heading ?? null, speedKnots ?? null, course ?? null, altitude ?? null, id],
@@ -139,24 +139,24 @@ export class EntityRepository extends Repository<EntityRecord> {
   private mapRawToEntity(raw: Record<string, unknown>): EntityRecord {
     return this.create({
       id: raw.id as string,
-      entityType: raw.entity_type as EntityType,
+      entityType: raw.entitytype as EntityType,
       name: raw.name as string,
       description: raw.description as string,
       source: raw.source as EntitySource,
       classification: raw.classification as Classification,
       position: raw.position as object | null,
       heading: raw.heading as number | null,
-      speedKnots: raw.speed_knots as number | null,
+      speedKnots: raw.speedknots as number | null,
       course: raw.course as number | null,
       altitude: raw.altitude as number | null,
-      milStd2525dSymbol: raw.mil_std_2525d_symbol as string | null,
+      milStd2525dSymbol: raw.milstd2525dsymbol as string | null,
       metadata: raw.metadata as Record<string, unknown>,
       affiliations: raw.affiliations as string[],
-      createdAt: raw.created_at as Date,
-      updatedAt: raw.updated_at as Date,
-      lastSeenAt: raw.last_seen_at as Date | null,
+      createdAt: raw.createdat as Date,
+      updatedAt: raw.updatedat as Date,
+      lastSeenAt: raw.lastseenat as Date | null,
       deleted: raw.deleted as boolean,
-      deletedAt: raw.deleted_at as Date | null,
+      deletedAt: raw.deletedat as Date | null,
     });
   }
 
@@ -212,11 +212,11 @@ export class EntityRepository extends Repository<EntityRecord> {
       `UPDATE sentinel.entities AS e
        SET position = ST_SetSRID(ST_MakePoint(b.lng, b.lat), 4326),
            heading = b.heading,
-           speed_knots = b.speed_knots,
+           speedknots = b.speedknots,
            course = b.course,
            altitude = b.altitude,
-           last_seen_at = NOW()
-       FROM (VALUES ${valueClauses.join(',')}) AS b(id, lng, lat, heading, speed_knots, course, altitude)
+           lastseenat = NOW()
+       FROM (VALUES ${valueClauses.join(',')}) AS b(id, lng, lat, heading, speedknots, course, altitude)
        WHERE e.id = b.id AND e.deleted = false`,
       params,
     );
