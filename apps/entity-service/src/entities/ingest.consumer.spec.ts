@@ -247,13 +247,14 @@ describe('IngestConsumer', () => {
     );
   });
 
-  // ─── Source inference ──────────────────────────────────────────────
+  // ─── Source inference from entity ID prefix ──────────────────────
 
-  describe('source inference from entity ID', () => {
+  describe('source inference from entity ID prefix', () => {
     const cases: Array<[string, EntitySource]> = [
       ['ICAO-A1B2C3', EntitySource.ADS_B],
       ['MMSI-123456789', EntitySource.AIS],
       ['JTN-42', EntitySource.LINK16],
+      ['SAT-25544', EntitySource.CELESTRAK],
       ['other-id', EntitySource.GPS],
     ];
 
@@ -264,7 +265,7 @@ describe('IngestConsumer', () => {
           entity_id: entityId,
           entity_type: 'unknown',
           name: 'Test',
-          source: 'tcp',
+          source: '',
           latitude: 10,
           longitude: 20,
           altitude: 0,
@@ -281,5 +282,64 @@ describe('IngestConsumer', () => {
         );
       },
     );
+  });
+
+  // ─── Explicit source from ingest adapter ──────────────────────────
+
+  describe('explicit source from message.source field', () => {
+    const cases: Array<[string, EntitySource]> = [
+      ['opensky', EntitySource.OPENSKY],
+      ['adsblol', EntitySource.ADSB_LOL],
+      ['celestrak', EntitySource.CELESTRAK],
+      ['ais', EntitySource.AIS],
+      ['adsb', EntitySource.ADS_B],
+    ];
+
+    it.each(cases)(
+      'maps source "%s" to %s',
+      async (sourceValue, expectedSource) => {
+        const message = {
+          entity_id: 'TEST-1',
+          entity_type: 'unknown',
+          name: 'Test',
+          source: sourceValue,
+          latitude: 10,
+          longitude: 20,
+          altitude: 0,
+          heading: 0,
+          speed_knots: 0,
+          course: 0,
+          timestamp: '2025-01-15T12:00:00Z',
+        };
+
+        await consumer.handleIngestMessage(message);
+
+        expect(entityService.create).toHaveBeenCalledWith(
+          expect.objectContaining({ source: expectedSource }),
+        );
+      },
+    );
+
+    it('prefers explicit source over entity ID prefix', async () => {
+      const message = {
+        entity_id: 'ICAO-A1B2C3',
+        entity_type: 'aircraft',
+        name: 'Test',
+        source: 'opensky',
+        latitude: 10,
+        longitude: 20,
+        altitude: 0,
+        heading: 0,
+        speed_knots: 0,
+        course: 0,
+        timestamp: '2025-01-15T12:00:00Z',
+      };
+
+      await consumer.handleIngestMessage(message);
+
+      expect(entityService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ source: EntitySource.OPENSKY }),
+      );
+    });
   });
 });
