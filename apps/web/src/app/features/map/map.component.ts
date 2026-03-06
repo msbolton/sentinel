@@ -30,6 +30,7 @@ import {
   DEFAULT_CAMERA_POSITION,
   TRACK_TRAIL_CONFIG,
 } from './cesium-config';
+import { CircularBuffer, decimateTrail, TrailPoint } from './trail-utils';
 
 // Configure Cesium before imports
 configureCesium();
@@ -89,36 +90,6 @@ interface LayerConfig {
   entityType: EntityType;
   visible: boolean;
   color: string;
-}
-
-class CircularBuffer<T> {
-  private buffer: (T | undefined)[];
-  private head = 0;
-  private count = 0;
-
-  constructor(private readonly capacity: number) {
-    this.buffer = new Array(capacity);
-  }
-
-  push(item: T): void {
-    this.buffer[this.head] = item;
-    this.head = (this.head + 1) % this.capacity;
-    if (this.count < this.capacity) this.count++;
-  }
-
-  get length(): number {
-    return this.count;
-  }
-
-  toArray(): T[] {
-    if (this.count === 0) return [];
-    const result: T[] = new Array(this.count);
-    const start = this.count < this.capacity ? 0 : this.head;
-    for (let i = 0; i < this.count; i++) {
-      result[i] = this.buffer[(start + i) % this.capacity] as T;
-    }
-    return result;
-  }
 }
 
 @Component({
