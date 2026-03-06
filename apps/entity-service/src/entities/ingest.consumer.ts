@@ -87,6 +87,10 @@ export class IngestConsumer implements OnModuleInit, OnModuleDestroy {
         speedKnots: number | null;
         course: number | null;
         altitude: number | null;
+        entityType: string;
+        classification: string;
+        source: string;
+        metadata: Record<string, unknown>;
       }> = [];
       const nameUpdates: Array<{ id: string; name: string }> = [];
 
@@ -104,6 +108,10 @@ export class IngestConsumer implements OnModuleInit, OnModuleDestroy {
               speedKnots: msg.speed_knots || null,
               course: msg.course || null,
               altitude: msg.altitude || null,
+              entityType: existing.entityType,
+              classification: existing.classification,
+              source: existing.source,
+              metadata: existing.metadata,
             });
           }
           if (msg.name && msg.name !== existing.name) {
