@@ -223,9 +223,6 @@ export class EntityService implements OnModuleInit {
   // ─── POSITION UPDATE ─────────────────────────────────────────────────
 
   async updatePosition(id: string, dto: UpdatePositionDto): Promise<EntityRecord> {
-    // Verify entity exists
-    await this.findByIdOrThrow(id);
-
     const updated = await this.entityRepository.updatePosition(
       id,
       dto.lat,

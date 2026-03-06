@@ -121,20 +121,43 @@ export class EntityRepository extends Repository<EntityRecord> {
     course?: number,
     altitude?: number,
   ): Promise<EntityRecord | null> {
-    await this.createQueryBuilder()
-      .update(EntityRecord)
-      .set({
-        position: () => `ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)`,
-        heading: heading ?? null,
-        speedKnots: speedKnots ?? null,
-        course: course ?? null,
-        altitude: altitude ?? null,
-        lastSeenAt: new Date(),
-      })
-      .where('id = :id AND deleted = :deleted', { id, deleted: false })
-      .execute();
+    const result = await this.query(
+      `UPDATE sentinel.entities
+       SET position = ST_SetSRID(ST_MakePoint($1, $2), 4326),
+           heading = $3, speed_knots = $4, course = $5, altitude = $6,
+           last_seen_at = NOW()
+       WHERE id = $7 AND deleted = false
+       RETURNING *`,
+      [lng, lat, heading ?? null, speedKnots ?? null, course ?? null, altitude ?? null, id],
+    );
 
-    return this.findOneBy({ id, deleted: false });
+    if (!result || result.length === 0) return null;
+
+    return this.mapRawToEntity(result[0]);
+  }
+
+  private mapRawToEntity(raw: Record<string, unknown>): EntityRecord {
+    return this.create({
+      id: raw.id as string,
+      entityType: raw.entity_type as EntityType,
+      name: raw.name as string,
+      description: raw.description as string,
+      source: raw.source as EntitySource,
+      classification: raw.classification as Classification,
+      position: raw.position as object | null,
+      heading: raw.heading as number | null,
+      speedKnots: raw.speed_knots as number | null,
+      course: raw.course as number | null,
+      altitude: raw.altitude as number | null,
+      milStd2525dSymbol: raw.mil_std_2525d_symbol as string | null,
+      metadata: raw.metadata as Record<string, unknown>,
+      affiliations: raw.affiliations as string[],
+      createdAt: raw.created_at as Date,
+      updatedAt: raw.updated_at as Date,
+      lastSeenAt: raw.last_seen_at as Date | null,
+      deleted: raw.deleted as boolean,
+      deletedAt: raw.deleted_at as Date | null,
+    });
   }
 
   /**
