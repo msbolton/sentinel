@@ -33,6 +33,9 @@ type OpenSkyListener struct {
 	metrics *metrics.Metrics
 	client  *http.Client
 
+	onSuccess func(int, time.Time)
+	onError   func()
+
 	mu          sync.Mutex
 	accessToken string
 	tokenExpiry time.Time
@@ -43,12 +46,14 @@ type OpenSkyListener struct {
 }
 
 // NewOpenSkyListener creates a new OpenSky polling adapter.
-func NewOpenSkyListener(cfg *config.Config, input chan<- *models.IngestMessage, logger *zap.Logger, m *metrics.Metrics) *OpenSkyListener {
+func NewOpenSkyListener(cfg *config.Config, input chan<- *models.IngestMessage, logger *zap.Logger, m *metrics.Metrics, onSuccess func(int, time.Time), onError func()) *OpenSkyListener {
 	return &OpenSkyListener{
-		cfg:     cfg,
-		input:   input,
-		logger:  logger,
-		metrics: m,
+		cfg:       cfg,
+		input:     input,
+		logger:    logger,
+		metrics:   m,
+		onSuccess: onSuccess,
+		onError:   onError,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -110,6 +115,10 @@ func (l *OpenSkyListener) pollLoop() {
 			if err := l.poll(); err != nil {
 				l.logger.Warn("opensky poll failed", zap.Error(err))
 				l.metrics.MessagesFailed.WithLabelValues(models.SourceOpenSky, "poll_error").Inc()
+				l.metrics.FeedErrorsTotal.WithLabelValues("opensky").Inc()
+				if l.onError != nil {
+					l.onError()
+				}
 
 				// Exponential backoff: 1s, 2s, 4s, ... capped at 60s.
 				if backoff == 0 {
@@ -198,6 +207,14 @@ func (l *OpenSkyListener) poll() error {
 	}
 
 	l.metrics.MessagesReceived.WithLabelValues(models.SourceOpenSky).Add(float64(sent))
+
+	now := time.Now()
+	l.metrics.FeedLastSuccess.WithLabelValues("opensky").Set(float64(now.Unix()))
+	l.metrics.FeedEntityCount.WithLabelValues("opensky").Set(float64(sent))
+	if l.onSuccess != nil {
+		l.onSuccess(sent, now)
+	}
+
 	l.logger.Info("opensky poll complete", zap.Int("aircraft", sent), zap.Int("total_states", len(states)))
 
 	return nil
