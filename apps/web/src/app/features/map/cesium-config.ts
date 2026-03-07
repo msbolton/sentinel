@@ -128,7 +128,7 @@ export const HEADING_ROTATED_TYPES = new Set<string>([
 export const TRACK_TRAIL_CONFIG = {
   maxPoints: 300,
   width: 2,
-  trailOpacity: 0.4,
+  trailOpacity: 0.7,
   decimation: {
     HIGH_ALT_THRESHOLD: 5_000_000,
     HIGH_ALT_STRIDE: 20,
