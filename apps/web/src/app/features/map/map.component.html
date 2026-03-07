@@ -42,75 +42,10 @@
     </div>
   </div>
 
-  <!-- Entity Info Popup -->
-  @if (selectedEntity(); as entity) {
-    <div class="entity-info-popup">
-      <div class="popup-header">
-        <h4>{{ entity.name }}</h4>
-        <button class="popup-close" (click)="closeEntityPopup()">&times;</button>
-      </div>
-      <div class="popup-body">
-        <div class="popup-row">
-          <span class="popup-label">Type</span>
-          <span class="chip chip-entity-type" [ngClass]="entity.entityType">
-            {{ entity.entityType }}
-          </span>
-        </div>
-        <div class="popup-row">
-          <span class="popup-label">Source</span>
-          <span class="popup-value mono">{{ entity.source }}</span>
-        </div>
-        <div class="popup-row">
-          <span class="popup-label">Classification</span>
-          <span class="chip chip-classification" [ngClass]="entity.classification">
-            {{ entity.classification }}
-          </span>
-        </div>
-        @if (entity.lastSeenAt) {
-          <div class="popup-row">
-            <span class="popup-label">Last Seen</span>
-            <span class="popup-value mono">{{ entity.lastSeenAt | date:'short' }}</span>
-          </div>
-        }
-        @if (entity.position) {
-          <div class="popup-row">
-            <span class="popup-label">Position</span>
-            <span class="popup-value mono">
-              {{ entity.position.latitude | number:'1.4-4' }},
-              {{ entity.position.longitude | number:'1.4-4' }}
-            </span>
-          </div>
-        }
-        @if (entity.position?.altitude) {
-          <div class="popup-row">
-            <span class="popup-label">Altitude</span>
-            <span class="popup-value mono">{{ entity.position.altitude | number:'1.0-0' }} m</span>
-          </div>
-        }
-        @if (entity.speedKnots !== undefined && entity.speedKnots !== null) {
-          <div class="popup-row">
-            <span class="popup-label">Speed</span>
-            <span class="popup-value mono">{{ entity.speedKnots | number:'1.1-1' }} kts</span>
-          </div>
-        }
-        @if (entity.heading !== undefined && entity.heading !== null) {
-          <div class="popup-row">
-            <span class="popup-label">Heading</span>
-            <span class="popup-value mono">{{ entity.heading | number:'1.0-0' }}&deg;</span>
-          </div>
-        }
-      </div>
-      <div class="popup-footer">
-        <button class="btn btn-primary btn-sm" (click)="viewEntityDetails(entity)">
-          Details
-        </button>
-        <button class="btn btn-secondary btn-sm" (click)="flyToEntity(entity)">
-          Fly To
-        </button>
-        <button class="btn btn-ghost btn-sm" (click)="closeEntityPopup()">
-          Close
-        </button>
-      </div>
-    </div>
-  }
+  <!-- Entity Detail Panel -->
+  <app-entity-detail-panel
+    [entity]="selectedEntity()"
+    (close)="closeEntityPopup()"
+    (flyTo)="flyToEntity($event)"
+  />
 </div>
