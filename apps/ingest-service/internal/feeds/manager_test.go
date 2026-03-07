@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -187,5 +188,73 @@ func TestStopAll(t *testing.T) {
 		if f.Enabled {
 			t.Errorf("expected feed %s to be disabled after StopAll", f.ID)
 		}
+	}
+}
+
+func TestRecordSuccess(t *testing.T) {
+	mgr := NewManager(testLogger())
+	_ = mgr.Register("s1", "Success Feed", "test", "d", newMockFactory(&mockListener{}), false)
+
+	ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	mgr.RecordSuccess("s1", 42, ts)
+
+	h := mgr.GetHealth("s1")
+	if h == nil {
+		t.Fatal("expected non-nil health")
+	}
+	if h.EntitiesCount != 42 {
+		t.Errorf("expected EntitiesCount=42, got %d", h.EntitiesCount)
+	}
+	if !h.LastSuccessAt.Equal(ts) {
+		t.Errorf("expected LastSuccessAt=%v, got %v", ts, h.LastSuccessAt)
+	}
+}
+
+func TestRecordError(t *testing.T) {
+	mgr := NewManager(testLogger())
+	_ = mgr.Register("e1", "Error Feed", "test", "d", newMockFactory(&mockListener{}), false)
+
+	mgr.RecordError("e1")
+	mgr.RecordError("e1")
+
+	h := mgr.GetHealth("e1")
+	if h == nil {
+		t.Fatal("expected non-nil health")
+	}
+	if h.ErrorCount != 2 {
+		t.Errorf("expected ErrorCount=2, got %d", h.ErrorCount)
+	}
+}
+
+func TestHealthStatus(t *testing.T) {
+	mgr := NewManager(testLogger())
+	_ = mgr.Register("h1", "Health Feed", "test", "d", newMockFactory(&mockListener{}), true)
+	mgr.SetStaleThresholds("h1", 120, 300)
+
+	// No success recorded yet → "unknown" (enabled but zero LastSuccessAt)
+	h := mgr.GetHealth("h1")
+	if h.Status != "unknown" {
+		t.Errorf("expected status 'unknown' with no success, got %q", h.Status)
+	}
+
+	// Record recent success → "healthy"
+	mgr.RecordSuccess("h1", 10, time.Now())
+	h = mgr.GetHealth("h1")
+	if h.Status != "healthy" {
+		t.Errorf("expected status 'healthy', got %q", h.Status)
+	}
+
+	// Record success 150s ago → "warn" (>= 120s but < 300s)
+	mgr.RecordSuccess("h1", 5, time.Now().Add(-150*time.Second))
+	h = mgr.GetHealth("h1")
+	if h.Status != "warn" {
+		t.Errorf("expected status 'warn', got %q", h.Status)
+	}
+
+	// Record success 400s ago → "critical" (>= 300s)
+	mgr.RecordSuccess("h1", 1, time.Now().Add(-400*time.Second))
+	h = mgr.GetHealth("h1")
+	if h.Status != "critical" {
+		t.Errorf("expected status 'critical', got %q", h.Status)
 	}
 }
