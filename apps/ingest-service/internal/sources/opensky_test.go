@@ -213,7 +213,7 @@ func TestBuildURL(t *testing.T) {
 
 	// No bbox.
 	cfg := &config.Config{OpenSkyBBox: ""}
-	l := NewOpenSkyListener(cfg, nil, logger, m)
+	l := NewOpenSkyListener(cfg, nil, logger, m, nil, nil)
 	got := l.buildURL()
 	if got != openSkyBaseURL {
 		t.Errorf("buildURL() = %q, want %q", got, openSkyBaseURL)
@@ -221,7 +221,7 @@ func TestBuildURL(t *testing.T) {
 
 	// With bbox.
 	cfg = &config.Config{OpenSkyBBox: "45.8389, 5.9962, 47.8084, 10.5226"}
-	l = NewOpenSkyListener(cfg, nil, logger, m)
+	l = NewOpenSkyListener(cfg, nil, logger, m, nil, nil)
 	got = l.buildURL()
 	want := openSkyBaseURL + "?lamin=45.8389&lomin=5.9962&lamax=47.8084&lomax=10.5226"
 	if got != want {
@@ -230,7 +230,7 @@ func TestBuildURL(t *testing.T) {
 
 	// Invalid bbox (wrong number of parts) falls back to global.
 	cfg = &config.Config{OpenSkyBBox: "45.8389,5.9962"}
-	l = NewOpenSkyListener(cfg, nil, logger, m)
+	l = NewOpenSkyListener(cfg, nil, logger, m, nil, nil)
 	got = l.buildURL()
 	if got != openSkyBaseURL {
 		t.Errorf("buildURL() with bad bbox = %q, want %q", got, openSkyBaseURL)
@@ -283,7 +283,7 @@ func TestHTTPErrorHandling(t *testing.T) {
 				OpenSkyEnabled:     true,
 				OpenSkyIntervalSec: 15,
 			}
-			l := NewOpenSkyListener(cfg, input, logger, m)
+			l := NewOpenSkyListener(cfg, input, logger, m, nil, nil)
 			// Override the client to point at our test server.
 			l.client = server.Client()
 
@@ -321,7 +321,7 @@ func TestPollWithTestServer(t *testing.T) {
 		OpenSkyEnabled:     true,
 		OpenSkyIntervalSec: 15,
 	}
-	l := NewOpenSkyListener(cfg, input, logger, m)
+	l := NewOpenSkyListener(cfg, input, logger, m, nil, nil)
 	l.client = server.Client()
 
 	// Override buildURL to point at the test server by temporarily
@@ -387,7 +387,7 @@ func TestOAuth2TokenFetch(t *testing.T) {
 		OpenSkyClientSecret: "test-client-secret",
 		OpenSkyTokenURL:     tokenServer.URL,
 	}
-	l := NewOpenSkyListener(cfg, input, logger, m)
+	l := NewOpenSkyListener(cfg, input, logger, m, nil, nil)
 
 	// Fetch a token
 	token, err := l.getAccessToken()

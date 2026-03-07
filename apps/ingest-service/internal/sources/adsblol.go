@@ -27,18 +27,23 @@ type ADSBLolListener struct {
 	metrics *metrics.Metrics
 	client  *http.Client
 
+	onSuccess func(int, time.Time)
+	onError   func()
+
 	stopOnce sync.Once
 	stop     chan struct{}
 	wg       sync.WaitGroup
 }
 
 // NewADSBLolListener creates a new adsb.lol polling adapter.
-func NewADSBLolListener(cfg *config.Config, input chan<- *models.IngestMessage, logger *zap.Logger, m *metrics.Metrics) *ADSBLolListener {
+func NewADSBLolListener(cfg *config.Config, input chan<- *models.IngestMessage, logger *zap.Logger, m *metrics.Metrics, onSuccess func(int, time.Time), onError func()) *ADSBLolListener {
 	return &ADSBLolListener{
-		cfg:     cfg,
-		input:   input,
-		logger:  logger,
-		metrics: m,
+		cfg:       cfg,
+		input:     input,
+		logger:    logger,
+		metrics:   m,
+		onSuccess: onSuccess,
+		onError:   onError,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -98,6 +103,10 @@ func (l *ADSBLolListener) pollLoop() {
 			if err := l.poll(); err != nil {
 				l.logger.Warn("adsb.lol poll failed", zap.Error(err))
 				l.metrics.MessagesFailed.WithLabelValues(models.SourceADSBLol, "poll_error").Inc()
+				l.metrics.FeedErrorsTotal.WithLabelValues("adsblol").Inc()
+				if l.onError != nil {
+					l.onError()
+				}
 
 				if backoff == 0 {
 					backoff = 1 * time.Second
@@ -176,6 +185,14 @@ func (l *ADSBLolListener) poll() error {
 	}
 
 	l.metrics.MessagesReceived.WithLabelValues(models.SourceADSBLol).Add(float64(sent))
+
+	successTime := time.Now()
+	l.metrics.FeedLastSuccess.WithLabelValues("adsblol").Set(float64(successTime.Unix()))
+	l.metrics.FeedEntityCount.WithLabelValues("adsblol").Set(float64(sent))
+	if l.onSuccess != nil {
+		l.onSuccess(sent, successTime)
+	}
+
 	l.logger.Info("adsb.lol poll complete", zap.Int("aircraft", sent), zap.Int("total_ac", len(aircraft)))
 
 	return nil

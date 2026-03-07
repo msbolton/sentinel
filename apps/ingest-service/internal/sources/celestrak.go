@@ -33,6 +33,9 @@ type CelesTrakListener struct {
 	metrics *metrics.Metrics
 	client  *http.Client
 
+	onSuccess func(int, time.Time)
+	onError   func()
+
 	tleCache map[int]cachedTLE // NORAD ID → parsed TLE
 	tleMu    sync.RWMutex
 
@@ -59,15 +62,17 @@ type rawTLE struct {
 }
 
 // NewCelesTrakListener creates a new CelesTrak satellite adapter.
-func NewCelesTrakListener(cfg *config.Config, input chan<- *models.IngestMessage, logger *zap.Logger, m *metrics.Metrics) *CelesTrakListener {
+func NewCelesTrakListener(cfg *config.Config, input chan<- *models.IngestMessage, logger *zap.Logger, m *metrics.Metrics, onSuccess func(int, time.Time), onError func()) *CelesTrakListener {
 	return &CelesTrakListener{
-		cfg:      cfg,
-		input:    input,
-		logger:   logger,
-		metrics:  m,
-		client:   &http.Client{Timeout: 60 * time.Second},
-		tleCache: make(map[int]cachedTLE),
-		stop:     make(chan struct{}),
+		cfg:       cfg,
+		input:     input,
+		logger:    logger,
+		metrics:   m,
+		onSuccess: onSuccess,
+		onError:   onError,
+		client:    &http.Client{Timeout: 60 * time.Second},
+		tleCache:  make(map[int]cachedTLE),
+		stop:      make(chan struct{}),
 	}
 }
 
@@ -154,6 +159,10 @@ func (l *CelesTrakListener) refreshTLEs() {
 				zap.Error(err),
 			)
 			l.metrics.MessagesFailed.WithLabelValues(models.SourceCelesTrak, "tle_fetch_error").Inc()
+			l.metrics.FeedErrorsTotal.WithLabelValues("celestrak").Inc()
+			if l.onError != nil {
+				l.onError()
+			}
 
 			if backoff == 0 {
 				backoff = 1 * time.Second
@@ -319,6 +328,14 @@ func (l *CelesTrakListener) propagateAll() {
 	}
 
 	l.metrics.MessagesReceived.WithLabelValues(models.SourceCelesTrak).Add(float64(sent))
+
+	successTime := time.Now()
+	l.metrics.FeedLastSuccess.WithLabelValues("celestrak").Set(float64(successTime.Unix()))
+	l.metrics.FeedEntityCount.WithLabelValues("celestrak").Set(float64(sent))
+	if l.onSuccess != nil {
+		l.onSuccess(sent, successTime)
+	}
+
 	l.logger.Info("celestrak propagation complete",
 		zap.Int("satellites", sent),
 		zap.Int("total_cached", len(snapshot)),

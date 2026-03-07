@@ -292,7 +292,7 @@ func TestCelesTrakHTTPErrorHandling(t *testing.T) {
 			}
 
 			input := make(chan *models.IngestMessage, 100)
-			listener := NewCelesTrakListener(cfg, input, logger, m)
+			listener := NewCelesTrakListener(cfg, input, logger, m, nil, nil)
 
 			// Override the client to hit our test server.
 			listener.client = server.Client()
@@ -343,7 +343,7 @@ func TestCelesTrakFetchWithTestServer(t *testing.T) {
 	}
 
 	input := make(chan *models.IngestMessage, 100)
-	listener := NewCelesTrakListener(cfg, input, logger, m)
+	listener := NewCelesTrakListener(cfg, input, logger, m, nil, nil)
 	listener.client = server.Client()
 
 	// Fetch using the test server URL directly.
