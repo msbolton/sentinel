@@ -3,6 +3,7 @@ package feeds
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -18,11 +19,28 @@ type FeedStatus struct {
 	Enabled     bool   `json:"enabled"`
 }
 
+// FeedHealth holds runtime health metrics for a feed.
+type FeedHealth struct {
+	LastSuccessAt time.Time `json:"lastSuccessAt"`
+	EntitiesCount int       `json:"entitiesCount"`
+	ErrorCount    int64     `json:"errorCount"`
+	Status        string    `json:"status"`
+}
+
+// FeedStatusWithHealth extends FeedStatus with optional health information.
+type FeedStatusWithHealth struct {
+	FeedStatus
+	Health *FeedHealth `json:"health"`
+}
+
 // feed is the internal bookkeeping for a single registered feed.
 type feed struct {
-	status   FeedStatus
-	factory  func() (sources.Listener, error)
-	listener sources.Listener // nil when disabled
+	status      FeedStatus
+	factory     func() (sources.Listener, error)
+	listener    sources.Listener // nil when disabled
+	health      FeedHealth
+	warnSec     int
+	criticalSec int
 }
 
 // Manager tracks all data-feed listeners and exposes runtime start/stop.
@@ -153,4 +171,87 @@ func (m *Manager) StopAll() {
 			f.status.Enabled = false
 		}
 	}
+}
+
+// SetStaleThresholds configures the warn and critical staleness thresholds
+// (in seconds) for a feed.
+func (m *Manager) SetStaleThresholds(id string, warnSec, criticalSec int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if f, ok := m.byID[id]; ok {
+		f.warnSec = warnSec
+		f.criticalSec = criticalSec
+	}
+}
+
+// RecordSuccess updates the health of a feed after a successful poll.
+func (m *Manager) RecordSuccess(id string, entitiesCount int, at time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if f, ok := m.byID[id]; ok {
+		f.health.LastSuccessAt = at
+		f.health.EntitiesCount = entitiesCount
+	}
+}
+
+// RecordError increments the error count for a feed.
+func (m *Manager) RecordError(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if f, ok := m.byID[id]; ok {
+		f.health.ErrorCount++
+	}
+}
+
+// GetHealth returns a snapshot of the feed's health with a computed Status.
+func (m *Manager) GetHealth(id string) *FeedHealth {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	f, ok := m.byID[id]
+	if !ok {
+		return nil
+	}
+
+	h := f.health
+	h.Status = m.computeStatus(f)
+	return &h
+}
+
+// ListWithHealth returns a snapshot of all feeds with their health status.
+func (m *Manager) ListWithHealth() []FeedStatusWithHealth {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]FeedStatusWithHealth, len(m.feeds))
+	for i, f := range m.feeds {
+		h := f.health
+		h.Status = m.computeStatus(f)
+		out[i] = FeedStatusWithHealth{
+			FeedStatus: f.status,
+			Health:     &h,
+		}
+	}
+	return out
+}
+
+// computeStatus derives the health status string for a feed. Must be called
+// under m.mu.
+func (m *Manager) computeStatus(f *feed) string {
+	if !f.status.Enabled || f.health.LastSuccessAt.IsZero() {
+		return "unknown"
+	}
+
+	age := int(time.Since(f.health.LastSuccessAt).Seconds())
+
+	if f.criticalSec > 0 && age >= f.criticalSec {
+		return "critical"
+	}
+	if f.warnSec > 0 && age >= f.warnSec {
+		return "warn"
+	}
+	return "healthy"
 }
