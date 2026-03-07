@@ -35,6 +35,18 @@ type Config struct {
 	CelesTrakGroups                 string // CELESTRAK_GROUPS (default: "active")
 	CelesTrakTLERefreshHours        int    // CELESTRAK_TLE_REFRESH_HOURS (default: 6)
 	CelesTrakPropagationIntervalSec int    // CELESTRAK_PROPAGATION_INTERVAL_SEC (default: 60)
+
+	FeedStaleWarnSec     int // FEED_STALE_WARN_SEC (default: 120)
+	FeedStaleCriticalSec int // FEED_STALE_CRITICAL_SEC (default: 300)
+
+	OpenSkyStaleWarnSec     int // OPENSKY_STALE_WARN_SEC (default: 0 = use global)
+	OpenSkyStaleCriticalSec int // OPENSKY_STALE_CRITICAL_SEC (default: 0 = use global)
+
+	ADSBLolStaleWarnSec     int // ADSBLOL_STALE_WARN_SEC (default: 0 = use global)
+	ADSBLolStaleCriticalSec int // ADSBLOL_STALE_CRITICAL_SEC (default: 0 = use global)
+
+	CelesTrakStaleWarnSec     int // CELESTRAK_STALE_WARN_SEC (default: 600)
+	CelesTrakStaleCriticalSec int // CELESTRAK_STALE_CRITICAL_SEC (default: 900)
 }
 
 // Load reads configuration from environment variables, applying defaults
@@ -68,6 +80,18 @@ func Load() *Config {
 		CelesTrakGroups:                 envOrDefault("CELESTRAK_GROUPS", "active"),
 		CelesTrakTLERefreshHours:        envOrDefaultInt("CELESTRAK_TLE_REFRESH_HOURS", 6),
 		CelesTrakPropagationIntervalSec: envOrDefaultInt("CELESTRAK_PROPAGATION_INTERVAL_SEC", 60),
+
+		FeedStaleWarnSec:     envOrDefaultInt("FEED_STALE_WARN_SEC", 120),
+		FeedStaleCriticalSec: envOrDefaultInt("FEED_STALE_CRITICAL_SEC", 300),
+
+		OpenSkyStaleWarnSec:     envOrDefaultInt("OPENSKY_STALE_WARN_SEC", 0),
+		OpenSkyStaleCriticalSec: envOrDefaultInt("OPENSKY_STALE_CRITICAL_SEC", 0),
+
+		ADSBLolStaleWarnSec:     envOrDefaultInt("ADSBLOL_STALE_WARN_SEC", 0),
+		ADSBLolStaleCriticalSec: envOrDefaultInt("ADSBLOL_STALE_CRITICAL_SEC", 0),
+
+		CelesTrakStaleWarnSec:     envOrDefaultInt("CELESTRAK_STALE_WARN_SEC", 600),
+		CelesTrakStaleCriticalSec: envOrDefaultInt("CELESTRAK_STALE_CRITICAL_SEC", 900),
 	}
 }
 

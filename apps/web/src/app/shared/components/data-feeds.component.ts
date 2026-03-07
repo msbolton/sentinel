@@ -9,10 +9,7 @@ import {
   OnInit,
   OnDestroy,
 } from '@angular/core';
-import { Subscription } from 'rxjs';
 import { DataFeedService, DataFeed } from '../../core/services/data-feed.service';
-import { EntityService } from '../../core/services/entity.service';
-import { EntityType } from '../../shared/models/entity.model';
 
 interface DataLayerConfig {
   id: string;
@@ -27,6 +24,8 @@ interface DataLayer {
   count: number | null;
   enabled: boolean;
   lastUpdated: string;
+  freshness: 'green' | 'yellow' | 'red' | 'gray' | 'none';
+  errorCount: number;
 }
 
 @Component({
@@ -52,7 +51,7 @@ interface DataLayer {
             <div class="layer-row">
               <div class="layer-content">
                 <div class="layer-main">
-                  <span class="freshness-dot" [attr.data-status]="getFreshnessStatus(layer.id)"></span>
+                  <span class="freshness-dot" [attr.data-status]="layer.freshness"></span>
                   <span class="layer-name">{{ layer.name }}</span>
                   <span class="layer-count">{{ layer.count !== null ? formatCount(layer.count) : '—' }}</span>
                   <button
@@ -66,6 +65,9 @@ interface DataLayer {
                 </div>
                 <div class="layer-meta">
                   {{ layer.source }} · {{ layer.lastUpdated }}
+                  @if (layer.errorCount > 0) {
+                    · <span class="error-count">{{ layer.errorCount }} errors</span>
+                  }
                 </div>
               </div>
             </div>
@@ -213,6 +215,7 @@ interface DataLayer {
       &[data-status="green"]  { background: var(--accent-green); }
       &[data-status="yellow"] { background: #eab308; }
       &[data-status="red"]    { background: #ef4444; }
+      &[data-status="gray"]   { background: #6b7280; }
       &[data-status="none"]   { background: transparent; }
     }
 
@@ -276,6 +279,10 @@ interface DataLayer {
       text-overflow: ellipsis;
     }
 
+    .error-count {
+      color: #ef4444;
+    }
+
     .layer-empty {
       padding: 12px 10px;
       font-size: 0.75rem;
@@ -298,13 +305,11 @@ interface DataLayer {
 export class DataFeedsComponent implements OnInit, OnDestroy {
   readonly feedService = inject(DataFeedService);
   private readonly elementRef = inject(ElementRef);
-  private readonly entityService = inject(EntityService);
 
   readonly expanded = signal(false);
   readonly toggling = signal<string | null>(null);
   private readonly localOverrides = signal<Map<string, boolean>>(new Map());
-  private feedFreshness = signal<Map<string, Date>>(new Map());
-  private entitySub?: Subscription;
+  private refreshInterval?: ReturnType<typeof setInterval>;
 
   private readonly LAYER_CONFIG: DataLayerConfig[] = [
     { id: 'opensky',     name: 'Live Flights',      source: 'OpenSky Network' },
@@ -333,6 +338,8 @@ export class DataFeedsComponent implements OnInit, OnDestroy {
         count: feed ? this.extractCount(feed) : null,
         enabled: overrides.has(config.id) ? overrides.get(config.id)! : baseEnabled,
         lastUpdated: feed ? this.getRelativeTime(feed) : 'never',
+        freshness: this.healthToFreshness(feed),
+        errorCount: feed?.health?.errorCount ?? 0,
       };
     });
 
@@ -348,6 +355,8 @@ export class DataFeedsComponent implements OnInit, OnDestroy {
           count: this.extractCount(feed),
           enabled: overrides.has(feed.id) ? overrides.get(feed.id)! : baseEnabled,
           lastUpdated: this.getRelativeTime(feed),
+          freshness: this.healthToFreshness(feed),
+          errorCount: feed.health?.errorCount ?? 0,
         });
       }
     }
@@ -359,38 +368,20 @@ export class DataFeedsComponent implements OnInit, OnDestroy {
     this.layers().filter((l) => l.enabled).length,
   );
 
-  private readonly FEED_ENTITY_TYPE_MAP: Record<string, string> = {
-    'opensky': EntityType.AIRCRAFT,
-    'adsb-lol': EntityType.AIRCRAFT,
-    'celestrak': EntityType.SATELLITE,
-  };
-
   ngOnInit(): void {
     this.feedService.loadFeeds();
 
-    this.entitySub = this.entityService.entityUpdates$.subscribe(event => {
-      const entityType = event.entity.entityType;
-      this.feedFreshness.update(m => {
-        const next = new Map(m);
-        next.set(entityType, new Date());
-        return next;
-      });
-    });
+    this.refreshInterval = setInterval(() => {
+      if (this.expanded()) {
+        this.feedService.loadFeeds();
+      }
+    }, 30_000);
   }
 
   ngOnDestroy(): void {
-    this.entitySub?.unsubscribe();
-  }
-
-  getFreshnessStatus(feedId: string): 'green' | 'yellow' | 'red' | 'none' {
-    const entityType = this.FEED_ENTITY_TYPE_MAP[feedId];
-    if (!entityType) return 'none';
-    const lastSeen = this.feedFreshness().get(entityType);
-    if (!lastSeen) return 'red';
-    const ageMs = Date.now() - lastSeen.getTime();
-    if (ageMs < 120_000) return 'green';
-    if (ageMs < 300_000) return 'yellow';
-    return 'red';
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+    }
   }
 
   toggle(): void {
@@ -449,17 +440,26 @@ export class DataFeedsComponent implements OnInit, OnDestroy {
     }
   }
 
+  private healthToFreshness(feed?: DataFeed): 'green' | 'yellow' | 'red' | 'gray' | 'none' {
+    if (!feed?.health) return 'none';
+    switch (feed.health.status) {
+      case 'healthy': return 'green';
+      case 'warn': return 'yellow';
+      case 'critical': return 'red';
+      case 'unknown': return 'gray';
+      default: return 'none';
+    }
+  }
+
   private extractCount(feed: DataFeed): number | null {
-    // DataFeed doesn't have count — return null for now
-    // Will be enriched when API supports entity counts per feed
-    return null;
+    return feed.health?.entitiesCount ?? null;
   }
 
   private getRelativeTime(feed: DataFeed): string {
-    const entityType = this.FEED_ENTITY_TYPE_MAP[feed.id];
-    if (!entityType) return feed.enabled ? 'active' : 'never';
-    const lastSeen = this.feedFreshness().get(entityType);
-    if (!lastSeen) return feed.enabled ? 'waiting...' : 'never';
+    if (!feed.health?.lastSuccessAt) {
+      return feed.enabled ? 'waiting...' : 'never';
+    }
+    const lastSeen = new Date(feed.health.lastSuccessAt);
     const ageSec = Math.floor((Date.now() - lastSeen.getTime()) / 1000);
     if (ageSec < 5) return 'just now';
     if (ageSec < 60) return `${ageSec}s ago`;
