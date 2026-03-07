@@ -10,6 +10,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { EntityDetailPanelComponent } from '../../shared/components/entity-detail-panel.component';
 import { Subscription, debounceTime, Subject, throttleTime, bufferTime, filter } from 'rxjs';
 import {
   Entity,
@@ -96,7 +97,7 @@ interface LayerConfig {
   selector: 'app-map',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, EntityDetailPanelComponent],
   templateUrl: './map.component.html',
   styleUrls: ['./map.component.scss'],
 })
@@ -638,12 +639,6 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       ),
       duration: 1.0,
     });
-  }
-
-  viewEntityDetails(entity: Entity): void {
-    this.wsService.subscribeToEntity(entity.id);
-    // Could navigate to entity detail panel
-    console.log('View details for entity:', entity.id);
   }
 
   closeEntityPopup(): void {
