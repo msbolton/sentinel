@@ -3,12 +3,20 @@ import { HttpClient } from '@angular/common/http';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { BehaviorSubject, Observable, tap, retry, timer } from 'rxjs';
 
+export interface FeedHealth {
+  lastSuccessAt: string;
+  entitiesCount: number;
+  errorCount: number;
+  status: 'healthy' | 'warn' | 'critical' | 'unknown';
+}
+
 export interface DataFeed {
   id: string;
   name: string;
   sourceType: string;
   description: string;
   enabled: boolean;
+  health?: FeedHealth;
 }
 
 @Injectable({ providedIn: 'root' })

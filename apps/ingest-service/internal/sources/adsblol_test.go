@@ -350,7 +350,7 @@ func TestADSBLolHTTPErrorHandling(t *testing.T) {
 				ADSBLolEnabled:     true,
 				ADSBLolIntervalSec: 10,
 			}
-			l := NewADSBLolListener(cfg, input, logger, m)
+			l := NewADSBLolListener(cfg, input, logger, m, nil, nil)
 			l.client = server.Client()
 
 			req, err := http.NewRequest(http.MethodGet, server.URL, nil)
@@ -386,7 +386,7 @@ func TestADSBLolPollWithTestServer(t *testing.T) {
 		ADSBLolEnabled:     true,
 		ADSBLolIntervalSec: 10,
 	}
-	l := NewADSBLolListener(cfg, input, logger, m)
+	l := NewADSBLolListener(cfg, input, logger, m, nil, nil)
 	l.client = server.Client()
 
 	req, err := http.NewRequest(http.MethodGet, server.URL, nil)

@@ -92,7 +92,10 @@ func main() {
 		"opensky", "OpenSky Network", models.SourceOpenSky,
 		"Global ADS-B aircraft positions from OpenSky Network",
 		func() (sources.Listener, error) {
-			return sources.NewOpenSkyListener(cfg, pipelineInput, logger, m), nil
+			return sources.NewOpenSkyListener(cfg, pipelineInput, logger, m,
+				func(count int, at time.Time) { feedManager.RecordSuccess("opensky", count, at) },
+				func() { feedManager.RecordError("opensky") },
+			), nil
 		},
 		cfg.OpenSkyEnabled,
 	); err != nil {
@@ -104,7 +107,10 @@ func main() {
 		"adsb-lol", "Military Flights", models.SourceADSBLol,
 		"Military/government aircraft positions from adsb.lol",
 		func() (sources.Listener, error) {
-			return sources.NewADSBLolListener(cfg, pipelineInput, logger, m), nil
+			return sources.NewADSBLolListener(cfg, pipelineInput, logger, m,
+				func(count int, at time.Time) { feedManager.RecordSuccess("adsb-lol", count, at) },
+				func() { feedManager.RecordError("adsb-lol") },
+			), nil
 		},
 		cfg.ADSBLolEnabled,
 	); err != nil {
@@ -116,12 +122,29 @@ func main() {
 		"celestrak", "CelesTrak Satellites", models.SourceCelesTrak,
 		"Satellite positions computed from CelesTrak TLE data via SGP4",
 		func() (sources.Listener, error) {
-			return sources.NewCelesTrakListener(cfg, pipelineInput, logger, m), nil
+			return sources.NewCelesTrakListener(cfg, pipelineInput, logger, m,
+				func(count int, at time.Time) { feedManager.RecordSuccess("celestrak", count, at) },
+				func() { feedManager.RecordError("celestrak") },
+			), nil
 		},
 		cfg.CelesTrakEnabled,
 	); err != nil {
 		logger.Error("failed to register celestrak feed", zap.Error(err))
 	}
+
+	// Configure per-feed staleness thresholds.
+	feedManager.SetStaleThresholds("opensky",
+		staleThreshold(cfg.OpenSkyStaleWarnSec, cfg.FeedStaleWarnSec),
+		staleThreshold(cfg.OpenSkyStaleCriticalSec, cfg.FeedStaleCriticalSec),
+	)
+	feedManager.SetStaleThresholds("adsb-lol",
+		staleThreshold(cfg.ADSBLolStaleWarnSec, cfg.FeedStaleWarnSec),
+		staleThreshold(cfg.ADSBLolStaleCriticalSec, cfg.FeedStaleCriticalSec),
+	)
+	feedManager.SetStaleThresholds("celestrak",
+		staleThreshold(cfg.CelesTrakStaleWarnSec, cfg.FeedStaleWarnSec),
+		staleThreshold(cfg.CelesTrakStaleCriticalSec, cfg.FeedStaleCriticalSec),
+	)
 
 	// Start HTTP health/metrics/feeds server.
 	healthHandler := health.NewHandler(producer, logger)
@@ -208,4 +231,12 @@ func newLogger() (*zap.Logger, error) {
 	}
 
 	return cfg.Build()
+}
+
+// staleThreshold returns the per-feed threshold if set (> 0), otherwise the global default.
+func staleThreshold(perFeed, global int) int {
+	if perFeed > 0 {
+		return perFeed
+	}
+	return global
 }
