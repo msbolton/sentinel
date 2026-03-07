@@ -1,4 +1,5 @@
-import { Component, input, output } from '@angular/core';
+import { Component, computed, CUSTOM_ELEMENTS_SCHEMA, inject, input, output } from '@angular/core';
+import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { CommonModule } from '@angular/common';
 import { Entity } from '../models/entity.model';
 
@@ -6,6 +7,7 @@ import { Entity } from '../models/entity.model';
   selector: 'app-entity-detail-panel',
   standalone: true,
   imports: [CommonModule],
+  schemas: [CUSTOM_ELEMENTS_SCHEMA],
   template: `
     @if (entity(); as e) {
       <aside class="detail-panel">
@@ -35,6 +37,16 @@ import { Entity } from '../models/entity.model';
               {{ e.classification }}
             </span>
           </section>
+
+          <!-- 3D Model -->
+          @if (modelSrc()) {
+            <section class="section model-section">
+              <iframe
+                [srcdoc]="modelViewerHtml()"
+                style="width:100%;height:200px;display:block;border:none;border-radius:8px;background:transparent"
+              ></iframe>
+            </section>
+          }
 
           <!-- Position -->
           @if (e.position) {
@@ -149,7 +161,7 @@ import { Entity } from '../models/entity.model';
       top: 12px;
       right: 12px;
       bottom: calc(var(--status-bar-height, 28px) + 12px);
-      width: var(--panel-width, 380px);
+      width: var(--panel-width, 600px);
       z-index: 100;
       background: var(--bg-panel);
       backdrop-filter: blur(20px);
@@ -268,6 +280,20 @@ import { Entity } from '../models/entity.model';
       border-color: color-mix(in srgb, var(--accent-purple) 30%, transparent);
     }
 
+    .model-section {
+      padding: 12px 0;
+
+      model-viewer {
+        width: 100%;
+        height: 200px;
+        display: block;
+        border-radius: var(--radius-md);
+        overflow: hidden;
+        background-color: var(--bg-tertiary);
+        --poster-color: transparent;
+      }
+    }
+
     .description-text {
       font-size: 0.8rem;
       color: var(--text-secondary);
@@ -276,7 +302,43 @@ import { Entity } from '../models/entity.model';
   `],
 })
 export class EntityDetailPanelComponent {
+  private static readonly TYPES_WITH_MODELS = new Set(['AIRCRAFT', 'DRONE', 'VEHICLE', 'VESSEL', 'SATELLITE']);
+
+  private sanitizer = inject(DomSanitizer);
+
   entity = input<Entity | null>(null);
   close = output<void>();
   flyTo = output<Entity>();
+
+  protected modelSrc = computed(() => {
+    const e = this.entity();
+    if (!e || !EntityDetailPanelComponent.TYPES_WITH_MODELS.has(e.entityType)) return null;
+    return `/assets/models/${e.entityType.toLowerCase()}.glb`;
+  });
+
+  protected modelViewerHtml = computed(() => {
+    const src = this.modelSrc();
+    if (!src) return '';
+    return this.sanitizer.bypassSecurityTrustHtml(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
+        <style>
+          body { margin: 0; overflow: hidden; background: transparent; }
+          model-viewer { width: 100%; height: 100vh; display: block; --poster-color: transparent; }
+        </style>
+      </head>
+      <body>
+        <model-viewer
+          src="${src}"
+          auto-rotate
+          camera-controls
+          interaction-prompt="none"
+          shadow-intensity="0"
+        ></model-viewer>
+      </body>
+      </html>
+    `);
+  });
 }
