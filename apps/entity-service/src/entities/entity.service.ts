@@ -223,9 +223,6 @@ export class EntityService implements OnModuleInit {
   // ─── POSITION UPDATE ─────────────────────────────────────────────────
 
   async updatePosition(id: string, dto: UpdatePositionDto): Promise<EntityRecord> {
-    // Verify entity exists
-    await this.findByIdOrThrow(id);
-
     const updated = await this.entityRepository.updatePosition(
       id,
       dto.lat,
@@ -291,6 +288,40 @@ export class EntityService implements OnModuleInit {
 
   async getEntityCount(): Promise<EntityCountByType[]> {
     return this.entityRepository.getEntityCounts();
+  }
+
+  // ─── Batch helpers (used by IngestConsumer) ──────────────────────────
+
+  emitPositionEvent(update: {
+    id: string;
+    lat: number;
+    lng: number;
+    heading: number | null;
+    speedKnots: number | null;
+    course: number | null;
+    altitude: number | null;
+    entityType?: string;
+    classification?: string;
+    source?: string;
+    metadata?: Record<string, unknown>;
+  }): void {
+    this.emitKafka(TOPIC_ENTITY_POSITION, update.id, {
+      entity_id: update.id,
+      entity_type: update.entityType,
+      latitude: update.lat,
+      longitude: update.lng,
+      altitude_meters: update.altitude ?? undefined,
+      heading: update.heading,
+      speed_knots: update.speedKnots,
+      classification: update.classification,
+      source: update.source,
+      timestamp: new Date().toISOString(),
+      metadata: update.metadata,
+    });
+  }
+
+  async updateRedisGeo(entityId: string, lng: number, lat: number): Promise<void> {
+    await this.redisGeoAdd(entityId, lng, lat);
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────
