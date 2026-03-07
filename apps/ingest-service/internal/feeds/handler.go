@@ -37,7 +37,7 @@ func (h *Handler) handleFeeds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	feeds := h.manager.List()
+	feeds := h.manager.ListWithHealth()
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(feeds); err != nil {
