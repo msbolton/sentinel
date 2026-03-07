@@ -30,6 +30,7 @@ import {
   DEFAULT_CAMERA_POSITION,
   TRACK_TRAIL_CONFIG,
 } from './cesium-config';
+import { CircularBuffer, decimateTrail, TrailPoint } from './trail-utils';
 
 // Configure Cesium before imports
 configureCesium();
@@ -91,36 +92,6 @@ interface LayerConfig {
   color: string;
 }
 
-class CircularBuffer<T> {
-  private buffer: (T | undefined)[];
-  private head = 0;
-  private count = 0;
-
-  constructor(private readonly capacity: number) {
-    this.buffer = new Array(capacity);
-  }
-
-  push(item: T): void {
-    this.buffer[this.head] = item;
-    this.head = (this.head + 1) % this.capacity;
-    if (this.count < this.capacity) this.count++;
-  }
-
-  get length(): number {
-    return this.count;
-  }
-
-  toArray(): T[] {
-    if (this.count === 0) return [];
-    const result: T[] = new Array(this.count);
-    const start = this.count < this.capacity ? 0 : this.head;
-    for (let i = 0; i < this.count; i++) {
-      result[i] = this.buffer[(start + i) % this.capacity] as T;
-    }
-    return result;
-  }
-}
-
 @Component({
   selector: 'app-map',
   standalone: true,
@@ -160,6 +131,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private cesiumColorCache = new Map<string, any>();
   private billboardImageCache = new Map<string, string>();
   private renderScheduled = false;
+  private currentCameraAltitude = DEFAULT_CAMERA_POSITION.height;
   private themePostProcessStage: any = null;
 
   constructor(
@@ -264,6 +236,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       .pipe(debounceTime(500))
       .subscribe(() => {
         this.sendViewportBounds();
+        this.refreshTrailDecimation();
       });
     this.subscriptions.add(sub);
 
@@ -413,7 +386,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // Track trail
     this.updateTrackTrail(entity);
     const trailBuffer = this.trackTrails.get(entity.id);
-    const trail = trailBuffer ? trailBuffer.toArray() : [];
+    const rawTrail = trailBuffer ? trailBuffer.toArray() : [];
+    const trail = decimateTrail(rawTrail, this.currentCameraAltitude, TRACK_TRAIL_CONFIG.decimation);
 
     const position = Cesium.Cartesian3.fromDegrees(
       entity.position.longitude,
@@ -446,7 +420,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         const trailPositions = trail.map((p) =>
           Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt),
         );
-        existing.polyline.positions = trailPositions;
+        if (existing.polyline) {
+          existing.polyline.positions = trailPositions;
+        } else {
+          existing.polyline = new Cesium.PolylineGraphics({
+            positions: trailPositions,
+            width: TRACK_TRAIL_CONFIG.width,
+            material: cesiumColor.withAlpha(TRACK_TRAIL_CONFIG.trailOpacity),
+            clampToGround: !hasAltitude,
+          });
+        }
       }
     } else {
       // Create new entity
@@ -641,6 +624,45 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.billboardImageCache.set(entityType, svgToDataUrl(svg));
     }
     return this.billboardImageCache.get(entityType)!;
+  }
+
+  private refreshTrailDecimation(): void {
+    if (!this.viewer || !this.Cesium) return;
+
+    const cartographic = this.Cesium.Cartographic.fromCartesian(this.viewer.camera.position);
+    const newAltitude = cartographic.height;
+
+    const oldStride = this.getStride(this.currentCameraAltitude);
+    const newStride = this.getStride(newAltitude);
+    this.currentCameraAltitude = newAltitude;
+
+    if (oldStride === newStride) return;
+
+    this.entityMap.forEach((cesiumEntity, entityId) => {
+      const trailBuffer = this.trackTrails.get(entityId);
+      if (!trailBuffer || trailBuffer.length < 2 || !cesiumEntity.polyline) return;
+
+      const decimated = decimateTrail(
+        trailBuffer.toArray(),
+        this.currentCameraAltitude,
+        TRACK_TRAIL_CONFIG.decimation,
+      );
+
+      if (decimated.length >= 2) {
+        cesiumEntity.polyline.positions = decimated.map((p: TrailPoint) =>
+          this.Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt),
+        );
+      }
+    });
+
+    this.scheduleRender();
+  }
+
+  private getStride(altitude: number): number {
+    const d = TRACK_TRAIL_CONFIG.decimation;
+    if (altitude > d.HIGH_ALT_THRESHOLD) return d.HIGH_ALT_STRIDE;
+    if (altitude > d.MID_ALT_THRESHOLD) return d.MID_ALT_STRIDE;
+    return d.LOW_ALT_STRIDE;
   }
 
   private scheduleRender(): void {
