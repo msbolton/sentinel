@@ -15,6 +15,9 @@ type Metrics struct {
 	ActiveConnections   *prometheus.GaugeVec
 	BatchSize           prometheus.Histogram
 	PipelineQueueDepth  prometheus.Gauge
+	FeedLastSuccess     *prometheus.GaugeVec
+	FeedEntityCount     *prometheus.GaugeVec
+	FeedErrorsTotal     *prometheus.CounterVec
 }
 
 // New creates and registers all Prometheus metrics for the ingest service.
@@ -90,6 +93,33 @@ func New() *Metrics {
 				Name:      "pipeline_queue_depth",
 				Help:      "Current number of messages waiting in the pipeline input queue.",
 			},
+		),
+		FeedLastSuccess: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: "sentinel",
+				Subsystem: "ingest",
+				Name:      "feed_last_success_timestamp",
+				Help:      "Unix timestamp of the last successful poll for an external feed.",
+			},
+			[]string{"feed"},
+		),
+		FeedEntityCount: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: "sentinel",
+				Subsystem: "ingest",
+				Name:      "feed_entities_count",
+				Help:      "Number of entities returned by the last successful poll.",
+			},
+			[]string{"feed"},
+		),
+		FeedErrorsTotal: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "sentinel",
+				Subsystem: "ingest",
+				Name:      "feed_errors_total",
+				Help:      "Total number of poll errors for an external feed.",
+			},
+			[]string{"feed"},
 		),
 	}
 }
