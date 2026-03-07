@@ -24,6 +24,8 @@ interface DataLayer {
   count: number | null;
   enabled: boolean;
   lastUpdated: string;
+  freshness: 'green' | 'yellow' | 'red' | 'gray' | 'none';
+  errorCount: number;
 }
 
 @Component({
@@ -49,7 +51,7 @@ interface DataLayer {
             <div class="layer-row">
               <div class="layer-content">
                 <div class="layer-main">
-                  <span class="freshness-dot" [attr.data-status]="getFreshnessStatus(layer.id)"></span>
+                  <span class="freshness-dot" [attr.data-status]="layer.freshness"></span>
                   <span class="layer-name">{{ layer.name }}</span>
                   <span class="layer-count">{{ layer.count !== null ? formatCount(layer.count) : '—' }}</span>
                   <button
@@ -63,8 +65,8 @@ interface DataLayer {
                 </div>
                 <div class="layer-meta">
                   {{ layer.source }} · {{ layer.lastUpdated }}
-                  @if (getErrorCount(layer.id) > 0) {
-                    · <span class="error-count">{{ getErrorCount(layer.id) }} errors</span>
+                  @if (layer.errorCount > 0) {
+                    · <span class="error-count">{{ layer.errorCount }} errors</span>
                   }
                 </div>
               </div>
@@ -336,6 +338,8 @@ export class DataFeedsComponent implements OnInit, OnDestroy {
         count: feed ? this.extractCount(feed) : null,
         enabled: overrides.has(config.id) ? overrides.get(config.id)! : baseEnabled,
         lastUpdated: feed ? this.getRelativeTime(feed) : 'never',
+        freshness: this.healthToFreshness(feed),
+        errorCount: feed?.health?.errorCount ?? 0,
       };
     });
 
@@ -351,6 +355,8 @@ export class DataFeedsComponent implements OnInit, OnDestroy {
           count: this.extractCount(feed),
           enabled: overrides.has(feed.id) ? overrides.get(feed.id)! : baseEnabled,
           lastUpdated: this.getRelativeTime(feed),
+          freshness: this.healthToFreshness(feed),
+          errorCount: feed.health?.errorCount ?? 0,
         });
       }
     }
@@ -376,25 +382,6 @@ export class DataFeedsComponent implements OnInit, OnDestroy {
     if (this.refreshInterval) {
       clearInterval(this.refreshInterval);
     }
-  }
-
-  getFreshnessStatus(feedId: string): 'green' | 'yellow' | 'red' | 'gray' | 'none' {
-    const feeds = this.feedService.feeds();
-    const feed = feeds.find(f => f.id === feedId);
-    if (!feed?.health) return 'none';
-    switch (feed.health.status) {
-      case 'healthy': return 'green';
-      case 'warn': return 'yellow';
-      case 'critical': return 'red';
-      case 'unknown': return 'gray';
-      default: return 'none';
-    }
-  }
-
-  getErrorCount(feedId: string): number {
-    const feeds = this.feedService.feeds();
-    const feed = feeds.find(f => f.id === feedId);
-    return feed?.health?.errorCount ?? 0;
   }
 
   toggle(): void {
@@ -450,6 +437,17 @@ export class DataFeedsComponent implements OnInit, OnDestroy {
   onDocumentClick(event: MouseEvent): void {
     if (!this.elementRef.nativeElement.contains(event.target)) {
       this.expanded.set(false);
+    }
+  }
+
+  private healthToFreshness(feed?: DataFeed): 'green' | 'yellow' | 'red' | 'gray' | 'none' {
+    if (!feed?.health) return 'none';
+    switch (feed.health.status) {
+      case 'healthy': return 'green';
+      case 'warn': return 'yellow';
+      case 'critical': return 'red';
+      case 'unknown': return 'gray';
+      default: return 'none';
     }
   }
 
