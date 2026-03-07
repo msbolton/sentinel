@@ -3,12 +3,20 @@ import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 
+export interface FeedHealth {
+  lastSuccessAt: string;
+  entitiesCount: number;
+  errorCount: number;
+  status: 'healthy' | 'warn' | 'critical' | 'unknown';
+}
+
 export interface FeedStatus {
   id: string;
   name: string;
   sourceType: string;
   description: string;
   enabled: boolean;
+  health?: FeedHealth;
 }
 
 @Injectable()
