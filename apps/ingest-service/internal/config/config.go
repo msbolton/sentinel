@@ -21,11 +21,12 @@ type Config struct {
 	BatchSize       int    // BATCH_SIZE (default: 500)
 	FlushIntervalMs int    // FLUSH_INTERVAL_MS (default: 100)
 
-	OpenSkyEnabled     bool   // OPENSKY_ENABLED (default: false)
-	OpenSkyIntervalSec int    // OPENSKY_INTERVAL_SEC (default: 15)
-	OpenSkyBBox        string // OPENSKY_BBOX (default: "" = global)
-	OpenSkyUsername    string // OPENSKY_USERNAME (default: "")
-	OpenSkyPassword    string // OPENSKY_PASSWORD (default: "")
+	OpenSkyEnabled      bool   // OPENSKY_ENABLED (default: false)
+	OpenSkyIntervalSec  int    // OPENSKY_INTERVAL_SEC (default: 15)
+	OpenSkyBBox         string // OPENSKY_BBOX (default: "" = global)
+	OpenSkyClientID     string // OPENSKY_CLIENT_ID (default: "")
+	OpenSkyClientSecret string // OPENSKY_CLIENT_SECRET (default: "")
+	OpenSkyTokenURL     string // OPENSKY_TOKEN_URL (default: "https://opensky-network.org/api/oauth/token")
 
 	ADSBLolEnabled     bool // ADSBLOL_ENABLED (default: false)
 	ADSBLolIntervalSec int  // ADSBLOL_INTERVAL_SEC (default: 10)
@@ -53,11 +54,12 @@ func Load() *Config {
 		BatchSize:       envOrDefaultInt("BATCH_SIZE", 500),
 		FlushIntervalMs: envOrDefaultInt("FLUSH_INTERVAL_MS", 100),
 
-		OpenSkyEnabled:     os.Getenv("OPENSKY_ENABLED") == "true",
-		OpenSkyIntervalSec: envOrDefaultInt("OPENSKY_INTERVAL_SEC", 15),
-		OpenSkyBBox:        envOrDefault("OPENSKY_BBOX", ""),
-		OpenSkyUsername:    envOrDefault("OPENSKY_USERNAME", ""),
-		OpenSkyPassword:    envOrDefault("OPENSKY_PASSWORD", ""),
+		OpenSkyEnabled:      os.Getenv("OPENSKY_ENABLED") == "true",
+		OpenSkyIntervalSec:  envOrDefaultInt("OPENSKY_INTERVAL_SEC", 15),
+		OpenSkyBBox:         envOrDefault("OPENSKY_BBOX", ""),
+		OpenSkyClientID:     envOrDefault("OPENSKY_CLIENT_ID", ""),
+		OpenSkyClientSecret: envOrDefault("OPENSKY_CLIENT_SECRET", ""),
+		OpenSkyTokenURL:     envOrDefault("OPENSKY_TOKEN_URL", "https://opensky-network.org/api/oauth/token"),
 
 		ADSBLolEnabled:     os.Getenv("ADSBLOL_ENABLED") == "true",
 		ADSBLolIntervalSec: envOrDefaultInt("ADSBLOL_INTERVAL_SEC", 10),
