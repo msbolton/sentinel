@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -38,7 +39,7 @@ func TestHandleFeeds_GET(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var feeds []FeedStatus
+	var feeds []FeedStatusWithHealth
 	if err := json.NewDecoder(w.Body).Decode(&feeds); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -51,6 +52,44 @@ func TestHandleFeeds_GET(t *testing.T) {
 	}
 	if feeds[1].ID != "tcp" || feeds[1].Enabled {
 		t.Errorf("unexpected second feed: %+v", feeds[1])
+	}
+}
+
+func TestHandleFeeds_IncludesHealth(t *testing.T) {
+	handler, mgr := setupTestHandler()
+
+	mgr.Register("opensky", "OpenSky", "opensky", "OpenSky feed",
+		func() (sources.Listener, error) { return &mockListener{}, nil }, true)
+	mgr.SetStaleThresholds("opensky", 120, 300)
+	mgr.RecordSuccess("opensky", 100, time.Now())
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/feeds", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var feeds []FeedStatusWithHealth
+	if err := json.NewDecoder(w.Body).Decode(&feeds); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(feeds) != 1 {
+		t.Fatalf("expected 1 feed, got %d", len(feeds))
+	}
+	if feeds[0].Health == nil {
+		t.Fatal("expected Health to be non-nil")
+	}
+	if feeds[0].Health.Status != "healthy" {
+		t.Errorf("expected health status 'healthy', got %q", feeds[0].Health.Status)
+	}
+	if feeds[0].Health.EntitiesCount != 100 {
+		t.Errorf("expected EntitiesCount 100, got %d", feeds[0].Health.EntitiesCount)
 	}
 }
 
