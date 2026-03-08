@@ -45,6 +45,13 @@ export enum Affiliation {
   PENDING = 'PENDING',
 }
 
+export enum CharacterizationState {
+  ASSESSED = 'ASSESSED',
+  ASSUMED = 'ASSUMED',
+  SUSPECTED = 'SUSPECTED',
+  UNCHARACTERIZED = 'UNCHARACTERIZED',
+}
+
 export interface Entity {
   id: string;
   entityType: EntityType;
