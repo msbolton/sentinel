@@ -29,7 +29,7 @@ export interface Observation {
   velocity?: GeodeticVelocity;
   acceleration?: GeodeticAcceleration;
 
-  // Measurement uncertainty (UC2 DetectionPointRecordType)
+  // Measurement uncertainty
   uncertainty?: MeasurementUncertainty;
 
   // Full covariance
@@ -41,7 +41,7 @@ export interface Observation {
   detectionConfidence?: number;
   trackProcessingState?: TrackProcessingState;
 
-  // Sensor-relative measurements (UC2 DetectionPointRecordType)
+  // Sensor-relative measurements
   azimuth?: number;
   elevation?: number;
   range?: number;

@@ -91,7 +91,6 @@ export class EntityRecord {
   @Column({ type: 'text', array: true, default: () => "ARRAY[]::text[]" })
   affiliations!: string[];
 
-  // UC2-informed identity & confidence
   @Column({ type: 'varchar', default: 'UNKNOWN' })
   affiliation!: string;
 

@@ -13,7 +13,7 @@ export interface GeodeticAcceleration {
 }
 
 /**
- * 3x3 position covariance matrix (UC2 PositionPositionCovarianceType).
+ * 3x3 position covariance matrix.
  * Units: meters². Symmetric matrix stored as upper triangle.
  * Axes: Pn=north, Pe=east, Pu=up.
  */
@@ -27,7 +27,7 @@ export interface PositionCovariance {
 }
 
 /**
- * 3x3 position-velocity cross-covariance (UC2 PositionVelocityCovarianceType).
+ * 3x3 position-velocity cross-covariance.
  * Units: m·(m/s). Full 3x3 matrix (not symmetric).
  */
 export interface PositionVelocityCovariance {
@@ -37,7 +37,7 @@ export interface PositionVelocityCovariance {
 }
 
 /**
- * 3x3 velocity covariance matrix (UC2 VelocityVelocityCovarianceType).
+ * 3x3 velocity covariance matrix.
  * Units: (m/s)². Symmetric matrix stored as upper triangle.
  */
 export interface VelocityCovariance {
@@ -49,7 +49,7 @@ export interface VelocityCovariance {
   vuVu: number;
 }
 
-/** Full kinematic state vector (UC2 TrackPointRecordType) */
+/** Full kinematic state vector */
 export interface KinematicState {
   velocity?: GeodeticVelocity;
   acceleration?: GeodeticAcceleration;
@@ -58,7 +58,7 @@ export interface KinematicState {
   velocityCovariance?: VelocityCovariance;
 }
 
-/** ECEF-based orientation (UC2 ECEFBasedOrientationType) */
+/** ECEF-based orientation */
 export interface Orientation {
   yaw: number;
   pitch: number;

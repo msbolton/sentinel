@@ -12,6 +12,11 @@ interface BufferedPoint {
   course: number | null;
   source: string | null;
   timestamp: Date;
+  altitude: number | null;
+  velocityNorth: number | null;
+  velocityEast: number | null;
+  velocityUp: number | null;
+  circularError: number | null;
 }
 
 /**
@@ -107,7 +112,7 @@ export class TrackBatchService implements OnModuleDestroy {
       for (const point of pointsToFlush) {
         const idx = paramIndex.current;
         valuesClauses.push(
-          `($${idx}, $${idx + 1}, ST_SetSRID(ST_MakePoint($${idx + 2}, $${idx + 3}), 4326), $${idx + 4}, $${idx + 5}, $${idx + 6}, $${idx + 7})`,
+          `($${idx}, $${idx + 1}, ST_SetSRID(ST_MakePoint($${idx + 2}, $${idx + 3}), 4326), $${idx + 4}, $${idx + 5}, $${idx + 6}, $${idx + 7}, $${idx + 8}, $${idx + 9}, $${idx + 10}, $${idx + 11}, $${idx + 12})`,
         );
         params.push(
           point.entityId,
@@ -118,13 +123,18 @@ export class TrackBatchService implements OnModuleDestroy {
           point.speedKnots,
           point.course,
           point.timestamp,
+          point.altitude,
+          point.velocityNorth,
+          point.velocityEast,
+          point.velocityUp,
+          point.circularError,
         );
-        paramIndex.current += 8;
+        paramIndex.current += 13;
       }
 
       const sql = `
         INSERT INTO sentinel.track_points
-          ("entityId", "source", "position", "heading", "speedKnots", "course", "timestamp")
+          ("entityId", "source", "position", "heading", "speedKnots", "course", "timestamp", "altitude", "velocityNorth", "velocityEast", "velocityUp", "circularError")
         VALUES ${valuesClauses.join(', ')}
       `;
 

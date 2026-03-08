@@ -45,6 +45,11 @@ export class TrackService {
     course: number | null,
     source: string | null,
     timestamp: Date,
+    altitude: number | null = null,
+    velocityNorth: number | null = null,
+    velocityEast: number | null = null,
+    velocityUp: number | null = null,
+    circularError: number | null = null,
   ): Promise<void> {
     await this.batchService.addPoint({
       entityId,
@@ -55,6 +60,11 @@ export class TrackService {
       course,
       source,
       timestamp,
+      altitude,
+      velocityNorth,
+      velocityEast,
+      velocityUp,
+      circularError,
     });
   }
 
@@ -257,17 +267,27 @@ export class TrackService {
     course?: number;
     source?: string;
     timestamp: string;
+    altitude?: number;
+    velocityNorth?: number;
+    velocityEast?: number;
+    velocityUp?: number;
+    circularError?: number;
   }): Promise<void> {
-    await this.recordPoint(
-      payload.entityId,
-      payload.latitude,
-      payload.longitude,
-      payload.heading ?? null,
-      payload.speedKnots ?? null,
-      payload.course ?? null,
-      payload.source ?? null,
-      new Date(payload.timestamp),
-    );
+    await this.batchService.addPoint({
+      entityId: payload.entityId,
+      latitude: payload.latitude,
+      longitude: payload.longitude,
+      heading: payload.heading ?? null,
+      speedKnots: payload.speedKnots ?? null,
+      course: payload.course ?? null,
+      source: payload.source ?? null,
+      timestamp: new Date(payload.timestamp),
+      altitude: payload.altitude ?? null,
+      velocityNorth: payload.velocityNorth ?? null,
+      velocityEast: payload.velocityEast ?? null,
+      velocityUp: payload.velocityUp ?? null,
+      circularError: payload.circularError ?? null,
+    });
 
     this.logger.debug(
       `Recorded track point for entity ${payload.entityId}`,

@@ -27,6 +27,11 @@ export interface EntityPositionUpdate {
   source: string;
   timestamp: string;
   metadata?: Record<string, unknown>;
+  trackEnvironment?: string;
+  countryOfOrigin?: string;
+  platformData?: Record<string, unknown>;
+  operationalStatus?: string;
+  circularError?: number;
 }
 
 /**
@@ -51,6 +56,11 @@ export interface EntityEvent {
     createdAt: string;
     updatedAt: string;
     lastSeenAt?: string;
+    trackEnvironment?: string;
+    countryOfOrigin?: string;
+    platformData?: Record<string, unknown>;
+    operationalStatus?: string;
+    circularError?: number;
   };
   timestamp: string;
 }
@@ -279,6 +289,11 @@ export class EntityGateway
             affiliations: [],
             createdAt: entity.timestamp,
             updatedAt: entity.timestamp,
+            trackEnvironment: entity.trackEnvironment,
+            countryOfOrigin: entity.countryOfOrigin,
+            platformData: entity.platformData,
+            operationalStatus: entity.operationalStatus,
+            circularError: entity.circularError,
           },
           timestamp: entity.timestamp,
         },

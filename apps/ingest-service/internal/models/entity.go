@@ -17,12 +17,11 @@ type EntityPosition struct {
 	Longitude  float64   `json:"longitude"`
 	Altitude   float64   `json:"altitude"`
 	Heading    float64   `json:"heading"`
-	SpeedKnots float64  `json:"speed_knots"`
+	SpeedKnots float64   `json:"speed_knots"`
 	Course     float64   `json:"course"`
 	Timestamp  time.Time `json:"timestamp"`
 	RawData    []byte    `json:"raw_data,omitempty"`
 
-	// UC2-informed fields
 	Pitch            float64 `json:"pitch,omitempty"`
 	Roll             float64 `json:"roll,omitempty"`
 	TrackEnvironment string  `json:"track_environment,omitempty"`
@@ -63,7 +62,7 @@ type EntityPosition struct {
 	UAVData    *UAVData    `json:"uav_data,omitempty"`
 }
 
-// AISData contains AIS maritime identification and voyage data (per UC2 AISDataType).
+// AISData contains AIS maritime identification and voyage data.
 type AISData struct {
 	// Identity
 	MMSI       string `json:"mmsi"`
@@ -103,7 +102,7 @@ type AISData struct {
 	RepeatIndicator int `json:"repeat_indicator,omitempty"`
 }
 
-// ADSBData contains ADS-B / IFF transponder data (per UC2 IFFDataType).
+// ADSBData contains ADS-B / IFF transponder data.
 type ADSBData struct {
 	// Core identity
 	ICAOHex          string `json:"icao_hex"`
@@ -205,7 +204,7 @@ type CoTData struct {
 	QOS           string  `json:"qos,omitempty"`
 }
 
-// UAVData contains UAV-specific telemetry data (per UC2 UAVDataType).
+// UAVData contains UAV-specific telemetry data.
 type UAVData struct {
 	Make               string  `json:"make,omitempty"`
 	Model              string  `json:"model,omitempty"`

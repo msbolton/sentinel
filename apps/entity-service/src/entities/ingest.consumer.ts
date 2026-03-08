@@ -19,7 +19,6 @@ interface IngestMessage {
   course: number;
   timestamp: string;
 
-  // UC2-informed fields
   pitch?: number;
   roll?: number;
   track_environment?: string;

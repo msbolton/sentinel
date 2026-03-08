@@ -1,6 +1,6 @@
 import { NavigationalStatus } from './common';
 
-/** AIS maritime identification and voyage data (per UC2 AISDataType) */
+/** AIS maritime identification and voyage data */
 export interface AISData {
   // Identity
   mmsi: string;
@@ -18,7 +18,7 @@ export interface AISData {
   eta?: string;
   draught?: number;
 
-  // Dimensions (UC2: dimensionA-D from reference point)
+  // Dimensions (dimensionA-D from reference point)
   dimensionA?: number;
   dimensionB?: number;
   dimensionC?: number;
@@ -40,7 +40,7 @@ export interface AISData {
   repeatIndicator?: number;
 }
 
-/** ADS-B / IFF transponder data (per UC2 IFFDataType + ModeSType + Mode5Type) */
+/** ADS-B / IFF transponder data */
 export interface ADSBData {
   // Core identity
   icaoHex: string;
@@ -50,13 +50,13 @@ export interface ADSBData {
   operatorIcao?: string;
   operatorName?: string;
 
-  // Transponder codes (UC2 IFFDataType)
+  // Transponder codes
   squawk?: string;
   emergency?: string;
   mode1?: string;
   mode2?: string;
 
-  // Mode S data (UC2 ModeSType)
+  // Mode S data
   aircraftId?: string;
   flightAirborne?: boolean;
   indicatedAirSpeed?: number;
@@ -64,7 +64,7 @@ export interface ADSBData {
   groundSpeed?: number;
   magneticHeading?: number;
 
-  // Mode 5 data (UC2 Mode5Type — military IFF)
+  // Mode 5 data
   mode5FigureOfMerit?: number;
   nationalOriginCode?: number;
   missionCode?: number;
@@ -142,7 +142,7 @@ export interface CoTData {
   qos?: string;
 }
 
-/** UAV-specific telemetry data (per UC2 UAVDataType) */
+/** UAV-specific telemetry data */
 export interface UAVData {
   make?: string;
   model?: string;
