@@ -116,7 +116,7 @@ message VelocityCovariance {
   double vu_vu = 6;
 }
 
-// KinematicState is the full kinematic state vector per UC2 TrackPointRecordType.
+// KinematicState is the full kinematic state vector.
 message KinematicState {
   GeodeticVelocity velocity = 1;
   GeodeticAcceleration acceleration = 2;
@@ -236,7 +236,7 @@ message Entity {
   // Timestamp when the entity was last observed by a sensor or source.
   google.protobuf.Timestamp last_seen_at = 16;
 
-  // UC2-informed identity & confidence
+  // Identity & confidence
   Affiliation affiliation = 17;
   int32 identity_confidence = 18;          // 0-10 scale
   CharacterizationState characterization = 19;

@@ -97,7 +97,7 @@ enum NavigationalStatus {
   NAVIGATIONAL_STATUS_UNKNOWN = 11;
 }
 
-// OperationalStatus reflects entity readiness/availability (UC2 AvailabilityCode).
+// OperationalStatus reflects entity readiness/availability.
 enum OperationalStatus {
   OPERATIONAL_STATUS_UNSPECIFIED = 0;
   OPERATIONAL_STATUS_OPERATIONAL = 1;

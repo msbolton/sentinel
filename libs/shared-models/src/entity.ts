@@ -77,7 +77,6 @@ export interface Entity {
   updatedAt: string;
   lastSeenAt?: string;
 
-  // UC2-informed identity & confidence
   affiliation?: Affiliation;
   identityConfidence?: number;
   characterization?: CharacterizationState;
@@ -142,7 +141,6 @@ export interface CreateEntityRequest {
   metadata?: Record<string, string>;
   affiliations?: string[];
 
-  // UC2-informed fields
   affiliation?: Affiliation;
   identityConfidence?: number;
   characterization?: CharacterizationState;
@@ -175,7 +173,6 @@ export interface UpdateEntityRequest {
   metadata?: Record<string, string>;
   affiliations?: string[];
 
-  // UC2-informed fields
   affiliation?: Affiliation;
   identityConfidence?: number;
   characterization?: CharacterizationState;

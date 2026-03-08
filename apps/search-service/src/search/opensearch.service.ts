@@ -21,6 +21,20 @@ export interface EntityDocument {
   createdAt?: string;
   updatedAt?: string;
   lastSeenAt?: string;
+  trackEnvironment?: string;
+  countryOfOrigin?: string;
+  operationalStatus?: string;
+  sourceEntityId?: string;
+  affiliation?: string;
+  platformIdentifiers?: {
+    mmsi?: string;
+    imo?: string;
+    icaoHex?: string;
+    registration?: string;
+    callsign?: string;
+    noradId?: number;
+    squawk?: string;
+  };
 }
 
 export interface SearchQuery {
@@ -151,6 +165,23 @@ export class OpenSearchService implements OnModuleInit {
                 createdAt: { type: 'date' },
                 updatedAt: { type: 'date' },
                 lastSeenAt: { type: 'date' },
+                affiliation: { type: 'keyword' },
+                trackEnvironment: { type: 'keyword' },
+                operationalStatus: { type: 'keyword' },
+                countryOfOrigin: { type: 'keyword' },
+                sourceEntityId: { type: 'keyword' },
+                platformIdentifiers: {
+                  type: 'object',
+                  properties: {
+                    mmsi: { type: 'keyword' },
+                    imo: { type: 'keyword' },
+                    icaoHex: { type: 'keyword' },
+                    registration: { type: 'keyword' },
+                    callsign: { type: 'keyword' },
+                    noradId: { type: 'integer' },
+                    squawk: { type: 'keyword' },
+                  },
+                },
               },
             },
           },
@@ -269,6 +300,12 @@ export class OpenSearchService implements OnModuleInit {
           createdAt: entity.createdAt,
           updatedAt: entity.updatedAt,
           lastSeenAt: entity.lastSeenAt,
+          affiliation: entity.affiliation,
+          trackEnvironment: entity.trackEnvironment,
+          operationalStatus: entity.operationalStatus,
+          countryOfOrigin: entity.countryOfOrigin,
+          sourceEntityId: entity.sourceEntityId,
+          platformIdentifiers: entity.platformIdentifiers,
         },
         refresh: 'wait_for',
       });
