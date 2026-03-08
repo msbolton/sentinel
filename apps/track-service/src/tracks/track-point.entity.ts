@@ -43,6 +43,9 @@ export class TrackPoint {
   @Column({ type: 'varchar', nullable: true })
   source: string;
 
+  @Column({ type: 'uuid', nullable: true })
+  feedId: string;
+
   @Column({ type: 'timestamptz' })
   timestamp: Date;
 }
