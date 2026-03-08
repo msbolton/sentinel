@@ -20,6 +20,9 @@ import {
 import { EntityService } from '../../core/services/entity.service';
 import { WebSocketService } from '../../core/services/websocket.service';
 import { ThemeService, ThemePreset } from '../../core/services/theme.service';
+import { LocationService } from '../../core/services/location.service';
+import { BuildingsService } from '../../core/services/buildings.service';
+import { Location } from '../../shared/models/location.model';
 import {
   configureCesium,
   CESIUM_VIEWER_OPTIONS,
@@ -108,6 +111,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   viewer: any = null;
   selectedEntity = signal<Entity | null>(null);
   showLayerPanel = signal<boolean>(false);
+  flyingTo = signal<string | null>(null);
 
   layers: LayerConfig[] = [
     { name: 'Persons', entityType: EntityType.PERSON, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.PERSON] },
@@ -140,6 +144,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly entityService: EntityService,
     private readonly wsService: WebSocketService,
     private readonly themeService: ThemeService,
+    private readonly locationService: LocationService,
+    readonly buildingsService: BuildingsService,
   ) {}
 
   async ngAfterViewInit(): Promise<void> {
@@ -153,7 +159,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // handler won't trigger a fetch.  Load all entities eagerly.
     this.entityService.getEntities({ limit: 500 }).subscribe();
 
+    this.buildingsService.init(this.viewer, this.Cesium);
     this.subscribeToThemeChanges();
+    this.subscribeToFlyTo();
+    this.initUserLocation();
   }
 
   ngOnDestroy(): void {
@@ -243,6 +252,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
     this.viewer.camera.moveEnd.addEventListener(() => {
       this.cameraMovedSubject.next();
+      this.saveCameraPosition();
     });
   }
 
@@ -711,5 +721,122 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         this.viewer.scene.requestRender();
       }
     });
+  }
+
+  private subscribeToFlyTo(): void {
+    const sub = this.locationService.flyTo$.subscribe((location) => {
+      this.flyToLocation(location);
+    });
+    this.subscriptions.add(sub);
+  }
+
+  private flyToLocation(location: Location): void {
+    if (!this.viewer || !this.Cesium) return;
+
+    const Cesium = this.Cesium;
+
+    this.ngZone.run(() => this.flyingTo.set(location.name));
+
+    if (location.has3dTiles) {
+      this.buildingsService.ensureEnabled();
+    }
+
+    const currentPos = Cesium.Cartographic.fromCartesian(this.viewer.camera.position);
+    const targetPos = Cesium.Cartographic.fromDegrees(location.longitude, location.latitude);
+    const distance = Cesium.Cartesian3.distance(
+      Cesium.Cartesian3.fromRadians(currentPos.longitude, currentPos.latitude),
+      Cesium.Cartesian3.fromRadians(targetPos.longitude, targetPos.latitude),
+    );
+    const duration = Math.min(3, Math.max(1, distance / 5_000_000));
+
+    this.viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(
+        location.longitude,
+        location.latitude,
+        location.altitude,
+      ),
+      orientation: {
+        heading: Cesium.Math.toRadians(location.heading),
+        pitch: Cesium.Math.toRadians(location.pitch),
+        roll: 0,
+      },
+      duration,
+      complete: () => {
+        this.ngZone.run(() => this.flyingTo.set(null));
+      },
+    });
+  }
+
+  private initUserLocation(): void {
+    if (!this.viewer || !this.Cesium) return;
+
+    const Cesium = this.Cesium;
+    const saved = localStorage.getItem('sentinel-camera-position');
+
+    if (saved) {
+      try {
+        const { lon, lat, alt, heading, pitch } = JSON.parse(saved);
+        this.viewer.camera.setView({
+          destination: Cesium.Cartesian3.fromDegrees(lon, lat, alt),
+          orientation: { heading, pitch, roll: 0 },
+        });
+      } catch {
+        // Invalid saved data — fall through to geolocation
+      }
+      return;
+    }
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          this.viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(
+              pos.coords.longitude,
+              pos.coords.latitude,
+              50000,
+            ),
+            duration: 2,
+          });
+          localStorage.setItem('sentinel-has-geolocated', 'true');
+        },
+        () => { /* permission denied — stay at default view */ },
+      );
+    }
+  }
+
+  private saveCameraPosition(): void {
+    if (!this.viewer || !this.Cesium) return;
+
+    try {
+      const pos = this.viewer.camera.positionCartographic;
+      localStorage.setItem('sentinel-camera-position', JSON.stringify({
+        lon: this.Cesium.Math.toDegrees(pos.longitude),
+        lat: this.Cesium.Math.toDegrees(pos.latitude),
+        alt: pos.height,
+        heading: this.viewer.camera.heading,
+        pitch: this.viewer.camera.pitch,
+      }));
+    } catch {
+      // Cartographic conversion can fail in edge cases
+    }
+  }
+
+  goToMyLocation(): void {
+    if (!this.viewer || !this.Cesium || !navigator.geolocation) return;
+
+    const Cesium = this.Cesium;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        this.viewer.camera.flyTo({
+          destination: Cesium.Cartesian3.fromDegrees(
+            pos.coords.longitude,
+            pos.coords.latitude,
+            50000,
+          ),
+          duration: 2,
+        });
+      },
+      () => { /* permission denied */ },
+    );
   }
 }
