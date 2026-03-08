@@ -20,6 +20,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/models"
 	"github.com/sentinel/ingest-service/internal/sources"
+	"github.com/sentinel/ingest-service/internal/store"
 )
 
 func main() {
@@ -84,8 +85,19 @@ func main() {
 		logger.Fatal("failed to start tcp listener", zap.Error(err))
 	}
 
+	// Open Postgres connection for custom feed persistence.
+	feedStore, err := store.New(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		logger.Fatal("failed to connect to postgres for feed store", zap.Error(err))
+	}
+	defer feedStore.Close()
+
+	if err := feedStore.Migrate(context.Background()); err != nil {
+		logger.Fatal("failed to migrate custom_feeds table", zap.Error(err))
+	}
+
 	// Feed manager for runtime-toggleable data sources.
-	feedManager := feeds.NewManager(logger, nil, pipelineInput, m)
+	feedManager := feeds.NewManager(logger, feedStore, pipelineInput, m)
 
 	// Register OpenSky feed (toggleable via /feeds API).
 	if err := feedManager.Register(
@@ -145,6 +157,11 @@ func main() {
 		staleThreshold(cfg.CelesTrakStaleWarnSec, cfg.FeedStaleWarnSec),
 		staleThreshold(cfg.CelesTrakStaleCriticalSec, cfg.FeedStaleCriticalSec),
 	)
+
+	// Load custom feeds persisted in Postgres.
+	if err := feedManager.LoadCustomFeeds(context.Background()); err != nil {
+		logger.Error("failed to load custom feeds from database", zap.Error(err))
+	}
 
 	// Start HTTP health/metrics/feeds server.
 	healthHandler := health.NewHandler(producer, logger)
