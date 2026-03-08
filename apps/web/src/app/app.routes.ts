@@ -36,6 +36,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: 'locations',
+    loadComponent: () =>
+      import('./features/locations/locations.component').then(
+        (m) => m.LocationsComponent,
+      ),
+  },
+  {
     path: '**',
     redirectTo: 'map',
   },
