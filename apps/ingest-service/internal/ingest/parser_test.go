@@ -539,3 +539,69 @@ func TestParseGeneric_UnknownFormat(t *testing.T) {
 		t.Fatal("expected error for unknown format, got nil")
 	}
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// ParseFormat Tests
+// ──────────────────────────────────────────────────────────────────────────────
+
+func TestParseFormat_JSON(t *testing.T) {
+	p := NewParser()
+	data := []byte(`{"entity_id":"test-1","latitude":40.0,"longitude":-74.0}`)
+	entity, err := p.ParseFormat("json", "mqtt", data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if entity.EntityID != "test-1" {
+		t.Errorf("EntityID = %q, want test-1", entity.EntityID)
+	}
+	if entity.Source != "mqtt" {
+		t.Errorf("Source = %q, want mqtt", entity.Source)
+	}
+}
+
+func TestParseFormat_ADSB(t *testing.T) {
+	p := NewParser()
+	data := []byte("MSG,3,1,1,A1B2C3,1,2025/01/15,12:30:00.000,2025/01/15,12:30:00.000,,35000,450,180.5,51.5074,-0.1278,,,,,,0")
+	entity, err := p.ParseFormat("adsb", "tcp", data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if entity.EntityID != "ICAO-A1B2C3" {
+		t.Errorf("EntityID = %q, want ICAO-A1B2C3", entity.EntityID)
+	}
+	if entity.Source != "tcp" {
+		t.Errorf("Source = %q, want tcp", entity.Source)
+	}
+}
+
+func TestParseFormat_NMEA(t *testing.T) {
+	p := NewParser()
+	data := []byte("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,47.0,M,,*47")
+	entity, err := p.ParseFormat("nmea", "tcp", data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if entity.Source != "tcp" {
+		t.Errorf("Source = %q, want tcp", entity.Source)
+	}
+}
+
+func TestParseFormat_UnknownFallsBackToGeneric(t *testing.T) {
+	p := NewParser()
+	data := []byte(`{"entity_id":"fallback","latitude":1.0,"longitude":2.0}`)
+	entity, err := p.ParseFormat("unknown_format", "mqtt", data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if entity.EntityID != "fallback" {
+		t.Errorf("EntityID = %q, want fallback", entity.EntityID)
+	}
+}
+
+func TestParseFormat_InvalidData(t *testing.T) {
+	p := NewParser()
+	_, err := p.ParseFormat("json", "mqtt", []byte("not json"))
+	if err == nil {
+		t.Fatal("expected error for invalid JSON, got nil")
+	}
+}

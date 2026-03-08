@@ -118,7 +118,13 @@ func (p *Pipeline) processMessage(msg *models.IngestMessage) {
 	p.metrics.MessagesReceived.WithLabelValues(msg.SourceType).Inc()
 
 	// Parse the raw message into an entity position.
-	entity, err := p.parser.ParseGeneric(msg.SourceType, msg.Payload)
+	var entity *models.EntityPosition
+	var err error
+	if msg.Format != "" {
+		entity, err = p.parser.ParseFormat(msg.Format, msg.SourceType, msg.Payload)
+	} else {
+		entity, err = p.parser.ParseGeneric(msg.SourceType, msg.Payload)
+	}
 	if err != nil {
 		p.metrics.MessagesFailed.WithLabelValues(msg.SourceType, "parse_error").Inc()
 		p.logger.Debug("failed to parse message",
