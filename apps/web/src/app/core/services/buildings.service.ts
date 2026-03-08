@@ -11,6 +11,11 @@ export class BuildingsService {
   init(viewer: any, Cesium: any): void {
     this.viewer = viewer;
     this.Cesium = Cesium;
+
+    // Configure Cesium Ion token if available
+    if (environment.cesiumIonAccessToken) {
+      Cesium.Ion.defaultAccessToken = environment.cesiumIonAccessToken;
+    }
   }
 
   async enable(): Promise<void> {
@@ -22,20 +27,23 @@ export class BuildingsService {
       return;
     }
 
-    const apiKey = environment.googleMapsApiKey;
-    if (!apiKey) {
-      console.warn('Google Maps API key not configured. Set googleMapsApiKey in environment config to enable 3D buildings.');
-      return;
-    }
-
     try {
-      this.tileset = await this.Cesium.Cesium3DTileset.fromUrl(
-        `https://tile.googleapis.com/v1/3dtiles/root.json?key=${apiKey}`,
-      );
+      // Try Cesium Ion OSM Buildings first (works in Vite dev server, no Draco needed)
+      if (environment.cesiumIonAccessToken) {
+        this.tileset = await this.Cesium.createOsmBuildingsAsync();
+      } else if (environment.googleMapsApiKey) {
+        // Google Photorealistic 3D Tiles (requires Draco, may not work in Vite dev server)
+        this.tileset = await this.Cesium.createGooglePhotorealistic3DTileset({
+          key: environment.googleMapsApiKey,
+        });
+      } else {
+        console.warn('[Buildings] No 3D buildings provider configured. Set cesiumIonAccessToken (recommended) or googleMapsApiKey in environment config.');
+        return;
+      }
       this.viewer.scene.primitives.add(this.tileset);
       this.buildings3dEnabled.set(true);
     } catch (err) {
-      console.error('Failed to load Google 3D Tiles:', err);
+      console.error('[Buildings] Failed to load 3D buildings:', err);
     }
   }
 

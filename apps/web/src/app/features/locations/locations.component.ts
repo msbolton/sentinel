@@ -1,9 +1,18 @@
 import { Component, OnInit, OnDestroy, signal, computed, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Subscription } from 'rxjs';
+import { HttpClient } from '@angular/common/http';
+import { Subscription, Subject, debounceTime, switchMap, of, catchError } from 'rxjs';
 import { Location, LocationCategory } from '../../shared/models/location.model';
 import { LocationService } from '../../core/services/location.service';
+
+interface GeoSearchResult {
+  display_name: string;
+  lat: string;
+  lon: string;
+  type: string;
+  class: string;
+}
 
 @Component({
   selector: 'app-locations',
@@ -19,6 +28,11 @@ export class LocationsComponent implements OnInit, OnDestroy {
   selectedCategory = signal<LocationCategory | null>(null);
   showForm = signal<boolean>(false);
   editingLocation = signal<Location | null>(null);
+
+  // Geocoding search
+  geoSearchResults = signal<GeoSearchResult[]>([]);
+  geoSearching = signal<boolean>(false);
+  private geoSearch$ = new Subject<string>();
 
   categories = Object.values(LocationCategory);
 
@@ -38,9 +52,16 @@ export class LocationsComponent implements OnInit, OnDestroy {
     return list;
   });
 
+  isCustomCategory = computed(() => this.formData.category === LocationCategory.CUSTOM);
+
+  loading = computed(() => this.locationService.loading());
+
   private subscriptions = new Subscription();
 
-  constructor(private readonly locationService: LocationService) {}
+  constructor(
+    private readonly locationService: LocationService,
+    private readonly http: HttpClient,
+  ) {}
 
   ngOnInit(): void {
     const sub = this.locationService.locations$.subscribe((locations) => {
@@ -48,6 +69,35 @@ export class LocationsComponent implements OnInit, OnDestroy {
     });
     this.subscriptions.add(sub);
     this.locationService.loadLocations();
+
+    // Geocoding search with debounce
+    const geoSub = this.geoSearch$.pipe(
+      debounceTime(400),
+      switchMap((query) => {
+        if (!query || query.length < 3) {
+          return of([]);
+        }
+        this.geoSearching.set(true);
+        return this.http.get<GeoSearchResult[]>(
+          'https://nominatim.openstreetmap.org/search',
+          {
+            params: {
+              q: query,
+              format: 'json',
+              limit: '6',
+              addressdetails: '0',
+            },
+            headers: {
+              'Accept': 'application/json',
+            },
+          },
+        ).pipe(catchError(() => of([])));
+      }),
+    ).subscribe((results) => {
+      this.geoSearchResults.set(results);
+      this.geoSearching.set(false);
+    });
+    this.subscriptions.add(geoSub);
   }
 
   ngOnDestroy(): void {
@@ -56,6 +106,23 @@ export class LocationsComponent implements OnInit, OnDestroy {
 
   onSearchInput(value: string): void {
     this.searchQuery.set(value);
+  }
+
+  onGeoSearchInput(value: string): void {
+    this.geoSearch$.next(value);
+  }
+
+  selectGeoResult(result: GeoSearchResult): void {
+    this.formData.name = result.display_name.split(',')[0].trim();
+    this.formData.description = result.display_name;
+    this.formData.latitude = parseFloat(result.lat);
+    this.formData.longitude = parseFloat(result.lon);
+    this.formData.altitude = 1500;
+    this.formData.heading = 0;
+    this.formData.pitch = -45;
+    this.formData.range = 3000;
+    this.formData.category = this.inferCategory(result);
+    this.geoSearchResults.set([]);
   }
 
   toggleCategory(category: LocationCategory): void {
@@ -71,12 +138,14 @@ export class LocationsComponent implements OnInit, OnDestroy {
   startAdd(): void {
     this.editingLocation.set(null);
     this.formData = this.getEmptyForm();
+    this.geoSearchResults.set([]);
     this.showForm.set(true);
   }
 
   startEdit(location: Location): void {
     this.editingLocation.set(location);
     this.formData = { ...location };
+    this.geoSearchResults.set([]);
     this.showForm.set(true);
   }
 
@@ -84,16 +153,18 @@ export class LocationsComponent implements OnInit, OnDestroy {
     this.showForm.set(false);
     this.editingLocation.set(null);
     this.formData = this.getEmptyForm();
+    this.geoSearchResults.set([]);
   }
 
   saveForm(): void {
     const editing = this.editingLocation();
+    const { id, createdAt, updatedAt, createdBy, ...dto } = this.formData as any;
     if (editing) {
-      this.locationService.updateLocation(editing.id, this.formData).subscribe({
+      this.locationService.updateLocation(editing.id, dto).subscribe({
         next: () => this.cancelForm(),
       });
     } else {
-      this.locationService.createLocation(this.formData).subscribe({
+      this.locationService.createLocation(dto).subscribe({
         next: () => this.cancelForm(),
       });
     }
@@ -124,6 +195,24 @@ export class LocationsComponent implements OnInit, OnDestroy {
       this.formData.longitude >= -180 &&
       this.formData.longitude <= 180
     );
+  }
+
+  private inferCategory(result: GeoSearchResult): LocationCategory {
+    const type = result.type?.toLowerCase() ?? '';
+    const cls = result.class?.toLowerCase() ?? '';
+    if (cls === 'place' && ['city', 'town', 'village', 'hamlet', 'suburb', 'borough', 'county', 'state', 'country'].includes(type)) {
+      return LocationCategory.CITY;
+    }
+    if (type === 'aerodrome' || type === 'airport' || cls === 'aeroway') {
+      return LocationCategory.AIRPORT;
+    }
+    if (type === 'port' || type === 'harbour' || type === 'marina' || type === 'dock') {
+      return LocationCategory.PORT;
+    }
+    if (cls === 'military' || type === 'military') {
+      return LocationCategory.MILITARY_BASE;
+    }
+    return LocationCategory.CUSTOM;
   }
 
   private getEmptyForm(): Partial<Location> {

@@ -10,6 +10,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router, NavigationEnd } from '@angular/router';
 import { EntityDetailPanelComponent } from '../../shared/components/entity-detail-panel.component';
 import { Subscription, debounceTime, Subject, throttleTime, bufferTime, filter } from 'rxjs';
 import {
@@ -112,6 +113,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   selectedEntity = signal<Entity | null>(null);
   showLayerPanel = signal<boolean>(false);
   flyingTo = signal<string | null>(null);
+  panelRouteActive = signal<boolean>(false);
 
   layers: LayerConfig[] = [
     { name: 'Persons', entityType: EntityType.PERSON, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.PERSON] },
@@ -129,6 +131,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   ];
 
   private Cesium: any;
+  private userLocationEntity: any = null;
   private entityMap = new Map<string, any>(); // Cesium entity references
   private trackTrails = new Map<string, CircularBuffer<{ lat: number; lon: number; alt: number }>>();
   private subscriptions = new Subscription();
@@ -141,12 +144,27 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   constructor(
     private readonly ngZone: NgZone,
+    private readonly router: Router,
     private readonly entityService: EntityService,
     private readonly wsService: WebSocketService,
     private readonly themeService: ThemeService,
     private readonly locationService: LocationService,
     readonly buildingsService: BuildingsService,
-  ) {}
+  ) {
+    // Track whether a panel route is active (anything other than /map or /)
+    const routerSub = this.router.events.pipe(
+      filter((e): e is NavigationEnd => e instanceof NavigationEnd),
+    ).subscribe((e) => {
+      const url = e.urlAfterRedirects ?? e.url;
+      const isPanelRoute = url !== '/map' && url !== '/' && url !== '';
+      this.panelRouteActive.set(isPanelRoute);
+    });
+    this.subscriptions.add(routerSub);
+
+    // Check initial route
+    const currentUrl = this.router.url;
+    this.panelRouteActive.set(currentUrl !== '/map' && currentUrl !== '/' && currentUrl !== '');
+  }
 
   async ngAfterViewInit(): Promise<void> {
     await this.initCesium();
@@ -783,20 +801,25 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       } catch {
         // Invalid saved data — fall through to geolocation
       }
-      return;
     }
 
+    // Always try to place the blue dot, even if restoring camera from localStorage
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          this.viewer.camera.flyTo({
-            destination: Cesium.Cartesian3.fromDegrees(
-              pos.coords.longitude,
-              pos.coords.latitude,
-              50000,
-            ),
-            duration: 2,
-          });
+          this.updateUserLocationMarker(pos.coords.longitude, pos.coords.latitude);
+
+          // Only fly to user location on first visit (no saved camera)
+          if (!saved) {
+            this.viewer.camera.flyTo({
+              destination: Cesium.Cartesian3.fromDegrees(
+                pos.coords.longitude,
+                pos.coords.latitude,
+                50000,
+              ),
+              duration: 2,
+            });
+          }
           localStorage.setItem('sentinel-has-geolocated', 'true');
         },
         () => { /* permission denied — stay at default view */ },
@@ -827,6 +850,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const Cesium = this.Cesium;
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        this.updateUserLocationMarker(pos.coords.longitude, pos.coords.latitude);
         this.viewer.camera.flyTo({
           destination: Cesium.Cartesian3.fromDegrees(
             pos.coords.longitude,
@@ -838,5 +862,37 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       },
       () => { /* permission denied */ },
     );
+  }
+
+  private updateUserLocationMarker(lon: number, lat: number): void {
+    if (!this.viewer || !this.Cesium) return;
+
+    const Cesium = this.Cesium;
+    const position = Cesium.Cartesian3.fromDegrees(lon, lat);
+
+    if (this.userLocationEntity) {
+      this.userLocationEntity.position = position;
+    } else {
+      // Blue dot SVG with pulse ring — similar to Apple Maps
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+        <circle cx="32" cy="32" r="28" fill="rgba(59,130,246,0.12)" stroke="rgba(59,130,246,0.3)" stroke-width="1"/>
+        <circle cx="32" cy="32" r="18" fill="rgba(59,130,246,0.2)" stroke="rgba(59,130,246,0.4)" stroke-width="1"/>
+        <circle cx="32" cy="32" r="9" fill="#3b82f6" stroke="white" stroke-width="2.5"/>
+      </svg>`;
+      const dataUrl = 'data:image/svg+xml;base64,' + btoa(svg);
+
+      this.userLocationEntity = this.viewer.entities.add({
+        position,
+        billboard: {
+          image: dataUrl,
+          scale: 0.7,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+        },
+      });
+    }
+
+    this.scheduleRender();
   }
 }

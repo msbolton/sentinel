@@ -44,6 +44,36 @@
         <button class="btn-ghost btn-sm" (click)="cancelForm()">&times;</button>
       </div>
 
+      <!-- Geocoding Search (add mode only) -->
+      @if (!editingLocation()) {
+        <div class="geo-search">
+          <div class="geo-search-wrapper">
+            <input
+              type="text"
+              class="search-input"
+              placeholder="Search for a place..."
+              (input)="onGeoSearchInput($any($event.target).value)"
+            />
+            @if (geoSearching()) {
+              <span class="geo-spinner"></span>
+            }
+          </div>
+          @if (geoSearchResults().length > 0) {
+            <div class="geo-results">
+              @for (result of geoSearchResults(); track result.display_name) {
+                <button
+                  type="button"
+                  class="geo-result-item"
+                  (click)="selectGeoResult(result)">
+                  <span class="geo-result-name">{{ result.display_name.split(',')[0] }}</span>
+                  <span class="geo-result-detail">{{ result.display_name.split(',').slice(1).join(',').trim() }}</span>
+                </button>
+              }
+            </div>
+          }
+        </div>
+      }
+
       <div class="form-grid">
         <div class="form-group full-width">
           <label>Name *</label>
@@ -64,35 +94,48 @@
           </select>
         </div>
 
-        <div class="form-group">
-          <label>Latitude *</label>
-          <input type="number" [(ngModel)]="formData.latitude" min="-90" max="90" step="0.0001" />
-        </div>
+        <!-- Coordinate fields: always shown for CUSTOM, hidden for other categories -->
+        @if (formData.category === 'CUSTOM') {
+          <div class="form-group">
+            <label>Latitude *</label>
+            <input type="number" [(ngModel)]="formData.latitude" min="-90" max="90" step="0.0001" />
+          </div>
 
-        <div class="form-group">
-          <label>Longitude *</label>
-          <input type="number" [(ngModel)]="formData.longitude" min="-180" max="180" step="0.0001" />
-        </div>
+          <div class="form-group">
+            <label>Longitude *</label>
+            <input type="number" [(ngModel)]="formData.longitude" min="-180" max="180" step="0.0001" />
+          </div>
 
-        <div class="form-group">
-          <label>Altitude (m)</label>
-          <input type="number" [(ngModel)]="formData.altitude" min="0" step="100" />
-        </div>
+          <div class="form-group">
+            <label>Altitude (m)</label>
+            <input type="number" [(ngModel)]="formData.altitude" min="0" step="100" />
+          </div>
 
-        <div class="form-group">
-          <label>Heading</label>
-          <input type="number" [(ngModel)]="formData.heading" step="1" />
-        </div>
+          <div class="form-group">
+            <label>Heading</label>
+            <input type="number" [(ngModel)]="formData.heading" step="1" />
+          </div>
 
-        <div class="form-group">
-          <label>Pitch</label>
-          <input type="number" [(ngModel)]="formData.pitch" step="1" />
-        </div>
+          <div class="form-group">
+            <label>Pitch</label>
+            <input type="number" [(ngModel)]="formData.pitch" step="1" />
+          </div>
 
-        <div class="form-group">
-          <label>Range (m)</label>
-          <input type="number" [(ngModel)]="formData.range" min="0" step="100" />
-        </div>
+          <div class="form-group">
+            <label>Range (m)</label>
+            <input type="number" [(ngModel)]="formData.range" min="0" step="100" />
+          </div>
+        }
+
+        <!-- Show coordinates read-only for non-custom categories -->
+        @if (formData.category !== 'CUSTOM' && formData.latitude) {
+          <div class="form-group full-width">
+            <label>Coordinates</label>
+            <span class="meta-item mono">
+              {{ formData.latitude | number:'1.4-4' }}, {{ formData.longitude | number:'1.4-4' }}
+            </span>
+          </div>
+        }
 
         <label class="toggle-row full-width">
           <input type="checkbox" [(ngModel)]="formData.has3dTiles" />
@@ -111,7 +154,26 @@
 
   <!-- Location Cards -->
   <div class="panel-content location-list">
-    @if (filteredLocations().length === 0) {
+    @if (loading()) {
+      @for (i of [1, 2, 3, 4, 5]; track i) {
+        <div class="location-card skeleton-card">
+          <div class="location-card-header">
+            <span class="skeleton skeleton-dot"></span>
+            <span class="skeleton skeleton-text" style="width: 60%"></span>
+            <span class="skeleton skeleton-chip"></span>
+          </div>
+          <div class="skeleton skeleton-text" style="width: 80%; margin-top: 6px"></div>
+          <div class="location-card-meta" style="margin-top: 8px">
+            <span class="skeleton skeleton-text" style="width: 40%"></span>
+          </div>
+          <div class="location-card-actions" style="margin-top: 8px">
+            <span class="skeleton skeleton-btn"></span>
+            <span class="skeleton skeleton-btn"></span>
+            <span class="skeleton skeleton-btn"></span>
+          </div>
+        </div>
+      }
+    } @else if (filteredLocations().length === 0) {
       <div class="empty-state">
         <span class="empty-icon">&#128205;</span>
         <p>No locations found</p>
@@ -142,9 +204,9 @@
           }
         </div>
         <div class="location-card-actions">
-          <button class="btn btn-primary btn-sm" (click)="flyTo(location)">Fly To</button>
-          <button class="btn btn-ghost btn-sm" (click)="startEdit(location)">Edit</button>
-          <button class="btn btn-danger btn-sm" (click)="deleteLocation(location)">Delete</button>
+          <button type="button" class="btn btn-primary btn-sm" (click)="flyTo(location); $event.stopPropagation()">Fly To</button>
+          <button type="button" class="btn btn-ghost btn-sm" (click)="startEdit(location); $event.stopPropagation()">Edit</button>
+          <button type="button" class="btn btn-danger btn-sm" (click)="deleteLocation(location); $event.stopPropagation()">Delete</button>
         </div>
       </div>
     }

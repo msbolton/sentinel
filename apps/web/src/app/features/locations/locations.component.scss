@@ -99,6 +99,80 @@
   }
 }
 
+// --- Geo Search ---
+.geo-search {
+  margin-bottom: 12px;
+  position: relative;
+}
+
+.geo-search-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.geo-spinner {
+  position: absolute;
+  right: 10px;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.geo-results {
+  margin-top: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  overflow: hidden;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.geo-result-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  appearance: none;
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &:hover {
+    background: rgba(59, 130, 246, 0.1);
+  }
+}
+
+.geo-result-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.geo-result-detail {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 // --- Form ---
 .location-form {
   padding: 12px 16px;
@@ -281,6 +355,8 @@
 
 // --- Buttons ---
 .btn {
+  appearance: none;
+  background: none;
   padding: 5px 12px;
   border-radius: var(--radius-sm);
   font-size: 0.78rem;
@@ -328,6 +404,52 @@
       color: var(--accent-red);
     }
   }
+}
+
+// --- Skeleton Loading ---
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.03) 25%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.03) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+.skeleton-card {
+  pointer-events: none;
+}
+
+.skeleton-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.skeleton-text {
+  height: 12px;
+  display: block;
+}
+
+.skeleton-chip {
+  width: 50px;
+  height: 18px;
+  border-radius: 100px;
+}
+
+.skeleton-btn {
+  width: 48px;
+  height: 24px;
+  border-radius: var(--radius-sm);
 }
 
 // --- Empty State ---

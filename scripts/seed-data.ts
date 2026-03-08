@@ -200,25 +200,28 @@ async function seed() {
     // Ensure schema exists
     await client.query('CREATE SCHEMA IF NOT EXISTS sentinel');
 
-    // Create entities table if not exists
+    // Create entities table if not exists (column names match TypeORM camelCase)
     await client.query(`
       CREATE TABLE IF NOT EXISTS sentinel.entities (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        entity_type VARCHAR(50) NOT NULL,
+        "entityType" VARCHAR(50) NOT NULL,
         name VARCHAR(255) NOT NULL,
         description TEXT,
         source VARCHAR(50) NOT NULL,
         classification VARCHAR(50) NOT NULL DEFAULT 'UNCLASSIFIED',
         position geometry(Point, 4326),
         heading FLOAT,
-        speed_knots FLOAT,
+        "speedKnots" FLOAT,
         course FLOAT,
-        mil_std_2525d_symbol VARCHAR(50),
+        altitude FLOAT,
+        "milStd2525dSymbol" VARCHAR(50),
         metadata JSONB DEFAULT '{}',
         affiliations TEXT[] DEFAULT '{}',
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        updated_at TIMESTAMPTZ DEFAULT NOW(),
-        last_seen_at TIMESTAMPTZ DEFAULT NOW()
+        "createdAt" TIMESTAMPTZ DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ DEFAULT NOW(),
+        "lastSeenAt" TIMESTAMPTZ DEFAULT NOW(),
+        deleted BOOLEAN DEFAULT FALSE,
+        "deletedAt" TIMESTAMPTZ
       )
     `);
 
@@ -232,7 +235,7 @@ async function seed() {
     for (const entity of sampleEntities) {
       await client.query(
         `INSERT INTO sentinel.entities
-          (entity_type, name, source, classification, position, heading, speed_knots, mil_std_2525d_symbol, affiliations, last_seen_at)
+          ("entityType", name, source, classification, position, heading, "speedKnots", "milStd2525dSymbol", affiliations, "lastSeenAt")
         VALUES
           ($1, $2, $3, $4, ST_SetSRID(ST_MakePoint($5, $6), 4326), $7, $8, $9, $10, NOW())
         ON CONFLICT DO NOTHING`,
