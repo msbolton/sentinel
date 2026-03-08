@@ -124,4 +124,43 @@ export class CreateEntityDto {
   @IsArray()
   @IsString({ each: true })
   affiliations?: string[];
+
+  @ApiPropertyOptional({ description: 'Track environment (AIR, SEA_SURFACE, GROUND, SPACE, etc.)' })
+  @IsOptional()
+  @IsString()
+  trackEnvironment?: string;
+
+  @ApiPropertyOptional({ description: 'Country of origin (ISO 3166-1 alpha-2)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2)
+  countryOfOrigin?: string;
+
+  @ApiPropertyOptional({ description: 'Protocol-specific platform data (AIS, ADS-B, TLE, etc.)' })
+  @IsOptional()
+  @IsObject()
+  platformData?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Source-assigned entity identifier (ICAO hex, MMSI, etc.)' })
+  @IsOptional()
+  @IsString()
+  sourceEntityId?: string;
+
+  @ApiPropertyOptional({ description: 'Circular error probable in meters' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  circularError?: number;
+
+  @ApiPropertyOptional({ description: 'Dimension length in meters' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  dimensionLength?: number;
+
+  @ApiPropertyOptional({ description: 'Dimension width in meters' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  dimensionWidth?: number;
 }
