@@ -67,19 +67,19 @@ func main() {
 	pipelineInput := pipeline.Input()
 
 	// MQTT listener.
-	mqttListener := sources.NewMQTTListener(cfg.MQTTBroker, cfg.MQTTTopics, pipelineInput, logger, m)
+	mqttListener := sources.NewMQTTListener(cfg.MQTTBroker, cfg.MQTTTopics, models.FeedIDMQTT, pipelineInput, logger, m)
 	if err := mqttListener.Start(); err != nil {
 		logger.Error("failed to start mqtt listener (will retry on reconnect)", zap.Error(err))
 	}
 
 	// STOMP/ActiveMQ listener.
-	stompListener := sources.NewSTOMPListener(cfg.STOMPAddr, cfg.STOMPQueue, pipelineInput, logger, m)
+	stompListener := sources.NewSTOMPListener(cfg.STOMPAddr, cfg.STOMPQueue, models.FeedIDSTOMP, pipelineInput, logger, m)
 	if err := stompListener.Start(); err != nil {
 		logger.Error("failed to start stomp listener (will retry on reconnect)", zap.Error(err))
 	}
 
 	// Raw TCP listener.
-	tcpListener := sources.NewTCPListener(cfg.TCPAddr, pipelineInput, logger, m)
+	tcpListener := sources.NewTCPListener(cfg.TCPAddr, models.FeedIDTCP, pipelineInput, logger, m)
 	if err := tcpListener.Start(); err != nil {
 		logger.Fatal("failed to start tcp listener", zap.Error(err))
 	}
