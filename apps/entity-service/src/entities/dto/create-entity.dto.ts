@@ -62,6 +62,11 @@ export class CreateEntityDto {
   @IsEnum(Classification)
   classification?: Classification;
 
+  @ApiPropertyOptional({ description: 'Feed UUID identifying the data source' })
+  @IsOptional()
+  @IsString()
+  feedId?: string;
+
   @ApiPropertyOptional({ description: 'Initial position (lat/lng)', type: GeoPointDto })
   @IsOptional()
   @ValidateNested()

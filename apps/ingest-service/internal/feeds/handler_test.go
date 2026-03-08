@@ -15,7 +15,7 @@ import (
 
 func setupTestHandler() (*Handler, *Manager) {
 	logger := zap.NewNop()
-	mgr := NewManager(logger)
+	mgr := NewManager(logger, nil, nil, nil)
 	handler := NewHandler(mgr, logger)
 	return handler, mgr
 }
@@ -99,12 +99,60 @@ func TestHandleFeeds_MethodNotAllowed(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodPost, "/feeds", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/feeds", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestHandleFeeds_POST_MissingName(t *testing.T) {
+	handler, _ := setupTestHandler()
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	body := strings.NewReader(`{"connector_type":"mqtt","format":"json","config":{}}`)
+	req := httptest.NewRequest(http.MethodPost, "/feeds", body)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleFeeds_POST_InvalidConnectorType(t *testing.T) {
+	handler, _ := setupTestHandler()
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	body := strings.NewReader(`{"name":"Test","connector_type":"websocket","format":"json","config":{}}`)
+	req := httptest.NewRequest(http.MethodPost, "/feeds", body)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleFeeds_POST_InvalidFormat(t *testing.T) {
+	handler, _ := setupTestHandler()
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	body := strings.NewReader(`{"name":"Test","connector_type":"mqtt","format":"xml","config":{}}`)
+	req := httptest.NewRequest(http.MethodPost, "/feeds", body)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -185,6 +233,79 @@ func TestHandleFeedByID_BadBody(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandleFeedByID_DELETE_BuiltIn_403(t *testing.T) {
+	handler, mgr := setupTestHandler()
+
+	mgr.Register("opensky", "OpenSky", "opensky", "built-in",
+		func() (sources.Listener, error) { return &mockListener{}, nil }, false)
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodDelete, "/feeds/opensky", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleFeedByID_DELETE_CustomFeed_204(t *testing.T) {
+	handler, mgr := setupTestHandler()
+
+	mgr.Register("custom-1", "Custom", "mqtt", "custom feed",
+		func() (sources.Listener, error) { return &mockListener{}, nil }, true)
+	mgr.mu.Lock()
+	mgr.byID["custom-1"].status.Custom = true
+	mgr.mu.Unlock()
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodDelete, "/feeds/custom-1", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleFeedByID_DELETE_NotFound_404(t *testing.T) {
+	handler, _ := setupTestHandler()
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodDelete, "/feeds/nonexistent", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleFeedByID_PATCH_BuiltIn_403(t *testing.T) {
+	handler, mgr := setupTestHandler()
+
+	mgr.Register("opensky", "OpenSky", "opensky", "built-in",
+		func() (sources.Listener, error) { return &mockListener{}, nil }, false)
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	body := strings.NewReader(`{"name":"Updated"}`)
+	req := httptest.NewRequest(http.MethodPatch, "/feeds/opensky", body)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

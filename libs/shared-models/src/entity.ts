@@ -52,6 +52,7 @@ export interface Entity {
   description?: string;
   source: EntitySource;
   classification: Classification;
+  feedId?: string;
   position?: Coordinate;
   heading?: number;
   speedKnots?: number;
@@ -84,6 +85,7 @@ export interface CreateEntityRequest {
   description?: string;
   source: EntitySource;
   classification?: Classification;
+  feedId?: string;
   position?: Coordinate;
   heading?: number;
   speedKnots?: number;

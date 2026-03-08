@@ -69,6 +69,7 @@ export class EntityService implements OnModuleInit {
       description: dto.description,
       source: dto.source,
       classification: dto.classification,
+      feedId: dto.feedId ?? null,
       heading: dto.heading ?? null,
       speedKnots: dto.speedKnots ?? null,
       course: dto.course ?? null,

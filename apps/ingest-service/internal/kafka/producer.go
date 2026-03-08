@@ -105,6 +105,7 @@ func (p *Producer) ProduceBatch(topic string, messages []*models.EntityPosition)
 			Headers: []kafka.Header{
 				{Key: "source", Value: []byte(msg.Source)},
 				{Key: "entity_type", Value: []byte(msg.EntityType)},
+				{Key: "feed_id", Value: []byte(msg.FeedID)},
 			},
 		}, nil)
 		if err != nil {

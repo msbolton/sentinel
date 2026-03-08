@@ -16,7 +16,17 @@ export interface DataFeed {
   sourceType: string;
   description: string;
   enabled: boolean;
+  custom?: boolean;
+  connectorType?: string;
+  format?: string;
   health?: FeedHealth;
+}
+
+export interface CreateFeedRequest {
+  name: string;
+  connector_type: 'mqtt' | 'stomp' | 'tcp';
+  format: 'json' | 'nmea' | 'cot' | 'ais' | 'adsb' | 'link16';
+  config: Record<string, unknown>;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -52,6 +62,21 @@ export class DataFeedService {
         const feeds = this.feedsSubject.value.map((f) =>
           f.id === updated.id ? updated : f,
         );
+        this.feedsSubject.next(feeds);
+      }),
+    );
+  }
+
+  createFeed(request: CreateFeedRequest): Observable<DataFeed> {
+    return this.http.post<DataFeed>(this.apiUrl, request).pipe(
+      tap(() => this.loadFeeds()),
+    );
+  }
+
+  deleteFeed(id: string): Observable<void> {
+    return this.http.delete<void>(`${this.apiUrl}/${id}`).pipe(
+      tap(() => {
+        const feeds = this.feedsSubject.value.filter(f => f.id !== id);
         this.feedsSubject.next(feeds);
       }),
     );

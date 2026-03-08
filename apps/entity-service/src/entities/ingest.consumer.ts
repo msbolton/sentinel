@@ -10,6 +10,7 @@ interface IngestMessage {
   entity_type: string;
   name: string;
   source: string;
+  feed_id?: string;
   latitude: number;
   longitude: number;
   altitude: number;
@@ -143,6 +144,7 @@ export class IngestConsumer implements OnModuleInit, OnModuleDestroy {
             name: msg.name || msg.entity_id,
             source: entitySource,
             classification: Classification.UNCLASSIFIED,
+            feedId: msg.feed_id || undefined,
             position: hasPosition
               ? {
                   lat: msg.latitude,
