@@ -1,7 +1,9 @@
 package feeds
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -41,7 +43,7 @@ func testLogger() *zap.Logger {
 }
 
 func TestRegisterAndList(t *testing.T) {
-	mgr := NewManager(testLogger())
+	mgr := NewManager(testLogger(), nil, nil, nil)
 
 	err := mgr.Register("feed1", "Feed One", "test", "description", newMockFactory(&mockListener{}), false)
 	if err != nil {
@@ -66,7 +68,7 @@ func TestRegisterAndList(t *testing.T) {
 }
 
 func TestRegisterDuplicate(t *testing.T) {
-	mgr := NewManager(testLogger())
+	mgr := NewManager(testLogger(), nil, nil, nil)
 
 	_ = mgr.Register("dup", "Dup", "test", "d", newMockFactory(&mockListener{}), false)
 	err := mgr.Register("dup", "Dup Again", "test", "d", newMockFactory(&mockListener{}), false)
@@ -77,7 +79,7 @@ func TestRegisterDuplicate(t *testing.T) {
 
 func TestRegisterWithStartNow(t *testing.T) {
 	ml := &mockListener{}
-	mgr := NewManager(testLogger())
+	mgr := NewManager(testLogger(), nil, nil, nil)
 
 	err := mgr.Register("auto", "Auto Start", "test", "d", newMockFactory(ml), true)
 	if err != nil {
@@ -95,7 +97,7 @@ func TestRegisterWithStartNow(t *testing.T) {
 
 func TestSetEnabled(t *testing.T) {
 	ml := &mockListener{}
-	mgr := NewManager(testLogger())
+	mgr := NewManager(testLogger(), nil, nil, nil)
 
 	// Use a factory that returns a new mock each time but tracks via shared pointer.
 	callCount := &atomic.Int32{}
@@ -141,7 +143,7 @@ func TestSetEnabled(t *testing.T) {
 }
 
 func TestSetEnabledUnknownFeed(t *testing.T) {
-	mgr := NewManager(testLogger())
+	mgr := NewManager(testLogger(), nil, nil, nil)
 
 	_, err := mgr.SetEnabled("nonexistent", true)
 	if err == nil {
@@ -151,7 +153,7 @@ func TestSetEnabledUnknownFeed(t *testing.T) {
 
 func TestSetEnabledStartError(t *testing.T) {
 	ml := &mockListener{startFn: func() error { return errors.New("connection refused") }}
-	mgr := NewManager(testLogger())
+	mgr := NewManager(testLogger(), nil, nil, nil)
 
 	_ = mgr.Register("fail", "Fail Feed", "test", "d", newMockFactory(ml), false)
 
@@ -169,7 +171,7 @@ func TestSetEnabledStartError(t *testing.T) {
 func TestStopAll(t *testing.T) {
 	ml1 := &mockListener{}
 	ml2 := &mockListener{}
-	mgr := NewManager(testLogger())
+	mgr := NewManager(testLogger(), nil, nil, nil)
 
 	_ = mgr.Register("a", "A", "test", "d", newMockFactory(ml1), true)
 	_ = mgr.Register("b", "B", "test", "d", newMockFactory(ml2), true)
@@ -192,7 +194,7 @@ func TestStopAll(t *testing.T) {
 }
 
 func TestRecordSuccess(t *testing.T) {
-	mgr := NewManager(testLogger())
+	mgr := NewManager(testLogger(), nil, nil, nil)
 	_ = mgr.Register("s1", "Success Feed", "test", "d", newMockFactory(&mockListener{}), false)
 
 	ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
@@ -211,7 +213,7 @@ func TestRecordSuccess(t *testing.T) {
 }
 
 func TestRecordError(t *testing.T) {
-	mgr := NewManager(testLogger())
+	mgr := NewManager(testLogger(), nil, nil, nil)
 	_ = mgr.Register("e1", "Error Feed", "test", "d", newMockFactory(&mockListener{}), false)
 
 	mgr.RecordError("e1")
@@ -227,7 +229,7 @@ func TestRecordError(t *testing.T) {
 }
 
 func TestHealthStatus(t *testing.T) {
-	mgr := NewManager(testLogger())
+	mgr := NewManager(testLogger(), nil, nil, nil)
 	_ = mgr.Register("h1", "Health Feed", "test", "d", newMockFactory(&mockListener{}), true)
 	mgr.SetStaleThresholds("h1", 120, 300)
 
@@ -256,5 +258,84 @@ func TestHealthStatus(t *testing.T) {
 	h = mgr.GetHealth("h1")
 	if h.Status != "critical" {
 		t.Errorf("expected status 'critical', got %q", h.Status)
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Custom Feed CRUD Tests (no real DB — tests manager logic with mock factory)
+// ──────────────────────────────────────────────────────────────────────────────
+
+func TestDeleteCustomFeed_RejectsBuiltIn(t *testing.T) {
+	mgr := NewManager(testLogger(), nil, nil, nil)
+
+	_ = mgr.Register("opensky", "OpenSky", "opensky", "built-in", newMockFactory(&mockListener{}), false)
+
+	err := mgr.DeleteCustomFeed(context.Background(), "opensky")
+	if err == nil {
+		t.Fatal("expected error deleting built-in feed")
+	}
+	if !strings.Contains(err.Error(), "cannot delete built-in") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestDeleteCustomFeed_StopsAndRemoves(t *testing.T) {
+	ml := &mockListener{}
+	mgr := NewManager(testLogger(), nil, nil, nil)
+
+	// Simulate a custom feed by registering and then marking it custom.
+	_ = mgr.Register("custom-1", "Custom Feed", "mqtt", "test custom", newMockFactory(ml), true)
+	mgr.mu.Lock()
+	mgr.byID["custom-1"].status.Custom = true
+	mgr.mu.Unlock()
+
+	err := mgr.DeleteCustomFeed(context.Background(), "custom-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if ml.stopped.Load() != 1 {
+		t.Errorf("expected listener to be stopped, got %d stops", ml.stopped.Load())
+	}
+
+	feeds := mgr.List()
+	for _, f := range feeds {
+		if f.ID == "custom-1" {
+			t.Error("expected custom feed to be removed from list")
+		}
+	}
+}
+
+func TestDeleteCustomFeed_NotFound(t *testing.T) {
+	mgr := NewManager(testLogger(), nil, nil, nil)
+
+	err := mgr.DeleteCustomFeed(context.Background(), "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for unknown feed")
+	}
+}
+
+func TestCustomFeedStatus_HasFields(t *testing.T) {
+	mgr := NewManager(testLogger(), nil, nil, nil)
+	_ = mgr.Register("custom-1", "My Feed", "mqtt", "test", newMockFactory(&mockListener{}), false)
+
+	mgr.mu.Lock()
+	mgr.byID["custom-1"].status.Custom = true
+	mgr.byID["custom-1"].status.ConnectorType = "mqtt"
+	mgr.byID["custom-1"].status.Format = "json"
+	mgr.mu.Unlock()
+
+	feeds := mgr.ListWithHealth()
+	if len(feeds) != 1 {
+		t.Fatalf("expected 1 feed, got %d", len(feeds))
+	}
+	if !feeds[0].Custom {
+		t.Error("expected Custom=true")
+	}
+	if feeds[0].ConnectorType != "mqtt" {
+		t.Errorf("ConnectorType = %q, want mqtt", feeds[0].ConnectorType)
+	}
+	if feeds[0].Format != "json" {
+		t.Errorf("Format = %q, want json", feeds[0].Format)
 	}
 }
