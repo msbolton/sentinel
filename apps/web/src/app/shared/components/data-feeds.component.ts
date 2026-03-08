@@ -44,9 +44,6 @@ interface DataLayer {
           <span class="feed-badge">{{ activeCount() }}</span>
         }
         <span class="pill-rule" [class.visible]="expanded()"></span>
-        @if (expanded()) {
-          <button class="add-feed-btn" (click)="startAddFeed(); $event.stopPropagation()">+ ADD</button>
-        }
         <span class="pill-toggle-btn">{{ expanded() ? '−' : '+' }}</span>
       </button>
 
@@ -169,6 +166,7 @@ interface DataLayer {
               }
             </div>
           }
+          <button class="add-feed-btn bottom" (click)="startAddFeed(); $event.stopPropagation()">+ ADD FEED</button>
         </div>
       }
     </div>
@@ -258,21 +256,24 @@ interface DataLayer {
     }
 
     .add-feed-btn {
-      padding: 3px 10px;
-      border-radius: 4px;
+      display: block;
+      width: 100%;
+      padding: 8px 10px;
+      margin-top: 4px;
+      border-radius: var(--radius-sm);
       font-family: var(--font-mono);
-      font-size: 0.65rem;
+      font-size: 0.7rem;
       font-weight: 600;
       letter-spacing: 0.08em;
-      background: rgba(6, 182, 212, 0.12);
+      background: rgba(6, 182, 212, 0.08);
       color: var(--accent-cyan, var(--accent-blue));
-      border: 1px solid var(--accent-cyan, var(--accent-blue));
+      border: 1px dashed color-mix(in srgb, var(--accent-cyan, var(--accent-blue)) 40%, transparent);
       cursor: pointer;
-      flex-shrink: 0;
       transition: all 150ms ease;
 
       &:hover {
-        background: rgba(6, 182, 212, 0.25);
+        background: rgba(6, 182, 212, 0.18);
+        border-color: var(--accent-cyan, var(--accent-blue));
       }
     }
 
