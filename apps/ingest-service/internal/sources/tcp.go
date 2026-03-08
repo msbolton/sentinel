@@ -19,6 +19,7 @@ import (
 // It supports multiple concurrent connections with graceful shutdown.
 type TCPListener struct {
 	addr     string
+	feedID   string
 	input    chan<- *models.IngestMessage
 	logger   *zap.Logger
 	metrics  *metrics.Metrics
@@ -31,9 +32,10 @@ type TCPListener struct {
 }
 
 // NewTCPListener creates a new TCP listener on the specified address.
-func NewTCPListener(addr string, input chan<- *models.IngestMessage, logger *zap.Logger, m *metrics.Metrics) *TCPListener {
+func NewTCPListener(addr, feedID string, input chan<- *models.IngestMessage, logger *zap.Logger, m *metrics.Metrics) *TCPListener {
 	return &TCPListener{
 		addr:    addr,
+		feedID:  feedID,
 		input:   input,
 		logger:  logger,
 		metrics: m,
@@ -127,6 +129,7 @@ func (l *TCPListener) handleConnection(id int64, conn net.Conn) {
 			SourceAddr: remoteAddr,
 			Payload:    payload,
 			ReceivedAt: time.Now().UTC(),
+			FeedID:     l.feedID,
 		}
 
 		select {

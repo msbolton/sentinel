@@ -20,6 +20,7 @@ import { EntityType, EntitySource, Classification } from './enums';
 @Index('idx_entities_last_seen_at', ['lastSeenAt'])
 @Index('idx_entities_position', ['position'], { spatial: true })
 @Index('idx_entities_source_entity_id', { synchronize: false })
+@Index('idx_entities_feed_id', ['feedId'])
 export class EntityRecord {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -42,6 +43,9 @@ export class EntityRecord {
     default: Classification.UNCLASSIFIED,
   })
   classification!: Classification;
+
+  @Column({ type: 'uuid', nullable: true })
+  feedId!: string | null;
 
   @Column({
     type: 'geometry',

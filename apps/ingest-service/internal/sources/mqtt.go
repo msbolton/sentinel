@@ -19,6 +19,7 @@ type MQTTListener struct {
 	client   mqtt.Client
 	broker   string
 	topics   []string
+	feedID   string
 	input    chan<- *models.IngestMessage
 	logger   *zap.Logger
 	metrics  *metrics.Metrics
@@ -28,7 +29,7 @@ type MQTTListener struct {
 
 // NewMQTTListener creates a new MQTT listener. The topics parameter is a
 // comma-separated list of MQTT topic patterns (wildcards supported).
-func NewMQTTListener(broker, topics string, input chan<- *models.IngestMessage, logger *zap.Logger, m *metrics.Metrics) *MQTTListener {
+func NewMQTTListener(broker, topics, feedID string, input chan<- *models.IngestMessage, logger *zap.Logger, m *metrics.Metrics) *MQTTListener {
 	topicList := strings.Split(topics, ",")
 	for i := range topicList {
 		topicList[i] = strings.TrimSpace(topicList[i])
@@ -37,6 +38,7 @@ func NewMQTTListener(broker, topics string, input chan<- *models.IngestMessage, 
 	return &MQTTListener{
 		broker:  broker,
 		topics:  topicList,
+		feedID:  feedID,
 		input:   input,
 		logger:  logger,
 		metrics: m,
@@ -113,6 +115,7 @@ func (l *MQTTListener) onMessage(_ mqtt.Client, msg mqtt.Message) {
 		SourceAddr: msg.Topic(),
 		Payload:    msg.Payload(),
 		ReceivedAt: time.Now().UTC(),
+		FeedID:     l.feedID,
 	}
 
 	select {
