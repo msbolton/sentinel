@@ -1,4 +1,15 @@
-export { EntityType, EntitySource, Classification } from '@sentinel/proto-gen';
+export {
+  EntityType,
+  EntitySource,
+  Classification,
+  TrackEnvironment,
+  TrackProcessingState,
+  NavigationalStatus,
+  OperationalStatus,
+  DamageAssessment,
+  Affiliation,
+  CharacterizationState,
+} from '@sentinel/proto-gen';
 import { Classification } from '@sentinel/proto-gen';
 
 /**

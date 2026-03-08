@@ -37,12 +37,38 @@ export class IngestConsumer implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     try {
+      // Legacy JSONB index (kept for backwards compat during transition)
       await this.dataSource.query(
         `CREATE INDEX IF NOT EXISTS idx_entities_source_entity_id ON sentinel.entities ((metadata->>'sourceEntityId'))`,
       );
-      this.logger.log('Ensured idx_entities_source_entity_id index exists');
+      // GIN index on platformData for JSONB queries
+      await this.dataSource.query(
+        `CREATE INDEX IF NOT EXISTS idx_entities_platform_data ON sentinel.entities USING GIN ("platformData")`,
+      );
+
+      // Backfill sourceEntityId column from metadata JSONB
+      const backfilled = await this.dataSource.query(
+        `UPDATE sentinel.entities SET "sourceEntityId" = metadata->>'sourceEntityId'
+         WHERE metadata->>'sourceEntityId' IS NOT NULL AND "sourceEntityId" IS NULL`,
+      );
+      if (backfilled?.[1] > 0) {
+        this.logger.log(`Backfilled sourceEntityId for ${backfilled[1]} entities`);
+      }
+
+      // Backfill trackEnvironment from entityType
+      await this.dataSource.query(
+        `UPDATE sentinel.entities SET "trackEnvironment" = CASE "entityType"
+           WHEN 'AIRCRAFT' THEN 'AIR' WHEN 'DRONE' THEN 'AIR'
+           WHEN 'VESSEL' THEN 'SEA_SURFACE'
+           WHEN 'SATELLITE' THEN 'SPACE'
+           WHEN 'VEHICLE' THEN 'GROUND' WHEN 'PERSON' THEN 'GROUND'
+           ELSE 'UNKNOWN' END
+         WHERE "trackEnvironment" = 'UNKNOWN' AND "entityType" != 'UNKNOWN'`,
+      );
+
+      this.logger.log('Ensured entity enrichment indexes and backfills complete');
     } catch (error) {
-      this.logger.warn(`Failed to create sourceEntityId index: ${error}`);
+      this.logger.warn(`Failed during onModuleInit migrations: ${error}`);
     }
 
     this.flushTimer = setInterval(

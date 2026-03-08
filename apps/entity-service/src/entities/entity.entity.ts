@@ -6,7 +6,17 @@ import {
   UpdateDateColumn,
   Index,
 } from 'typeorm';
-import { EntityType, EntitySource, Classification } from './enums';
+import {
+  EntityType,
+  EntitySource,
+  Classification,
+  TrackEnvironment,
+  TrackProcessingState,
+  OperationalStatus,
+  DamageAssessment,
+  CharacterizationState,
+  Affiliation,
+} from './enums';
 
 /**
  * Core entity record for the SENTINEL geospatial intelligence platform.
@@ -21,6 +31,11 @@ import { EntityType, EntitySource, Classification } from './enums';
 @Index('idx_entities_position', ['position'], { spatial: true })
 @Index('idx_entities_source_entity_id', { synchronize: false })
 @Index('idx_entities_feed_id', ['feedId'])
+@Index('idx_entities_affiliation', ['affiliation'])
+@Index('idx_entities_track_environment', ['trackEnvironment'])
+@Index('idx_entities_operational_status', ['operationalStatus'])
+@Index('idx_entities_country_of_origin', ['countryOfOrigin'])
+@Index('idx_entities_source_entity_id_col', ['sourceEntityId'])
 export class EntityRecord {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -75,6 +90,72 @@ export class EntityRecord {
 
   @Column({ type: 'text', array: true, default: () => "ARRAY[]::text[]" })
   affiliations!: string[];
+
+  // UC2-informed identity & confidence
+  @Column({ type: 'varchar', default: 'UNKNOWN' })
+  affiliation!: string;
+
+  @Column({ type: 'smallint', default: 0 })
+  identityConfidence!: number;
+
+  @Column({ type: 'varchar', default: 'UNCHARACTERIZED' })
+  characterization!: string;
+
+  // Track context
+  @Column({ type: 'varchar', default: 'UNKNOWN' })
+  trackEnvironment!: string;
+
+  @Column({ type: 'varchar', default: 'LIVE' })
+  trackProcessingState!: string;
+
+  // Orientation (full 3-axis)
+  @Column({ type: 'float', nullable: true })
+  pitch!: number | null;
+
+  @Column({ type: 'float', nullable: true })
+  roll!: number | null;
+
+  // Operational status
+  @Column({ type: 'varchar', default: 'UNKNOWN' })
+  operationalStatus!: string;
+
+  @Column({ type: 'varchar', default: 'UNKNOWN' })
+  damageAssessment!: string;
+
+  @Column({ type: 'smallint', default: 0 })
+  damageConfidence!: number;
+
+  // Physical characteristics
+  @Column({ type: 'float', nullable: true })
+  dimensionLength!: number | null;
+
+  @Column({ type: 'float', nullable: true })
+  dimensionWidth!: number | null;
+
+  @Column({ type: 'float', nullable: true })
+  dimensionHeight!: number | null;
+
+  @Column({ type: 'varchar', length: 2, nullable: true })
+  countryOfOrigin!: string | null;
+
+  // Kinematics JSONB (velocity, acceleration, covariance matrices)
+  @Column({ type: 'jsonb', default: () => "'{}'" })
+  kinematics!: Record<string, unknown>;
+
+  // Protocol-specific typed JSONB
+  @Column({ type: 'jsonb', default: () => "'{}'" })
+  platformData!: Record<string, unknown>;
+
+  // Measurement quality
+  @Column({ type: 'float', nullable: true })
+  circularError!: number | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  lastObservationSource!: string | null;
+
+  // Promoted from metadata JSONB
+  @Column({ type: 'varchar', nullable: true })
+  sourceEntityId!: string | null;
 
   @CreateDateColumn()
   createdAt!: Date;
