@@ -53,6 +53,36 @@ func (p *Parser) evictStaleFragments() {
 	}
 }
 
+// ParseFormat dispatches to a specific parser by format string, skipping
+// auto-detection. Falls back to ParseGeneric for unknown formats.
+func (p *Parser) ParseFormat(format, sourceType string, data []byte) (*models.EntityPosition, error) {
+	var entity *models.EntityPosition
+	var err error
+
+	switch format {
+	case "json":
+		entity, err = p.ParseJSON(data)
+	case "nmea":
+		entity, err = p.ParseNMEA(data)
+	case "cot":
+		entity, err = p.ParseCoT(data)
+	case "ais":
+		entity, err = p.ParseAIS(data)
+	case "adsb":
+		entity, err = p.ParseADSB(data)
+	case "link16":
+		entity, err = p.ParseLink16(data)
+	default:
+		return p.ParseGeneric(sourceType, data)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	entity.Source = sourceType
+	return entity, nil
+}
+
 // ParseGeneric attempts auto-detection of the message format and delegates
 // to the appropriate parser. It tries JSON first, then checks for known
 // protocol signatures.
