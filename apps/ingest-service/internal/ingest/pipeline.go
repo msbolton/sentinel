@@ -129,6 +129,9 @@ func (p *Pipeline) processMessage(msg *models.IngestMessage) {
 		return
 	}
 
+	// Propagate feed ID from source to entity.
+	entity.FeedID = msg.FeedID
+
 	// Correlate with existing tracks.
 	correlated, isDuplicate := p.correlator.Correlate(entity)
 	if isDuplicate {

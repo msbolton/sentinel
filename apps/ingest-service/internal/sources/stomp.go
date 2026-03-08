@@ -18,6 +18,7 @@ import (
 type STOMPListener struct {
 	addr     string
 	queue    string
+	feedID   string
 	input    chan<- *models.IngestMessage
 	logger   *zap.Logger
 	metrics  *metrics.Metrics
@@ -29,10 +30,11 @@ type STOMPListener struct {
 }
 
 // NewSTOMPListener creates a new STOMP listener for the given broker address and queue.
-func NewSTOMPListener(addr, queue string, input chan<- *models.IngestMessage, logger *zap.Logger, m *metrics.Metrics) *STOMPListener {
+func NewSTOMPListener(addr, queue, feedID string, input chan<- *models.IngestMessage, logger *zap.Logger, m *metrics.Metrics) *STOMPListener {
 	return &STOMPListener{
 		addr:    addr,
 		queue:   queue,
+		feedID:  feedID,
 		input:   input,
 		logger:  logger,
 		metrics: m,
@@ -125,6 +127,7 @@ func (l *STOMPListener) consumeLoop() {
 				SourceAddr: l.queue,
 				Payload:    msg.Body,
 				ReceivedAt: time.Now().UTC(),
+				FeedID:     l.feedID,
 			}
 
 			select {

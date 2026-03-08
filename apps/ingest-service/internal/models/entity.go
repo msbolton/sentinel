@@ -12,6 +12,7 @@ type EntityPosition struct {
 	EntityType string    `json:"entity_type"`
 	Name       string    `json:"name"`
 	Source     string    `json:"source"`
+	FeedID     string    `json:"feed_id,omitempty"`
 	Latitude   float64   `json:"latitude"`
 	Longitude  float64   `json:"longitude"`
 	Altitude   float64   `json:"altitude"`
@@ -29,6 +30,8 @@ type IngestMessage struct {
 	SourceAddr string
 	Payload    []byte
 	ReceivedAt time.Time
+	FeedID     string
+	Format     string // "" = auto-detect, or "json","nmea","cot","ais","adsb","link16"
 }
 
 // Supported entity types for classification.
@@ -51,4 +54,14 @@ const (
 	SourceOpenSky   = "opensky"
 	SourceADSBLol   = "adsblol"
 	SourceCelesTrak = "celestrak"
+)
+
+// Well-known feed UUID constants for built-in feeds.
+const (
+	FeedIDMQTT      = "00000000-0000-0000-0000-000000000001"
+	FeedIDSTOMP     = "00000000-0000-0000-0000-000000000002"
+	FeedIDTCP       = "00000000-0000-0000-0000-000000000003"
+	FeedIDOpenSky   = "00000000-0000-0000-0000-000000000004"
+	FeedIDADSBLol   = "00000000-0000-0000-0000-000000000005"
+	FeedIDCelesTrak = "00000000-0000-0000-0000-000000000006"
 )
