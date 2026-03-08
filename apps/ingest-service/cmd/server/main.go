@@ -85,7 +85,7 @@ func main() {
 	}
 
 	// Feed manager for runtime-toggleable data sources.
-	feedManager := feeds.NewManager(logger)
+	feedManager := feeds.NewManager(logger, nil, pipelineInput, m)
 
 	// Register OpenSky feed (toggleable via /feeds API).
 	if err := feedManager.Register(

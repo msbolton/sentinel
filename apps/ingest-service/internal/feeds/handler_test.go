@@ -15,7 +15,7 @@ import (
 
 func setupTestHandler() (*Handler, *Manager) {
 	logger := zap.NewNop()
-	mgr := NewManager(logger)
+	mgr := NewManager(logger, nil, nil, nil)
 	handler := NewHandler(mgr, logger)
 	return handler, mgr
 }
