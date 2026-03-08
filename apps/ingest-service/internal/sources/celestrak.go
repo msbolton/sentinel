@@ -370,15 +370,49 @@ func propagateToEntityPosition(tle cachedTLE, now time.Time) *models.EntityPosit
 	speedKms := math.Sqrt(vel.X*vel.X + vel.Y*vel.Y + vel.Z*vel.Z)
 	speedKnots := speedKms * kmsToKnots
 
+	// Parse orbital elements from TLE line 2
+	tleData := &models.TLEData{
+		NoradID: tle.NoradID,
+		SatName: tle.Name,
+		Line1:   tle.Line1,
+		Line2:   tle.Line2,
+	}
+
+	// Extract orbital elements from line 2 (standard TLE format)
+	if len(tle.Line2) >= 69 {
+		tleData.Inclination, _ = strconv.ParseFloat(strings.TrimSpace(tle.Line2[8:16]), 64)
+		tleData.RAAN, _ = strconv.ParseFloat(strings.TrimSpace(tle.Line2[17:25]), 64)
+		eccStr := "0." + strings.TrimSpace(tle.Line2[26:33])
+		tleData.Eccentricity, _ = strconv.ParseFloat(eccStr, 64)
+		tleData.ArgOfPerigee, _ = strconv.ParseFloat(strings.TrimSpace(tle.Line2[34:42]), 64)
+		tleData.MeanAnomaly, _ = strconv.ParseFloat(strings.TrimSpace(tle.Line2[43:51]), 64)
+		tleData.MeanMotion, _ = strconv.ParseFloat(strings.TrimSpace(tle.Line2[52:63]), 64)
+
+		// Derive period and apogee/perigee from mean motion and eccentricity
+		if tleData.MeanMotion > 0 {
+			tleData.Period = 1440.0 / tleData.MeanMotion // minutes
+			semiMajorKm := math.Pow(8681663.653/tleData.MeanMotion, 2.0/3.0)
+			tleData.Apogee = semiMajorKm*(1+tleData.Eccentricity) - 6371.0
+			tleData.Perigee = semiMajorKm*(1-tleData.Eccentricity) - 6371.0
+		}
+	}
+
+	// Extract international designator from line 1
+	if len(tle.Line1) >= 17 {
+		tleData.IntlDesignator = strings.TrimSpace(tle.Line1[9:17])
+	}
+
 	return &models.EntityPosition{
-		EntityID:   fmt.Sprintf("SAT-%d", tle.NoradID),
-		EntityType: models.EntityTypeSatellite,
-		Name:       tle.Name,
-		Source:     models.SourceCelesTrak,
-		Latitude:   latLngDeg.Latitude,
-		Longitude:  latLngDeg.Longitude,
-		Altitude:   alt * 1000, // km → meters for consistency with other sources
-		SpeedKnots: speedKnots,
-		Timestamp:  now,
+		EntityID:         fmt.Sprintf("SAT-%d", tle.NoradID),
+		EntityType:       models.EntityTypeSatellite,
+		Name:             tle.Name,
+		Source:           models.SourceCelesTrak,
+		Latitude:         latLngDeg.Latitude,
+		Longitude:        latLngDeg.Longitude,
+		Altitude:         alt * 1000, // km → meters for consistency with other sources
+		SpeedKnots:       speedKnots,
+		Timestamp:        now,
+		TrackEnvironment: "SPACE",
+		TLEData:          tleData,
 	}
 }

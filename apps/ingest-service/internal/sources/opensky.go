@@ -296,16 +296,18 @@ type openSkyResponse struct {
 
 // stateVector holds the parsed fields from a single OpenSky state vector.
 type stateVector struct {
-	Icao24       string
-	Callsign     string
-	Longitude    *float64
-	Latitude     *float64
-	BaroAltitude *float64
-	GeoAltitude  *float64
-	OnGround     bool
-	Velocity     *float64
-	TrueTrack    *float64
-	TimePosition *int64
+	Icao24        string
+	Callsign      string
+	OriginCountry string
+	Longitude     *float64
+	Latitude      *float64
+	BaroAltitude  *float64
+	GeoAltitude   *float64
+	OnGround      bool
+	Velocity      *float64
+	TrueTrack     *float64
+	VerticalRate  *float64
+	TimePosition  *int64
 }
 
 // parseOpenSkyResponse unmarshals the JSON body and extracts state vectors.
@@ -326,16 +328,18 @@ func parseOpenSkyResponse(body []byte) ([]stateVector, error) {
 		}
 
 		sv := stateVector{
-			Icao24:       stringAt(raw, 0),
-			Callsign:     strings.TrimSpace(stringAt(raw, 1)),
-			Longitude:    floatAt(raw, 5),
-			Latitude:     floatAt(raw, 6),
-			BaroAltitude: floatAt(raw, 7),
-			OnGround:     boolAt(raw, 8),
-			Velocity:     floatAt(raw, 9),
-			TrueTrack:    floatAt(raw, 10),
-			GeoAltitude:  floatAt(raw, 13),
-			TimePosition: intAt(raw, 3),
+			Icao24:        stringAt(raw, 0),
+			Callsign:      strings.TrimSpace(stringAt(raw, 1)),
+			OriginCountry: stringAt(raw, 2),
+			Longitude:     floatAt(raw, 5),
+			Latitude:      floatAt(raw, 6),
+			BaroAltitude:  floatAt(raw, 7),
+			OnGround:      boolAt(raw, 8),
+			Velocity:      floatAt(raw, 9),
+			TrueTrack:     floatAt(raw, 10),
+			VerticalRate:  floatAt(raw, 11),
+			GeoAltitude:   floatAt(raw, 13),
+			TimePosition:  intAt(raw, 3),
 		}
 
 		vectors = append(vectors, sv)
@@ -352,11 +356,12 @@ func stateVectorToEntityPosition(sv stateVector) *models.EntityPosition {
 	}
 
 	ep := &models.EntityPosition{
-		EntityID:   "ICAO-" + strings.ToUpper(sv.Icao24),
-		EntityType: models.EntityTypeAircraft,
-		Source:     models.SourceOpenSky,
-		Latitude:   *sv.Latitude,
-		Longitude:  *sv.Longitude,
+		EntityID:         "ICAO-" + strings.ToUpper(sv.Icao24),
+		EntityType:       models.EntityTypeAircraft,
+		Source:           models.SourceOpenSky,
+		Latitude:         *sv.Latitude,
+		Longitude:        *sv.Longitude,
+		TrackEnvironment: "AIR",
 	}
 
 	// Name: callsign if available, else ICAO hex.
@@ -367,15 +372,37 @@ func stateVectorToEntityPosition(sv stateVector) *models.EntityPosition {
 	}
 
 	// Altitude: prefer barometric, fall back to geometric.
+	adsbData := &models.ADSBData{
+		ICAOHex:  strings.ToUpper(sv.Icao24),
+		OnGround: sv.OnGround,
+	}
 	if sv.BaroAltitude != nil {
 		ep.Altitude = *sv.BaroAltitude
+		adsbData.AltitudeBaro = *sv.BaroAltitude
 	} else if sv.GeoAltitude != nil {
 		ep.Altitude = *sv.GeoAltitude
 	}
+	if sv.GeoAltitude != nil {
+		adsbData.AltitudeGeom = *sv.GeoAltitude
+	}
 
-	// Velocity: m/s to knots.
+	// Velocity: m/s to knots. Also decompose into NEU components.
 	if sv.Velocity != nil {
 		ep.SpeedKnots = *sv.Velocity * metersPerSecToKnots
+		adsbData.GroundSpeed = *sv.Velocity * metersPerSecToKnots
+
+		// Decompose ground velocity into North-East components using track angle.
+		if sv.TrueTrack != nil {
+			trackRad := *sv.TrueTrack * math.Pi / 180.0
+			ep.VelocityNorth = *sv.Velocity * math.Cos(trackRad)
+			ep.VelocityEast = *sv.Velocity * math.Sin(trackRad)
+		}
+	}
+
+	// Vertical rate (m/s, positive = climbing)
+	if sv.VerticalRate != nil {
+		ep.VelocityUp = *sv.VerticalRate
+		adsbData.VerticalRate = *sv.VerticalRate
 	}
 
 	// Heading and course from true_track.
@@ -383,6 +410,18 @@ func stateVectorToEntityPosition(sv stateVector) *models.EntityPosition {
 		ep.Heading = *sv.TrueTrack
 		ep.Course = *sv.TrueTrack
 	}
+
+	// Country of origin
+	if sv.OriginCountry != "" {
+		ep.CountryOfOrigin = sv.OriginCountry
+	}
+
+	// Callsign as aircraft ID
+	if sv.Callsign != "" {
+		adsbData.AircraftID = sv.Callsign
+	}
+
+	ep.ADSBData = adsbData
 
 	// Timestamp from time_position (Unix seconds).
 	if sv.TimePosition != nil {
