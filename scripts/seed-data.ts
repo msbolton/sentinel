@@ -340,7 +340,52 @@ async function seed() {
     `);
     console.log('  Inserted sample geofence rule');
 
-    console.log(`\nSeeded ${sampleEntities.length} entities successfully`);
+    // Create locations table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS sentinel.locations (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        latitude FLOAT NOT NULL,
+        longitude FLOAT NOT NULL,
+        altitude FLOAT DEFAULT 1000,
+        heading FLOAT DEFAULT 0,
+        pitch FLOAT DEFAULT -45,
+        "range" FLOAT DEFAULT 2000,
+        "has3dTiles" BOOLEAN DEFAULT FALSE,
+        category VARCHAR(50) DEFAULT 'CUSTOM',
+        "createdBy" VARCHAR(255),
+        "createdAt" TIMESTAMPTZ DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // Seed locations
+    const seedLocations = [
+      { name: 'New York City', description: 'Financial capital, largest US city', latitude: 40.7128, longitude: -74.0060, altitude: 1500, heading: 0, pitch: -45, range: 3000, has3dTiles: true, category: 'CITY' },
+      { name: 'London', description: 'Capital of the United Kingdom', latitude: 51.5074, longitude: -0.1278, altitude: 1500, heading: 0, pitch: -45, range: 3000, has3dTiles: true, category: 'CITY' },
+      { name: 'Dubai', description: 'Major city in the United Arab Emirates', latitude: 25.2048, longitude: 55.2708, altitude: 1500, heading: 0, pitch: -45, range: 3000, has3dTiles: true, category: 'CITY' },
+      { name: 'Washington DC', description: 'Capital of the United States', latitude: 38.9072, longitude: -77.0369, altitude: 1200, heading: 0, pitch: -45, range: 2500, has3dTiles: true, category: 'CITY' },
+      { name: 'Tokyo', description: 'Capital of Japan', latitude: 35.6762, longitude: 139.6503, altitude: 1500, heading: 0, pitch: -45, range: 3000, has3dTiles: true, category: 'CITY' },
+      { name: 'Sydney', description: 'Largest city in Australia', latitude: -33.8688, longitude: 151.2093, altitude: 1500, heading: 0, pitch: -45, range: 3000, has3dTiles: true, category: 'CITY' },
+      { name: 'Singapore', description: 'City-state in Southeast Asia', latitude: 1.3521, longitude: 103.8198, altitude: 1200, heading: 0, pitch: -45, range: 2500, has3dTiles: true, category: 'CITY' },
+      { name: 'Paris', description: 'Capital of France', latitude: 48.8566, longitude: 2.3522, altitude: 1200, heading: 0, pitch: -45, range: 2500, has3dTiles: true, category: 'CITY' },
+      { name: 'Naval Station Norfolk', description: 'Largest naval base in the world, home of US Atlantic Fleet', latitude: 36.9461, longitude: -76.3013, altitude: 800, heading: 0, pitch: -35, range: 2000, has3dTiles: false, category: 'MILITARY_BASE' },
+      { name: 'Pearl Harbor', description: 'Joint Base Pearl Harbor-Hickam, headquarters of US Pacific Fleet', latitude: 21.3500, longitude: -157.9500, altitude: 800, heading: 0, pitch: -35, range: 2000, has3dTiles: false, category: 'MILITARY_BASE' },
+    ];
+
+    for (const loc of seedLocations) {
+      await client.query(
+        `INSERT INTO sentinel.locations
+          (name, description, latitude, longitude, altitude, heading, pitch, "range", "has3dTiles", category)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT DO NOTHING`,
+        [loc.name, loc.description, loc.latitude, loc.longitude, loc.altitude, loc.heading, loc.pitch, loc.range, loc.has3dTiles, loc.category],
+      );
+      console.log(`  Inserted location: ${loc.name} (${loc.category})`);
+    }
+
+    console.log(`\nSeeded ${sampleEntities.length} entities and ${seedLocations.length} locations successfully`);
   } catch (err) {
     console.error('Seed failed:', err);
     process.exit(1);

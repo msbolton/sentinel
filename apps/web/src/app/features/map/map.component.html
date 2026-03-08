@@ -36,11 +36,44 @@
       <button class="control-btn" (click)="resetView()" title="Reset View">
         &#127758;
       </button>
+      <button class="control-btn" (click)="goToMyLocation()" title="My Location">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"/>
+          <path d="M12 2v4"/>
+          <path d="M12 18v4"/>
+          <path d="M2 12h4"/>
+          <path d="M18 12h4"/>
+        </svg>
+      </button>
+      <button
+        class="control-btn"
+        (click)="buildingsService.toggle()"
+        title="Toggle 3D Buildings"
+        [class.active]="buildingsService.buildings3dEnabled()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="2" width="16" height="20" rx="2" ry="2"/>
+          <path d="M9 22V12h6v10"/>
+          <path d="M8 6h.01"/>
+          <path d="M16 6h.01"/>
+          <path d="M12 6h.01"/>
+          <path d="M12 10h.01"/>
+          <path d="M8 10h.01"/>
+          <path d="M16 10h.01"/>
+        </svg>
+      </button>
       <button class="control-btn" (click)="toggleFullscreen()" title="Fullscreen">
         &#9974;
       </button>
     </div>
   </div>
+
+  <!-- Flying Indicator -->
+  @if (flyingTo()) {
+    <div class="flying-indicator">
+      <div class="loading-spinner"></div>
+      <span>Flying to {{ flyingTo() }}...</span>
+    </div>
+  }
 
   <!-- Entity Detail Panel -->
   <app-entity-detail-panel
