@@ -7,10 +7,9 @@ import { EntityType } from '../../shared/models/entity.model';
 export function configureCesium(): void {
   (window as any).CESIUM_BASE_URL = '/assets/cesium';
 
-  // Disable optional WASM features to reduce memory usage
-  // This prevents WebAssembly out-of-memory errors in some browsers
+  // Disable Basis Universal texture compression (not needed)
+  // Note: Draco must remain enabled for Google Photorealistic 3D Tiles
   if (typeof window !== 'undefined') {
-    (window as any).CESIUM_DISABLE_DRACO = true;
     (window as any).CESIUM_DISABLE_BASIS = true;
   }
 }

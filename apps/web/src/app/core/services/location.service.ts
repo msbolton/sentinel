@@ -1,4 +1,4 @@
-import { Injectable } from '@angular/core';
+import { Injectable, signal } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { BehaviorSubject, Subject, Observable, tap } from 'rxjs';
 import { Location, LocationCategory } from '../../shared/models/location.model';
@@ -9,19 +9,27 @@ export class LocationService {
 
   private locationsSubject = new BehaviorSubject<Location[]>([]);
   locations$ = this.locationsSubject.asObservable();
+  loading = signal<boolean>(false);
 
   flyTo$ = new Subject<Location>();
 
   constructor(private readonly http: HttpClient) {}
 
   loadLocations(category?: LocationCategory): void {
+    this.loading.set(true);
     let params = new HttpParams();
     if (category) {
       params = params.set('category', category);
     }
     this.http.get<Location[]>(this.apiUrl, { params }).subscribe({
-      next: (locations) => this.locationsSubject.next(locations),
-      error: (err) => console.error('Failed to load locations:', err),
+      next: (locations) => {
+        this.locationsSubject.next(locations);
+        this.loading.set(false);
+      },
+      error: (err) => {
+        console.error('[LocationService] Failed to load locations:', err);
+        this.loading.set(false);
+      },
     });
   }
 
