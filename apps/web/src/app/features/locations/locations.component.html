@@ -1,0 +1,214 @@
+<div class="panel locations-panel">
+  <div class="panel-header">
+    <h2>Locations</h2>
+    <button class="btn btn-primary btn-sm" (click)="startAdd()">+ Add</button>
+  </div>
+
+  <!-- Search -->
+  <div class="search-input-container">
+    <div class="search-input-wrapper">
+      <span class="search-icon">&#128269;</span>
+      <input
+        type="text"
+        class="search-input"
+        placeholder="Search locations..."
+        [value]="searchQuery()"
+        (input)="onSearchInput($any($event.target).value)"
+      />
+      @if (searchQuery()) {
+        <button class="search-clear" (click)="onSearchInput('')">&times;</button>
+      }
+    </div>
+  </div>
+
+  <!-- Category Filters -->
+  <div class="filter-section">
+    <div class="chip-row">
+      @for (cat of categories; track cat) {
+        <button
+          class="filter-chip"
+          [class.active]="selectedCategory() === cat"
+          [style.--chip-color]="getCategoryColor(cat)"
+          (click)="toggleCategory(cat)">
+          {{ cat.replace('_', ' ') }}
+        </button>
+      }
+    </div>
+  </div>
+
+  <!-- Inline Form -->
+  @if (showForm()) {
+    <div class="location-form">
+      <div class="form-header">
+        <h3>{{ editingLocation() ? 'Edit Location' : 'New Location' }}</h3>
+        <button class="btn-ghost btn-sm" (click)="cancelForm()">&times;</button>
+      </div>
+
+      <!-- Geocoding Search (add mode only) -->
+      @if (!editingLocation()) {
+        <div class="geo-search">
+          <div class="geo-search-wrapper">
+            <input
+              type="text"
+              class="search-input"
+              placeholder="Search for a place..."
+              (input)="onGeoSearchInput($any($event.target).value)"
+            />
+            @if (geoSearching()) {
+              <span class="geo-spinner"></span>
+            }
+          </div>
+          @if (geoSearchResults().length > 0) {
+            <div class="geo-results">
+              @for (result of geoSearchResults(); track result.display_name) {
+                <button
+                  type="button"
+                  class="geo-result-item"
+                  (click)="selectGeoResult(result)">
+                  <span class="geo-result-name">{{ result.display_name.split(',')[0] }}</span>
+                  <span class="geo-result-detail">{{ result.display_name.split(',').slice(1).join(',').trim() }}</span>
+                </button>
+              }
+            </div>
+          }
+        </div>
+      }
+
+      <div class="form-grid">
+        <div class="form-group full-width">
+          <label>Name *</label>
+          <input type="text" [(ngModel)]="formData.name" placeholder="Location name" />
+        </div>
+
+        <div class="form-group full-width">
+          <label>Description</label>
+          <input type="text" [(ngModel)]="formData.description" placeholder="Optional description" />
+        </div>
+
+        <div class="form-group full-width">
+          <label>Category</label>
+          <select [(ngModel)]="formData.category">
+            @for (cat of categories; track cat) {
+              <option [value]="cat">{{ cat.replace('_', ' ') }}</option>
+            }
+          </select>
+        </div>
+
+        <!-- Coordinate fields: always shown for CUSTOM, hidden for other categories -->
+        @if (formData.category === 'CUSTOM') {
+          <div class="form-group">
+            <label>Latitude *</label>
+            <input type="number" [(ngModel)]="formData.latitude" min="-90" max="90" step="0.0001" />
+          </div>
+
+          <div class="form-group">
+            <label>Longitude *</label>
+            <input type="number" [(ngModel)]="formData.longitude" min="-180" max="180" step="0.0001" />
+          </div>
+
+          <div class="form-group">
+            <label>Altitude (m)</label>
+            <input type="number" [(ngModel)]="formData.altitude" min="0" step="100" />
+          </div>
+
+          <div class="form-group">
+            <label>Heading</label>
+            <input type="number" [(ngModel)]="formData.heading" step="1" />
+          </div>
+
+          <div class="form-group">
+            <label>Pitch</label>
+            <input type="number" [(ngModel)]="formData.pitch" step="1" />
+          </div>
+
+          <div class="form-group">
+            <label>Range (m)</label>
+            <input type="number" [(ngModel)]="formData.range" min="0" step="100" />
+          </div>
+        }
+
+        <!-- Show coordinates read-only for non-custom categories -->
+        @if (formData.category !== 'CUSTOM' && formData.latitude) {
+          <div class="form-group full-width">
+            <label>Coordinates</label>
+            <span class="meta-item mono">
+              {{ formData.latitude | number:'1.4-4' }}, {{ formData.longitude | number:'1.4-4' }}
+            </span>
+          </div>
+        }
+
+        <label class="toggle-row full-width">
+          <input type="checkbox" [(ngModel)]="formData.has3dTiles" />
+          <span>Has 3D building tiles</span>
+        </label>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn btn-ghost" (click)="cancelForm()">Cancel</button>
+        <button class="btn btn-primary" [disabled]="!isFormValid()" (click)="saveForm()">
+          {{ editingLocation() ? 'Update' : 'Create' }}
+        </button>
+      </div>
+    </div>
+  }
+
+  <!-- Location Cards -->
+  <div class="panel-content location-list">
+    @if (loading()) {
+      @for (i of [1, 2, 3, 4, 5]; track i) {
+        <div class="location-card skeleton-card">
+          <div class="location-card-header">
+            <span class="skeleton skeleton-dot"></span>
+            <span class="skeleton skeleton-text" style="width: 60%"></span>
+            <span class="skeleton skeleton-chip"></span>
+          </div>
+          <div class="skeleton skeleton-text" style="width: 80%; margin-top: 6px"></div>
+          <div class="location-card-meta" style="margin-top: 8px">
+            <span class="skeleton skeleton-text" style="width: 40%"></span>
+          </div>
+          <div class="location-card-actions" style="margin-top: 8px">
+            <span class="skeleton skeleton-btn"></span>
+            <span class="skeleton skeleton-btn"></span>
+            <span class="skeleton skeleton-btn"></span>
+          </div>
+        </div>
+      }
+    } @else if (filteredLocations().length === 0) {
+      <div class="empty-state">
+        <span class="empty-icon">&#128205;</span>
+        <p>No locations found</p>
+      </div>
+    }
+
+    @for (location of filteredLocations(); track location.id) {
+      <div class="location-card">
+        <div class="location-card-header">
+          <span
+            class="location-dot"
+            [style.background]="getCategoryColor(location.category)"
+          ></span>
+          <span class="location-name">{{ location.name }}</span>
+          <span class="chip chip-category" [style.--chip-color]="getCategoryColor(location.category)">
+            {{ location.category.replace('_', ' ') }}
+          </span>
+        </div>
+        @if (location.description) {
+          <p class="location-description">{{ location.description }}</p>
+        }
+        <div class="location-card-meta">
+          <span class="meta-item mono">
+            {{ location.latitude | number:'1.4-4' }}, {{ location.longitude | number:'1.4-4' }}
+          </span>
+          @if (location.has3dTiles) {
+            <span class="chip chip-3d">3D</span>
+          }
+        </div>
+        <div class="location-card-actions">
+          <button type="button" class="btn btn-primary btn-sm" (click)="flyTo(location); $event.stopPropagation()">Fly To</button>
+          <button type="button" class="btn btn-ghost btn-sm" (click)="startEdit(location); $event.stopPropagation()">Edit</button>
+          <button type="button" class="btn btn-danger btn-sm" (click)="deleteLocation(location); $event.stopPropagation()">Delete</button>
+        </div>
+      </div>
+    }
+  </div>
+</div>
