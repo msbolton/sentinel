@@ -305,6 +305,9 @@ export class EntityService implements OnModuleInit {
     classification?: string;
     source?: string;
     metadata?: Record<string, unknown>;
+    trackEnvironment?: string;
+    platformData?: Record<string, unknown> | null;
+    circularError?: number | null;
   }): void {
     this.emitKafka(TOPIC_ENTITY_POSITION, update.id, {
       entity_id: update.id,
@@ -318,6 +321,9 @@ export class EntityService implements OnModuleInit {
       source: update.source,
       timestamp: new Date().toISOString(),
       metadata: update.metadata,
+      track_environment: update.trackEnvironment,
+      platform_data: update.platformData,
+      circular_error: update.circularError,
     });
   }
 
