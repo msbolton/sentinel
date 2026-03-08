@@ -1,4 +1,10 @@
-import { BoundingBox, Classification, Coordinate, PaginationRequest, PaginationResponse } from './common';
+import {
+  BoundingBox, Classification, Coordinate, DamageAssessment,
+  OperationalStatus, PaginationRequest, PaginationResponse,
+  TrackEnvironment, TrackProcessingState,
+} from './common';
+import { KinematicState, Orientation } from './kinematics';
+import { PlatformData } from './platform-data';
 
 // Canonical definitions in @sentinel/proto-gen (proto/entity.proto)
 export enum EntityType {
@@ -70,6 +76,41 @@ export interface Entity {
   createdAt: string;
   updatedAt: string;
   lastSeenAt?: string;
+
+  // UC2-informed identity & confidence
+  affiliation?: Affiliation;
+  identityConfidence?: number;
+  characterization?: CharacterizationState;
+
+  // Track context
+  trackEnvironment?: TrackEnvironment;
+  trackProcessingState?: TrackProcessingState;
+
+  // Extended kinematics
+  altitude?: number;
+  orientation?: Orientation;
+  kinematics?: KinematicState;
+
+  // Operational status
+  operationalStatus?: OperationalStatus;
+  damageAssessment?: DamageAssessment;
+  damageConfidence?: number;
+
+  // Physical characteristics
+  dimensions?: {
+    length?: number;
+    width?: number;
+    height?: number;
+  };
+  countryOfOrigin?: string;
+
+  // Protocol-specific structured data
+  platformData?: PlatformData;
+  sourceEntityId?: string;
+
+  // Measurement quality
+  circularError?: number;
+  lastObservationSource?: string;
 }
 
 export enum EntityEventType {
@@ -100,6 +141,25 @@ export interface CreateEntityRequest {
   milStd2525dSymbol?: string;
   metadata?: Record<string, string>;
   affiliations?: string[];
+
+  // UC2-informed fields
+  affiliation?: Affiliation;
+  identityConfidence?: number;
+  characterization?: CharacterizationState;
+  trackEnvironment?: TrackEnvironment;
+  trackProcessingState?: TrackProcessingState;
+  altitude?: number;
+  orientation?: Orientation;
+  kinematics?: KinematicState;
+  operationalStatus?: OperationalStatus;
+  damageAssessment?: DamageAssessment;
+  damageConfidence?: number;
+  dimensions?: { length?: number; width?: number; height?: number };
+  countryOfOrigin?: string;
+  platformData?: PlatformData;
+  sourceEntityId?: string;
+  circularError?: number;
+  lastObservationSource?: string;
 }
 
 export interface UpdateEntityRequest {
@@ -114,6 +174,25 @@ export interface UpdateEntityRequest {
   milStd2525dSymbol?: string;
   metadata?: Record<string, string>;
   affiliations?: string[];
+
+  // UC2-informed fields
+  affiliation?: Affiliation;
+  identityConfidence?: number;
+  characterization?: CharacterizationState;
+  trackEnvironment?: TrackEnvironment;
+  trackProcessingState?: TrackProcessingState;
+  altitude?: number;
+  orientation?: Orientation;
+  kinematics?: KinematicState;
+  operationalStatus?: OperationalStatus;
+  damageAssessment?: DamageAssessment;
+  damageConfidence?: number;
+  dimensions?: { length?: number; width?: number; height?: number };
+  countryOfOrigin?: string;
+  platformData?: PlatformData;
+  sourceEntityId?: string;
+  circularError?: number;
+  lastObservationSource?: string;
 }
 
 export interface QueryEntitiesRequest extends PaginationRequest {
