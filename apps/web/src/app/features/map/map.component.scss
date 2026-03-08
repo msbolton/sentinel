@@ -130,6 +130,51 @@
   flex: 1;
 }
 
+// --- Flying Indicator ---
+.flying-indicator {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: var(--bg-panel);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--accent-blue);
+  border-radius: var(--radius-md);
+  color: var(--accent-blue);
+  font-size: 0.85rem;
+  font-family: var(--font-mono);
+  box-shadow: var(--shadow-lg);
+  animation: fadeIn 0.2s ease-out;
+
+  .loading-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--accent-blue);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+// --- Entity Detail Panel offset when sidebar panel is open ---
+app-entity-detail-panel.panel-offset ::ng-deep .detail-panel {
+  right: calc(var(--panel-width, 380px) + 12px);
+}
+
 // Cesium widget overrides
 :host ::ng-deep {
   .cesium-viewer {

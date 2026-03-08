@@ -151,10 +151,8 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   }
 
   // Inject AuthService manually since functional interceptors can't use constructor injection
-  // We access the token from a singleton pattern
-  const token = AuthService.prototype.getToken.call(
-    (window as any).__sentinelAuthService,
-  );
+  const authService = (window as any).__sentinelAuthService;
+  const token = authService ? authService.getToken() : null;
 
   if (token) {
     const cloned = req.clone({
