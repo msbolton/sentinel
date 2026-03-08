@@ -36,6 +36,8 @@ type Config struct {
 	CelesTrakTLERefreshHours        int    // CELESTRAK_TLE_REFRESH_HOURS (default: 6)
 	CelesTrakPropagationIntervalSec int    // CELESTRAK_PROPAGATION_INTERVAL_SEC (default: 60)
 
+	DatabaseURL string // DATABASE_URL (default: postgres://sentinel:sentinel_dev@localhost:5432/sentinel?sslmode=disable)
+
 	FeedStaleWarnSec     int // FEED_STALE_WARN_SEC (default: 120)
 	FeedStaleCriticalSec int // FEED_STALE_CRITICAL_SEC (default: 300)
 
@@ -80,6 +82,8 @@ func Load() *Config {
 		CelesTrakGroups:                 envOrDefault("CELESTRAK_GROUPS", "active"),
 		CelesTrakTLERefreshHours:        envOrDefaultInt("CELESTRAK_TLE_REFRESH_HOURS", 6),
 		CelesTrakPropagationIntervalSec: envOrDefaultInt("CELESTRAK_PROPAGATION_INTERVAL_SEC", 60),
+
+		DatabaseURL: envOrDefault("DATABASE_URL", "postgres://sentinel:sentinel_dev@localhost:5432/sentinel?sslmode=disable"),
 
 		FeedStaleWarnSec:     envOrDefaultInt("FEED_STALE_WARN_SEC", 120),
 		FeedStaleCriticalSec: envOrDefaultInt("FEED_STALE_CRITICAL_SEC", 300),
