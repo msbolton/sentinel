@@ -21,6 +21,12 @@ import {
             <span class="chip chip-entity-type" [ngClass]="e.entityType">
               {{ e.entityType }}
             </span>
+            @if (envLabel()) {
+              <span class="chip chip-env">{{ envLabel() }}</span>
+            }
+            @if (e.countryOfOrigin) {
+              <span class="chip chip-country">{{ e.countryOfOrigin }}</span>
+            }
           </div>
           <div class="header-actions">
             <button class="btn btn-ghost btn-sm" (click)="flyTo.emit(e)" title="Fly To">
@@ -40,6 +46,39 @@ import {
               {{ e.classification }}
             </span>
           </section>
+
+          <!-- Identity -->
+          @if (primaryId() || e.affiliation) {
+            <section class="section">
+              <h4 class="section-label">Identity</h4>
+              @if (primaryId(); as pid) {
+                <div class="field-row">
+                  <span class="field-label">{{ pid.label }}</span>
+                  <span class="field-value mono">{{ pid.value }}</span>
+                </div>
+              }
+              @if (e.sourceEntityId && e.sourceEntityId !== primaryId()?.value) {
+                <div class="field-row">
+                  <span class="field-label">Source ID</span>
+                  <span class="field-value mono">{{ e.sourceEntityId }}</span>
+                </div>
+              }
+              @for (sid of secondaryIds(); track sid.label) {
+                <div class="field-row">
+                  <span class="field-label">{{ sid.label }}</span>
+                  <span class="field-value mono">{{ sid.value }}</span>
+                </div>
+              }
+              @if (e.affiliation) {
+                <div class="field-row">
+                  <span class="field-label">Affiliation</span>
+                  <span class="chip chip-affiliation-id" [ngClass]="affiliationColor()">
+                    {{ e.affiliation }}
+                  </span>
+                </div>
+              }
+            </section>
+          }
 
           <!-- 3D Model -->
           @if (modelSrc()) {
@@ -69,6 +108,12 @@ import {
                   <span class="field-value mono">{{ e.position.altitude | number:'1.0-0' }} m</span>
                 </div>
               }
+              @if (e.circularError != null) {
+                <div class="field-row">
+                  <span class="field-label">CEP</span>
+                  <span class="field-value mono">{{ e.circularError | number:'1.0-1' }} m</span>
+                </div>
+              }
             </section>
           }
 
@@ -92,6 +137,45 @@ import {
                 <div class="field-row">
                   <span class="field-label">Course</span>
                   <span class="field-value mono">{{ e.course | number:'1.0-0' }}&deg;</span>
+                </div>
+              }
+              @if (e.kinematics?.velocity; as vel) {
+                <div class="field-row">
+                  <span class="field-label">Velocity</span>
+                  <span class="field-value mono">
+                    N{{ vel.north | number:'1.1-1' }} E{{ vel.east | number:'1.1-1' }} U{{ vel.up | number:'1.1-1' }} m/s
+                  </span>
+                </div>
+              }
+            </section>
+          }
+
+          <!-- Operational Status -->
+          @if (e.operationalStatus && e.operationalStatus !== 'UNKNOWN') {
+            <section class="section">
+              <h4 class="section-label">Operational Status</h4>
+              <div class="field-row">
+                <span class="field-label">Status</span>
+                <span class="chip chip-op-status" [ngClass]="e.operationalStatus">
+                  {{ e.operationalStatus }}
+                </span>
+              </div>
+              @if (e.damageAssessment && e.damageAssessment !== 'UNKNOWN' && e.damageAssessment !== 'NONE') {
+                <div class="field-row">
+                  <span class="field-label">Damage</span>
+                  <span class="chip chip-damage" [ngClass]="e.damageAssessment">
+                    {{ e.damageAssessment }}
+                  </span>
+                </div>
+              }
+              @if (e.dimensions) {
+                <div class="field-row">
+                  <span class="field-label">Dimensions</span>
+                  <span class="field-value mono">
+                    @if (e.dimensions.length != null) { {{ e.dimensions.length | number:'1.0-1' }}m }
+                    @if (e.dimensions.width != null) { &times; {{ e.dimensions.width | number:'1.0-1' }}m }
+                    @if (e.dimensions.height != null) { &times; {{ e.dimensions.height | number:'1.0-1' }}m }
+                  </span>
                 </div>
               }
             </section>
@@ -301,6 +385,88 @@ import {
       font-size: 0.8rem;
       color: var(--text-secondary);
       line-height: 1.5;
+    }
+
+    .chip-env {
+      background: color-mix(in srgb, var(--accent-blue) 15%, transparent);
+      color: var(--accent-blue);
+      border-color: color-mix(in srgb, var(--accent-blue) 30%, transparent);
+      font-size: 0.65rem;
+    }
+
+    .chip-country {
+      background: color-mix(in srgb, var(--text-muted) 15%, transparent);
+      color: var(--text-secondary);
+      border-color: color-mix(in srgb, var(--text-muted) 30%, transparent);
+      font-size: 0.65rem;
+      font-family: var(--font-mono);
+    }
+
+    .chip-affiliation-id {
+      font-size: 0.7rem;
+      &.friendly {
+        background: color-mix(in srgb, #3b82f6 15%, transparent);
+        color: #3b82f6;
+        border-color: color-mix(in srgb, #3b82f6 30%, transparent);
+      }
+      &.hostile {
+        background: color-mix(in srgb, #ef4444 15%, transparent);
+        color: #ef4444;
+        border-color: color-mix(in srgb, #ef4444 30%, transparent);
+      }
+      &.neutral {
+        background: color-mix(in srgb, #22c55e 15%, transparent);
+        color: #22c55e;
+        border-color: color-mix(in srgb, #22c55e 30%, transparent);
+      }
+      &.unknown {
+        background: color-mix(in srgb, var(--text-muted) 15%, transparent);
+        color: var(--text-muted);
+        border-color: color-mix(in srgb, var(--text-muted) 30%, transparent);
+      }
+    }
+
+    .chip-op-status {
+      font-size: 0.7rem;
+      &.OPERATIONAL {
+        background: color-mix(in srgb, #22c55e 15%, transparent);
+        color: #22c55e;
+        border-color: color-mix(in srgb, #22c55e 30%, transparent);
+      }
+      &.DEGRADED {
+        background: color-mix(in srgb, #eab308 15%, transparent);
+        color: #eab308;
+        border-color: color-mix(in srgb, #eab308 30%, transparent);
+      }
+      &.DAMAGED {
+        background: color-mix(in srgb, #f97316 15%, transparent);
+        color: #f97316;
+        border-color: color-mix(in srgb, #f97316 30%, transparent);
+      }
+      &.DESTROYED, &.INACTIVE {
+        background: color-mix(in srgb, #ef4444 15%, transparent);
+        color: #ef4444;
+        border-color: color-mix(in srgb, #ef4444 30%, transparent);
+      }
+    }
+
+    .chip-damage {
+      font-size: 0.7rem;
+      &.LIGHT {
+        background: color-mix(in srgb, #eab308 15%, transparent);
+        color: #eab308;
+        border-color: color-mix(in srgb, #eab308 30%, transparent);
+      }
+      &.MODERATE {
+        background: color-mix(in srgb, #f97316 15%, transparent);
+        color: #f97316;
+        border-color: color-mix(in srgb, #f97316 30%, transparent);
+      }
+      &.HEAVY, &.DESTROYED {
+        background: color-mix(in srgb, #ef4444 15%, transparent);
+        color: #ef4444;
+        border-color: color-mix(in srgb, #ef4444 30%, transparent);
+      }
     }
   `],
 })
