@@ -181,6 +181,250 @@ import {
             </section>
           }
 
+          <!-- Platform Details (collapsible) -->
+          @if (platformType()) {
+            <section class="section">
+              <div class="collapsible-header" (click)="toggleSection('platformDetails')">
+                <h4 class="section-label" style="margin:0">
+                  @switch (platformType()) {
+                    @case ('ais') { Vessel Details }
+                    @case ('adsb') { Aircraft Details }
+                    @case ('tle') { Satellite Orbit }
+                    @case ('cot') { CoT Data }
+                    @case ('link16') { Link 16 Data }
+                    @case ('uav') { UAV Data }
+                  }
+                </h4>
+                <span class="chevron" [class.expanded]="expandedSections()['platformDetails']">&#9654;</span>
+              </div>
+              @if (expandedSections()['platformDetails']) {
+                <div class="collapsible-content">
+                  @switch (platformType()) {
+                    @case ('ais') {
+                      @if (e.platformData?.ais; as ais) {
+                        @if (ais.shipTypeName) {
+                          <div class="field-row"><span class="field-label">Ship Type</span><span class="field-value">{{ ais.shipTypeName }}</span></div>
+                        }
+                        @if (ais.navStatus && ais.navStatus !== 'UNKNOWN') {
+                          <div class="field-row"><span class="field-label">Nav Status</span><span class="field-value">{{ ais.navStatus }}</span></div>
+                        }
+                        @if (ais.destination) {
+                          <div class="field-row"><span class="field-label">Destination</span><span class="field-value">{{ ais.destination }}</span></div>
+                        }
+                        @if (ais.eta) {
+                          <div class="field-row"><span class="field-label">ETA</span><span class="field-value mono">{{ ais.eta | date:'short' }}</span></div>
+                        }
+                        @if (ais.draught != null) {
+                          <div class="field-row"><span class="field-label">Draught</span><span class="field-value mono">{{ ais.draught | number:'1.1-1' }} m</span></div>
+                        }
+                        @if (ais.lengthOverall != null) {
+                          <div class="field-row"><span class="field-label">Length</span><span class="field-value mono">{{ ais.lengthOverall | number:'1.0-0' }} m</span></div>
+                        }
+                        @if (ais.beam != null) {
+                          <div class="field-row"><span class="field-label">Beam</span><span class="field-value mono">{{ ais.beam | number:'1.0-0' }} m</span></div>
+                        }
+                        @if (ais.flag) {
+                          <div class="field-row"><span class="field-label">Flag</span><span class="field-value">{{ ais.flag }}</span></div>
+                        }
+                        @if (ais.rateOfTurn != null) {
+                          <div class="field-row"><span class="field-label">Rate of Turn</span><span class="field-value mono">{{ ais.rateOfTurn | number:'1.1-1' }}&deg;/min</span></div>
+                        }
+                        @if (ais.trueHeading != null && ais.trueHeading !== 511) {
+                          <div class="field-row"><span class="field-label">True Heading</span><span class="field-value mono">{{ ais.trueHeading | number:'1.0-0' }}&deg;</span></div>
+                        }
+                        @if (ais.speedOverGround != null) {
+                          <div class="field-row"><span class="field-label">SOG</span><span class="field-value mono">{{ ais.speedOverGround | number:'1.1-1' }} kts</span></div>
+                        }
+                        @if (ais.courseOverGround != null) {
+                          <div class="field-row"><span class="field-label">COG</span><span class="field-value mono">{{ ais.courseOverGround | number:'1.1-1' }}&deg;</span></div>
+                        }
+                        @if (ais.positionAccuracyHigh != null) {
+                          <div class="field-row"><span class="field-label">DGPS</span><span class="field-value">{{ ais.positionAccuracyHigh ? 'Yes' : 'No' }}</span></div>
+                        }
+                        @if (ais.messageType != null) {
+                          <div class="field-row"><span class="field-label">Msg Type</span><span class="field-value mono">{{ ais.messageType }}</span></div>
+                        }
+                      }
+                    }
+                    @case ('adsb') {
+                      @if (e.platformData?.adsb; as adsb) {
+                        @if (adsb.aircraftTypeName || adsb.aircraftType) {
+                          <div class="field-row"><span class="field-label">Aircraft</span><span class="field-value">{{ adsb.aircraftTypeName || adsb.aircraftType }}</span></div>
+                        }
+                        @if (adsb.operatorName) {
+                          <div class="field-row"><span class="field-label">Operator</span><span class="field-value">{{ adsb.operatorName }}</span></div>
+                        }
+                        @if (adsb.emergency) {
+                          <div class="field-row"><span class="field-label">Emergency</span><span class="field-value chip-damage HEAVY">{{ adsb.emergency }}</span></div>
+                        }
+                        @if (adsb.altitudeBaro != null) {
+                          <div class="field-row"><span class="field-label">Alt (Baro)</span><span class="field-value mono">{{ adsb.altitudeBaro | number:'1.0-0' }} m</span></div>
+                        }
+                        @if (adsb.altitudeGeom != null) {
+                          <div class="field-row"><span class="field-label">Alt (GPS)</span><span class="field-value mono">{{ adsb.altitudeGeom | number:'1.0-0' }} m</span></div>
+                        }
+                        @if (adsb.verticalRate != null) {
+                          <div class="field-row"><span class="field-label">Vert Rate</span><span class="field-value mono">{{ adsb.verticalRate | number:'1.1-1' }} m/s</span></div>
+                        }
+                        @if (adsb.groundSpeed != null) {
+                          <div class="field-row"><span class="field-label">Ground Speed</span><span class="field-value mono">{{ adsb.groundSpeed | number:'1.0-0' }} kts</span></div>
+                        }
+                        @if (adsb.indicatedAirSpeed != null) {
+                          <div class="field-row"><span class="field-label">IAS</span><span class="field-value mono">{{ adsb.indicatedAirSpeed | number:'1.0-0' }} kts</span></div>
+                        }
+                        @if (adsb.trueAirSpeed != null) {
+                          <div class="field-row"><span class="field-label">TAS</span><span class="field-value mono">{{ adsb.trueAirSpeed | number:'1.0-0' }} kts</span></div>
+                        }
+                        @if (adsb.magneticHeading != null) {
+                          <div class="field-row"><span class="field-label">Mag Heading</span><span class="field-value mono">{{ adsb.magneticHeading | number:'1.0-0' }}&deg;</span></div>
+                        }
+                        @if (adsb.onGround != null) {
+                          <div class="field-row"><span class="field-label">On Ground</span><span class="field-value">{{ adsb.onGround ? 'Yes' : 'No' }}</span></div>
+                        }
+                        @if (adsb.category) {
+                          <div class="field-row"><span class="field-label">Category</span><span class="field-value mono">{{ adsb.category }}</span></div>
+                        }
+                      }
+                    }
+                    @case ('tle') {
+                      @if (e.platformData?.tle; as tle) {
+                        @if (tle.intlDesignator) {
+                          <div class="field-row"><span class="field-label">Intl Desig</span><span class="field-value mono">{{ tle.intlDesignator }}</span></div>
+                        }
+                        @if (tle.objectType) {
+                          <div class="field-row"><span class="field-label">Object Type</span><span class="field-value">{{ tle.objectType }}</span></div>
+                        }
+                        @if (tle.epoch) {
+                          <div class="field-row"><span class="field-label">TLE Epoch</span><span class="field-value mono">{{ tle.epoch | date:'short' }}</span></div>
+                        }
+                        @if (tle.inclination != null) {
+                          <div class="field-row"><span class="field-label">Inclination</span><span class="field-value mono">{{ tle.inclination | number:'1.2-2' }}&deg;</span></div>
+                        }
+                        @if (tle.eccentricity != null) {
+                          <div class="field-row"><span class="field-label">Eccentricity</span><span class="field-value mono">{{ tle.eccentricity | number:'1.6-6' }}</span></div>
+                        }
+                        @if (tle.period != null) {
+                          <div class="field-row"><span class="field-label">Period</span><span class="field-value mono">{{ tle.period | number:'1.1-1' }} min</span></div>
+                        }
+                        @if (tle.apogee != null) {
+                          <div class="field-row"><span class="field-label">Apogee</span><span class="field-value mono">{{ tle.apogee | number:'1.0-0' }} km</span></div>
+                        }
+                        @if (tle.perigee != null) {
+                          <div class="field-row"><span class="field-label">Perigee</span><span class="field-value mono">{{ tle.perigee | number:'1.0-0' }} km</span></div>
+                        }
+                        @if (tle.meanMotion != null) {
+                          <div class="field-row"><span class="field-label">Mean Motion</span><span class="field-value mono">{{ tle.meanMotion | number:'1.4-4' }} rev/day</span></div>
+                        }
+                        @if (tle.raan != null) {
+                          <div class="field-row"><span class="field-label">RAAN</span><span class="field-value mono">{{ tle.raan | number:'1.2-2' }}&deg;</span></div>
+                        }
+                        @if (tle.rcsSize) {
+                          <div class="field-row"><span class="field-label">RCS</span><span class="field-value">{{ tle.rcsSize }}</span></div>
+                        }
+                        @if (tle.country) {
+                          <div class="field-row"><span class="field-label">Country</span><span class="field-value">{{ tle.country }}</span></div>
+                        }
+                        @if (tle.launchDate) {
+                          <div class="field-row"><span class="field-label">Launched</span><span class="field-value mono">{{ tle.launchDate | date:'mediumDate' }}</span></div>
+                        }
+                      }
+                    }
+                    @case ('cot') {
+                      @if (e.platformData?.cot; as cot) {
+                        <div class="field-row"><span class="field-label">CoT Type</span><span class="field-value mono">{{ cot.cotType }}</span></div>
+                        @if (cot.how) {
+                          <div class="field-row"><span class="field-label">How</span><span class="field-value mono">{{ cot.how }}</span></div>
+                        }
+                        @if (cot.ce != null) {
+                          <div class="field-row"><span class="field-label">CE</span><span class="field-value mono">{{ cot.ce | number:'1.1-1' }} m</span></div>
+                        }
+                        @if (cot.le != null) {
+                          <div class="field-row"><span class="field-label">LE</span><span class="field-value mono">{{ cot.le | number:'1.1-1' }} m</span></div>
+                        }
+                        @if (cot.staleTime) {
+                          <div class="field-row"><span class="field-label">Stale</span><span class="field-value mono">{{ cot.staleTime | date:'short' }}</span></div>
+                        }
+                        @if (cot.accessControl) {
+                          <div class="field-row"><span class="field-label">Access</span><span class="field-value">{{ cot.accessControl }}</span></div>
+                        }
+                      }
+                    }
+                    @case ('link16') {
+                      @if (e.platformData?.link16; as l16) {
+                        <div class="field-row"><span class="field-label">J-Series</span><span class="field-value mono">{{ l16.jSeriesLabel }}</span></div>
+                        @if (l16.originatingUnit) {
+                          <div class="field-row"><span class="field-label">Orig Unit</span><span class="field-value">{{ l16.originatingUnit }}</span></div>
+                        }
+                        @if (l16.quality != null) {
+                          <div class="field-row"><span class="field-label">Quality</span><span class="field-value mono">{{ l16.quality }}/15</span></div>
+                        }
+                        @if (l16.forceIdentity) {
+                          <div class="field-row"><span class="field-label">Force ID</span><span class="field-value">{{ l16.forceIdentity }}</span></div>
+                        }
+                        @if (l16.exerciseIndicator) {
+                          <div class="field-row"><span class="field-label">Exercise</span><span class="field-value">Yes</span></div>
+                        }
+                        @if (l16.simulationIndicator) {
+                          <div class="field-row"><span class="field-label">Simulation</span><span class="field-value">Yes</span></div>
+                        }
+                      }
+                    }
+                    @case ('uav') {
+                      @if (e.platformData?.uav; as uav) {
+                        @if (uav.make) {
+                          <div class="field-row"><span class="field-label">Make</span><span class="field-value">{{ uav.make }}</span></div>
+                        }
+                        @if (uav.model) {
+                          <div class="field-row"><span class="field-label">Model</span><span class="field-value">{{ uav.model }}</span></div>
+                        }
+                        @if (uav.serialNumber) {
+                          <div class="field-row"><span class="field-label">Serial</span><span class="field-value mono">{{ uav.serialNumber }}</span></div>
+                        }
+                      }
+                    }
+                  }
+                </div>
+              }
+            </section>
+          }
+
+          <!-- Signal Quality (ADS-B only, collapsible) -->
+          @if (platformType() === 'adsb' && e.platformData?.adsb; as adsb) {
+            @if (adsb.nacP != null || adsb.sil != null || adsb.nic != null) {
+              <section class="section">
+                <div class="collapsible-header" (click)="toggleSection('signalQuality')">
+                  <h4 class="section-label" style="margin:0">Signal Quality</h4>
+                  <span class="chevron" [class.expanded]="expandedSections()['signalQuality']">&#9654;</span>
+                </div>
+                @if (expandedSections()['signalQuality']) {
+                  <div class="collapsible-content">
+                    @if (adsb.nacP != null) {
+                      <div class="field-row"><span class="field-label">NACp</span><span class="field-value mono">{{ adsb.nacP }}</span></div>
+                    }
+                    @if (adsb.nacV != null) {
+                      <div class="field-row"><span class="field-label">NACv</span><span class="field-value mono">{{ adsb.nacV }}</span></div>
+                    }
+                    @if (adsb.sil != null) {
+                      <div class="field-row"><span class="field-label">SIL</span><span class="field-value mono">{{ adsb.sil }}@if (adsb.silType) { ({{ adsb.silType }}) }</span></div>
+                    }
+                    @if (adsb.nic != null) {
+                      <div class="field-row"><span class="field-label">NIC</span><span class="field-value mono">{{ adsb.nic }}</span></div>
+                    }
+                    @if (adsb.rc != null) {
+                      <div class="field-row"><span class="field-label">RC</span><span class="field-value mono">{{ adsb.rc | number:'1.0-0' }} m</span></div>
+                    }
+                    @if (adsb.gva != null) {
+                      <div class="field-row"><span class="field-label">GVA</span><span class="field-value mono">{{ adsb.gva }}</span></div>
+                    }
+                    @if (adsb.sda != null) {
+                      <div class="field-row"><span class="field-label">SDA</span><span class="field-value mono">{{ adsb.sda }}</span></div>
+                    }
+                  </div>
+                }
+              </section>
+            }
+          }
+
           <!-- Source & Timing -->
           <section class="section">
             <h4 class="section-label">Source & Timing</h4>
@@ -467,6 +711,33 @@ import {
         color: #ef4444;
         border-color: color-mix(in srgb, #ef4444 30%, transparent);
       }
+    }
+
+    .collapsible-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      padding: 2px 0;
+      user-select: none;
+
+      &:hover {
+        opacity: 0.8;
+      }
+    }
+
+    .chevron {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      transition: transform 150ms ease;
+
+      &.expanded {
+        transform: rotate(90deg);
+      }
+    }
+
+    .collapsible-content {
+      padding-top: 8px;
     }
   `],
 })
