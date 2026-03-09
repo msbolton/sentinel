@@ -1,7 +1,10 @@
-import { Component, computed, CUSTOM_ELEMENTS_SCHEMA, inject, input, output } from '@angular/core';
+import { Component, computed, CUSTOM_ELEMENTS_SCHEMA, inject, input, output, signal } from '@angular/core';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { CommonModule } from '@angular/common';
 import { Entity } from '../models/entity.model';
+import {
+  PlatformData,
+} from '../models/platform-data.model';
 
 @Component({
   selector: 'app-entity-detail-panel',
@@ -341,4 +344,78 @@ export class EntityDetailPanelComponent {
       </html>
     `);
   });
+
+  protected expandedSections = signal<Record<string, boolean>>({
+    platformDetails: false,
+    signalQuality: false,
+  });
+
+  protected platformType = computed(() => {
+    const pd = this.entity()?.platformData;
+    if (!pd) return null;
+    if (pd.ais) return 'ais' as const;
+    if (pd.adsb) return 'adsb' as const;
+    if (pd.tle) return 'tle' as const;
+    if (pd.link16) return 'link16' as const;
+    if (pd.cot) return 'cot' as const;
+    if (pd.uav) return 'uav' as const;
+    return null;
+  });
+
+  protected primaryId = computed(() => {
+    const pd = this.entity()?.platformData;
+    if (!pd) return null;
+    if (pd.ais) return { label: 'MMSI', value: pd.ais.mmsi };
+    if (pd.adsb) return { label: 'ICAO', value: pd.adsb.icaoHex };
+    if (pd.tle) return { label: 'NORAD', value: String(pd.tle.noradId) };
+    if (pd.cot) return { label: 'UID', value: pd.cot.uid };
+    if (pd.link16) return { label: 'JTN', value: String(pd.link16.trackNumber) };
+    return null;
+  });
+
+  protected secondaryIds = computed(() => {
+    const pd = this.entity()?.platformData;
+    const ids: { label: string; value: string }[] = [];
+    if (!pd) return ids;
+
+    if (pd.ais) {
+      if (pd.ais.callsign) ids.push({ label: 'Callsign', value: pd.ais.callsign });
+      if (pd.ais.imo) ids.push({ label: 'IMO', value: pd.ais.imo });
+      if (pd.ais.vesselName) ids.push({ label: 'Vessel', value: pd.ais.vesselName });
+    }
+    if (pd.adsb) {
+      if (pd.adsb.aircraftId) ids.push({ label: 'Flight', value: pd.adsb.aircraftId });
+      if (pd.adsb.registration) ids.push({ label: 'Reg', value: pd.adsb.registration });
+      if (pd.adsb.squawk) ids.push({ label: 'Squawk', value: pd.adsb.squawk });
+      if (pd.adsb.operatorName) ids.push({ label: 'Operator', value: pd.adsb.operatorName });
+    }
+    if (pd.tle?.satName) ids.push({ label: 'Name', value: pd.tle.satName });
+    if (pd.link16?.originatingUnit) ids.push({ label: 'Unit', value: pd.link16.originatingUnit });
+
+    return ids;
+  });
+
+  protected affiliationColor = computed(() => {
+    switch (this.entity()?.affiliation) {
+      case 'FRIENDLY': case 'ASSUMED_FRIENDLY': return 'friendly';
+      case 'HOSTILE': case 'SUSPECT': return 'hostile';
+      case 'NEUTRAL': return 'neutral';
+      default: return 'unknown';
+    }
+  });
+
+  protected envLabel = computed(() => {
+    switch (this.entity()?.trackEnvironment) {
+      case 'AIR': return 'Air';
+      case 'SEA_SURFACE': return 'Sea';
+      case 'SUBSURFACE': return 'Sub';
+      case 'GROUND': return 'Ground';
+      case 'SPACE': return 'Space';
+      default: return null;
+    }
+  });
+
+  protected toggleSection(key: string): void {
+    this.expandedSections.update(s => ({ ...s, [key]: !s[key] }));
+  }
 }
