@@ -286,15 +286,27 @@ function mapEntityType(raw: string): EntityType {
 }
 
 /**
+ * Convert snake_case keys to camelCase (Go JSON tags → TypeScript conventions).
+ */
+function snakeToCamel(obj: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    const camelKey = key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    result[camelKey] = value;
+  }
+  return result;
+}
+
+/**
  * Build the platformData discriminated union from protocol-specific fields.
  */
 function buildPlatformData(msg: IngestMessage): Record<string, unknown> | null {
-  if (msg.ais_data) return { ais: msg.ais_data };
-  if (msg.adsb_data) return { adsb: msg.adsb_data };
-  if (msg.tle_data) return { tle: msg.tle_data };
-  if (msg.link16_data) return { link16: msg.link16_data };
-  if (msg.cot_data) return { cot: msg.cot_data };
-  if (msg.uav_data) return { uav: msg.uav_data };
+  if (msg.ais_data) return { ais: snakeToCamel(msg.ais_data) };
+  if (msg.adsb_data) return { adsb: snakeToCamel(msg.adsb_data) };
+  if (msg.tle_data) return { tle: snakeToCamel(msg.tle_data) };
+  if (msg.link16_data) return { link16: snakeToCamel(msg.link16_data) };
+  if (msg.cot_data) return { cot: snakeToCamel(msg.cot_data) };
+  if (msg.uav_data) return { uav: snakeToCamel(msg.uav_data) };
   return null;
 }
 

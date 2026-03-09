@@ -7,8 +7,8 @@ import {
 
 @Entity('observations', { schema: 'sentinel' })
 @Index('idx_observations_entity_time', ['entityId', 'timestamp'])
-@Index('idx_observations_sensor', ['sensorId'], { where: '"sensor_id" IS NOT NULL' })
-@Index('idx_observations_feed', ['feedId'], { where: '"feed_id" IS NOT NULL' })
+@Index('idx_observations_sensor', ['sensorId'], { where: '"sensorId" IS NOT NULL' })
+@Index('idx_observations_feed', ['feedId'], { where: '"feedId" IS NOT NULL' })
 export class ObservationRecord {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

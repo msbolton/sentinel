@@ -1,10 +1,7 @@
-import { Component, computed, CUSTOM_ELEMENTS_SCHEMA, inject, input, output, signal } from '@angular/core';
+import { Component, computed, CUSTOM_ELEMENTS_SCHEMA, effect, inject, input, output, signal } from '@angular/core';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { CommonModule } from '@angular/common';
 import { Entity } from '../models/entity.model';
-import {
-  PlatformData,
-} from '../models/platform-data.model';
 
 @Component({
   selector: 'app-entity-detail-panel',
@@ -21,9 +18,6 @@ import {
             <span class="chip chip-entity-type" [ngClass]="e.entityType">
               {{ e.entityType }}
             </span>
-            @if (envLabel()) {
-              <span class="chip chip-env">{{ envLabel() }}</span>
-            }
             @if (e.countryOfOrigin) {
               <span class="chip chip-country">{{ e.countryOfOrigin }}</span>
             }
@@ -111,7 +105,7 @@ import {
               @if (e.circularError != null) {
                 <div class="field-row">
                   <span class="field-label">CEP</span>
-                  <span class="field-value mono">{{ e.circularError | number:'1.0-1' }} m</span>
+                  <span class="field-value mono">{{ e.circularError | number:'1.0-0' }} m</span>
                 </div>
               }
             </section>
@@ -258,10 +252,10 @@ import {
                           <div class="field-row"><span class="field-label">Emergency</span><span class="field-value chip-damage HEAVY">{{ adsb.emergency }}</span></div>
                         }
                         @if (adsb.altitudeBaro != null) {
-                          <div class="field-row"><span class="field-label">Alt (Baro)</span><span class="field-value mono">{{ adsb.altitudeBaro | number:'1.0-0' }} m</span></div>
+                          <div class="field-row"><span class="field-label">Alt (Baro)</span><span class="field-value mono">{{ adsb.altitudeBaro | number:'1.0-0' }} ft</span></div>
                         }
                         @if (adsb.altitudeGeom != null) {
-                          <div class="field-row"><span class="field-label">Alt (GPS)</span><span class="field-value mono">{{ adsb.altitudeGeom | number:'1.0-0' }} m</span></div>
+                          <div class="field-row"><span class="field-label">Alt (GPS)</span><span class="field-value mono">{{ adsb.altitudeGeom | number:'1.0-0' }} ft</span></div>
                         }
                         @if (adsb.verticalRate != null) {
                           <div class="field-row"><span class="field-label">Vert Rate</span><span class="field-value mono">{{ adsb.verticalRate | number:'1.1-1' }} m/s</span></div>
@@ -631,13 +625,6 @@ import {
       line-height: 1.5;
     }
 
-    .chip-env {
-      background: color-mix(in srgb, var(--accent-blue) 15%, transparent);
-      color: var(--accent-blue);
-      border-color: color-mix(in srgb, var(--accent-blue) 30%, transparent);
-      font-size: 0.65rem;
-    }
-
     .chip-country {
       background: color-mix(in srgb, var(--text-muted) 15%, transparent);
       color: var(--text-secondary);
@@ -750,6 +737,13 @@ export class EntityDetailPanelComponent {
   close = output<void>();
   flyTo = output<Entity>();
 
+  constructor() {
+    effect(() => {
+      this.entity();
+      this.expandedSections.set({ platformDetails: false, signalQuality: false });
+    });
+  }
+
   protected modelSrc = computed(() => {
     const e = this.entity();
     if (!e || !EntityDetailPanelComponent.TYPES_WITH_MODELS.has(e.entityType)) return null;
@@ -821,10 +815,9 @@ export class EntityDetailPanelComponent {
       if (pd.ais.vesselName) ids.push({ label: 'Vessel', value: pd.ais.vesselName });
     }
     if (pd.adsb) {
-      if (pd.adsb.aircraftId) ids.push({ label: 'Flight', value: pd.adsb.aircraftId });
+      if (pd.adsb.aircraftId) ids.push({ label: 'Callsign', value: pd.adsb.aircraftId });
       if (pd.adsb.registration) ids.push({ label: 'Reg', value: pd.adsb.registration });
       if (pd.adsb.squawk) ids.push({ label: 'Squawk', value: pd.adsb.squawk });
-      if (pd.adsb.operatorName) ids.push({ label: 'Operator', value: pd.adsb.operatorName });
     }
     if (pd.tle?.satName) ids.push({ label: 'Name', value: pd.tle.satName });
     if (pd.link16?.originatingUnit) ids.push({ label: 'Unit', value: pd.link16.originatingUnit });
@@ -838,17 +831,6 @@ export class EntityDetailPanelComponent {
       case 'HOSTILE': case 'SUSPECT': return 'hostile';
       case 'NEUTRAL': return 'neutral';
       default: return 'unknown';
-    }
-  });
-
-  protected envLabel = computed(() => {
-    switch (this.entity()?.trackEnvironment) {
-      case 'AIR': return 'Air';
-      case 'SEA_SURFACE': return 'Sea';
-      case 'SUBSURFACE': return 'Sub';
-      case 'GROUND': return 'Ground';
-      case 'SPACE': return 'Space';
-      default: return null;
     }
   });
 
