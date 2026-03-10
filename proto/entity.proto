@@ -59,6 +59,132 @@ enum Affiliation {
   AFFILIATION_PENDING = 7;
 }
 
+// CharacterizationState describes how confidently an entity has been identified.
+enum CharacterizationState {
+  CHARACTERIZATION_STATE_UNSPECIFIED = 0;
+  CHARACTERIZATION_STATE_ASSESSED = 1;
+  CHARACTERIZATION_STATE_ASSUMED = 2;
+  CHARACTERIZATION_STATE_SUSPECTED = 3;
+  CHARACTERIZATION_STATE_UNCHARACTERIZED = 4;
+}
+
+// Orientation describes the 3-axis attitude of an entity (yaw/pitch/roll).
+message Orientation {
+  double yaw = 1;    // Degrees from north, clockwise
+  double pitch = 2;  // Degrees, positive = nose up
+  double roll = 3;   // Degrees, positive = right wing down
+}
+
+// GeodeticVelocity is a 3-axis velocity vector in the North-East-Up frame.
+message GeodeticVelocity {
+  double north = 1;  // m/s northward
+  double east = 2;   // m/s eastward
+  double up = 3;     // m/s upward
+}
+
+// GeodeticAcceleration is a 3-axis acceleration vector in North-East-Up frame.
+message GeodeticAcceleration {
+  double north = 1;  // m/s² northward
+  double east = 2;   // m/s² eastward
+  double up = 3;     // m/s² upward
+}
+
+// PositionCovariance is a 3x3 symmetric matrix (upper triangle) in meters².
+message PositionCovariance {
+  double pn_pn = 1;
+  double pn_pe = 2;
+  double pn_pu = 3;
+  double pe_pe = 4;
+  double pe_pu = 5;
+  double pu_pu = 6;
+}
+
+// PositionVelocityCovariance is a full 3x3 cross-covariance matrix.
+message PositionVelocityCovariance {
+  double pn_vn = 1; double pn_ve = 2; double pn_vu = 3;
+  double pe_vn = 4; double pe_ve = 5; double pe_vu = 6;
+  double pu_vn = 7; double pu_ve = 8; double pu_vu = 9;
+}
+
+// VelocityCovariance is a 3x3 symmetric matrix (upper triangle) in (m/s)².
+message VelocityCovariance {
+  double vn_vn = 1;
+  double vn_ve = 2;
+  double vn_vu = 3;
+  double ve_ve = 4;
+  double ve_vu = 5;
+  double vu_vu = 6;
+}
+
+// KinematicState is the full kinematic state vector.
+message KinematicState {
+  GeodeticVelocity velocity = 1;
+  GeodeticAcceleration acceleration = 2;
+  PositionCovariance position_covariance = 3;
+  PositionVelocityCovariance position_velocity_covariance = 4;
+  VelocityCovariance velocity_covariance = 5;
+}
+
+// MeasurementUncertainty captures observation quality metrics.
+message MeasurementUncertainty {
+  double circular_error = 1;   // CEP meters (95th percentile)
+  double semi_major = 2;       // Error ellipse semi-major (meters)
+  double semi_minor = 3;       // Error ellipse semi-minor (meters)
+  double orientation = 4;      // Error ellipse orientation (degrees)
+  double altitude_error = 5;   // Altitude uncertainty (meters)
+  double confidence = 6;       // Detection confidence 0.0-1.0
+}
+
+// Dimensions describes the physical size of an entity.
+message Dimensions {
+  double length = 1;  // meters
+  double width = 2;   // meters
+  double height = 3;  // meters
+}
+
+// Observation records a single sensor measurement of an entity.
+message Observation {
+  string id = 1;
+  string entity_id = 2;
+
+  // Who observed
+  string sensor_id = 3;
+  string feed_id = 4;
+  EntitySource source = 5;
+
+  // Position
+  Coordinate position = 6;
+  double altitude = 7;
+
+  // Kinematics
+  double heading = 8;
+  double speed_knots = 9;
+  double course = 10;
+  GeodeticVelocity velocity = 11;
+  GeodeticAcceleration acceleration = 12;
+
+  // Uncertainty
+  MeasurementUncertainty uncertainty = 13;
+  PositionCovariance position_covariance = 14;
+  PositionVelocityCovariance position_velocity_covariance = 15;
+  VelocityCovariance velocity_covariance = 16;
+
+  // Detection metadata
+  double detection_confidence = 17;
+  TrackProcessingState track_processing_state = 18;
+
+  // Sensor-relative measurements
+  double azimuth = 19;
+  double elevation = 20;
+  double range = 21;
+  double azimuth_error = 22;
+  double elevation_error = 23;
+  double range_error = 24;
+
+  // Timestamp
+  google.protobuf.Timestamp timestamp = 25;
+}
+
 // Entity represents a discrete object of intelligence interest that can be
 // tracked, analyzed, and linked to other entities on the SENTINEL platform.
 message Entity {
@@ -109,6 +235,39 @@ message Entity {
 
   // Timestamp when the entity was last observed by a sensor or source.
   google.protobuf.Timestamp last_seen_at = 16;
+
+  // Identity & confidence
+  Affiliation affiliation = 17;
+  int32 identity_confidence = 18;          // 0-10 scale
+  CharacterizationState characterization = 19;
+
+  // Track context
+  TrackEnvironment track_environment = 20;
+  TrackProcessingState track_processing_state = 21;
+
+  // Extended kinematics
+  double altitude = 22;
+  Orientation orientation = 23;
+  KinematicState kinematics = 24;
+
+  // Operational status
+  OperationalStatus operational_status = 25;
+  DamageAssessment damage_assessment = 26;
+  int32 damage_confidence = 27;            // 0-10
+
+  // Physical characteristics
+  Dimensions dimensions = 28;
+  string country_of_origin = 29;           // ISO 3166-1 alpha-2
+
+  // Protocol-specific data (JSONB in DB, opaque bytes in proto)
+  bytes platform_data = 30;
+
+  // Source identity
+  string source_entity_id = 31;
+
+  // Measurement quality
+  double circular_error = 32;
+  string last_observation_source = 33;
 }
 
 // EntityEventType describes the kind of mutation that occurred on an entity.

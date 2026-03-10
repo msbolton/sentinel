@@ -52,6 +52,11 @@ describe('TrackBatchService', () => {
     course: number | null;
     source: string | null;
     timestamp: Date;
+    altitude: number | null;
+    velocityNorth: number | null;
+    velocityEast: number | null;
+    velocityUp: number | null;
+    circularError: number | null;
   }> = {}) {
     return {
       entityId: overrides.entityId ?? '550e8400-e29b-41d4-a716-446655440000',
@@ -62,6 +67,11 @@ describe('TrackBatchService', () => {
       course: overrides.course ?? null,
       source: overrides.source ?? 'AIS',
       timestamp: overrides.timestamp ?? new Date('2025-01-01T00:00:00Z'),
+      altitude: overrides.altitude ?? null,
+      velocityNorth: overrides.velocityNorth ?? null,
+      velocityEast: overrides.velocityEast ?? null,
+      velocityUp: overrides.velocityUp ?? null,
+      circularError: overrides.circularError ?? null,
     };
   }
 

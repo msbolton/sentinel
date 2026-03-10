@@ -1,5 +1,15 @@
 import { EntityType, EntitySource, Classification } from '@sentinel/proto-gen';
+import {
+  Affiliation,
+  DamageAssessment,
+  KinematicState,
+  OperationalStatus,
+  Orientation,
+  PlatformData,
+  TrackEnvironment,
+} from './platform-data.model';
 export { EntityType, EntitySource, Classification };
+export { Affiliation, DamageAssessment, OperationalStatus, TrackEnvironment };
 
 export interface Entity {
   id: string;
@@ -22,6 +32,35 @@ export interface Entity {
   createdAt: string;
   updatedAt: string;
   lastSeenAt?: string;
+
+  // Identity
+  affiliation?: Affiliation;
+  sourceEntityId?: string;
+  countryOfOrigin?: string;
+
+  // Track context
+  trackEnvironment?: TrackEnvironment;
+
+  // Operational status
+  operationalStatus?: OperationalStatus;
+  damageAssessment?: DamageAssessment;
+
+  // Physical dimensions
+  dimensions?: {
+    length?: number;
+    width?: number;
+    height?: number;
+  };
+
+  // Kinematics
+  orientation?: Orientation;
+  kinematics?: KinematicState;
+
+  // Protocol-specific data
+  platformData?: PlatformData;
+
+  // Measurement quality
+  circularError?: number;
 }
 
 export interface EntityEvent {

@@ -78,6 +78,13 @@ export class EntityService implements OnModuleInit {
       metadata: dto.metadata ?? {},
       affiliations: dto.affiliations ?? [],
       lastSeenAt: dto.position ? new Date() : null,
+      trackEnvironment: dto.trackEnvironment ?? undefined,
+      countryOfOrigin: dto.countryOfOrigin ?? undefined,
+      platformData: dto.platformData ?? undefined,
+      sourceEntityId: dto.sourceEntityId ?? undefined,
+      circularError: dto.circularError ?? undefined,
+      dimensionLength: dto.dimensionLength ?? undefined,
+      dimensionWidth: dto.dimensionWidth ?? undefined,
     });
 
     // Set position as GeoJSON if provided
@@ -104,6 +111,10 @@ export class EntityService implements OnModuleInit {
         source: saved.source,
         timestamp: saved.lastSeenAt?.toISOString() ?? new Date().toISOString(),
         metadata: saved.metadata,
+        track_environment: saved.trackEnvironment,
+        country_of_origin: saved.countryOfOrigin,
+        platform_data: saved.platformData,
+        circular_error: saved.circularError,
       });
     }
 
@@ -136,6 +147,12 @@ export class EntityService implements OnModuleInit {
     if (dto.milStd2525dSymbol !== undefined) updates.milStd2525dSymbol = dto.milStd2525dSymbol;
     if (dto.metadata !== undefined) updates.metadata = dto.metadata;
     if (dto.affiliations !== undefined) updates.affiliations = dto.affiliations;
+    if (dto.trackEnvironment !== undefined) updates.trackEnvironment = dto.trackEnvironment;
+    if (dto.countryOfOrigin !== undefined) updates.countryOfOrigin = dto.countryOfOrigin;
+    if (dto.platformData !== undefined) updates.platformData = dto.platformData;
+    if (dto.sourceEntityId !== undefined) updates.sourceEntityId = dto.sourceEntityId;
+    if (dto.operationalStatus !== undefined) updates.operationalStatus = dto.operationalStatus;
+    if (dto.circularError !== undefined) updates.circularError = dto.circularError;
 
     if (dto.position) {
       updates.position = {
@@ -163,6 +180,11 @@ export class EntityService implements OnModuleInit {
         source: saved.source,
         timestamp: saved.lastSeenAt?.toISOString() ?? new Date().toISOString(),
         metadata: saved.metadata,
+        track_environment: saved.trackEnvironment,
+        country_of_origin: saved.countryOfOrigin,
+        platform_data: saved.platformData,
+        operational_status: saved.operationalStatus,
+        circular_error: saved.circularError,
       });
     }
 
@@ -305,6 +327,9 @@ export class EntityService implements OnModuleInit {
     classification?: string;
     source?: string;
     metadata?: Record<string, unknown>;
+    trackEnvironment?: string;
+    platformData?: Record<string, unknown> | null;
+    circularError?: number | null;
   }): void {
     this.emitKafka(TOPIC_ENTITY_POSITION, update.id, {
       entity_id: update.id,
@@ -318,6 +343,9 @@ export class EntityService implements OnModuleInit {
       source: update.source,
       timestamp: new Date().toISOString(),
       metadata: update.metadata,
+      track_environment: update.trackEnvironment,
+      platform_data: update.platformData,
+      circular_error: update.circularError,
     });
   }
 

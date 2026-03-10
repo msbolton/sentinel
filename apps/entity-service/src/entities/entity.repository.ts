@@ -38,6 +38,7 @@ export interface ExistingEntityInfo {
   classification: Classification;
   source: EntitySource;
   metadata: Record<string, unknown>;
+  sourceEntityId: string | null;
 }
 
 @Injectable()
@@ -161,6 +162,25 @@ export class EntityRepository extends Repository<EntityRecord> {
       milStd2525dSymbol: raw.milStd2525dSymbol as string | null,
       metadata: raw.metadata as Record<string, unknown>,
       affiliations: raw.affiliations as string[],
+      affiliation: raw.affiliation as string,
+      identityConfidence: raw.identityConfidence as number,
+      characterization: raw.characterization as string,
+      trackEnvironment: raw.trackEnvironment as string,
+      trackProcessingState: raw.trackProcessingState as string,
+      pitch: raw.pitch as number | null,
+      roll: raw.roll as number | null,
+      operationalStatus: raw.operationalStatus as string,
+      damageAssessment: raw.damageAssessment as string,
+      damageConfidence: raw.damageConfidence as number,
+      dimensionLength: raw.dimensionLength as number | null,
+      dimensionWidth: raw.dimensionWidth as number | null,
+      dimensionHeight: raw.dimensionHeight as number | null,
+      countryOfOrigin: raw.countryOfOrigin as string | null,
+      kinematics: raw.kinematics as Record<string, unknown>,
+      platformData: raw.platformData as Record<string, unknown>,
+      circularError: raw.circularError as number | null,
+      lastObservationSource: raw.lastObservationSource as string | null,
+      sourceEntityId: raw.sourceEntityId as string | null,
       createdAt: raw.createdAt as Date,
       updatedAt: raw.updatedAt as Date,
       lastSeenAt: raw.lastSeenAt as Date | null,
@@ -185,21 +205,22 @@ export class EntityRepository extends Repository<EntityRecord> {
         'e.classification',
         'e.source',
         'e.metadata',
-        "e.metadata->>'sourceEntityId' as source_entity_id",
+        'e.sourceEntityId',
       ])
       .where('e.deleted = :deleted', { deleted: false })
-      .andWhere("e.metadata->>'sourceEntityId' IN (:...sourceEntityIds)", { sourceEntityIds })
+      .andWhere('e.sourceEntityId IN (:...sourceEntityIds)', { sourceEntityIds })
       .getRawMany();
 
     const map = new Map<string, ExistingEntityInfo>();
     for (const row of results) {
-      map.set(row.source_entity_id, {
+      map.set(row.e_sourceEntityId, {
         id: row.e_id,
         name: row.e_name,
         entityType: row.e_entityType,
         classification: row.e_classification,
         source: row.e_source,
         metadata: row.e_metadata,
+        sourceEntityId: row.e_sourceEntityId,
       });
     }
     return map;
@@ -217,19 +238,30 @@ export class EntityRepository extends Repository<EntityRecord> {
       speedKnots: number | null;
       course: number | null;
       altitude: number | null;
+      platformData?: Record<string, unknown> | null;
+      kinematics?: Record<string, unknown> | null;
+      trackEnvironment?: string | null;
+      circularError?: number | null;
     }>,
   ): Promise<void> {
     if (updates.length === 0) return;
 
+    const COLS_PER_ROW = 11;
     const params: unknown[] = [];
     const valueClauses: string[] = [];
     for (let i = 0; i < updates.length; i++) {
       const u = updates[i];
-      const offset = i * 7;
+      const offset = i * COLS_PER_ROW;
       valueClauses.push(
-        `($${offset + 1}::uuid, $${offset + 2}::double precision, $${offset + 3}::double precision, $${offset + 4}::double precision, $${offset + 5}::double precision, $${offset + 6}::double precision, $${offset + 7}::double precision)`,
+        `($${offset + 1}::uuid, $${offset + 2}::double precision, $${offset + 3}::double precision, $${offset + 4}::double precision, $${offset + 5}::double precision, $${offset + 6}::double precision, $${offset + 7}::double precision, $${offset + 8}::jsonb, $${offset + 9}::jsonb, $${offset + 10}::varchar, $${offset + 11}::double precision)`,
       );
-      params.push(u.id, u.lng, u.lat, u.heading, u.speedKnots, u.course, u.altitude);
+      params.push(
+        u.id, u.lng, u.lat, u.heading, u.speedKnots, u.course, u.altitude,
+        u.platformData ? JSON.stringify(u.platformData) : null,
+        u.kinematics ? JSON.stringify(u.kinematics) : null,
+        u.trackEnvironment ?? null,
+        u.circularError ?? null,
+      );
     }
 
     await this.query(
@@ -239,8 +271,12 @@ export class EntityRepository extends Repository<EntityRecord> {
            "speedKnots" = b.speed_knots,
            course = b.course,
            altitude = b.altitude,
+           "platformData" = COALESCE(b.platform_data, e."platformData"),
+           kinematics = COALESCE(b.kinematics, e.kinematics),
+           "trackEnvironment" = COALESCE(b.track_env, e."trackEnvironment"),
+           "circularError" = COALESCE(b.circular_err, e."circularError"),
            "lastSeenAt" = NOW()
-       FROM (VALUES ${valueClauses.join(',')}) AS b(id, lng, lat, heading, speed_knots, course, altitude)
+       FROM (VALUES ${valueClauses.join(',')}) AS b(id, lng, lat, heading, speed_knots, course, altitude, platform_data, kinematics, track_env, circular_err)
        WHERE e.id = b.id AND e.deleted = false`,
       params,
     );

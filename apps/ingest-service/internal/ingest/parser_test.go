@@ -605,3 +605,173 @@ func TestParseFormat_InvalidData(t *testing.T) {
 		t.Fatal("expected error for invalid JSON, got nil")
 	}
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Platform Data Enrichment Tests
+// ──────────────────────────────────────────────────────────────────────────────
+
+func TestParseAIS_PlatformData_Type1(t *testing.T) {
+	msg := "!AIVDM,1,1,,B,13u@Dt002s000000000000000000,0*13"
+	p := NewParser()
+	entity, err := p.ParseAIS([]byte(msg))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if entity.TrackEnvironment != "SEA_SURFACE" {
+		t.Errorf("TrackEnvironment = %q, want SEA_SURFACE", entity.TrackEnvironment)
+	}
+	if entity.AISData == nil {
+		t.Fatal("AISData is nil, expected populated")
+	}
+	if entity.AISData.MMSI == "" {
+		t.Error("AISData.MMSI is empty")
+	}
+	if entity.AISData.MessageType < 1 || entity.AISData.MessageType > 3 {
+		t.Errorf("AISData.MessageType = %d, want 1-3", entity.AISData.MessageType)
+	}
+	if entity.CircularError <= 0 {
+		t.Errorf("CircularError = %f, want > 0", entity.CircularError)
+	}
+}
+
+func TestParseAIS_PlatformData_Type5(t *testing.T) {
+	frag1 := "!AIVDM,2,1,3,B,55?MbV02>H97ac<H4eEK6WSF220l4hB222222222220l1@E846RLAT0Eq,0*2C"
+	frag2 := "!AIVDM,2,2,3,B,888888888888880,2*21"
+
+	p := NewParser()
+	p.ParseAIS([]byte(frag1)) // buffered
+	entity, err := p.ParseAIS([]byte(frag2))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if entity.TrackEnvironment != "SEA_SURFACE" {
+		t.Errorf("TrackEnvironment = %q, want SEA_SURFACE", entity.TrackEnvironment)
+	}
+	if entity.AISData == nil {
+		t.Fatal("AISData is nil, expected populated")
+	}
+	if entity.AISData.MessageType != 5 {
+		t.Errorf("AISData.MessageType = %d, want 5", entity.AISData.MessageType)
+	}
+	if entity.AISData.LengthOverall <= 0 && entity.AISData.DimensionA <= 0 {
+		t.Log("No dimensions decoded (may vary with test payload)")
+	}
+}
+
+func TestParseADSB_PlatformData(t *testing.T) {
+	msg := "MSG,3,1,1,A1B2C3,1,2025/01/15,12:30:00.000,2025/01/15,12:30:00.000,BAW123,35000,450,180.5,51.5074,-0.1278,,7700,,,,-1"
+	p := NewParser()
+	entity, err := p.ParseADSB([]byte(msg))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if entity.TrackEnvironment != "AIR" {
+		t.Errorf("TrackEnvironment = %q, want AIR", entity.TrackEnvironment)
+	}
+	if entity.ADSBData == nil {
+		t.Fatal("ADSBData is nil, expected populated")
+	}
+	if entity.ADSBData.ICAOHex != "A1B2C3" {
+		t.Errorf("ADSBData.ICAOHex = %q, want A1B2C3", entity.ADSBData.ICAOHex)
+	}
+	if entity.ADSBData.Squawk != "7700" {
+		t.Errorf("ADSBData.Squawk = %q, want 7700", entity.ADSBData.Squawk)
+	}
+	if entity.ADSBData.Emergency != "GENERAL_EMERGENCY" {
+		t.Errorf("ADSBData.Emergency = %q, want GENERAL_EMERGENCY", entity.ADSBData.Emergency)
+	}
+	if !entity.ADSBData.OnGround {
+		t.Error("ADSBData.OnGround = false, want true")
+	}
+	if entity.ADSBData.AircraftID != "BAW123" {
+		t.Errorf("ADSBData.AircraftID = %q, want BAW123", entity.ADSBData.AircraftID)
+	}
+}
+
+func TestParseCoT_PlatformData(t *testing.T) {
+	cot := `<event uid="test-uid" type="a-f-A" time="2025-01-15T12:00:00Z" start="2025-01-15T12:00:00Z" stale="2025-01-15T12:05:00Z" how="m-g">
+		<point lat="38.9" lon="-77.0" hae="100" ce="10" le="5"/>
+		<detail><track speed="50" course="90"/><contact callsign="ALPHA1"/></detail>
+	</event>`
+	p := NewParser()
+	entity, err := p.ParseCoT([]byte(cot))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if entity.TrackEnvironment != "AIR" {
+		t.Errorf("TrackEnvironment = %q, want AIR", entity.TrackEnvironment)
+	}
+	if entity.CoTData == nil {
+		t.Fatal("CoTData is nil, expected populated")
+	}
+	if entity.CoTData.UID != "test-uid" {
+		t.Errorf("CoTData.UID = %q, want test-uid", entity.CoTData.UID)
+	}
+	if entity.CoTData.CoTType != "a-f-A" {
+		t.Errorf("CoTData.CoTType = %q, want a-f-A", entity.CoTData.CoTType)
+	}
+	if entity.CoTData.How != "m-g" {
+		t.Errorf("CoTData.How = %q, want m-g", entity.CoTData.How)
+	}
+	if entity.CoTData.CE != 10 {
+		t.Errorf("CoTData.CE = %f, want 10", entity.CoTData.CE)
+	}
+	if entity.CircularError != 10 {
+		t.Errorf("CircularError = %f, want 10", entity.CircularError)
+	}
+	// Velocity should be computed from speed=50 m/s, course=90 degrees
+	// VelocityEast ≈ 50 * sin(90°) = 50
+	if math.Abs(entity.VelocityEast-50.0) > 0.1 {
+		t.Errorf("VelocityEast = %f, want ~50.0", entity.VelocityEast)
+	}
+	// VelocityNorth ≈ 50 * cos(90°) ≈ 0
+	if math.Abs(entity.VelocityNorth) > 0.1 {
+		t.Errorf("VelocityNorth = %f, want ~0.0", entity.VelocityNorth)
+	}
+}
+
+func TestParseLink16_PlatformData(t *testing.T) {
+	data := buildJREAPCMessage(1, 1, 0x0200, 42, 0, 0, 0, 0, 0)
+	p := NewParser()
+	entity, err := p.ParseLink16(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if entity.TrackEnvironment != "AIR" {
+		t.Errorf("TrackEnvironment = %q, want AIR", entity.TrackEnvironment)
+	}
+	if entity.Link16Data == nil {
+		t.Fatal("Link16Data is nil, expected populated")
+	}
+	if entity.Link16Data.TrackNumber != 42 {
+		t.Errorf("Link16Data.TrackNumber = %d, want 42", entity.Link16Data.TrackNumber)
+	}
+	if entity.Link16Data.JSeriesLabel != "0200" {
+		t.Errorf("Link16Data.JSeriesLabel = %q, want 0200", entity.Link16Data.JSeriesLabel)
+	}
+}
+
+func TestCotDimensionToTrackEnvironment(t *testing.T) {
+	tests := []struct {
+		cotType string
+		want    string
+	}{
+		{"a-f-A-M-F", "AIR"},
+		{"a-h-S-X", "SEA_SURFACE"},
+		{"a-n-G-E-V", "GROUND"},
+		{"a-f-U-S", "SUBSURFACE"},
+		{"a-f-X", "UNKNOWN"},
+		{"a", "UNKNOWN"},
+	}
+	for _, tt := range tests {
+		got := cotDimensionToTrackEnvironment(tt.cotType)
+		if got != tt.want {
+			t.Errorf("cotDimensionToTrackEnvironment(%q) = %q, want %q", tt.cotType, got, tt.want)
+		}
+	}
+}

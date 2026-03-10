@@ -7,10 +7,13 @@ import { EntityRepository } from './entity.repository';
 import { EntityService } from './entity.service';
 import { EntityController } from './entity.controller';
 import { IngestConsumer } from './ingest.consumer';
+import { ObservationRecord } from '../observations/observation.entity';
+import { ObservationRepository } from '../observations/observation.repository';
+import { ObservationService } from '../observations/observation.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EntityRecord]),
+    TypeOrmModule.forFeature([EntityRecord, ObservationRecord]),
 
     ClientsModule.registerAsync([
       {
@@ -33,7 +36,7 @@ import { IngestConsumer } from './ingest.consumer';
     ]),
   ],
   controllers: [EntityController, IngestConsumer],
-  providers: [EntityService, EntityRepository],
-  exports: [EntityService, EntityRepository],
+  providers: [EntityService, EntityRepository, ObservationService, ObservationRepository],
+  exports: [EntityService, EntityRepository, ObservationService],
 })
 export class EntityModule {}
