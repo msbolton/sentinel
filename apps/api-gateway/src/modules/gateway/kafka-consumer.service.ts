@@ -24,6 +24,11 @@ interface RawEntityPositionEvent {
   source: string;
   timestamp: string;
   metadata?: Record<string, unknown>;
+  track_environment?: string;
+  country_of_origin?: string;
+  platform_data?: Record<string, unknown>;
+  operational_status?: string;
+  circular_error?: number;
 }
 
 /**
@@ -226,6 +231,11 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
       source: raw.source,
       timestamp: raw.timestamp,
       metadata: raw.metadata,
+      trackEnvironment: raw.track_environment,
+      countryOfOrigin: raw.country_of_origin,
+      platformData: raw.platform_data,
+      operationalStatus: raw.operational_status,
+      circularError: raw.circular_error,
     };
 
     this.updateBuffer.push({ entity: update, eventType });

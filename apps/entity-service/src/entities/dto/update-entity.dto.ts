@@ -90,4 +90,36 @@ export class UpdateEntityDto {
   @IsArray()
   @IsString({ each: true })
   affiliations?: string[];
+
+  @ApiPropertyOptional({ description: 'Track environment (AIR, SEA_SURFACE, GROUND, SPACE, etc.)' })
+  @IsOptional()
+  @IsString()
+  trackEnvironment?: string;
+
+  @ApiPropertyOptional({ description: 'Country of origin (ISO 3166-1 alpha-2)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2)
+  countryOfOrigin?: string;
+
+  @ApiPropertyOptional({ description: 'Protocol-specific platform data' })
+  @IsOptional()
+  @IsObject()
+  platformData?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Source-assigned entity identifier' })
+  @IsOptional()
+  @IsString()
+  sourceEntityId?: string;
+
+  @ApiPropertyOptional({ description: 'Operational status' })
+  @IsOptional()
+  @IsString()
+  operationalStatus?: string;
+
+  @ApiPropertyOptional({ description: 'Circular error probable in meters' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  circularError?: number;
 }

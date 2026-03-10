@@ -1,4 +1,11 @@
-import { Coordinate } from './common';
+import { Coordinate, TrackProcessingState } from './common';
+import {
+  GeodeticVelocity,
+  GeodeticAcceleration,
+  PositionCovariance,
+  PositionVelocityCovariance,
+  VelocityCovariance,
+} from './kinematics';
 
 export interface TrackPoint {
   id: string;
@@ -9,6 +16,16 @@ export interface TrackPoint {
   course?: number;
   source?: string;
   timestamp: string;
+  altitude?: number;
+  trackProcessingState?: TrackProcessingState;
+  velocity?: GeodeticVelocity;
+  acceleration?: GeodeticAcceleration;
+  positionCovariance?: PositionCovariance;
+  positionVelocityCovariance?: PositionVelocityCovariance;
+  velocityCovariance?: VelocityCovariance;
+  circularError?: number;
+  altitudeError?: number;
+  sensorId?: string;
 }
 
 export interface TrackSegment {

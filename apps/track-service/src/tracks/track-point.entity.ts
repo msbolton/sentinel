@@ -46,6 +46,54 @@ export class TrackPoint {
   @Column({ type: 'uuid', nullable: true })
   feedId: string;
 
+  // Extended kinematic state
+  @Column({ type: 'float', nullable: true })
+  altitude: number;
+
+  @Column({ type: 'varchar', nullable: true })
+  trackProcessingState: string;
+
+  // Velocity vector (m/s, North-East-Up)
+  @Column({ type: 'float', nullable: true })
+  velocityNorth: number;
+
+  @Column({ type: 'float', nullable: true })
+  velocityEast: number;
+
+  @Column({ type: 'float', nullable: true })
+  velocityUp: number;
+
+  // Acceleration vector (m/s², North-East-Up)
+  @Column({ type: 'float', nullable: true })
+  accelNorth: number;
+
+  @Column({ type: 'float', nullable: true })
+  accelEast: number;
+
+  @Column({ type: 'float', nullable: true })
+  accelUp: number;
+
+  // Covariance matrices (upper triangle arrays)
+  @Column({ type: 'float', array: true, nullable: true })
+  posCovariance: number[];
+
+  @Column({ type: 'float', array: true, nullable: true })
+  posVelCovariance: number[];
+
+  @Column({ type: 'float', array: true, nullable: true })
+  velCovariance: number[];
+
+  // Measurement uncertainty
+  @Column({ type: 'float', nullable: true })
+  circularError: number;
+
+  @Column({ type: 'float', nullable: true })
+  altitudeError: number;
+
+  // Provenance
+  @Column({ type: 'varchar', nullable: true })
+  sensorId: string;
+
   @Column({ type: 'timestamptz' })
   timestamp: Date;
 }

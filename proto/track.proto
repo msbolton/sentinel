@@ -34,6 +34,36 @@ message TrackPoint {
 
   // The intelligence source that produced this observation.
   EntitySource source = 8;
+
+  // Altitude in meters above mean sea level.
+  double altitude = 9;
+
+  // Processing state of this track point.
+  TrackProcessingState track_processing_state = 10;
+
+  // Full velocity vector (m/s, North-East-Up).
+  GeodeticVelocity velocity = 11;
+
+  // Acceleration vector (m/s², North-East-Up).
+  GeodeticAcceleration acceleration = 12;
+
+  // Position covariance (upper triangle, meters²).
+  PositionCovariance position_covariance = 13;
+
+  // Position-velocity cross-covariance.
+  PositionVelocityCovariance position_velocity_covariance = 14;
+
+  // Velocity covariance (upper triangle, (m/s)²).
+  VelocityCovariance velocity_covariance = 15;
+
+  // Circular Error Probable in meters.
+  double circular_error = 16;
+
+  // Altitude uncertainty in meters.
+  double altitude_error = 17;
+
+  // Sensor/system that produced this observation.
+  string sensor_id = 18;
 }
 
 // TrackSegment groups a contiguous series of track points for a single entity

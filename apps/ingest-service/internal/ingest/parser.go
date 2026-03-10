@@ -386,18 +386,41 @@ func (p *Parser) ParseCoT(data []byte) (*models.EntityPosition, error) {
 	// Convert CoT speed (m/s) to knots.
 	speedKnots := event.Detail.Track.Speed * 1.94384
 
+	// Compute velocity components from speed (m/s) and course
+	speedMS := event.Detail.Track.Speed
+	courseRad := event.Detail.Track.Course * math.Pi / 180.0
+	velNorth := speedMS * math.Cos(courseRad)
+	velEast := speedMS * math.Sin(courseRad)
+
+	// Infer track environment from CoT type dimension code
+	trackEnv := cotDimensionToTrackEnvironment(event.Type)
+
+	cotData := &models.CoTData{
+		UID:       event.UID,
+		CoTType:   event.Type,
+		How:       event.How,
+		CE:        event.Point.CE,
+		LE:        event.Point.LE,
+		StaleTime: event.Stale,
+	}
+
 	return &models.EntityPosition{
-		EntityID:   event.UID,
-		EntityType: entityType,
-		Name:       name,
-		Latitude:   event.Point.Lat,
-		Longitude:  event.Point.Lon,
-		Altitude:   event.Point.Hae,
-		Heading:    event.Detail.Track.Course,
-		SpeedKnots: speedKnots,
-		Course:     event.Detail.Track.Course,
-		Timestamp:  ts,
-		RawData:    data,
+		EntityID:         event.UID,
+		EntityType:       entityType,
+		Name:             name,
+		Latitude:         event.Point.Lat,
+		Longitude:        event.Point.Lon,
+		Altitude:         event.Point.Hae,
+		Heading:          event.Detail.Track.Course,
+		SpeedKnots:       speedKnots,
+		Course:           event.Detail.Track.Course,
+		Timestamp:        ts,
+		RawData:          data,
+		TrackEnvironment: trackEnv,
+		CircularError:    event.Point.CE,
+		VelocityNorth:    velNorth,
+		VelocityEast:     velEast,
+		CoTData:          cotData,
 	}, nil
 }
 
@@ -530,42 +553,86 @@ func (p *Parser) parseAISPositionReport(bits []byte, rawData []byte) (*models.En
 		return nil, fmt.Errorf("AIS position report too short: %d bits (need 168)", len(bits))
 	}
 
+	msgType := bitsToUint(bits, 0, 6)
+	repeatIndicator := bitsToUint(bits, 6, 2)
 	mmsi := bitsToUint(bits, 8, 30)
+	navStatus := bitsToUint(bits, 38, 4)
+	rot := float64(bitsToInt(bits, 42, 8))
 	sog := float64(bitsToUint(bits, 50, 10)) / 10.0
+	posAccuracy := bitsToUint(bits, 60, 1)
 	lon := float64(bitsToInt(bits, 61, 28)) / 600000.0
 	lat := float64(bitsToInt(bits, 89, 27)) / 600000.0
 	cog := float64(bitsToUint(bits, 116, 12)) / 10.0
 	heading := float64(bitsToUint(bits, 128, 9))
+	specialManoeuvre := bitsToUint(bits, 143, 2)
 
+	trueHeading := heading
 	if heading == 511 {
 		heading = cog
 	}
 
+	mmsiStr := fmt.Sprintf("%d", mmsi)
+
+	aisData := &models.AISData{
+		MMSI:                 mmsiStr,
+		NavStatus:            aisNavStatusString(navStatus),
+		RateOfTurn:           rot,
+		SpeedOverGround:      sog,
+		CourseOverGround:     cog,
+		TrueHeading:          trueHeading,
+		PositionAccuracyHigh: posAccuracy == 1,
+		SpecialManoeuvre:     specialManoeuvre == 1,
+		MessageType:          int(msgType),
+		RepeatIndicator:      int(repeatIndicator),
+	}
+
+	// Derive flag from MMSI MID (first 3 digits for 9-digit MMSI)
+	if len(mmsiStr) == 9 {
+		aisData.Flag = mmsiMIDToCountry(mmsiStr[:3])
+	}
+
+	// Circular error: DGPS ~1m, else ~10m
+	ce := 10.0
+	if posAccuracy == 1 {
+		ce = 1.0
+	}
+
 	return &models.EntityPosition{
-		EntityID:   fmt.Sprintf("MMSI-%d", mmsi),
-		EntityType: models.EntityTypeVessel,
-		Name:       fmt.Sprintf("MMSI %d", mmsi),
-		Latitude:   lat,
-		Longitude:  lon,
-		Heading:    heading,
-		SpeedKnots: sog,
-		Course:     cog,
-		Timestamp:  time.Now().UTC(),
-		RawData:    rawData,
+		EntityID:         fmt.Sprintf("MMSI-%d", mmsi),
+		EntityType:       models.EntityTypeVessel,
+		Name:             fmt.Sprintf("MMSI %d", mmsi),
+		Latitude:         lat,
+		Longitude:        lon,
+		Heading:          heading,
+		SpeedKnots:       sog,
+		Course:           cog,
+		Timestamp:        time.Now().UTC(),
+		RawData:          rawData,
+		TrackEnvironment: "SEA_SURFACE",
+		CircularError:    ce,
+		AISData:          aisData,
 	}, nil
 }
 
 // parseAISType5 extracts static and voyage data from AIS message type 5.
 // Type 5 messages are 424 bits and always span 2 fragments. They contain
-// vessel name and callsign but no position data.
+// vessel name, callsign, dimensions, and voyage data but no position.
 func (p *Parser) parseAISType5(bits []byte, rawData []byte) (*models.EntityPosition, error) {
 	if len(bits) < 424 {
 		return nil, fmt.Errorf("AIS type 5 too short: %d bits (need 424)", len(bits))
 	}
 
 	mmsi := bitsToUint(bits, 8, 30)
+	imo := bitsToUint(bits, 40, 30)
 	callsign := decodeAIS6BitText(bits, 70, 42)
 	vesselName := decodeAIS6BitText(bits, 112, 120)
+	shipType := bitsToUint(bits, 232, 8)
+	dimA := float64(bitsToUint(bits, 240, 9))
+	dimB := float64(bitsToUint(bits, 249, 9))
+	dimC := float64(bitsToUint(bits, 258, 6))
+	dimD := float64(bitsToUint(bits, 264, 6))
+	draught := float64(bitsToUint(bits, 294, 8)) / 10.0
+	destination := decodeAIS6BitText(bits, 302, 120)
 
 	name := vesselName
 	if name == "" {
@@ -575,14 +642,46 @@ func (p *Parser) parseAISType5(bits []byte, rawData []byte) (*models.EntityPosit
 		name = fmt.Sprintf("MMSI %d", mmsi)
 	}
 
+	mmsiStr := fmt.Sprintf("%d", mmsi)
+	lengthOverall := dimA + dimB
+	beam := dimC + dimD
+
+	aisData := &models.AISData{
+		MMSI:          mmsiStr,
+		Callsign:      callsign,
+		VesselName:    vesselName,
+		ShipType:      int(shipType),
+		ShipTypeName:  aisShipTypeName(shipType),
+		DimensionA:    dimA,
+		DimensionB:    dimB,
+		DimensionC:    dimC,
+		DimensionD:    dimD,
+		LengthOverall: lengthOverall,
+		Beam:          beam,
+		Draught:       draught,
+		Destination:   destination,
+		MessageType:   5,
+	}
+
+	if imo > 0 {
+		aisData.IMO = fmt.Sprintf("%d", imo)
+	}
+	if len(mmsiStr) == 9 {
+		aisData.Flag = mmsiMIDToCountry(mmsiStr[:3])
+	}
+
 	return &models.EntityPosition{
-		EntityID:   fmt.Sprintf("MMSI-%d", mmsi),
-		EntityType: models.EntityTypeVessel,
-		Name:       name,
-		Latitude:   0,
-		Longitude:  0,
-		Timestamp:  time.Now().UTC(),
-		RawData:    rawData,
+		EntityID:         fmt.Sprintf("MMSI-%d", mmsi),
+		EntityType:       models.EntityTypeVessel,
+		Name:             name,
+		Latitude:         0,
+		Longitude:        0,
+		Timestamp:        time.Now().UTC(),
+		RawData:          rawData,
+		TrackEnvironment: "SEA_SURFACE",
+		DimensionLength:  lengthOverall,
+		DimensionWidth:   beam,
+		AISData:          aisData,
 	}, nil
 }
 
@@ -705,21 +804,63 @@ func (p *Parser) ParseADSB(data []byte) (*models.EntityPosition, error) {
 		name = fmt.Sprintf("ICAO %s", icaoHex)
 	}
 
+	// Vertical rate (field 16) in ft/min → m/s.
+	var verticalRate float64
+	if vr := strings.TrimSpace(fields[16]); vr != "" {
+		if v, err := strconv.ParseFloat(vr, 64); err == nil {
+			verticalRate = v * 0.00508 // ft/min → m/s
+		}
+	}
+
+	// Squawk (field 17)
+	squawk := strings.TrimSpace(fields[17])
+
+	// Ground flag (field 21)
+	onGround := strings.TrimSpace(fields[21]) == "-1"
+
+	// Callsign from field 10 as aircraftId
+	aircraftId := strings.TrimSpace(fields[10])
+
 	ts := parseADSBTimestamp(strings.TrimSpace(fields[6]), strings.TrimSpace(fields[7]))
 
-	return &models.EntityPosition{
-		EntityID:   fmt.Sprintf("ICAO-%s", icaoHex),
-		EntityType: models.EntityTypeAircraft,
-		Name:       name,
-		Latitude:   lat,
-		Longitude:  lon,
-		Altitude:   altitude,
-		Heading:    heading,
-		SpeedKnots: speedKnots,
-		Course:     heading,
-		Timestamp:  ts,
-		RawData:    data,
-	}, nil
+	adsbData := &models.ADSBData{
+		ICAOHex:      icaoHex,
+		Squawk:       squawk,
+		AltitudeBaro: altitude,
+		VerticalRate: verticalRate,
+		OnGround:     onGround,
+		AircraftID:   aircraftId,
+		GroundSpeed:  speedKnots,
+	}
+
+	// Decode emergency from squawk
+	switch squawk {
+	case "7500":
+		adsbData.Emergency = "HIJACK"
+	case "7600":
+		adsbData.Emergency = "RADIO_FAILURE"
+	case "7700":
+		adsbData.Emergency = "GENERAL_EMERGENCY"
+	}
+
+	entity := &models.EntityPosition{
+		EntityID:         fmt.Sprintf("ICAO-%s", icaoHex),
+		EntityType:       models.EntityTypeAircraft,
+		Name:             name,
+		Latitude:         lat,
+		Longitude:        lon,
+		Altitude:         altitude,
+		Heading:          heading,
+		SpeedKnots:       speedKnots,
+		Course:           heading,
+		Timestamp:        ts,
+		RawData:          data,
+		TrackEnvironment: "AIR",
+		VelocityUp:       verticalRate,
+		ADSBData:         adsbData,
+	}
+
+	return entity, nil
 }
 
 // parseADSBTimestamp parses SBS date and time fields ("2006/01/02" + "15:04:05.000").
@@ -782,19 +923,27 @@ func (p *Parser) ParseLink16(data []byte) (*models.EntityPosition, error) {
 	heading := float64(hdgRaw) * 360.0 / 65536.0
 
 	entityType := classifyJSeriesLabel(jLabel)
+	trackEnv := jSeriesLabelToTrackEnvironment(jLabel)
+
+	link16Data := &models.Link16Data{
+		TrackNumber:  int(trackNumber),
+		JSeriesLabel: fmt.Sprintf("%04X", jLabel),
+	}
 
 	return &models.EntityPosition{
-		EntityID:   fmt.Sprintf("JTN-%d", trackNumber),
-		EntityType: entityType,
-		Name:       fmt.Sprintf("JTN %d", trackNumber),
-		Latitude:   lat,
-		Longitude:  lon,
-		Altitude:   alt,
-		Heading:    heading,
-		SpeedKnots: speed,
-		Course:     heading,
-		Timestamp:  time.Now().UTC(),
-		RawData:    data,
+		EntityID:         fmt.Sprintf("JTN-%d", trackNumber),
+		EntityType:       entityType,
+		Name:             fmt.Sprintf("JTN %d", trackNumber),
+		Latitude:         lat,
+		Longitude:        lon,
+		Altitude:         alt,
+		Heading:          heading,
+		SpeedKnots:       speed,
+		Course:           heading,
+		Timestamp:        time.Now().UTC(),
+		RawData:          data,
+		TrackEnvironment: trackEnv,
+		Link16Data:       link16Data,
 	}, nil
 }
 
@@ -846,4 +995,148 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// aisNavStatusString maps AIS navigational status codes to string constants.
+func aisNavStatusString(status uint32) string {
+	switch status {
+	case 0:
+		return "UNDER_WAY_USING_ENGINE"
+	case 1:
+		return "AT_ANCHOR"
+	case 2:
+		return "NOT_UNDER_COMMAND"
+	case 3:
+		return "RESTRICTED_MANOEUVRABILITY"
+	case 4:
+		return "CONSTRAINED_BY_DRAUGHT"
+	case 5:
+		return "MOORED"
+	case 6:
+		return "AGROUND"
+	case 7:
+		return "ENGAGED_IN_FISHING"
+	case 8:
+		return "UNDER_WAY_SAILING"
+	case 14:
+		return "AIS_SART"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// aisShipTypeName maps AIS ship type codes (0-99) to human-readable names.
+func aisShipTypeName(code uint32) string {
+	switch {
+	case code >= 20 && code <= 29:
+		return "Wing in Ground"
+	case code == 30:
+		return "Fishing"
+	case code == 31 || code == 32:
+		return "Towing"
+	case code == 33:
+		return "Dredging"
+	case code == 34:
+		return "Diving Operations"
+	case code == 35:
+		return "Military Operations"
+	case code == 36:
+		return "Sailing"
+	case code == 37:
+		return "Pleasure Craft"
+	case code >= 40 && code <= 49:
+		return "High Speed Craft"
+	case code == 50:
+		return "Pilot Vessel"
+	case code == 51:
+		return "Search and Rescue"
+	case code == 52:
+		return "Tug"
+	case code == 53:
+		return "Port Tender"
+	case code == 55:
+		return "Law Enforcement"
+	case code >= 60 && code <= 69:
+		return "Passenger"
+	case code >= 70 && code <= 79:
+		return "Cargo"
+	case code >= 80 && code <= 89:
+		return "Tanker"
+	default:
+		return "Other"
+	}
+}
+
+// mmsiMIDToCountry provides a basic mapping of MMSI MID codes to ISO 3166-1
+// alpha-2 country codes for a subset of common maritime nations.
+func mmsiMIDToCountry(mid string) string {
+	midMap := map[string]string{
+		"201": "GR", "211": "DE", "219": "DK", "220": "DK",
+		"224": "ES", "225": "ES", "226": "FR", "227": "FR",
+		"228": "FR", "229": "MT", "230": "FI", "231": "FO",
+		"232": "GB", "233": "GB", "234": "GB", "235": "GB",
+		"236": "GI", "237": "GR", "238": "HR", "239": "GR",
+		"240": "GR", "241": "GR", "242": "MA", "243": "HU",
+		"244": "NL", "245": "NL", "246": "NL", "247": "IT",
+		"248": "MT", "249": "MT", "250": "IE", "255": "PT",
+		"256": "MT", "257": "NO", "258": "NO", "259": "NO",
+		"261": "PL", "263": "PT", "265": "SE", "266": "SE",
+		"269": "CH", "270": "CZ", "271": "TR", "272": "UA",
+		"273": "RU", "274": "MK", "275": "LV", "276": "EE",
+		"277": "LT", "278": "SI", "279": "RS",
+		"303": "US", "338": "US", "366": "US", "367": "US",
+		"368": "US", "369": "US",
+		"316": "CA",
+		"401": "AF", "412": "CN", "413": "CN", "414": "CN",
+		"431": "JP", "432": "JP", "440": "KR", "441": "KR",
+		"501": "FR", "503": "AU", "506": "MM",
+		"508": "MV", "510": "NZ", "512": "NZ",
+		"525": "ID", "533": "MY", "548": "PH",
+		"563": "SG", "564": "SG", "565": "SG", "566": "SG",
+		"567": "TH",
+		"601": "ZA", "603": "AO", "605": "DZ",
+		"636": "LR", "637": "LR",
+		"710": "BR", "720": "BO", "725": "CL", "730": "CO",
+		"735": "EC", "740": "FK",
+		"760": "MX",
+	}
+	if c, ok := midMap[mid]; ok {
+		return c
+	}
+	return ""
+}
+
+// cotDimensionToTrackEnvironment infers track environment from CoT type dimension code.
+func cotDimensionToTrackEnvironment(cotType string) string {
+	parts := strings.Split(cotType, "-")
+	if len(parts) < 3 {
+		return "UNKNOWN"
+	}
+	switch strings.ToUpper(parts[2]) {
+	case "A":
+		return "AIR"
+	case "S":
+		return "SEA_SURFACE"
+	case "G":
+		return "GROUND"
+	case "U":
+		return "SUBSURFACE"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// jSeriesLabelToTrackEnvironment infers track environment from J-series label.
+func jSeriesLabelToTrackEnvironment(label uint16) string {
+	majorByte := label >> 8
+	switch {
+	case majorByte == 0x02:
+		return "AIR"
+	case label == 0x0302:
+		return "SEA_SURFACE"
+	case label == 0x0305:
+		return "GROUND"
+	default:
+		return "UNKNOWN"
+	}
 }

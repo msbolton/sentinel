@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -205,17 +206,25 @@ type adsbLolResponse struct {
 }
 
 type adsbLolAircraft struct {
-	Hex          string           `json:"hex"`
-	Flight       *string          `json:"flight"`
-	Reg          *string          `json:"r"`
-	AircraftType *string          `json:"t"`
-	Lat          *float64         `json:"lat"`
-	Lon          *float64         `json:"lon"`
-	AltBaro      *adsbLolAltitude `json:"alt_baro"`
-	AltGeom      *float64         `json:"alt_geom"`
-	GroundSpeed  *float64         `json:"gs"`
-	Track        *float64         `json:"track"`
-	Squawk       *string          `json:"squawk"`
+	Hex              string           `json:"hex"`
+	Flight           *string          `json:"flight"`
+	Reg              *string          `json:"r"`
+	AircraftType     *string          `json:"t"`
+	AircraftTypeName *string          `json:"desc"`
+	OperatorName     *string          `json:"ownOp"`
+	Lat              *float64         `json:"lat"`
+	Lon              *float64         `json:"lon"`
+	AltBaro          *adsbLolAltitude `json:"alt_baro"`
+	AltGeom          *float64         `json:"alt_geom"`
+	GroundSpeed      *float64         `json:"gs"`
+	Track            *float64         `json:"track"`
+	BaroRate         *float64         `json:"baro_rate"`
+	Squawk           *string          `json:"squawk"`
+	Category         *string          `json:"category"`
+	NacP             *int             `json:"nac_p"`
+	SIL              *int             `json:"sil"`
+	NIC              *int             `json:"nic"`
+	RC               *float64         `json:"rc"`
 }
 
 // adsbLolAltitude handles the alt_baro field which can be a number or the
@@ -264,13 +273,19 @@ func adsbLolAircraftToEntityPosition(ac adsbLolAircraft, now time.Time) *models.
 		return nil
 	}
 
+	icaoHex := strings.ToUpper(ac.Hex)
 	ep := &models.EntityPosition{
-		EntityID:   "ICAO-" + strings.ToUpper(ac.Hex),
-		EntityType: models.EntityTypeAircraft,
-		Source:     models.SourceADSBLol,
-		Latitude:   *ac.Lat,
-		Longitude:  *ac.Lon,
-		Timestamp:  now,
+		EntityID:         "ICAO-" + icaoHex,
+		EntityType:       models.EntityTypeAircraft,
+		Source:           models.SourceADSBLol,
+		Latitude:         *ac.Lat,
+		Longitude:        *ac.Lon,
+		Timestamp:        now,
+		TrackEnvironment: "AIR",
+	}
+
+	adsbData := &models.ADSBData{
+		ICAOHex: icaoHex,
 	}
 
 	// Name: callsign (trimmed) if available, else hex.
@@ -278,6 +293,7 @@ func adsbLolAircraftToEntityPosition(ac adsbLolAircraft, now time.Time) *models.
 		name := strings.TrimSpace(*ac.Flight)
 		if name != "" {
 			ep.Name = name
+			adsbData.AircraftID = name
 		} else {
 			ep.Name = ac.Hex
 		}
@@ -285,19 +301,55 @@ func adsbLolAircraftToEntityPosition(ac adsbLolAircraft, now time.Time) *models.
 		ep.Name = ac.Hex
 	}
 
+	// Registration and aircraft type
+	if ac.Reg != nil {
+		adsbData.Registration = *ac.Reg
+	}
+	if ac.AircraftType != nil {
+		adsbData.AircraftType = *ac.AircraftType
+	}
+	if ac.AircraftTypeName != nil {
+		adsbData.AircraftTypeName = *ac.AircraftTypeName
+	}
+	if ac.OperatorName != nil {
+		adsbData.OperatorName = *ac.OperatorName
+	}
+	if ac.Squawk != nil {
+		adsbData.Squawk = *ac.Squawk
+	}
+
 	// Altitude: prefer baro (if numeric), fall back to geometric.
-	// If on ground, altitude stays 0.
 	if ac.AltBaro != nil {
+		adsbData.OnGround = ac.AltBaro.OnGround
 		if !ac.AltBaro.OnGround {
 			ep.Altitude = ac.AltBaro.Value
+			adsbData.AltitudeBaro = ac.AltBaro.Value
 		}
 	} else if ac.AltGeom != nil {
 		ep.Altitude = *ac.AltGeom
 	}
+	if ac.AltGeom != nil {
+		adsbData.AltitudeGeom = *ac.AltGeom
+	}
 
-	// Speed: gs is already in knots.
+	// Speed: gs is already in knots. Decompose into velocity components.
 	if ac.GroundSpeed != nil {
 		ep.SpeedKnots = *ac.GroundSpeed
+		adsbData.GroundSpeed = *ac.GroundSpeed
+
+		// Decompose into North-East using track angle
+		if ac.Track != nil {
+			gsMS := *ac.GroundSpeed / metersPerSecToKnots // knots → m/s
+			trackRad := *ac.Track * math.Pi / 180.0
+			ep.VelocityNorth = gsMS * math.Cos(trackRad)
+			ep.VelocityEast = gsMS * math.Sin(trackRad)
+		}
+	}
+
+	// Vertical rate: baro_rate is ft/min → m/s
+	if ac.BaroRate != nil {
+		ep.VelocityUp = *ac.BaroRate * 0.00508
+		adsbData.VerticalRate = *ac.BaroRate * 0.00508
 	}
 
 	// Heading and course from track.
@@ -305,6 +357,25 @@ func adsbLolAircraftToEntityPosition(ac adsbLolAircraft, now time.Time) *models.
 		ep.Heading = *ac.Track
 		ep.Course = *ac.Track
 	}
+
+	// Quality indicators
+	if ac.Category != nil {
+		adsbData.Category = *ac.Category
+	}
+	if ac.NacP != nil {
+		adsbData.NacP = *ac.NacP
+	}
+	if ac.SIL != nil {
+		adsbData.SIL = *ac.SIL
+	}
+	if ac.NIC != nil {
+		adsbData.NIC = *ac.NIC
+	}
+	if ac.RC != nil {
+		adsbData.RC = *ac.RC
+	}
+
+	ep.ADSBData = adsbData
 
 	return ep
 }
