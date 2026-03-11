@@ -247,7 +247,7 @@ services:
     container_name: sentinel-keycloak
     hostname: keycloak
     restart: unless-stopped
-    command: start-dev
+    command: start-dev --import-realm
     environment:
       # Database
       KC_DB: postgres
@@ -266,6 +266,8 @@ services:
       KC_FEATURES: "token-exchange,admin-fine-grained-authz"
     ports:
       - "8080:8080"
+    volumes:
+      - ./config/keycloak/sentinel-realm.json:/opt/keycloak/data/import/sentinel-realm.json:ro
     depends_on:
       keycloak-db:
         condition: service_healthy

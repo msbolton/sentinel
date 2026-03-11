@@ -17,6 +17,36 @@
   "maxDeltaTimeSeconds": 43200,
   "failureFactor": 5,
   "defaultRoles": ["sentinel-viewer"],
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "otpPolicyInitialCounter": 0,
+  "otpPolicyLookAheadWindow": 1,
+  "eventsEnabled": true,
+  "eventsListeners": ["jboss-logging"],
+  "enabledEventTypes": [
+    "LOGIN",
+    "LOGIN_ERROR",
+    "LOGOUT",
+    "REGISTER",
+    "REGISTER_ERROR",
+    "CODE_TO_TOKEN",
+    "CODE_TO_TOKEN_ERROR",
+    "CLIENT_LOGIN",
+    "CLIENT_LOGIN_ERROR",
+    "TOKEN_EXCHANGE",
+    "TOKEN_EXCHANGE_ERROR",
+    "REFRESH_TOKEN",
+    "REFRESH_TOKEN_ERROR",
+    "UPDATE_PROFILE",
+    "UPDATE_PASSWORD",
+    "SEND_RESET_PASSWORD",
+    "IMPERSONATE",
+    "CUSTOM_REQUIRED_ACTION"
+  ],
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": true,
   "roles": {
     "realm": [
       {
@@ -74,6 +104,19 @@
       "publicClient": false,
       "bearerOnly": true,
       "protocol": "openid-connect"
+    },
+    {
+      "clientId": "sentinel-service",
+      "name": "SENTINEL Inter-Service Client",
+      "description": "Client credentials grant for service-to-service authentication",
+      "enabled": true,
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "secret": "sentinel-service-secret-dev",
+      "protocol": "openid-connect",
+      "defaultClientScopes": ["openid"]
     }
   ],
   "users": [
@@ -139,6 +182,39 @@
         "classification-s",
         "classification-c",
         "classification-u"
+      ]
+    }
+  ],
+  "requiredActions": [
+    {
+      "alias": "CONFIGURE_TOTP",
+      "name": "Configure OTP",
+      "providerId": "CONFIGURE_TOTP",
+      "enabled": true,
+      "defaultAction": false,
+      "priority": 10
+    }
+  ],
+  "authenticationFlows": [
+    {
+      "alias": "sentinel-browser",
+      "description": "Browser login flow with optional MFA",
+      "providerId": "basic-flow",
+      "builtIn": false,
+      "topLevel": true,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-cookie",
+          "authenticatorFlow": false,
+          "requirement": "ALTERNATIVE",
+          "priority": 10
+        },
+        {
+          "authenticator": "auth-username-password-form",
+          "authenticatorFlow": false,
+          "requirement": "ALTERNATIVE",
+          "priority": 20
+        }
       ]
     }
   ]

@@ -13,6 +13,7 @@ export interface UserProfile {
 export class AuthService implements OnDestroy {
   private keycloak: any = null;
   private tokenRefreshInterval: ReturnType<typeof setInterval> | null = null;
+  private tokenExpiryTimeout: ReturnType<typeof setTimeout> | null = null;
 
   private readonly authenticatedSubject = new BehaviorSubject<boolean>(false);
   private readonly userProfileSubject = new BehaviorSubject<UserProfile | null>(null);
@@ -22,7 +23,6 @@ export class AuthService implements OnDestroy {
 
   async init(): Promise<boolean> {
     try {
-      // Dynamic import of keycloak-js to handle cases where it may not be installed
       const KeycloakModule = await import('keycloak-js').catch(() => null);
 
       if (!KeycloakModule) {
@@ -51,6 +51,18 @@ export class AuthService implements OnDestroy {
         this.setupTokenRefresh();
       }
 
+      // Listen for token expiry events
+      this.keycloak.onTokenExpired = () => {
+        console.warn('[Auth] Token expired, attempting refresh');
+        this.refreshToken();
+      };
+
+      this.keycloak.onAuthLogout = () => {
+        console.warn('[Auth] Session ended by Keycloak');
+        this.authenticatedSubject.next(false);
+        this.userProfileSubject.next(null);
+      };
+
       return authenticated;
     } catch (error) {
       console.warn('[Auth] Keycloak initialization failed, running in unauthenticated mode:', error);
@@ -68,6 +80,7 @@ export class AuthService implements OnDestroy {
   }
 
   async logout(): Promise<void> {
+    this.clearTimers();
     if (this.keycloak) {
       await this.keycloak.logout({ redirectUri: window.location.origin });
     }
@@ -81,6 +94,23 @@ export class AuthService implements OnDestroy {
 
   isAuthenticated(): boolean {
     return this.authenticatedSubject.value;
+  }
+
+  getUserRoles(): string[] {
+    return this.userProfileSubject.value?.roles ?? [];
+  }
+
+  hasRole(role: string): boolean {
+    return this.getUserRoles().includes(role);
+  }
+
+  hasAnyRole(...roles: string[]): boolean {
+    const userRoles = this.getUserRoles();
+    return roles.some((role) => userRoles.includes(role));
+  }
+
+  getClassificationLevel(): string {
+    return this.userProfileSubject.value?.classificationLevel ?? 'UNCLASSIFIED';
   }
 
   private async loadUserProfile(): Promise<void> {
@@ -102,32 +132,68 @@ export class AuthService implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.clearTimers();
+  }
+
+  private clearTimers(): void {
     if (this.tokenRefreshInterval) {
       clearInterval(this.tokenRefreshInterval);
       this.tokenRefreshInterval = null;
+    }
+    if (this.tokenExpiryTimeout) {
+      clearTimeout(this.tokenExpiryTimeout);
+      this.tokenExpiryTimeout = null;
     }
   }
 
   private setupTokenRefresh(): void {
     if (!this.keycloak) return;
 
-    // Clear existing interval before creating new one
-    if (this.tokenRefreshInterval) {
-      clearInterval(this.tokenRefreshInterval);
+    this.clearTimers();
+
+    // Refresh token every 60 seconds (with 70-second validity threshold)
+    this.tokenRefreshInterval = setInterval(() => {
+      this.refreshToken();
+    }, 60000);
+
+    // Schedule a warning before token expiry
+    this.scheduleExpiryWarning();
+  }
+
+  private async refreshToken(): Promise<void> {
+    if (!this.keycloak) return;
+
+    try {
+      const refreshed = await this.keycloak.updateToken(70);
+      if (refreshed) {
+        console.log('[Auth] Token refreshed');
+        await this.loadUserProfile();
+        this.scheduleExpiryWarning();
+      }
+    } catch {
+      console.warn('[Auth] Token refresh failed, session expired');
+      this.authenticatedSubject.next(false);
+      this.userProfileSubject.next(null);
+    }
+  }
+
+  private scheduleExpiryWarning(): void {
+    if (!this.keycloak?.tokenParsed?.exp) return;
+
+    if (this.tokenExpiryTimeout) {
+      clearTimeout(this.tokenExpiryTimeout);
     }
 
-    // Refresh token every 60 seconds
-    this.tokenRefreshInterval = setInterval(async () => {
-      try {
-        const refreshed = await this.keycloak.updateToken(70);
-        if (refreshed) {
-          console.log('[Auth] Token refreshed');
-        }
-      } catch {
-        console.warn('[Auth] Token refresh failed');
-        this.authenticatedSubject.next(false);
-      }
-    }, 60000);
+    const expiresIn = this.keycloak.tokenParsed.exp * 1000 - Date.now();
+    // Warn 2 minutes before expiry
+    const warnAt = expiresIn - 120000;
+
+    if (warnAt > 0) {
+      this.tokenExpiryTimeout = setTimeout(() => {
+        console.warn('[Auth] Token expiring soon, refreshing proactively');
+        this.refreshToken();
+      }, warnAt);
+    }
   }
 
   private setDevelopmentProfile(): void {
@@ -135,7 +201,7 @@ export class AuthService implements OnDestroy {
     this.userProfileSubject.next({
       username: 'dev-operator',
       email: 'operator@sentinel.local',
-      roles: ['analyst', 'operator'],
+      roles: ['sentinel-analyst', 'sentinel-operator'],
       classificationLevel: 'UNCLASSIFIED',
     });
   }
@@ -145,12 +211,10 @@ export class AuthService implements OnDestroy {
  * HTTP interceptor that attaches the JWT token to outgoing requests.
  */
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
-  // Only attach to API requests
   if (!req.url.startsWith('/api')) {
     return next(req);
   }
 
-  // Inject AuthService manually since functional interceptors can't use constructor injection
   const authService = (window as any).__sentinelAuthService;
   const token = authService ? authService.getToken() : null;
 
