@@ -34,6 +34,9 @@ import {
   svgToDataUrl,
   DEFAULT_CAMERA_POSITION,
   TRACK_TRAIL_CONFIG,
+  BILLBOARD_SCALE_BY_DISTANCE,
+  LABEL_SCALE_BY_DISTANCE,
+  LABEL_TRANSLUCENCY_BY_DISTANCE,
 } from './cesium-config';
 import { CircularBuffer, decimateTrail, TrailPoint } from './trail-utils';
 
@@ -97,6 +100,13 @@ interface LayerConfig {
   color: string;
 }
 
+interface EntityMapEntry {
+  billboard: any;
+  label: any;
+  polyline: any | null;
+  sentinelEntity: Entity;
+}
+
 @Component({
   selector: 'app-map',
   standalone: true,
@@ -132,7 +142,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   private Cesium: any;
   private userLocationEntity: any = null;
-  private entityMap = new Map<string, any>(); // Cesium entity references
+  private billboardCollection: any = null;
+  private labelCollection: any = null;
+  private polylineCollection: any = null;
+  private entityMap = new Map<string, EntityMapEntry>();
   private trackTrails = new Map<string, CircularBuffer<{ lat: number; lon: number; alt: number }>>();
   private subscriptions = new Subscription();
   private cameraMovedSubject = new Subject<void>();
@@ -188,6 +201,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (this.viewer && !this.viewer.isDestroyed()) {
       this.viewer.destroy();
     }
+    this.billboardCollection = null;
+    this.labelCollection = null;
+    this.polylineCollection = null;
   }
 
   private async initCesium(): Promise<void> {
@@ -213,9 +229,34 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.ngZone.runOutsideAngular(() => {
       this.viewer = new Cesium.Viewer(container, viewerOptions);
 
+      // Primitive collections for tracked entities
+      this.billboardCollection = this.viewer.scene.primitives.add(
+        new Cesium.BillboardCollection({ scene: this.viewer.scene })
+      );
+      this.labelCollection = this.viewer.scene.primitives.add(
+        new Cesium.LabelCollection({ scene: this.viewer.scene })
+      );
+      this.polylineCollection = this.viewer.scene.primitives.add(
+        new Cesium.PolylineCollection()
+      );
+
       // Set dark atmosphere
       this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
       this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a0e17');
+
+      // Disable expensive visual features
+      this.viewer.scene.sun.show = false;
+      this.viewer.scene.moon.show = false;
+      this.viewer.scene.fog.enabled = false;
+      this.viewer.scene.globe.showGroundAtmosphere = false;
+      this.viewer.scene.globe.enableLighting = false;
+      this.viewer.scene.postProcessStages.fxaa.enabled = false;
+
+      // Increase screen space error tolerance for fewer terrain tiles
+      this.viewer.scene.globe.maximumScreenSpaceError = 4;
+
+      // Larger tile cache to reduce network requests
+      this.viewer.scene.globe.tileCacheSize = 1000;
 
       // Enable depth testing for entities behind the globe
       this.viewer.scene.globe.depthTestAgainstTerrain = false;
@@ -244,15 +285,24 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     handler.setInputAction((click: any) => {
       const pickedObject = this.viewer.scene.pick(click.position);
 
-      if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelEntity) {
-        this.ngZone.run(() => {
-          this.selectedEntity.set(pickedObject.id._sentinelEntity);
-        });
-      } else {
-        this.ngZone.run(() => {
-          this.selectedEntity.set(null);
-        });
+      if (Cesium.defined(pickedObject) && pickedObject.id != null) {
+        const entry = this.entityMap.get(pickedObject.id as string);
+        if (entry) {
+          // Drive Cesium's SelectionIndicator (green brackets) by setting
+          // viewer.selectedEntity to a lightweight proxy with matching position.
+          this.viewer.selectedEntity = new Cesium.Entity({
+            position: entry.billboard.position,
+          });
+          this.ngZone.run(() => {
+            this.selectedEntity.set(entry.sentinelEntity);
+          });
+          return;
+        }
       }
+      this.viewer.selectedEntity = undefined;
+      this.ngZone.run(() => {
+        this.selectedEntity.set(null);
+      });
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
   }
 
@@ -329,16 +379,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     ).subscribe((entities) => {
       this.ngZone.runOutsideAngular(() => {
         if (!this.viewer) return;
-        this.viewer.entities.suspendEvents();
-        try {
-          entities.forEach((entity, id) => {
-            if (!this.entityMap.has(id)) {
-              this.addOrUpdateCesiumEntity(entity);
-            }
-          });
-        } finally {
-          this.viewer.entities.resumeEvents();
-        }
+        entities.forEach((entity, id) => {
+          if (!this.entityMap.has(id)) {
+            this.addOrUpdateCesiumEntity(entity);
+          }
+        });
         this.scheduleRender();
       });
     });
@@ -348,13 +393,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const evictionSub = this.entityService.entityEvictions$.subscribe((ids) => {
       this.ngZone.runOutsideAngular(() => {
         if (!this.viewer) return;
-        this.viewer.entities.suspendEvents();
-        try {
-          for (const id of ids) {
-            this.removeCesiumEntity(id);
-          }
-        } finally {
-          this.viewer.entities.resumeEvents();
+        for (const id of ids) {
+          this.removeCesiumEntity(id);
         }
         this.scheduleRender();
       });
@@ -365,13 +405,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private processCesiumBatch(events: EntityEvent[]): void {
     if (!this.viewer) return;
 
-    this.viewer.entities.suspendEvents();
-    try {
-      for (const event of events) {
-        this.handleEntityEvent(event);
-      }
-    } finally {
-      this.viewer.entities.resumeEvents();
+    for (const event of events) {
+      this.handleEntityEvent(event);
     }
 
     this.scheduleRender();
@@ -479,88 +514,97 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const existing = this.entityMap.get(entity.id);
 
     if (existing) {
-      // Update existing entity
-      existing.position = position;
+      // Update existing primitives
+      existing.billboard.position = position;
+      existing.billboard.rotation = rotation;
+
+      existing.label.position = position;
       existing.label.text = entity.name;
-      if (existing.billboard) {
-        existing.billboard.rotation = rotation;
-      }
 
       // Update polyline trail
       if (trail.length >= 2) {
-        const trailPositions = trail.map((p) =>
+        const trailPositions = trail.map((p: TrailPoint) =>
           Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt),
         );
         if (existing.polyline) {
           existing.polyline.positions = trailPositions;
         } else {
-          existing.polyline = new Cesium.PolylineGraphics({
+          existing.polyline = this.polylineCollection.add({
             positions: trailPositions,
             width: TRACK_TRAIL_CONFIG.width,
-            material: cesiumColor.withAlpha(TRACK_TRAIL_CONFIG.trailOpacity),
-            clampToGround: !hasAltitude,
+            material: Cesium.Material.fromType('Color', {
+              color: cesiumColor.withAlpha(TRACK_TRAIL_CONFIG.trailOpacity),
+            }),
+            id: entity.id,
           });
         }
       }
+
+      existing.sentinelEntity = entity;
     } else {
-      // Create new entity
-      const cesiumEntity = this.viewer.entities.add({
+      // Create new primitives
+      const billboard = this.billboardCollection.add({
         position,
-        billboard: {
-          image: this.getBillboardImage(entity.entityType),
-          scale: 0.5,
-          color: cesiumColor,
-          heightReference: heightRef,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          verticalOrigin: Cesium.VerticalOrigin.CENTER,
-          rotation,
-          alignedAxis: Cesium.Cartesian3.UNIT_Z,
-        },
-        label: {
-          text: entity.name,
-          font: '12px JetBrains Mono, monospace',
-          fillColor: Cesium.Color.WHITE,
-          outlineColor: Cesium.Color.BLACK,
-          outlineWidth: 2,
-          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-          pixelOffset: new Cesium.Cartesian2(0, -16),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          showBackground: true,
-          backgroundColor: Cesium.Color.fromCssColorString('#0a0e17').withAlpha(0.7),
-          backgroundPadding: new Cesium.Cartesian2(6, 4),
-          heightReference: heightRef,
-        },
-        polyline:
-          trail.length >= 2
-            ? {
-                positions: trail.map((p) =>
-                  Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt),
-                ),
-                width: TRACK_TRAIL_CONFIG.width,
-                material: cesiumColor.withAlpha(TRACK_TRAIL_CONFIG.trailOpacity),
-                clampToGround: !hasAltitude,
-              }
-            : undefined,
+        image: this.getBillboardImage(entity.entityType),
+        scale: 0.5,
+        color: cesiumColor,
+        heightReference: heightRef,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        verticalOrigin: Cesium.VerticalOrigin.CENTER,
+        rotation,
+        alignedAxis: Cesium.Cartesian3.UNIT_Z,
+        scaleByDistance: new Cesium.NearFarScalar(...BILLBOARD_SCALE_BY_DISTANCE),
+        id: entity.id,
       });
 
-      // Store reference to SENTINEL entity data
-      cesiumEntity._sentinelEntity = entity;
-      this.entityMap.set(entity.id, cesiumEntity);
-    }
+      const label = this.labelCollection.add({
+        position,
+        text: entity.name,
+        font: '12px JetBrains Mono, monospace',
+        fillColor: Cesium.Color.WHITE,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 2,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+        pixelOffset: new Cesium.Cartesian2(0, -16),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        showBackground: true,
+        backgroundColor: Cesium.Color.fromCssColorString('#0a0e17').withAlpha(0.7),
+        backgroundPadding: new Cesium.Cartesian2(6, 4),
+        heightReference: heightRef,
+        scaleByDistance: new Cesium.NearFarScalar(...LABEL_SCALE_BY_DISTANCE),
+        translucencyByDistance: new Cesium.NearFarScalar(...LABEL_TRANSLUCENCY_BY_DISTANCE),
+        id: entity.id,
+      });
 
-    // Update stored sentinel entity data
-    if (this.entityMap.has(entity.id)) {
-      this.entityMap.get(entity.id)._sentinelEntity = entity;
+      let polyline: any = null;
+      if (trail.length >= 2) {
+        polyline = this.polylineCollection.add({
+          positions: trail.map((p: TrailPoint) =>
+            Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt),
+          ),
+          width: TRACK_TRAIL_CONFIG.width,
+          material: Cesium.Material.fromType('Color', {
+            color: cesiumColor.withAlpha(TRACK_TRAIL_CONFIG.trailOpacity),
+          }),
+          id: entity.id,
+        });
+      }
+
+      this.entityMap.set(entity.id, { billboard, label, polyline, sentinelEntity: entity });
     }
 
     this.scheduleRender();
   }
 
   private removeCesiumEntity(entityId: string): void {
-    const cesiumEntity = this.entityMap.get(entityId);
-    if (cesiumEntity && this.viewer) {
-      this.viewer.entities.remove(cesiumEntity);
+    const entry = this.entityMap.get(entityId);
+    if (entry) {
+      this.billboardCollection.remove(entry.billboard);
+      this.labelCollection.remove(entry.label);
+      if (entry.polyline) {
+        this.polylineCollection.remove(entry.polyline);
+      }
       this.entityMap.delete(entityId);
       this.trackTrails.delete(entityId);
       this.scheduleRender();
@@ -624,10 +668,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   toggleLayer(layer: LayerConfig): void {
     // Show/hide all entities of this type
-    this.entityMap.forEach((cesiumEntity) => {
-      const sentinelEntity = cesiumEntity._sentinelEntity as Entity;
-      if (sentinelEntity.entityType === layer.entityType) {
-        cesiumEntity.show = layer.visible;
+    this.entityMap.forEach((entry) => {
+      if (entry.sentinelEntity.entityType === layer.entityType) {
+        entry.billboard.show = layer.visible;
+        entry.label.show = layer.visible;
+        if (entry.polyline) {
+          entry.polyline.show = layer.visible;
+        }
       }
     });
     this.scheduleRender();
@@ -670,6 +717,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   closeEntityPopup(): void {
+    this.viewer.selectedEntity = undefined;
     this.selectedEntity.set(null);
   }
 
@@ -703,9 +751,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
     if (oldStride === newStride) return;
 
-    this.entityMap.forEach((cesiumEntity, entityId) => {
+    this.entityMap.forEach((entry, entityId) => {
       const trailBuffer = this.trackTrails.get(entityId);
-      if (!trailBuffer || trailBuffer.length < 2 || !cesiumEntity.polyline) return;
+      if (!trailBuffer || trailBuffer.length < 2 || !entry.polyline) return;
 
       const decimated = decimateTrail(
         trailBuffer.toArray(),
@@ -714,7 +762,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       );
 
       if (decimated.length >= 2) {
-        cesiumEntity.polyline.positions = decimated.map((p: TrailPoint) =>
+        entry.polyline.positions = decimated.map((p: TrailPoint) =>
           this.Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt),
         );
       }
