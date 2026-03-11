@@ -14,6 +14,7 @@ import {
   CLASSIFICATION_HIERARCHY,
 } from './decorators/classification.decorator';
 import type { AuthenticatedUser } from './jwt.strategy';
+import { AuthAuditService } from './auth-audit.service';
 
 const IS_PRODUCTION = process.env['NODE_ENV'] === 'production';
 
@@ -22,8 +23,8 @@ const DEV_USER: AuthenticatedUser = {
   username: 'dev-operator',
   email: 'operator@sentinel.local',
   name: 'Dev Operator',
-  roles: ['analyst', 'operator', 'admin'],
-  realmRoles: ['analyst', 'operator', 'admin'],
+  roles: ['sentinel-analyst', 'sentinel-operator', 'sentinel-admin'],
+  realmRoles: ['sentinel-analyst', 'sentinel-operator', 'sentinel-admin'],
   clientRoles: [],
   classificationLevel: 'TOP_SECRET',
 };
@@ -32,7 +33,10 @@ const DEV_USER: AuthenticatedUser = {
 export class JwtAuthGuard extends AuthGuard('jwt') {
   private readonly logger = new Logger(JwtAuthGuard.name);
 
-  constructor(private readonly reflector: Reflector) {
+  constructor(
+    private readonly reflector: Reflector,
+    private readonly auditService: AuthAuditService,
+  ) {
     super();
   }
 
@@ -50,8 +54,6 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     const canActivate = super.canActivate(context);
 
     if (canActivate instanceof Observable) {
-      // For Observable, we cannot chain synchronous logic directly.
-      // Convert to promise for consistency.
       return new Promise<boolean>((resolve, reject) => {
         (canActivate as Observable<boolean>).subscribe({
           next: (result) => {
@@ -84,13 +86,10 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     return true;
   }
 
-  /**
-   * After JWT validation succeeds, check role-based and classification-based
-   * access requirements declared via decorators on the handler/controller.
-   */
   private validateRolesAndClassification(context: ExecutionContext): void {
     const request = context.switchToHttp().getRequest();
     const user = request.user as AuthenticatedUser | undefined;
+    const resource = `${request.method} ${request.url}`;
 
     if (!user) {
       throw new ForbiddenException('No authenticated user found');
@@ -108,6 +107,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
         this.logger.warn(
           `User ${user.username} denied: requires one of [${requiredRoles.join(', ')}], has [${user.roles.join(', ')}]`,
         );
+        this.auditService.logRoleCheckFailed(user, resource, requiredRoles);
         throw new ForbiddenException(
           'Insufficient role permissions for this resource',
         );
@@ -130,6 +130,11 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
       if (userRank < requiredRank) {
         this.logger.warn(
           `User ${user.username} denied: requires classification ${requiredClassification}, has ${userLevel}`,
+        );
+        this.auditService.logClassificationCheckFailed(
+          user,
+          resource,
+          requiredClassification,
         );
         throw new ForbiddenException(
           `Insufficient classification clearance. Required: ${requiredClassification}`,
