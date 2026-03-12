@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { Router, ActivatedRoute } from '@angular/router';
+import { Router, ActivatedRoute, provideRouter } from '@angular/router';
 import { BehaviorSubject } from 'rxjs';
 import { LoginComponent } from './login.component';
 import { AuthService } from '../../core/services/auth.service';
@@ -7,30 +7,36 @@ import { AuthService } from '../../core/services/auth.service';
 describe('LoginComponent', () => {
   let component: LoginComponent;
   let fixture: ComponentFixture<LoginComponent>;
-  let authService: { isAuthenticated$: BehaviorSubject<boolean>; login: jest.Mock; isAuthenticated: jest.Mock };
-  let router: { navigateByUrl: jest.Mock; navigate: jest.Mock };
+  let authService: {
+    isAuthenticated$: BehaviorSubject<boolean>;
+    loginWithCredentials: jest.Mock;
+    isAuthenticated: jest.Mock;
+  };
+  let router: Router;
   let queryParams: { returnUrl?: string };
 
   beforeEach(async () => {
     authService = {
       isAuthenticated$: new BehaviorSubject<boolean>(false),
-      login: jest.fn().mockResolvedValue(undefined),
+      loginWithCredentials: jest.fn().mockResolvedValue({ success: true }),
       isAuthenticated: jest.fn().mockReturnValue(false),
     };
-    router = { navigateByUrl: jest.fn(), navigate: jest.fn() };
     queryParams = {};
 
     await TestBed.configureTestingModule({
       imports: [LoginComponent],
       providers: [
         { provide: AuthService, useValue: authService },
-        { provide: Router, useValue: router },
+        provideRouter([]),
         {
           provide: ActivatedRoute,
           useValue: { snapshot: { queryParams } },
         },
       ],
     }).compileComponents();
+
+    router = TestBed.inject(Router);
+    jest.spyOn(router, 'navigateByUrl').mockResolvedValue(true);
 
     fixture = TestBed.createComponent(LoginComponent);
     component = fixture.componentInstance;
@@ -62,39 +68,68 @@ describe('LoginComponent', () => {
     expect(router.navigateByUrl).not.toHaveBeenCalled();
   });
 
-  it('should call authService.login with redirectUri on sign in', async () => {
+  it('should call loginWithCredentials on sign in', async () => {
     fixture.detectChanges();
+    component.username = 'operator';
+    component.password = 'secret';
 
     await component.onSignIn();
 
-    const expectedUri = window.location.origin + window.location.pathname + '#/map';
-    expect(authService.login).toHaveBeenCalledWith(expectedUri);
+    expect(authService.loginWithCredentials).toHaveBeenCalledWith('operator', 'secret');
   });
 
-  it('should use returnUrl in redirectUri on sign in', async () => {
-    queryParams.returnUrl = '/alerts';
+  it('should navigate to /map on successful login', async () => {
     fixture.detectChanges();
-
-    await component.onSignIn();
-
-    const expectedUri = window.location.origin + window.location.pathname + '#/alerts';
-    expect(authService.login).toHaveBeenCalledWith(expectedUri);
-  });
-
-  it('should navigate directly when login() does not redirect and user is authenticated', async () => {
-    authService.isAuthenticated.mockReturnValue(true);
-    fixture.detectChanges();
+    component.username = 'operator';
+    component.password = 'secret';
 
     await component.onSignIn();
 
     expect(router.navigateByUrl).toHaveBeenCalledWith('/map');
   });
 
-  it('should render the sign-in button', () => {
+  it('should navigate to returnUrl on successful login', async () => {
+    queryParams.returnUrl = '/alerts';
     fixture.detectChanges();
-    const button = fixture.nativeElement.querySelector('.sign-in-btn');
-    expect(button).toBeTruthy();
-    expect(button.textContent).toContain('SIGN IN');
+    component.username = 'operator';
+    component.password = 'secret';
+
+    await component.onSignIn();
+
+    expect(router.navigateByUrl).toHaveBeenCalledWith('/alerts');
+  });
+
+  it('should show error message on failed login', async () => {
+    authService.loginWithCredentials.mockResolvedValue({
+      success: false,
+      error: 'Invalid credentials',
+    });
+    fixture.detectChanges();
+    component.username = 'bad';
+    component.password = 'wrong';
+
+    await component.onSignIn();
+
+    expect(component.errorMessage()).toBe('Invalid credentials');
+    expect(router.navigateByUrl).not.toHaveBeenCalled();
+  });
+
+  it('should not submit when username or password is empty', async () => {
+    fixture.detectChanges();
+    component.username = '';
+    component.password = '';
+
+    await component.onSignIn();
+
+    expect(authService.loginWithCredentials).not.toHaveBeenCalled();
+  });
+
+  it('should render username and password inputs', () => {
+    fixture.detectChanges();
+    const inputs = fixture.nativeElement.querySelectorAll('.login-input');
+    expect(inputs.length).toBe(2);
+    expect(inputs[0].type).toBe('text');
+    expect(inputs[1].type).toBe('password');
   });
 
   it('should render the SENTINEL title', () => {
