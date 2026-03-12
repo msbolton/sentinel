@@ -51,6 +51,21 @@ describe('RegisterComponent', () => {
     expect(button.disabled).toBe(true);
   });
 
+  it('should show invalid email error', () => {
+    component.form.username = 'testuser';
+    component.form.email = 'not-an-email';
+    component.form.password = 'password123';
+    component.form.confirmPassword = 'password123';
+    component.form.firstName = 'Test';
+    component.form.lastName = 'User';
+    component.form.organization = 'Test Org';
+    component.form.justification = 'Need access for work';
+
+    component.onSubmit();
+
+    expect(component.errorMessage()).toBe('Please enter a valid email address');
+  });
+
   it('should show password mismatch error', () => {
     component.form.username = 'testuser';
     component.form.email = 'test@example.com';

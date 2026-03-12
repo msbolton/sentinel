@@ -9,7 +9,7 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { KeycloakAdminService } from './keycloak-admin.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { Roles } from './decorators/roles.decorator';
@@ -36,6 +36,7 @@ export class RegistrationController {
   ) {}
 
   @Post('register')
+  @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 900000 } })
   async register(@Body() dto: RegisterDto): Promise<{ message: string }> {
     if (dto.password !== dto.confirmPassword) {
@@ -92,13 +93,16 @@ export class RegistrationController {
   ): Promise<{ message: string }> {
     const { email, firstName } = await this.keycloakAdmin.rejectUser(userId);
 
-    await this.mailerService.sendMail({
-      to: email,
-      subject: 'Sentinel — Registration Request Rejected',
-      text: `Dear ${firstName},\n\nYour registration request for Sentinel has been reviewed and unfortunately rejected.\n\nIf you believe this is an error, please contact your administrator.\n\nSentinel Security Team`,
-    });
-
-    this.logger.log(`User ${userId} rejected; notification sent to ${email}`);
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: 'Sentinel — Registration Request Rejected',
+        text: `Dear ${firstName},\n\nYour registration request for Sentinel has been reviewed and unfortunately rejected.\n\nIf you believe this is an error, please contact your administrator.\n\nSentinel Security Team`,
+      });
+      this.logger.log(`User ${userId} rejected; notification sent to ${email}`);
+    } catch (mailError) {
+      this.logger.warn(`User ${userId} rejected but notification email to ${email} failed: ${mailError}`);
+    }
 
     return { message: `User ${userId} has been rejected.` };
   }

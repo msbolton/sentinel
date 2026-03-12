@@ -630,6 +630,11 @@ export class RegisterComponent {
   onSubmit(): void {
     if (!this.isFormValid()) return;
 
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.form.email)) {
+      this.errorMessage.set('Please enter a valid email address');
+      return;
+    }
+
     if (this.form.password !== this.form.confirmPassword) {
       this.errorMessage.set('Passwords do not match');
       return;
@@ -647,6 +652,7 @@ export class RegisterComponent {
       username: this.form.username,
       email: this.form.email,
       password: this.form.password,
+      confirmPassword: this.form.confirmPassword,
       firstName: this.form.firstName,
       lastName: this.form.lastName,
       organization: this.form.organization,
