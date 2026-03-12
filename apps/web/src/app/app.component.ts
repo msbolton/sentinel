@@ -1,7 +1,8 @@
 import { Component, OnInit, OnDestroy, DestroyRef, inject, signal, computed, ChangeDetectionStrategy } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { CommonModule } from '@angular/common';
-import { Router, RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
+import { Router, RouterOutlet, RouterLink, RouterLinkActive, NavigationEnd } from '@angular/router';
+import { filter } from 'rxjs';
 import { WebSocketService, ConnectionStatus } from './core/services/websocket.service';
 import { AuthService, UserProfile } from './core/services/auth.service';
 import { AlertService } from './core/services/alert.service';
@@ -17,130 +18,135 @@ import { MapComponent } from './features/map/map.component';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, ThemePickerComponent, DataFeedsComponent, UserMenuComponent],
   template: `
-    <!-- Sidebar Navigation -->
-    <nav class="sidebar">
-      <div class="sidebar-logo" title="SENTINEL">S</div>
+    @if (isFullScreenRoute()) {
+      <!-- Login page renders full-screen, no app shell -->
+      <router-outlet></router-outlet>
+    } @else {
+      <!-- Sidebar Navigation -->
+      <nav class="sidebar">
+        <div class="sidebar-logo" title="SENTINEL">S</div>
 
-      <div class="sidebar-nav">
-        <button
-          class="sidebar-btn"
-          routerLink="/map"
-          routerLinkActive="active"
-          title="Map View">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M2 12h20"/>
-            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-          </svg>
-        </button>
-        <button
-          class="sidebar-btn"
-          routerLink="/search"
-          routerLinkActive="active"
-          title="Search Entities">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="11" cy="11" r="8"/>
-            <path d="M21 21l-4.35-4.35"/>
-          </svg>
-        </button>
-        <button
-          class="sidebar-btn"
-          routerLink="/alerts"
-          routerLinkActive="active"
-          title="Alerts">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-          </svg>
-          @if (unacknowledgedAlertCount() > 0) {
-            <span class="badge">{{ unacknowledgedAlertCount() > 99 ? '99+' : unacknowledgedAlertCount() }}</span>
-          }
-        </button>
-        <button
-          class="sidebar-btn"
-          routerLink="/link-graph"
-          routerLinkActive="active"
-          title="Link Analysis">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="5" cy="6" r="3"/>
-            <circle cx="19" cy="6" r="3"/>
-            <circle cx="12" cy="19" r="3"/>
-            <path d="M7.5 8l4 8.5"/>
-            <path d="M16.5 8l-4 8.5"/>
-            <path d="M8 6h8"/>
-          </svg>
-        </button>
-        <button
-          class="sidebar-btn"
-          routerLink="/timeline"
-          routerLinkActive="active"
-          title="Timeline">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/>
-            <polyline points="12 6 12 12 16 14"/>
-          </svg>
-        </button>
-        <button
-          class="sidebar-btn"
-          routerLink="/locations"
-          routerLinkActive="active"
-          title="Locations">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
-            <circle cx="12" cy="10" r="3"/>
-          </svg>
-        </button>
-      </div>
+        <div class="sidebar-nav">
+          <button
+            class="sidebar-btn"
+            routerLink="/map"
+            routerLinkActive="active"
+            title="Map View">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M2 12h20"/>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+            </svg>
+          </button>
+          <button
+            class="sidebar-btn"
+            routerLink="/search"
+            routerLinkActive="active"
+            title="Search Entities">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="M21 21l-4.35-4.35"/>
+            </svg>
+          </button>
+          <button
+            class="sidebar-btn"
+            routerLink="/alerts"
+            routerLinkActive="active"
+            title="Alerts">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+              <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+            </svg>
+            @if (unacknowledgedAlertCount() > 0) {
+              <span class="badge">{{ unacknowledgedAlertCount() > 99 ? '99+' : unacknowledgedAlertCount() }}</span>
+            }
+          </button>
+          <button
+            class="sidebar-btn"
+            routerLink="/link-graph"
+            routerLinkActive="active"
+            title="Link Analysis">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="5" cy="6" r="3"/>
+              <circle cx="19" cy="6" r="3"/>
+              <circle cx="12" cy="19" r="3"/>
+              <path d="M7.5 8l4 8.5"/>
+              <path d="M16.5 8l-4 8.5"/>
+              <path d="M8 6h8"/>
+            </svg>
+          </button>
+          <button
+            class="sidebar-btn"
+            routerLink="/timeline"
+            routerLinkActive="active"
+            title="Timeline">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </button>
+          <button
+            class="sidebar-btn"
+            routerLink="/locations"
+            routerLinkActive="active"
+            title="Locations">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
+              <circle cx="12" cy="10" r="3"/>
+            </svg>
+          </button>
+        </div>
 
-      <div class="sidebar-footer">
-        <button
-          class="sidebar-btn"
-          (click)="toggleSettings()"
-          title="Settings">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"/>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-          </svg>
-        </button>
-        <app-user-menu></app-user-menu>
-      </div>
-    </nav>
+        <div class="sidebar-footer">
+          <button
+            class="sidebar-btn"
+            (click)="toggleSettings()"
+            title="Settings">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </button>
+          <app-user-menu></app-user-menu>
+        </div>
+      </nav>
 
-    <!-- Main Content Area -->
-    <main class="main-content">
-      <!-- Map is always rendered in the background -->
-      <app-map class="map-background"></app-map>
+      <!-- Main Content Area -->
+      <main class="main-content">
+        <!-- Map is always rendered in the background -->
+        <app-map class="map-background"></app-map>
 
-      <!-- Floating pills -->
-      <div class="floating-pills">
-        <app-data-feeds></app-data-feeds>
-        <app-theme-picker></app-theme-picker>
-      </div>
+        <!-- Floating pills -->
+        <div class="floating-pills">
+          <app-data-feeds></app-data-feeds>
+          <app-theme-picker></app-theme-picker>
+        </div>
 
-      <!-- Feature panels render on top of the map -->
-      <div class="panel-overlay">
-        <router-outlet></router-outlet>
-      </div>
-    </main>
+        <!-- Feature panels render on top of the map -->
+        <div class="panel-overlay">
+          <router-outlet></router-outlet>
+        </div>
+      </main>
 
-    <!-- Status Bar -->
-    <footer class="status-bar">
-      <div class="status-item" [ngClass]="connectionStatus()">
-        <span class="status-dot"></span>
-        <span>{{ connectionStatus() | titlecase }}</span>
-      </div>
-      <span class="status-item">
-        <span class="font-mono">{{ entityCount() }} entities</span>
-      </span>
-      <div class="status-spacer"></div>
-      <span class="status-item font-mono">
-        {{ userProfile()?.classificationLevel ?? 'UNCLASSIFIED' }}
-      </span>
-      <span class="status-item font-mono">
-        {{ userProfile()?.username ?? '--' }}
-      </span>
-      <span class="status-item font-mono">{{ currentTime() }}</span>
-    </footer>
+      <!-- Status Bar -->
+      <footer class="status-bar">
+        <div class="status-item" [ngClass]="connectionStatus()">
+          <span class="status-dot"></span>
+          <span>{{ connectionStatus() | titlecase }}</span>
+        </div>
+        <span class="status-item">
+          <span class="font-mono">{{ entityCount() }} entities</span>
+        </span>
+        <div class="status-spacer"></div>
+        <span class="status-item font-mono">
+          {{ userProfile()?.classificationLevel ?? 'UNCLASSIFIED' }}
+        </span>
+        <span class="status-item font-mono">
+          {{ userProfile()?.username ?? '--' }}
+        </span>
+        <span class="status-item font-mono">{{ currentTime() }}</span>
+      </footer>
+    }
   `,
   styles: [`
     :host {
@@ -196,6 +202,7 @@ import { MapComponent } from './features/map/map.component';
   `],
 })
 export class AppComponent implements OnInit, OnDestroy {
+  isFullScreenRoute = signal<boolean>(false);
   connectionStatus = signal<ConnectionStatus>('disconnected');
   entityCount = signal<number>(0);
   unacknowledgedAlertCount = signal<number>(0);
@@ -213,6 +220,15 @@ export class AppComponent implements OnInit, OnDestroy {
   ) {}
 
   async ngOnInit(): Promise<void> {
+    // Track login route to hide app shell
+    this.isFullScreenRoute.set(['/login', '/register'].includes(this.router.url.replace(/\?.*$/, '')));
+    this.router.events.pipe(
+      filter((e): e is NavigationEnd => e instanceof NavigationEnd),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe((e) => {
+      this.isFullScreenRoute.set(['/login', '/register'].includes(e.urlAfterRedirects.replace(/\?.*$/, '')));
+    });
+
     // Initialize auth
     await this.authService.init();
 
