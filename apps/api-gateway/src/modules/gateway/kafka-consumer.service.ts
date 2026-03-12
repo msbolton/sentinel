@@ -5,8 +5,9 @@ import {
   OnModuleDestroy,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Kafka, Consumer, EachMessagePayload } from 'kafkajs';
+import { Kafka, Consumer, Producer, EachMessagePayload } from 'kafkajs';
 import { EntityGateway, EntityPositionUpdate, EntityEvent } from './entity.gateway';
+import { KafkaTopics } from '@sentinel/common';
 
 /**
  * Raw entity position event as received from the Kafka topic.
@@ -44,6 +45,7 @@ interface RawEntityPositionEvent {
 export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(KafkaConsumerService.name);
   private consumer!: Consumer;
+  private producer!: Producer;
   private readonly kafka: Kafka;
 
   private kafkaConnected = false;
@@ -90,6 +92,10 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
       this.kafkaConnected = true;
       this.logger.log('Kafka consumer connected');
 
+      this.producer = this.kafka.producer();
+      await this.producer.connect();
+      this.logger.log('Kafka federation producer connected');
+
       await this.consumer.subscribe({
         topics: [
           KafkaConsumerService.ENTITY_POSITION_TOPIC,
@@ -130,6 +136,7 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     this.flushUpdateBuffer();
 
     try {
+      await this.producer?.disconnect();
       await this.consumer?.disconnect();
       this.logger.log('Kafka consumer disconnected');
     } catch (error) {
@@ -190,6 +197,7 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     if (!raw) return;
 
     this.bufferUpdate(raw, 'updated');
+    await this.forwardToFederation(raw, 'position');
   }
 
   /**
@@ -200,6 +208,7 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     if (!raw) return;
 
     this.bufferUpdate(raw, 'created');
+    await this.forwardToFederation(raw, 'created');
   }
 
   /**
@@ -210,6 +219,7 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     if (!raw) return;
 
     this.bufferUpdate(raw, 'updated');
+    await this.forwardToFederation(raw, 'updated');
   }
 
   /**
@@ -280,6 +290,25 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     };
 
     this.entityGateway.broadcastEntityEvent(event);
+  }
+
+  /**
+   * Forwards a local entity event to the federation outbound topic.
+   * Only local entities (no sourceInstanceId) are forwarded.
+   */
+  private async forwardToFederation(raw: RawEntityPositionEvent, eventType: string): Promise<void> {
+    if (!this.kafkaConnected) return;
+    try {
+      await this.producer.send({
+        topic: KafkaTopics.FEDERATION_ENTITY_OUTBOUND,
+        messages: [{
+          key: raw.entity_id,
+          value: JSON.stringify({ ...raw, eventType }),
+        }],
+      });
+    } catch (error) {
+      this.logger.debug(`Failed to forward to federation topic: ${error}`);
+    }
   }
 
   /**
