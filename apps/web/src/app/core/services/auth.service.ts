@@ -66,6 +66,7 @@ export class AuthService implements OnDestroy {
       return authenticated;
     } catch (error) {
       console.warn('[Auth] Keycloak initialization failed, running in unauthenticated mode:', error);
+      this.keycloak = null;
       this.setDevelopmentProfile();
       return true;
     }
