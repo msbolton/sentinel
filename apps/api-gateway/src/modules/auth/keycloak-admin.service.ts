@@ -86,7 +86,7 @@ export class KeycloakAdminService {
       this.logger.error(`Failed to obtain admin token: ${response.status} ${text}`);
       throw new HttpException(
         'Failed to obtain admin token',
-        HttpStatus.INTERNAL_SERVER_ERROR,
+        HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
 
@@ -157,10 +157,16 @@ export class KeycloakAdminService {
     });
 
     if (response.status === 409) {
-      throw new HttpException(
-        'Username or email already exists',
-        HttpStatus.CONFLICT,
-      );
+      let detail = 'Username or email already exists';
+      try {
+        const body = (await response.json()) as { errorMessage?: string };
+        if (body.errorMessage) {
+          detail = body.errorMessage;
+        }
+      } catch {
+        // ignore parse errors — fall back to default message
+      }
+      throw new HttpException(detail, HttpStatus.CONFLICT);
     }
 
     if (!response.ok) {
@@ -210,12 +216,13 @@ export class KeycloakAdminService {
 
   /**
    * Approves a pending user registration:
-   * 1. Enables the account
-   * 2. Assigns sentinel-viewer and classification-u roles
-   * 3. Removes the registrationDate attribute
-   * 4. Triggers a VERIFY_EMAIL required action
-   *
-   * If role fetch or assignment fails, the user is re-disabled and the error is re-thrown.
+   * 1. GET user to read current attributes
+   * 2. PUT enable only — attributes (including registrationDate) are left intact so that
+   *    a rollback leaves the user visible in getPendingRegistrations()
+   * 3. Fetch realm roles and assign sentinel-viewer + classification-u
+   *    — on failure: re-disable user and re-throw (registrationDate still present)
+   * 4. PUT remove registrationDate attribute (only after roles succeed)
+   * 5. POST /execute-actions-email to trigger the VERIFY_EMAIL email
    */
   async approveUser(userId: string): Promise<void> {
     // Step 1: Get current user representation
@@ -228,19 +235,11 @@ export class KeycloakAdminService {
       attributes?: Record<string, string[]>;
     };
 
-    // Remove registrationDate from attributes
-    const attributes = { ...(user.attributes ?? {}) };
-    delete attributes['registrationDate'];
-
-    // Step 2: Enable user and update attributes
+    // Step 2: Enable user only — keep all attributes intact for safe rollback
     const enableResponse = await this.adminRequest(`/users/${userId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        enabled: true,
-        attributes,
-        requiredActions: ['VERIFY_EMAIL'],
-      }),
+      body: JSON.stringify({ enabled: true }),
     });
 
     if (!enableResponse.ok) {
@@ -250,6 +249,8 @@ export class KeycloakAdminService {
     }
 
     // Step 3: Fetch available realm roles and assign sentinel-viewer + classification-u
+    // If this fails, re-disable the user so registrationDate is preserved and they remain
+    // visible in getPendingRegistrations().
     try {
       const rolesResponse = await this.adminRequest('/roles');
       if (!rolesResponse.ok) {
@@ -279,7 +280,8 @@ export class KeycloakAdminService {
         throw new Error(`Failed to assign roles: ${assignResponse.status}`);
       }
     } catch (error) {
-      // Re-disable user to avoid leaving them enabled without roles
+      // Re-disable user — registrationDate attribute is still intact so the user
+      // remains visible in getPendingRegistrations() and can be retried.
       this.logger.error(
         `Role assignment failed for user ${userId}, re-disabling: ${(error as Error).message}`,
       );
@@ -294,6 +296,40 @@ export class KeycloakAdminService {
         'Failed to assign roles; user has been re-disabled',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
+    }
+
+    // Step 4: Remove registrationDate attribute now that roles are assigned
+    const cleanAttributes = { ...(user.attributes ?? {}) };
+    delete cleanAttributes['registrationDate'];
+
+    const cleanupResponse = await this.adminRequest(`/users/${userId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ attributes: cleanAttributes }),
+    });
+
+    if (!cleanupResponse.ok) {
+      this.logger.error(
+        `Failed to remove registrationDate for user ${userId}: ${cleanupResponse.status}`,
+      );
+      // Non-fatal: user is enabled and has roles; log and continue
+    }
+
+    // Step 5: Trigger the VERIFY_EMAIL action email via the execute-actions-email endpoint
+    const emailResponse = await this.adminRequest(
+      `/users/${userId}/execute-actions-email`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(['VERIFY_EMAIL']),
+      },
+    );
+
+    if (!emailResponse.ok) {
+      this.logger.error(
+        `Failed to send verification email to user ${userId}: ${emailResponse.status}`,
+      );
+      // Non-fatal: user is enabled and has roles; log and continue
     }
   }
 

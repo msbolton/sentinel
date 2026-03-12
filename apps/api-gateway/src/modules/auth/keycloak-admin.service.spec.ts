@@ -102,18 +102,30 @@ describe('KeycloakAdminService', () => {
     });
 
     it('should throw HttpException with CONFLICT status on 409 duplicate', async () => {
+      const keycloakError = { errorMessage: 'User exists with same username' };
+
       fetchMock
         .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))
-        .mockResolvedValueOnce(mockFetchResponseEmpty(409));
-
-      await expect(service.createUser(validDto)).rejects.toThrow(HttpException);
+        .mockResolvedValueOnce(mockFetchResponse(keycloakError, 409));
 
       try {
-        // Re-run to capture the exception
-        fetchMock
-          .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))
-          .mockResolvedValueOnce(mockFetchResponseEmpty(409));
         await service.createUser(validDto);
+        fail('Expected HttpException');
+      } catch (err) {
+        expect(err).toBeInstanceOf(HttpException);
+        expect((err as HttpException).getStatus()).toBe(409);
+        expect((err as HttpException).message).toBe('User exists with same username');
+      }
+    });
+
+    it('should fall back to default message when 409 body has no errorMessage', async () => {
+      fetchMock
+        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))
+        .mockResolvedValueOnce(mockFetchResponse({}, 409));
+
+      try {
+        await service.createUser(validDto);
+        fail('Expected HttpException');
       } catch (err) {
         expect(err).toBeInstanceOf(HttpException);
         expect((err as HttpException).getStatus()).toBe(409);
@@ -256,92 +268,145 @@ describe('KeycloakAdminService', () => {
       { id: 'role-admin-id', name: 'sentinel-admin' },
     ];
 
-    it('should enable user, assign roles, and remove registrationDate', async () => {
+    /**
+     * Full success sequence (all fetches use the cached token from call #1):
+     * 1. fetch token
+     * 2. GET  /users/{id}
+     * 3. PUT  /users/{id}          — enable only
+     * 4. GET  /roles
+     * 5. POST /users/{id}/role-mappings/realm
+     * 6. PUT  /users/{id}          — remove registrationDate
+     * 7. PUT  /users/{id}/execute-actions-email
+     */
+    function mockSuccessSequence(): void {
       fetchMock
-        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))    // getToken (cached for all subsequent calls)
-        .mockResolvedValueOnce(mockFetchResponse(userRepresentation)) // GET user
-        .mockResolvedValueOnce(mockFetchResponseEmpty(204))           // PUT user (enable)
-        .mockResolvedValueOnce(mockFetchResponse(rolesResponse))      // GET roles
-        .mockResolvedValueOnce(mockFetchResponseEmpty(204));          // POST role-mappings
+        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))    // 1. token
+        .mockResolvedValueOnce(mockFetchResponse(userRepresentation)) // 2. GET user
+        .mockResolvedValueOnce(mockFetchResponseEmpty(204))           // 3. PUT enable
+        .mockResolvedValueOnce(mockFetchResponse(rolesResponse))      // 4. GET roles
+        .mockResolvedValueOnce(mockFetchResponseEmpty(204))           // 5. POST role-mappings
+        .mockResolvedValueOnce(mockFetchResponseEmpty(204))           // 6. PUT remove registrationDate
+        .mockResolvedValueOnce(mockFetchResponseEmpty(204));          // 7. PUT execute-actions-email
+    }
 
+    it('should resolve successfully for the full happy path', async () => {
+      mockSuccessSequence();
       await expect(service.approveUser(userId)).resolves.toBeUndefined();
+    });
 
-      // Find the PUT call to enable user
-      const putCallIndex = fetchMock.mock.calls.findIndex(
+    it('should enable user with enabled:true in the first PUT (no attribute changes)', async () => {
+      mockSuccessSequence();
+      await service.approveUser(userId);
+
+      // The first PUT to /users/{id} should only set enabled:true
+      const firstPutCall = fetchMock.mock.calls.find(
         (call) =>
           typeof call[0] === 'string' &&
           call[0].includes(`/users/${userId}`) &&
+          !call[0].includes('role-mappings') &&
+          !call[0].includes('execute-actions-email') &&
           call[1]?.method === 'PUT',
       );
-      expect(putCallIndex).toBeGreaterThan(-1);
+      expect(firstPutCall).toBeDefined();
+      const firstPutBody = JSON.parse(firstPutCall![1].body as string);
+      expect(firstPutBody.enabled).toBe(true);
+      // Must NOT remove registrationDate at this stage (rollback safety)
+      expect(firstPutBody.attributes).toBeUndefined();
+    });
 
-      const putBody = JSON.parse(fetchMock.mock.calls[putCallIndex][1].body as string);
-      expect(putBody.enabled).toBe(true);
-      expect(putBody.attributes?.registrationDate).toBeUndefined();
-      expect(putBody.requiredActions).toContain('VERIFY_EMAIL');
+    it('should remove registrationDate in a separate PUT after roles are assigned', async () => {
+      mockSuccessSequence();
+      await service.approveUser(userId);
+
+      // Find all PUTs to /users/{id} (excluding role-mappings and execute-actions-email)
+      const userPutCalls = fetchMock.mock.calls.filter(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes(`/users/${userId}`) &&
+          !call[0].includes('role-mappings') &&
+          !call[0].includes('execute-actions-email') &&
+          call[1]?.method === 'PUT',
+      );
+      // Expect exactly 2: enable-only PUT and cleanup PUT
+      expect(userPutCalls).toHaveLength(2);
+
+      const cleanupBody = JSON.parse(userPutCalls[1][1].body as string);
+      expect(cleanupBody.attributes?.registrationDate).toBeUndefined();
+      expect(cleanupBody.attributes?.organization).toEqual(['ACME Corp']);
+    });
+
+    it('should call execute-actions-email with VERIFY_EMAIL after roles succeed', async () => {
+      mockSuccessSequence();
+      await service.approveUser(userId);
+
+      const emailCall = fetchMock.mock.calls.find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes(`/users/${userId}/execute-actions-email`) &&
+          call[1]?.method === 'PUT',
+      );
+      expect(emailCall).toBeDefined();
+      const emailBody = JSON.parse(emailCall![1].body as string);
+      expect(emailBody).toEqual(['VERIFY_EMAIL']);
     });
 
     it('should only assign sentinel-viewer and classification-u roles', async () => {
-      fetchMock
-        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))    // getToken (cached)
-        .mockResolvedValueOnce(mockFetchResponse(userRepresentation)) // GET user
-        .mockResolvedValueOnce(mockFetchResponseEmpty(204))           // PUT user (enable)
-        .mockResolvedValueOnce(mockFetchResponse(rolesResponse))      // GET roles
-        .mockResolvedValueOnce(mockFetchResponseEmpty(204));          // POST role-mappings
-
+      mockSuccessSequence();
       await service.approveUser(userId);
 
-      const roleAssignCallIndex = fetchMock.mock.calls.findIndex(
+      const roleAssignCall = fetchMock.mock.calls.find(
         (call) =>
           typeof call[0] === 'string' &&
           call[0].includes('role-mappings/realm') &&
           call[1]?.method === 'POST',
       );
-      expect(roleAssignCallIndex).toBeGreaterThan(-1);
+      expect(roleAssignCall).toBeDefined();
 
-      const assignedRoles = JSON.parse(
-        fetchMock.mock.calls[roleAssignCallIndex][1].body as string,
-      ) as Array<{ name: string }>;
-
+      const assignedRoles = JSON.parse(roleAssignCall![1].body as string) as Array<{ name: string }>;
       const assignedNames = assignedRoles.map((r) => r.name);
       expect(assignedNames).toContain('sentinel-viewer');
       expect(assignedNames).toContain('classification-u');
       expect(assignedNames).not.toContain('sentinel-admin');
     });
 
-    it('should re-disable user and throw if role fetch fails', async () => {
+    it('should re-disable user and throw if role fetch fails, preserving registrationDate', async () => {
       fetchMock
-        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))    // getToken (cached)
+        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))    // token
         .mockResolvedValueOnce(mockFetchResponse(userRepresentation)) // GET user
-        .mockResolvedValueOnce(mockFetchResponseEmpty(204))           // PUT user (enable)
+        .mockResolvedValueOnce(mockFetchResponseEmpty(204))           // PUT enable
         .mockResolvedValueOnce(mockFetchResponseEmpty(500))           // GET roles fails
         .mockResolvedValueOnce(mockFetchResponseEmpty(204));          // PUT re-disable
 
       await expect(service.approveUser(userId)).rejects.toThrow(HttpException);
 
-      // Verify re-disable call was made
+      // Re-disable call must set enabled:false but NOT touch attributes
       const reDisableCall = fetchMock.mock.calls.find(
         (call) =>
           typeof call[0] === 'string' &&
           call[0].includes(`/users/${userId}`) &&
+          !call[0].includes('role-mappings') &&
+          !call[0].includes('execute-actions-email') &&
           call[1]?.method === 'PUT' &&
           (() => {
             try {
-              const body = JSON.parse(call[1].body as string);
-              return body.enabled === false;
+              return JSON.parse(call[1].body as string).enabled === false;
             } catch {
               return false;
             }
           })(),
       );
       expect(reDisableCall).toBeDefined();
+
+      // The re-disable PUT must not strip registrationDate (attributes not sent at all)
+      const reDisableBody = JSON.parse(reDisableCall![1].body as string);
+      expect(reDisableBody.attributes).toBeUndefined();
     });
 
     it('should re-disable user and throw if role assignment fails', async () => {
       fetchMock
-        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))    // getToken (cached)
+        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))    // token
         .mockResolvedValueOnce(mockFetchResponse(userRepresentation)) // GET user
-        .mockResolvedValueOnce(mockFetchResponseEmpty(204))           // PUT user (enable)
+        .mockResolvedValueOnce(mockFetchResponseEmpty(204))           // PUT enable
         .mockResolvedValueOnce(mockFetchResponse(rolesResponse))      // GET roles OK
         .mockResolvedValueOnce(mockFetchResponseEmpty(500))           // POST role-mappings fails
         .mockResolvedValueOnce(mockFetchResponseEmpty(204));          // PUT re-disable
@@ -479,10 +544,16 @@ describe('KeycloakAdminService', () => {
       expect(secondUserCall[1].headers['Authorization']).toBe('Bearer fresh-token');
     });
 
-    it('should throw INTERNAL_SERVER_ERROR when token request fails', async () => {
+    it('should throw SERVICE_UNAVAILABLE (503) when token request fails', async () => {
       fetchMock.mockResolvedValueOnce(mockFetchResponseEmpty(500));
 
-      await expect(service.createUser(validDto)).rejects.toThrow(HttpException);
+      try {
+        await service.createUser(validDto);
+        fail('Expected HttpException');
+      } catch (err) {
+        expect(err).toBeInstanceOf(HttpException);
+        expect((err as HttpException).getStatus()).toBe(503);
+      }
     });
   });
 });
