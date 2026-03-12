@@ -60,6 +60,7 @@ import { AuthService } from '../../core/services/auth.service';
     .bg-grid {
       position: absolute;
       inset: 0;
+      pointer-events: none;
       background-image:
         linear-gradient(rgba(59, 130, 246, 0.07) 1px, transparent 1px),
         linear-gradient(90deg, rgba(59, 130, 246, 0.07) 1px, transparent 1px);
@@ -72,6 +73,7 @@ import { AuthService } from '../../core/services/auth.service';
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
+      pointer-events: none;
     }
 
     .radar-circle {
@@ -125,6 +127,7 @@ import { AuthService } from '../../core/services/auth.service';
     .entity-dot {
       position: absolute;
       border-radius: 50%;
+      pointer-events: none;
       animation: pulse 3s ease-in-out infinite;
     }
 
@@ -179,6 +182,7 @@ import { AuthService } from '../../core/services/auth.service';
       width: 2px;
       height: 2px;
       border-radius: 50%;
+      pointer-events: none;
       background: rgba(59, 130, 246, 0.4);
       animation: drift 12s ease-in-out infinite;
     }
