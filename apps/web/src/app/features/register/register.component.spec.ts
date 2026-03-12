@@ -108,7 +108,7 @@ describe('RegisterComponent', () => {
 
     component.onSubmit();
 
-    const req = httpMock.expectOne('/api/auth/register');
+    const req = httpMock.expectOne('/api/v1/auth/register');
     expect(req.request.method).toBe('POST');
     req.flush({});
 
@@ -127,7 +127,7 @@ describe('RegisterComponent', () => {
 
     component.onSubmit();
 
-    const req = httpMock.expectOne('/api/auth/register');
+    const req = httpMock.expectOne('/api/v1/auth/register');
     req.flush({ message: 'Conflict' }, { status: 409, statusText: 'Conflict' });
 
     expect(component.errorMessage()).toBe('Username or email already exists');

@@ -308,7 +308,7 @@ export class PendingUsersComponent implements OnInit {
     this.loadingList.set(true);
     this.errorMessage.set('');
 
-    this.http.get<PendingUser[]>('/api/auth/pending-registrations').subscribe({
+    this.http.get<PendingUser[]>('/api/v1/auth/pending-registrations').subscribe({
       next: (users) => {
         this.users.set(users);
         this.loadingList.set(false);
@@ -325,7 +325,7 @@ export class PendingUsersComponent implements OnInit {
     this.actionType.set('approve');
     this.errorMessage.set('');
 
-    this.http.post(`/api/auth/approve-registration/${userId}`, {}).subscribe({
+    this.http.post(`/api/v1/auth/approve-registration/${userId}`, {}).subscribe({
       next: () => {
         this.users.set(this.users().filter(u => u.id !== userId));
         this.actionInProgress.set(null);
@@ -346,7 +346,7 @@ export class PendingUsersComponent implements OnInit {
     this.actionType.set('reject');
     this.errorMessage.set('');
 
-    this.http.post(`/api/auth/reject-registration/${userId}`, {}).subscribe({
+    this.http.post(`/api/v1/auth/reject-registration/${userId}`, {}).subscribe({
       next: () => {
         this.users.set(this.users().filter(u => u.id !== userId));
         this.actionInProgress.set(null);
