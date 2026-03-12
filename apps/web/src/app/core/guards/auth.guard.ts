@@ -3,10 +3,11 @@ import { CanActivateFn, Router } from '@angular/router';
 import { AuthService } from '../services/auth.service';
 
 /**
- * Route guard that redirects unauthenticated users to the login flow.
- * In dev mode (Keycloak unavailable), all users are treated as authenticated.
+ * Route guard that redirects unauthenticated users to the login page.
+ * Passes the intended URL as a returnUrl query param so the login page
+ * can redirect back after authentication.
  */
-export const authGuard: CanActivateFn = () => {
+export const authGuard: CanActivateFn = (_route, state) => {
   const authService = inject(AuthService);
   const router = inject(Router);
 
@@ -14,22 +15,26 @@ export const authGuard: CanActivateFn = () => {
     return true;
   }
 
-  // Trigger Keycloak login redirect
-  authService.login();
+  router.navigate(['/login'], {
+    queryParams: { returnUrl: state.url },
+  });
   return false;
 };
 
 /**
  * Route guard that checks whether the user has at least one of the required roles.
- * Usage: `canActivate: [roleGuard('analyst', 'admin')]`
+ * Redirects unauthenticated users to /login; authenticated users without
+ * the required role are sent to /map.
  */
 export function roleGuard(...requiredRoles: string[]): CanActivateFn {
-  return () => {
+  return (_route, state) => {
     const authService = inject(AuthService);
     const router = inject(Router);
 
     if (!authService.isAuthenticated()) {
-      authService.login();
+      router.navigate(['/login'], {
+        queryParams: { returnUrl: state.url },
+      });
       return false;
     }
 

@@ -1,147 +1,125 @@
 import { TestBed } from '@angular/core/testing';
-import { Router } from '@angular/router';
+import { Router, ActivatedRouteSnapshot, RouterStateSnapshot } from '@angular/router';
 import { authGuard, roleGuard } from './auth.guard';
 import { AuthService } from '../services/auth.service';
-import {
-  ActivatedRouteSnapshot,
-  RouterStateSnapshot,
-} from '@angular/router';
 
 describe('authGuard', () => {
-  let authService: jest.Mocked<Pick<AuthService, 'isAuthenticated' | 'login' | 'getUserRoles'>>;
-  let router: jest.Mocked<Pick<Router, 'navigate'>>;
-
-  const mockRoute = {} as ActivatedRouteSnapshot;
-  const mockState = {} as RouterStateSnapshot;
+  let authService: { isAuthenticated: jest.Mock };
+  let router: { navigate: jest.Mock };
 
   beforeEach(() => {
+    authService = { isAuthenticated: jest.fn() };
+    router = { navigate: jest.fn() };
+
     TestBed.configureTestingModule({
       providers: [
-        {
-          provide: AuthService,
-          useValue: {
-            isAuthenticated: jest.fn(),
-            login: jest.fn(),
-            getUserRoles: jest.fn(),
-          },
-        },
-        {
-          provide: Router,
-          useValue: {
-            navigate: jest.fn(),
-          },
-        },
+        { provide: AuthService, useValue: authService },
+        { provide: Router, useValue: router },
       ],
     });
-
-    authService = TestBed.inject(AuthService) as any;
-    router = TestBed.inject(Router) as any;
   });
 
-  describe('authGuard', () => {
-    it('should return true when user is authenticated', () => {
-      (authService.isAuthenticated as jest.Mock).mockReturnValue(true);
+  it('should allow access when authenticated', () => {
+    authService.isAuthenticated.mockReturnValue(true);
 
-      const result = TestBed.runInInjectionContext(() =>
-        authGuard(mockRoute, mockState),
-      );
+    const result = TestBed.runInInjectionContext(() =>
+      authGuard({} as ActivatedRouteSnapshot, { url: '/map' } as RouterStateSnapshot),
+    );
 
-      expect(result).toBe(true);
+    expect(result).toBe(true);
+  });
+
+  it('should redirect to /login with returnUrl when not authenticated', () => {
+    authService.isAuthenticated.mockReturnValue(false);
+
+    const result = TestBed.runInInjectionContext(() =>
+      authGuard({} as ActivatedRouteSnapshot, { url: '/alerts' } as RouterStateSnapshot),
+    );
+
+    expect(result).toBe(false);
+    expect(router.navigate).toHaveBeenCalledWith(['/login'], {
+      queryParams: { returnUrl: '/alerts' },
     });
+  });
+});
 
-    it('should call login and return false when user is not authenticated', () => {
-      (authService.isAuthenticated as jest.Mock).mockReturnValue(false);
+describe('roleGuard', () => {
+  let authService: { isAuthenticated: jest.Mock; getUserRoles: jest.Mock };
+  let router: { navigate: jest.Mock };
 
-      const result = TestBed.runInInjectionContext(() =>
-        authGuard(mockRoute, mockState),
-      );
+  beforeEach(() => {
+    authService = { isAuthenticated: jest.fn(), getUserRoles: jest.fn() };
+    router = { navigate: jest.fn() };
 
-      expect(result).toBe(false);
-      expect(authService.login).toHaveBeenCalled();
-    });
-
-    it('should not call login when user is authenticated', () => {
-      (authService.isAuthenticated as jest.Mock).mockReturnValue(true);
-
-      TestBed.runInInjectionContext(() => authGuard(mockRoute, mockState));
-
-      expect(authService.login).not.toHaveBeenCalled();
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: AuthService, useValue: authService },
+        { provide: Router, useValue: router },
+      ],
     });
   });
 
-  describe('roleGuard', () => {
-    it('should return true when user is authenticated and has a required role', () => {
-      (authService.isAuthenticated as jest.Mock).mockReturnValue(true);
-      (authService.getUserRoles as jest.Mock).mockReturnValue([
-        'analyst',
-        'viewer',
-      ]);
+  it('should redirect to /login with returnUrl when not authenticated', () => {
+    authService.isAuthenticated.mockReturnValue(false);
+    const guard = roleGuard('sentinel-admin');
 
-      const guard = roleGuard('analyst', 'admin');
-      const result = TestBed.runInInjectionContext(() =>
-        guard(mockRoute, mockState),
-      );
+    const result = TestBed.runInInjectionContext(() =>
+      guard({} as ActivatedRouteSnapshot, { url: '/link-graph' } as RouterStateSnapshot),
+    );
 
-      expect(result).toBe(true);
+    expect(result).toBe(false);
+    expect(router.navigate).toHaveBeenCalledWith(['/login'], {
+      queryParams: { returnUrl: '/link-graph' },
     });
+  });
 
-    it('should redirect to /map and return false when user lacks required roles', () => {
-      (authService.isAuthenticated as jest.Mock).mockReturnValue(true);
-      (authService.getUserRoles as jest.Mock).mockReturnValue(['viewer']);
+  it('should redirect to /map when authenticated but missing required role', () => {
+    authService.isAuthenticated.mockReturnValue(true);
+    authService.getUserRoles.mockReturnValue(['sentinel-viewer']);
+    const guard = roleGuard('sentinel-admin');
 
-      const guard = roleGuard('admin', 'operator');
-      const result = TestBed.runInInjectionContext(() =>
-        guard(mockRoute, mockState),
-      );
+    const result = TestBed.runInInjectionContext(() =>
+      guard({} as ActivatedRouteSnapshot, { url: '/link-graph' } as RouterStateSnapshot),
+    );
 
-      expect(result).toBe(false);
-      expect(router.navigate).toHaveBeenCalledWith(['/map']);
-    });
+    expect(result).toBe(false);
+    expect(router.navigate).toHaveBeenCalledWith(['/map']);
+  });
 
-    it('should call login and return false when user is not authenticated', () => {
-      (authService.isAuthenticated as jest.Mock).mockReturnValue(false);
+  it('should allow access when authenticated with required role', () => {
+    authService.isAuthenticated.mockReturnValue(true);
+    authService.getUserRoles.mockReturnValue(['sentinel-admin']);
+    const guard = roleGuard('sentinel-admin');
 
-      const guard = roleGuard('admin');
-      const result = TestBed.runInInjectionContext(() =>
-        guard(mockRoute, mockState),
-      );
+    const result = TestBed.runInInjectionContext(() =>
+      guard({} as ActivatedRouteSnapshot, { url: '/link-graph' } as RouterStateSnapshot),
+    );
 
-      expect(result).toBe(false);
-      expect(authService.login).toHaveBeenCalled();
-    });
+    expect(result).toBe(true);
+  });
 
-    it('should not navigate to /map when user is not authenticated (login takes priority)', () => {
-      (authService.isAuthenticated as jest.Mock).mockReturnValue(false);
+  it('should allow access when user has any one of multiple required roles', () => {
+    authService.isAuthenticated.mockReturnValue(true);
+    authService.getUserRoles.mockReturnValue(['sentinel-analyst']);
+    const guard = roleGuard('sentinel-analyst', 'sentinel-admin');
 
-      const guard = roleGuard('admin');
-      TestBed.runInInjectionContext(() => guard(mockRoute, mockState));
+    const result = TestBed.runInInjectionContext(() =>
+      guard({} as ActivatedRouteSnapshot, { url: '/link-graph' } as RouterStateSnapshot),
+    );
 
-      expect(router.navigate).not.toHaveBeenCalled();
-    });
+    expect(result).toBe(true);
+  });
 
-    it('should return true when user has at least one of multiple required roles', () => {
-      (authService.isAuthenticated as jest.Mock).mockReturnValue(true);
-      (authService.getUserRoles as jest.Mock).mockReturnValue(['operator']);
+  it('should reject when user has none of multiple required roles', () => {
+    authService.isAuthenticated.mockReturnValue(true);
+    authService.getUserRoles.mockReturnValue(['sentinel-viewer']);
+    const guard = roleGuard('sentinel-analyst', 'sentinel-admin');
 
-      const guard = roleGuard('analyst', 'operator', 'admin');
-      const result = TestBed.runInInjectionContext(() =>
-        guard(mockRoute, mockState),
-      );
+    const result = TestBed.runInInjectionContext(() =>
+      guard({} as ActivatedRouteSnapshot, { url: '/link-graph' } as RouterStateSnapshot),
+    );
 
-      expect(result).toBe(true);
-    });
-
-    it('should deny access when user has no roles at all', () => {
-      (authService.isAuthenticated as jest.Mock).mockReturnValue(true);
-      (authService.getUserRoles as jest.Mock).mockReturnValue([]);
-
-      const guard = roleGuard('admin');
-      const result = TestBed.runInInjectionContext(() =>
-        guard(mockRoute, mockState),
-      );
-
-      expect(result).toBe(false);
-      expect(router.navigate).toHaveBeenCalledWith(['/map']);
-    });
+    expect(result).toBe(false);
+    expect(router.navigate).toHaveBeenCalledWith(['/map']);
   });
 });
