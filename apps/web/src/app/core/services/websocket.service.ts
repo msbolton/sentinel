@@ -6,6 +6,34 @@ import { Alert } from '../../shared/models/alert.model';
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'reconnecting';
 
+export interface FederationPeerStatus {
+  instanceId: string;
+  displayName: string;
+  status: 'connected' | 'stale' | 'disconnected';
+  color: string;
+  entityCount: number;
+  userCount: number;
+}
+
+export interface FederationStatusEvent {
+  peers: FederationPeerStatus[];
+}
+
+export interface PresenceEntry {
+  userId: string;
+  displayName: string;
+  instanceId: string;
+  instanceName: string;
+  cameraCenter: { lat: number; lon: number };
+  zoom: number;
+  timestamp: number;
+  color: string;
+}
+
+export interface PresenceUpdateEvent {
+  users: PresenceEntry[];
+}
+
 @Injectable({ providedIn: 'root' })
 export class WebSocketService implements OnDestroy {
   private socket: Socket | null = null;
@@ -17,6 +45,12 @@ export class WebSocketService implements OnDestroy {
   readonly entityUpdates$ = this.entityUpdatesSubject.asObservable();
   readonly alertStream$ = this.alertSubject.asObservable();
   readonly connectionStatus$ = this.connectionStatusSubject.asObservable();
+
+  private readonly federationStatusSubject = new Subject<FederationStatusEvent>();
+  private readonly presenceUpdateSubject = new Subject<PresenceUpdateEvent>();
+
+  readonly federationStatus$ = this.federationStatusSubject.asObservable();
+  readonly presenceUpdates$ = this.presenceUpdateSubject.asObservable();
 
   connect(): void {
     if (this.socket) {
@@ -82,6 +116,15 @@ export class WebSocketService implements OnDestroy {
     // Alert events
     this.socket.on('alert:new', (alert: Alert) => {
       this.alertSubject.next(alert);
+    });
+
+    // Federation events (pushed by API gateway from federation module)
+    this.socket.on('federation:status', (event: FederationStatusEvent) => {
+      this.federationStatusSubject.next(event);
+    });
+
+    this.socket.on('federation:presence', (event: PresenceUpdateEvent) => {
+      this.presenceUpdateSubject.next(event);
     });
   }
 
