@@ -71,9 +71,9 @@ export class AuthService implements OnDestroy {
     }
   }
 
-  async login(): Promise<void> {
+  async login(redirectUri?: string): Promise<void> {
     if (this.keycloak) {
-      await this.keycloak.login();
+      await this.keycloak.login(redirectUri ? { redirectUri } : undefined);
     } else {
       console.warn('[Auth] No Keycloak instance available');
     }
