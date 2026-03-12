@@ -4,6 +4,10 @@ export const KafkaTopics = {
   ENTITY_POSITION: 'events.entity.position',
   ENTITY_CREATED: 'events.entity.created',
   ENTITY_UPDATED: 'events.entity.updated',
+  ENTITY_DELETED: 'events.entity.deleted',
+
+  // Federation events
+  FEDERATION_ENTITY_OUTBOUND: 'federation.entity.outbound',
 
   // Track events
   TRACK_POINT: 'events.track.point',
@@ -29,4 +33,5 @@ export const KafkaConsumerGroups = {
   SEARCH_SERVICE: 'sentinel-search-service',
   ALERT_SERVICE: 'sentinel-alert-service',
   ANALYTICS_SERVICE: 'sentinel-analytics',
+  FEDERATION: 'sentinel-federation',
 } as const;
