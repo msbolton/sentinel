@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Reflector } from '@nestjs/core';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { RegistrationController } from './registration.controller';
 import { KeycloakAdminService } from './keycloak-admin.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
@@ -150,6 +150,17 @@ describe('RegistrationController', () => {
       expect(mailerService.sendMail).toHaveBeenCalledWith(
         expect.objectContaining({ to: 'specific@example.com' }),
       );
+    });
+
+    it('should still succeed when rejection email fails to send', async () => {
+      const userId = 'user-mail-fail';
+      keycloakAdmin.rejectUser.mockResolvedValue({ email: 'fail@test.com', firstName: 'Fail' });
+      mailerService.sendMail.mockRejectedValue(new Error('SMTP connection refused'));
+
+      const result = await controller.rejectRegistration(userId);
+
+      expect(keycloakAdmin.rejectUser).toHaveBeenCalledWith(userId);
+      expect(result.message).toContain('rejected');
     });
   });
 });
