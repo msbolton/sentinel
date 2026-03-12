@@ -247,7 +247,7 @@ services:
     container_name: sentinel-keycloak
     hostname: keycloak
     restart: unless-stopped
-    command: start-dev
+    command: start-dev --import-realm
     environment:
       # Database
       KC_DB: postgres
@@ -266,6 +266,8 @@ services:
       KC_FEATURES: "token-exchange,admin-fine-grained-authz"
     ports:
       - "8080:8080"
+    volumes:
+      - ./config/keycloak/sentinel-realm.json:/opt/keycloak/data/import/sentinel-realm.json:ro
     depends_on:
       keycloak-db:
         condition: service_healthy
@@ -384,6 +386,31 @@ services:
       echo 'MinIO buckets initialized successfully.';
       "
     restart: "no"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # MailHog (Dev Email Catcher)
+  # ===========================================================================
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: sentinel-mailhog
+    hostname: mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8025/ > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.25"
     networks:
       - sentinel-network
 

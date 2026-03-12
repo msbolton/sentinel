@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CqrsModule } from '@nestjs/cqrs';
@@ -8,6 +8,7 @@ import { HealthModule } from './modules/health/health.module';
 import { EntitiesModule } from './modules/entities/entities.module';
 import { FeedsModule } from './modules/feeds/feeds.module';
 import { LocationsModule } from './modules/locations/locations.module';
+import { SecurityHeadersMiddleware } from './modules/auth/security-headers.middleware';
 
 @Module({
   imports: [
@@ -50,4 +51,8 @@ import { LocationsModule } from './modules/locations/locations.module';
     LocationsModule,
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(SecurityHeadersMiddleware).forRoutes('*');
+  }
+}
