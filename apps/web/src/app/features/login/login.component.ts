@@ -1,11 +1,14 @@
-import { Component, OnInit, OnDestroy, inject } from '@angular/core';
+import { Component, OnInit, OnDestroy, inject, signal } from '@angular/core';
 import { Router, ActivatedRoute } from '@angular/router';
+import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { Subscription, filter, take } from 'rxjs';
 import { AuthService } from '../../core/services/auth.service';
 
 @Component({
   selector: 'app-login',
   standalone: true,
+  imports: [FormsModule, RouterLink],
   template: `
     <div class="login-page">
       <!-- Animated background -->
@@ -33,8 +36,48 @@ import { AuthService } from '../../core/services/auth.service';
         <h1 class="app-title">SENTINEL</h1>
         <p class="app-subtitle">Geospatial Intelligence Platform</p>
         <div class="divider"></div>
-        <button class="sign-in-btn" (click)="onSignIn()">SIGN IN</button>
-        <p class="auth-notice">Authorized personnel only</p>
+        <form class="login-form" (ngSubmit)="onSignIn()">
+          <div class="input-group">
+            <label class="input-label" for="username">USERNAME</label>
+            <input
+              id="username"
+              class="login-input"
+              type="text"
+              [(ngModel)]="username"
+              name="username"
+              autocomplete="username"
+              placeholder="Enter username"
+              [disabled]="loading()" />
+          </div>
+          <div class="input-group">
+            <label class="input-label" for="password">PASSWORD</label>
+            <input
+              id="password"
+              class="login-input"
+              type="password"
+              [(ngModel)]="password"
+              name="password"
+              autocomplete="current-password"
+              placeholder="Enter password"
+              [disabled]="loading()" />
+          </div>
+          @if (errorMessage()) {
+            <p class="error-message">{{ errorMessage() }}</p>
+          }
+          <button
+            class="sign-in-btn"
+            type="submit"
+            [disabled]="loading() || !username || !password">
+            @if (loading()) {
+              AUTHENTICATING...
+            } @else {
+              SIGN IN
+            }
+          </button>
+        </form>
+        <p class="auth-notice">
+          Need access? <a class="request-link" routerLink="/register">Request an account</a>
+        </p>
       </div>
     </div>
   `,
@@ -290,6 +333,62 @@ import { AuthService } from '../../core/services/auth.service';
       margin: 28px 0;
     }
 
+    .login-form {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .input-group {
+      text-align: left;
+    }
+
+    .input-label {
+      display: block;
+      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      color: rgba(255, 255, 255, 0.4);
+      margin-bottom: 6px;
+    }
+
+    .login-input {
+      width: 100%;
+      padding: 11px 14px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(59, 130, 246, 0.2);
+      border-radius: 8px;
+      color: rgba(255, 255, 255, 0.9);
+      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s ease, background 0.2s ease;
+      box-sizing: border-box;
+    }
+
+    .login-input::placeholder {
+      color: rgba(255, 255, 255, 0.2);
+    }
+
+    .login-input:focus {
+      border-color: rgba(59, 130, 246, 0.5);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .login-input:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .error-message {
+      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-size: 12px;
+      color: #f87171;
+      margin: 0;
+      text-align: center;
+    }
+
     .sign-in-btn {
       width: 100%;
       padding: 13px 24px;
@@ -306,14 +405,19 @@ import { AuthService } from '../../core/services/auth.service';
       transition: box-shadow 0.2s ease, transform 0.15s ease;
     }
 
-    .sign-in-btn:hover {
+    .sign-in-btn:hover:not(:disabled) {
       box-shadow: 0 6px 28px rgba(59, 130, 246, 0.45);
       transform: translateY(-1px);
     }
 
-    .sign-in-btn:active {
+    .sign-in-btn:active:not(:disabled) {
       transform: translateY(0);
       box-shadow: 0 2px 12px rgba(59, 130, 246, 0.3);
+    }
+
+    .sign-in-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
     }
 
     .auth-notice {
@@ -323,6 +427,16 @@ import { AuthService } from '../../core/services/auth.service';
       margin: 16px 0 0;
       letter-spacing: 0.5px;
     }
+
+    .request-link {
+      color: rgba(59, 130, 246, 0.8);
+      text-decoration: none;
+    }
+
+    .request-link:hover {
+      color: rgba(59, 130, 246, 1);
+      text-decoration: underline;
+    }
   `],
 })
 export class LoginComponent implements OnInit, OnDestroy {
@@ -330,6 +444,11 @@ export class LoginComponent implements OnInit, OnDestroy {
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   private authSub: Subscription | null = null;
+
+  username = '';
+  password = '';
+  loading = signal(false);
+  errorMessage = signal('');
 
   ngOnInit(): void {
     this.authSub = this.authService.isAuthenticated$.pipe(
@@ -346,14 +465,20 @@ export class LoginComponent implements OnInit, OnDestroy {
   }
 
   async onSignIn(): Promise<void> {
-    const returnUrl = this.route.snapshot.queryParams['returnUrl'] || '/map';
-    const redirectUri =
-      window.location.origin + window.location.pathname + '#' + returnUrl;
-    await this.authService.login(redirectUri);
-    // If login() didn't redirect (dev mode or keycloak not ready),
-    // check if we're already authenticated and navigate directly
-    if (this.authService.isAuthenticated()) {
-      this.router.navigateByUrl(returnUrl);
+    if (!this.username || !this.password) return;
+
+    this.loading.set(true);
+    this.errorMessage.set('');
+
+    const result = await this.authService.loginWithCredentials(this.username, this.password);
+
+    if (!result.success) {
+      this.loading.set(false);
+      this.errorMessage.set(result.error ?? 'Authentication failed');
+      return;
     }
+
+    const returnUrl = this.route.snapshot.queryParams['returnUrl'] || '/map';
+    this.router.navigateByUrl(returnUrl);
   }
 }
