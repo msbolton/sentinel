@@ -534,6 +534,63 @@ describe('KeycloakAdminService', () => {
     });
   });
 
+  describe('getActiveUsers', () => {
+    const mockUsers = [
+      { id: 'u1', username: 'jdoe', email: 'j@e.com', firstName: 'John', lastName: 'Doe' },
+      { id: 'u2', username: 'service-account-sentinel-service', email: '', firstName: '', lastName: '' },
+      { id: 'u3', username: 'viewer1', email: 'v@e.com', firstName: 'View', lastName: 'Er' },
+    ];
+
+    it('should return enabled users with their classification level', async () => {
+      fetchMock
+        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))       // token
+        .mockResolvedValueOnce(mockFetchResponse(mockUsers))             // GET /users?enabled=true&max=100
+        .mockResolvedValueOnce(mockFetchResponse([                       // roles for u1
+          { name: 'sentinel-viewer' }, { name: 'classification-s' }
+        ]))
+        .mockResolvedValueOnce(mockFetchResponse([                       // roles for u3
+          { name: 'sentinel-viewer' }, { name: 'classification-u' }
+        ]));
+
+      const result = await service.getActiveUsers();
+
+      expect(result).toHaveLength(2); // service account filtered out
+      expect(result[0].username).toBe('jdoe');
+      expect(result[0].classificationLevel).toBe('classification-s');
+      expect(result[1].username).toBe('viewer1');
+      expect(result[1].classificationLevel).toBe('classification-u');
+    });
+
+    it('should exclude service account users', async () => {
+      fetchMock
+        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))
+        .mockResolvedValueOnce(mockFetchResponse(mockUsers))
+        .mockResolvedValueOnce(mockFetchResponse([{ name: 'sentinel-viewer' }]))
+        .mockResolvedValueOnce(mockFetchResponse([{ name: 'sentinel-viewer' }]));
+
+      const result = await service.getActiveUsers();
+      expect(result.every(u => !u.username.startsWith('service-account-'))).toBe(true);
+    });
+
+    it('should return classificationLevel as null when user has no classification role', async () => {
+      fetchMock
+        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))
+        .mockResolvedValueOnce(mockFetchResponse([mockUsers[0]]))        // only jdoe
+        .mockResolvedValueOnce(mockFetchResponse([{ name: 'sentinel-viewer' }])); // no classification
+
+      const result = await service.getActiveUsers();
+      expect(result[0].classificationLevel).toBeNull();
+    });
+
+    it('should throw when the users endpoint fails', async () => {
+      fetchMock
+        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))
+        .mockResolvedValueOnce(mockFetchResponseEmpty(500));
+
+      await expect(service.getActiveUsers()).rejects.toThrow(HttpException);
+    });
+  });
+
   describe('token caching', () => {
     const validDto: CreateUserDto = {
       username: 'cache-test',
