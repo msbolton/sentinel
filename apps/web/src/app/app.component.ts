@@ -98,6 +98,20 @@ import { MapComponent } from './features/map/map.component';
         </div>
 
         <div class="sidebar-footer">
+          @if (isAdmin()) {
+            <button
+              class="sidebar-btn"
+              routerLink="/admin/users"
+              routerLinkActive="active"
+              title="User Management">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+            </button>
+          }
           <button
             class="sidebar-btn"
             (click)="toggleSettings()"
@@ -207,6 +221,7 @@ export class AppComponent implements OnInit, OnDestroy {
   entityCount = signal<number>(0);
   unacknowledgedAlertCount = signal<number>(0);
   userProfile = signal<UserProfile | null>(null);
+  isAdmin = computed(() => this.userProfile()?.roles?.includes('sentinel-admin') ?? false);
   currentTime = signal<string>('');
   private readonly destroyRef = inject(DestroyRef);
   private readonly themeService = inject(ThemeService);
