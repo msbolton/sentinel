@@ -591,6 +591,79 @@ describe('KeycloakAdminService', () => {
     });
   });
 
+  describe('updateClassification', () => {
+    it('should remove old classification role and assign new one', async () => {
+      fetchMock
+        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))          // token
+        .mockResolvedValueOnce(mockFetchResponse([                          // GET role-mappings
+          { id: 'r1', name: 'classification-u' },
+          { id: 'r2', name: 'sentinel-viewer' },
+        ]))
+        .mockResolvedValueOnce(mockFetchResponseEmpty(204))                 // DELETE old classification
+        .mockResolvedValueOnce(mockFetchResponse([                          // GET /roles (all roles)
+          { id: 'r1', name: 'classification-u' },
+          { id: 'r3', name: 'classification-s' },
+          { id: 'r4', name: 'classification-ts' },
+          { id: 'r2', name: 'sentinel-viewer' },
+        ]))
+        .mockResolvedValueOnce(mockFetchResponseEmpty(204));                // POST new classification
+
+      await service.updateClassification('user-1', 'classification-ts');
+
+      // Verify DELETE was called with classification-u role only (not sentinel-viewer)
+      const deleteCall = fetchMock.mock.calls.find(
+        (c: any[]) => c[0].includes('role-mappings/realm') && c[1]?.method === 'DELETE',
+      );
+      expect(deleteCall).toBeDefined();
+      const deletedRoles = JSON.parse(deleteCall![1].body);
+      expect(deletedRoles).toEqual([{ id: 'r1', name: 'classification-u' }]);
+
+      // Verify POST was called with classification-ts role
+      const postCall = fetchMock.mock.calls.find(
+        (c: any[]) => c[0].includes('role-mappings/realm') && c[1]?.method === 'POST',
+      );
+      expect(postCall).toBeDefined();
+      const assignedRoles = JSON.parse(postCall![1].body);
+      expect(assignedRoles).toEqual([{ id: 'r4', name: 'classification-ts' }]);
+    });
+
+    it('should work when user has no existing classification role', async () => {
+      fetchMock
+        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))
+        .mockResolvedValueOnce(mockFetchResponse([                          // GET role-mappings
+          { id: 'r2', name: 'sentinel-viewer' },
+        ]))
+        // No DELETE call expected
+        .mockResolvedValueOnce(mockFetchResponse([                          // GET /roles
+          { id: 'r1', name: 'classification-u' },
+          { id: 'r3', name: 'classification-s' },
+          { id: 'r4', name: 'classification-ts' },
+          { id: 'r2', name: 'sentinel-viewer' },
+        ]))
+        .mockResolvedValueOnce(mockFetchResponseEmpty(204));                // POST new classification
+
+      await service.updateClassification('user-1', 'classification-s');
+
+      // Should NOT have a DELETE call for role-mappings
+      const deleteCall = fetchMock.mock.calls.find(
+        (c: any[]) => c[0].includes('role-mappings/realm') && c[1]?.method === 'DELETE',
+      );
+      expect(deleteCall).toBeUndefined();
+
+      // Should have POST for classification-s
+      const postCall = fetchMock.mock.calls.find(
+        (c: any[]) => c[0].includes('role-mappings/realm') && c[1]?.method === 'POST',
+      );
+      const assignedRoles = JSON.parse(postCall![1].body);
+      expect(assignedRoles).toEqual([{ id: 'r3', name: 'classification-s' }]);
+    });
+
+    it('should throw on invalid classification level', async () => {
+      await expect(service.updateClassification('user-1', 'classification-x' as any))
+        .rejects.toThrow();
+    });
+  });
+
   describe('token caching', () => {
     const validDto: CreateUserDto = {
       username: 'cache-test',
