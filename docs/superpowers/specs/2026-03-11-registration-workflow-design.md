@@ -112,7 +112,7 @@ The `GET /api/auth/pending-registrations` endpoint passes Keycloak's `max` query
 | File | Change |
 |------|--------|
 | `apps/web/src/app/app.routes.ts` | Add `/register` and `/admin/users` routes |
-| `apps/web/src/app/app.component.ts` | Rename `isLoginRoute` signal to `isFullScreenRoute` and update the check to `['/login', '/register'].includes(url)` so both pages render without the app shell |
+| `apps/web/src/app/app.component.ts` | Rename `isLoginRoute` signal to `isFullScreenRoute` in three places: the signal declaration, both `.set()` calls in `ngOnInit`, and the `@if (isLoginRoute())` template binding. Update the comparison from `=== '/login'` to `['/login', '/register'].includes(url)` |
 | `apps/web/src/app/core/services/auth.service.ts` | Add `sentinel-admin` to `setDevelopmentProfile()` roles array |
 | `apps/web/src/app/features/login/login.component.ts` | Add "Request Access" link |
 | `config/keycloak/sentinel-realm.json` | Add SMTP config, `manage-users` role for service account |
