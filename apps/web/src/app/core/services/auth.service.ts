@@ -12,8 +12,13 @@ export interface UserProfile {
 @Injectable({ providedIn: 'root' })
 export class AuthService implements OnDestroy {
   private keycloak: any = null;
+  private directToken: string | null = null;
+  private directRefreshToken: string | null = null;
   private tokenRefreshInterval: ReturnType<typeof setInterval> | null = null;
   private tokenExpiryTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  private readonly keycloakTokenUrl = '/auth/realms/sentinel/protocol/openid-connect/token';
+  private readonly clientId = 'sentinel-web';
 
   private readonly authenticatedSubject = new BehaviorSubject<boolean>(false);
   private readonly userProfileSubject = new BehaviorSubject<UserProfile | null>(null);
@@ -80,8 +85,107 @@ export class AuthService implements OnDestroy {
     }
   }
 
+  async loginWithCredentials(username: string, password: string): Promise<{ success: boolean; error?: string }> {
+    const body = new URLSearchParams({
+      grant_type: 'password',
+      client_id: this.clientId,
+      username,
+      password,
+    });
+
+    try {
+      const response = await fetch(this.keycloakTokenUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => null);
+        const message = err?.error_description || 'Invalid username or password';
+        return { success: false, error: message };
+      }
+
+      const tokenResponse = await response.json();
+      this.directToken = tokenResponse.access_token;
+      this.directRefreshToken = tokenResponse.refresh_token;
+
+      const parsed = this.parseJwt(tokenResponse.access_token);
+      this.userProfileSubject.next({
+        username: parsed.preferred_username ?? username,
+        email: parsed.email,
+        roles: parsed.realm_access?.roles ?? [],
+        classificationLevel: parsed.classification_level ?? 'UNCLASSIFIED',
+      });
+
+      this.authenticatedSubject.next(true);
+      this.setupDirectTokenRefresh(tokenResponse.expires_in);
+      return { success: true };
+    } catch {
+      return { success: false, error: 'Unable to reach authentication server' };
+    }
+  }
+
+  private parseJwt(token: string): any {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(base64));
+  }
+
+  private setupDirectTokenRefresh(expiresIn: number): void {
+    this.clearTimers();
+
+    // Refresh 30 seconds before expiry
+    const refreshAt = Math.max((expiresIn - 30) * 1000, 10000);
+    this.tokenRefreshInterval = setInterval(() => {
+      this.refreshDirectToken();
+    }, refreshAt);
+  }
+
+  private async refreshDirectToken(): Promise<void> {
+    if (!this.directRefreshToken) return;
+
+    const body = new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: this.clientId,
+      refresh_token: this.directRefreshToken,
+    });
+
+    try {
+      const response = await fetch(this.keycloakTokenUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+      });
+
+      if (!response.ok) {
+        throw new Error('Refresh failed');
+      }
+
+      const tokenResponse = await response.json();
+      this.directToken = tokenResponse.access_token;
+      this.directRefreshToken = tokenResponse.refresh_token;
+
+      const parsed = this.parseJwt(tokenResponse.access_token);
+      this.userProfileSubject.next({
+        username: parsed.preferred_username ?? 'unknown',
+        email: parsed.email,
+        roles: parsed.realm_access?.roles ?? [],
+        classificationLevel: parsed.classification_level ?? 'UNCLASSIFIED',
+      });
+    } catch {
+      console.warn('[Auth] Direct token refresh failed, session expired');
+      this.directToken = null;
+      this.directRefreshToken = null;
+      this.authenticatedSubject.next(false);
+      this.userProfileSubject.next(null);
+    }
+  }
+
   async logout(): Promise<void> {
     this.clearTimers();
+    this.directToken = null;
+    this.directRefreshToken = null;
     if (this.keycloak) {
       await this.keycloak.logout({ redirectUri: window.location.origin });
     }
@@ -90,7 +194,7 @@ export class AuthService implements OnDestroy {
   }
 
   getToken(): string | null {
-    return this.keycloak?.token ?? null;
+    return this.directToken ?? this.keycloak?.token ?? null;
   }
 
   isAuthenticated(): boolean {
@@ -202,7 +306,7 @@ export class AuthService implements OnDestroy {
     this.userProfileSubject.next({
       username: 'dev-operator',
       email: 'operator@sentinel.local',
-      roles: ['sentinel-analyst', 'sentinel-operator'],
+      roles: ['sentinel-analyst', 'sentinel-operator', 'sentinel-admin'],
       classificationLevel: 'UNCLASSIFIED',
     });
   }
