@@ -63,3 +63,4 @@ libs/proto-gen/src/python/
 *.pem
 *.key
 credentials.json
+.superpowers/

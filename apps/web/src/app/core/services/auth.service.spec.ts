@@ -67,4 +67,74 @@ describe('AuthService', () => {
       warnSpy.mockRestore();
     });
   });
+
+  describe('loginWithCredentials', () => {
+    const mockToken = [
+      btoa(JSON.stringify({ alg: 'RS256' })),
+      btoa(JSON.stringify({
+        preferred_username: 'operator',
+        email: 'op@sentinel.local',
+        realm_access: { roles: ['sentinel-operator'] },
+        classification_level: 'UNCLASSIFIED',
+      })),
+      'signature',
+    ].join('.');
+
+    let originalFetch: typeof fetch | undefined;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+      globalThis.fetch = jest.fn();
+    });
+
+    afterEach(() => {
+      if (originalFetch) {
+        globalThis.fetch = originalFetch;
+      } else {
+        delete (globalThis as any).fetch;
+      }
+    });
+
+    it('should authenticate on successful credentials', async () => {
+      (globalThis.fetch as jest.Mock).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          access_token: mockToken,
+          refresh_token: 'refresh-token',
+          expires_in: 300,
+        }),
+      } as Response);
+
+      const result = await service.loginWithCredentials('operator', 'password');
+
+      expect(result.success).toBe(true);
+      expect(service.isAuthenticated()).toBe(true);
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/auth/realms/sentinel/protocol/openid-connect/token',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    it('should return error on invalid credentials', async () => {
+      (globalThis.fetch as jest.Mock).mockResolvedValue({
+        ok: false,
+        json: () => Promise.resolve({ error_description: 'Invalid user credentials' }),
+      } as Response);
+
+      const result = await service.loginWithCredentials('bad', 'wrong');
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Invalid user credentials');
+      expect(service.isAuthenticated()).toBe(false);
+    });
+
+    it('should return error when server is unreachable', async () => {
+      (globalThis.fetch as jest.Mock).mockRejectedValue(new Error('Network error'));
+
+      const result = await service.loginWithCredentials('operator', 'password');
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Unable to reach authentication server');
+    });
+  });
 });
