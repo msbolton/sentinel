@@ -98,23 +98,10 @@ import { MapComponent } from './features/map/map.component';
         </div>
 
         <div class="sidebar-footer">
-          @if (isAdmin()) {
-            <button
-              class="sidebar-btn"
-              routerLink="/admin/users"
-              routerLinkActive="active"
-              title="User Management">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                <circle cx="9" cy="7" r="4"/>
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-              </svg>
-            </button>
-          }
           <button
             class="sidebar-btn"
-            (click)="toggleSettings()"
+            routerLink="/settings"
+            routerLinkActive="active"
             title="Settings">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="3"/>
@@ -254,7 +241,7 @@ export class AppComponent implements OnInit, OnDestroy {
     const classifyRoute = (url: string) => {
       const path = url.replace(/\?.*$/, '');
       this.isFullScreenRoute.set(['/login', '/register'].includes(path));
-      this.isPageRoute.set(path.startsWith('/admin'));
+      this.isPageRoute.set(path.startsWith('/admin') || path.startsWith('/settings'));
     };
     classifyRoute(this.router.url);
     this.router.events.pipe(
@@ -302,11 +289,6 @@ export class AppComponent implements OnInit, OnDestroy {
       clearInterval(this.timeInterval);
       this.timeInterval = null;
     }
-  }
-
-  toggleSettings(): void {
-    // Future: open settings panel
-    console.log('Settings panel - not yet implemented');
   }
 
   private updateTime(): void {

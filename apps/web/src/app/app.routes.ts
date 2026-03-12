@@ -60,12 +60,16 @@ export const routes: Routes = [
       import('./features/register/register.component').then((m) => m.RegisterComponent),
   },
   {
-    path: 'admin/users',
-    canActivate: [roleGuard('sentinel-admin')],
+    path: 'settings',
+    canActivate: [authGuard],
     loadComponent: () =>
-      import('./features/admin/pending-users/pending-users.component').then(
-        (m) => m.PendingUsersComponent,
+      import('./features/settings/settings.component').then(
+        (m) => m.SettingsComponent,
       ),
+  },
+  {
+    path: 'admin/users',
+    redirectTo: 'settings',
   },
   {
     path: '**',
