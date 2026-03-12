@@ -6,7 +6,7 @@
 
 **Architecture:** New NestJS `RegistrationController` + `KeycloakAdminService` handle user creation/approval/rejection via Keycloak Admin API. New Angular `RegisterComponent` and `PendingUsersComponent` provide the UI. MailHog handles dev email. `@nestjs/throttler` rate-limits the public registration endpoint.
 
-**Tech Stack:** Angular 19 (standalone components, signals, zoneless), NestJS (Passport, `@nestjs/throttler`, `@nestjs/mailer`), Keycloak 24 Admin REST API, MailHog (dev SMTP)
+**Tech Stack:** Angular 19 (standalone components, signals, zoneless), NestJS (Passport, `@nestjs/throttler`, `@nestjs-modules/mailer`), Keycloak 24 Admin REST API, MailHog (dev SMTP)
 
 **Spec:** `docs/superpowers/specs/2026-03-11-registration-workflow-design.md`
 
@@ -22,14 +22,14 @@
 - [ ] **Step 1: Install npm packages**
 
 ```bash
-npm install @nestjs/throttler@^5 @nestjs/mailer nodemailer
+npm install @nestjs/throttler@^5 @nestjs-modules/mailer nodemailer
 npm install -D @types/nodemailer
 ```
 
 - [ ] **Step 2: Verify packages installed**
 
 ```bash
-grep -E "@nestjs/throttler|@nestjs/mailer|nodemailer" package.json
+grep -E "@nestjs/throttler|@nestjs-modules/mailer|nodemailer" package.json
 ```
 
 Expected: All three packages appear in dependencies/devDependencies.
@@ -38,7 +38,7 @@ Expected: All three packages appear in dependencies/devDependencies.
 
 ```bash
 git add package.json package-lock.json
-git commit -m "chore: add @nestjs/throttler, @nestjs/mailer, nodemailer dependencies"
+git commit -m "chore: add @nestjs/throttler, @nestjs-modules/mailer, nodemailer dependencies"
 ```
 
 ---
@@ -606,7 +606,7 @@ import { HttpException, HttpStatus } from '@nestjs/common';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { RegistrationController } from './registration.controller';
 import { KeycloakAdminService } from './keycloak-admin.service';
-import { MailerService } from '@nestjs/mailer';
+import { MailerService } from '@nestjs-modules/mailer';
 
 describe('RegistrationController', () => {
   let controller: RegistrationController;
@@ -740,7 +740,7 @@ import { Throttle } from '@nestjs/throttler';
 import { KeycloakAdminService } from './keycloak-admin.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { Roles } from './decorators/roles.decorator';
-import { MailerService } from '@nestjs/mailer';
+import { MailerService } from '@nestjs-modules/mailer';
 
 interface RegisterDto {
   username: string;
@@ -856,7 +856,7 @@ import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { PassportModule } from '@nestjs/passport';
 import { ConfigService } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
-import { MailerModule } from '@nestjs/mailer';
+import { MailerModule } from '@nestjs-modules/mailer';
 import { JwtStrategy } from './jwt.strategy';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { AuthAuditService } from './auth-audit.service';
