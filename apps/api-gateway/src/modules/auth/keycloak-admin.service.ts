@@ -4,6 +4,16 @@ import { ConfigService } from '@nestjs/config';
 export const VALID_CLASSIFICATIONS = ['classification-u', 'classification-s', 'classification-ts'] as const;
 export type ClassificationLevel = typeof VALID_CLASSIFICATIONS[number];
 
+export interface ActiveUser {
+  id: string;
+  username: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  classificationLevel: ClassificationLevel | null;
+  roles: string[];
+}
+
 export interface CreateUserDto {
   username: string;
   email: string;
@@ -363,5 +373,48 @@ export class KeycloakAdminService {
     }
 
     return { email: user.email, firstName: user.firstName };
+  }
+
+  /**
+   * Returns all enabled (active) users with their classification level and roles.
+   * Filters out service accounts (usernames starting with `service-account-`).
+   */
+  async getActiveUsers(): Promise<ActiveUser[]> {
+    const response = await this.adminRequest('/users?enabled=true&max=100');
+    if (!response.ok) {
+      throw new HttpException('Failed to fetch users', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    const users = (await response.json()) as Array<{
+      id: string;
+      username: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+    }>;
+
+    const activeUsers = users.filter(u => !u.username.startsWith('service-account-'));
+
+    const results: ActiveUser[] = [];
+    for (const u of activeUsers) {
+      const rolesResponse = await this.adminRequest(`/users/${u.id}/role-mappings/realm`);
+      const roles = rolesResponse.ok
+        ? ((await rolesResponse.json()) as Array<{ name: string }>).map(r => r.name)
+        : [];
+
+      const classificationLevel = (VALID_CLASSIFICATIONS.find(c => roles.includes(c)) ?? null) as ClassificationLevel | null;
+
+      results.push({
+        id: u.id,
+        username: u.username,
+        email: u.email,
+        firstName: u.firstName,
+        lastName: u.lastName,
+        classificationLevel,
+        roles,
+      });
+    }
+
+    return results;
   }
 }
