@@ -15,6 +15,7 @@ export class DiscoveryService implements OnModuleInit, OnModuleDestroy {
   private readonly psk: string | undefined;
   private mdns: unknown | null = null;
   private seedPollTimer?: ReturnType<typeof setInterval>;
+  private mdnsQueryTimer?: ReturnType<typeof setInterval>;
 
   private static readonly SERVICE_TYPE = '_sentinel-fed._tcp.local';
   private static readonly MDNS_INTERVAL_MS = 30_000;
@@ -54,6 +55,7 @@ export class DiscoveryService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     if (this.seedPollTimer) clearInterval(this.seedPollTimer);
+    if (this.mdnsQueryTimer) clearInterval(this.mdnsQueryTimer);
     if (this.mdns && typeof (this.mdns as { destroy: () => void }).destroy === 'function') {
       (this.mdns as { destroy: () => void }).destroy();
     }
@@ -129,7 +131,7 @@ export class DiscoveryService implements OnModuleInit, OnModuleDestroy {
 
     mdns.query({ questions: [{ name: DiscoveryService.SERVICE_TYPE, type: 'SRV' }] });
 
-    setInterval(() => {
+    this.mdnsQueryTimer = setInterval(() => {
       mdns.query({ questions: [{ name: DiscoveryService.SERVICE_TYPE, type: 'SRV' }] });
     }, DiscoveryService.MDNS_INTERVAL_MS);
 
