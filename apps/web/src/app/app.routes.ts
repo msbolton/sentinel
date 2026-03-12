@@ -1,4 +1,5 @@
 import { Routes } from '@angular/router';
+import { authGuard, roleGuard } from './core/guards/auth.guard';
 
 export const routes: Routes = [
   {
@@ -8,21 +9,25 @@ export const routes: Routes = [
   },
   {
     path: 'map',
+    canActivate: [authGuard],
     loadComponent: () =>
       import('./features/map/map.component').then((m) => m.MapComponent),
   },
   {
     path: 'search',
+    canActivate: [authGuard],
     loadComponent: () =>
       import('./features/search/search.component').then((m) => m.SearchComponent),
   },
   {
     path: 'alerts',
+    canActivate: [authGuard],
     loadComponent: () =>
       import('./features/alerts/alerts.component').then((m) => m.AlertsComponent),
   },
   {
     path: 'link-graph',
+    canActivate: [roleGuard('sentinel-analyst', 'sentinel-admin')],
     loadComponent: () =>
       import('./features/link-graph/link-graph.component').then(
         (m) => m.LinkGraphComponent,
@@ -30,6 +35,7 @@ export const routes: Routes = [
   },
   {
     path: 'timeline',
+    canActivate: [authGuard],
     loadComponent: () =>
       import('./features/timeline/timeline.component').then(
         (m) => m.TimelineComponent,
@@ -37,10 +43,33 @@ export const routes: Routes = [
   },
   {
     path: 'locations',
+    canActivate: [authGuard],
     loadComponent: () =>
       import('./features/locations/locations.component').then(
         (m) => m.LocationsComponent,
       ),
+  },
+  {
+    path: 'login',
+    loadComponent: () =>
+      import('./features/login/login.component').then((m) => m.LoginComponent),
+  },
+  {
+    path: 'register',
+    loadComponent: () =>
+      import('./features/register/register.component').then((m) => m.RegisterComponent),
+  },
+  {
+    path: 'settings',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./features/settings/settings.component').then(
+        (m) => m.SettingsComponent,
+      ),
+  },
+  {
+    path: 'admin/users',
+    redirectTo: 'settings',
   },
   {
     path: '**',

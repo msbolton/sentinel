@@ -3,6 +3,78 @@
   "enabled": true,
   "displayName": "SENTINEL Intelligence Platform",
   "sslRequired": "external",
+  "smtpServer": {
+    "host": "mailhog",
+    "port": "1025",
+    "from": "sentinel@sentinel.local",
+    "fromDisplayName": "SENTINEL Platform",
+    "ssl": "false",
+    "starttls": "false",
+    "auth": "false"
+  },
+  "attributes": {
+    "userProfileEnabled": "true"
+  },
+  "userProfile": {
+    "attributes": [
+      {
+        "name": "username",
+        "displayName": "${username}",
+        "validations": {"length": {"min": 3, "max": 255}, "username-prohibited-characters": {}, "up-username-not-idn-homograph": {}},
+        "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
+        "multivalued": false
+      },
+      {
+        "name": "email",
+        "displayName": "${email}",
+        "validations": {"email": {}, "length": {"max": 255}},
+        "required": {"roles": ["user"]},
+        "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
+        "multivalued": false
+      },
+      {
+        "name": "firstName",
+        "displayName": "${firstName}",
+        "validations": {"length": {"max": 255}, "person-name-prohibited-characters": {}},
+        "required": {"roles": ["user"]},
+        "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
+        "multivalued": false
+      },
+      {
+        "name": "lastName",
+        "displayName": "${lastName}",
+        "validations": {"length": {"max": 255}, "person-name-prohibited-characters": {}},
+        "required": {"roles": ["user"]},
+        "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
+        "multivalued": false
+      },
+      {
+        "name": "organization",
+        "displayName": "Organization",
+        "permissions": {"view": ["admin"], "edit": ["admin"]},
+        "multivalued": false
+      },
+      {
+        "name": "justification",
+        "displayName": "Access Justification",
+        "permissions": {"view": ["admin"], "edit": ["admin"]},
+        "multivalued": false
+      },
+      {
+        "name": "registrationDate",
+        "displayName": "Registration Date",
+        "permissions": {"view": ["admin"], "edit": ["admin"]},
+        "multivalued": false
+      }
+    ],
+    "groups": [
+      {
+        "name": "user-metadata",
+        "displayHeader": "User metadata",
+        "displayDescription": "Attributes, which refer to user metadata"
+      }
+    ]
+  },
   "registrationAllowed": false,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
@@ -17,6 +89,36 @@
   "maxDeltaTimeSeconds": 43200,
   "failureFactor": 5,
   "defaultRoles": ["sentinel-viewer"],
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "otpPolicyInitialCounter": 0,
+  "otpPolicyLookAheadWindow": 1,
+  "eventsEnabled": true,
+  "eventsListeners": ["jboss-logging"],
+  "enabledEventTypes": [
+    "LOGIN",
+    "LOGIN_ERROR",
+    "LOGOUT",
+    "REGISTER",
+    "REGISTER_ERROR",
+    "CODE_TO_TOKEN",
+    "CODE_TO_TOKEN_ERROR",
+    "CLIENT_LOGIN",
+    "CLIENT_LOGIN_ERROR",
+    "TOKEN_EXCHANGE",
+    "TOKEN_EXCHANGE_ERROR",
+    "REFRESH_TOKEN",
+    "REFRESH_TOKEN_ERROR",
+    "UPDATE_PROFILE",
+    "UPDATE_PASSWORD",
+    "SEND_RESET_PASSWORD",
+    "IMPERSONATE",
+    "CUSTOM_REQUIRED_ACTION"
+  ],
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": true,
   "roles": {
     "realm": [
       {
@@ -74,6 +176,19 @@
       "publicClient": false,
       "bearerOnly": true,
       "protocol": "openid-connect"
+    },
+    {
+      "clientId": "sentinel-service",
+      "name": "SENTINEL Inter-Service Client",
+      "description": "Client credentials grant for service-to-service authentication",
+      "enabled": true,
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "secret": "sentinel-service-secret-dev",
+      "protocol": "openid-connect",
+      "defaultClientScopes": ["roles"]
     }
   ],
   "users": [
@@ -125,6 +240,14 @@
         }
       ],
       "realmRoles": ["sentinel-viewer", "classification-u"]
+    },
+    {
+      "username": "service-account-sentinel-service",
+      "enabled": true,
+      "serviceAccountClientId": "sentinel-service",
+      "clientRoles": {
+        "realm-management": ["manage-users"]
+      }
     }
   ],
   "scopeMappings": [
@@ -139,6 +262,39 @@
         "classification-s",
         "classification-c",
         "classification-u"
+      ]
+    }
+  ],
+  "requiredActions": [
+    {
+      "alias": "CONFIGURE_TOTP",
+      "name": "Configure OTP",
+      "providerId": "CONFIGURE_TOTP",
+      "enabled": true,
+      "defaultAction": false,
+      "priority": 10
+    }
+  ],
+  "authenticationFlows": [
+    {
+      "alias": "sentinel-browser",
+      "description": "Browser login flow with optional MFA",
+      "providerId": "basic-flow",
+      "builtIn": false,
+      "topLevel": true,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-cookie",
+          "authenticatorFlow": false,
+          "requirement": "ALTERNATIVE",
+          "priority": 10
+        },
+        {
+          "authenticator": "auth-username-password-form",
+          "authenticatorFlow": false,
+          "requirement": "ALTERNATIVE",
+          "priority": 20
+        }
       ]
     }
   ]
