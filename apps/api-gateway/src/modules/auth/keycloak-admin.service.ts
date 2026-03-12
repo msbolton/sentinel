@@ -457,7 +457,9 @@ export class KeycloakAdminService {
         ? ((await rolesResponse.json()) as Array<{ name: string }>).map(r => r.name)
         : [];
 
-      const classificationLevel = (VALID_CLASSIFICATIONS.find(c => roles.includes(c)) ?? null) as ClassificationLevel | null;
+      // Search highest-to-lowest so multiple roles returns the highest
+      const CLASSIFICATION_PRIORITY: readonly ClassificationLevel[] = ['classification-ts', 'classification-s', 'classification-u'];
+      const classificationLevel = (CLASSIFICATION_PRIORITY.find(c => roles.includes(c)) ?? null) as ClassificationLevel | null;
 
       results.push({
         id: u.id,
