@@ -509,7 +509,6 @@ export class SettingsComponent {
 
   readonly classificationOptions = [
     { value: 'classification-u', label: 'UNCLASSIFIED' },
-    { value: 'classification-c', label: 'CONFIDENTIAL' },
     { value: 'classification-s', label: 'SECRET' },
     { value: 'classification-ts', label: 'TOP SECRET' },
   ] as const;
@@ -571,6 +570,7 @@ export class SettingsComponent {
         this.actionInProgress.set(null);
         this.actionType.set(null);
         this.successMessage.set(`User approved successfully`);
+        this.autoClearSuccess();
         this.loadActiveUsers();
       },
       error: (err) => {
@@ -591,6 +591,7 @@ export class SettingsComponent {
         this.actionInProgress.set(null);
         this.actionType.set(null);
         this.successMessage.set(`User registration rejected`);
+        this.autoClearSuccess();
       },
       error: (err) => {
         this.errorMessage.set(err.error?.message || 'Failed to reject user');
@@ -598,6 +599,10 @@ export class SettingsComponent {
         this.actionType.set(null);
       },
     });
+  }
+
+  private autoClearSuccess(): void {
+    setTimeout(() => this.successMessage.set(''), 3000);
   }
 
   updateClassification(userId: string, level: string): void {
@@ -610,6 +615,7 @@ export class SettingsComponent {
         );
         this.classificationUpdating.set(null);
         this.successMessage.set(`Classification updated successfully`);
+        this.autoClearSuccess();
       },
       error: (err) => {
         this.errorMessage.set(err.error?.message || 'Failed to update classification');
