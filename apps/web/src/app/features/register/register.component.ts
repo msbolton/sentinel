@@ -648,7 +648,7 @@ export class RegisterComponent {
     this.loading.set(true);
     this.errorMessage.set('');
 
-    this.http.post('/api/auth/register', {
+    this.http.post('/api/v1/auth/register', {
       username: this.form.username,
       email: this.form.email,
       password: this.form.password,

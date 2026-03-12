@@ -52,7 +52,7 @@ describe('PendingUsersComponent', () => {
   it('should create and fetch pending users on init', () => {
     fixture.detectChanges();
 
-    const req = httpMock.expectOne('/api/auth/pending-registrations');
+    const req = httpMock.expectOne('/api/v1/auth/pending-registrations');
     expect(req.request.method).toBe('GET');
     req.flush(mockPendingUsers);
 
@@ -65,7 +65,7 @@ describe('PendingUsersComponent', () => {
   it('should render a table with pending users', () => {
     fixture.detectChanges();
 
-    const req = httpMock.expectOne('/api/auth/pending-registrations');
+    const req = httpMock.expectOne('/api/v1/auth/pending-registrations');
     req.flush(mockPendingUsers);
 
     fixture.detectChanges();
@@ -77,14 +77,14 @@ describe('PendingUsersComponent', () => {
   it('should call approve endpoint and remove user from list', () => {
     fixture.detectChanges();
 
-    const loadReq = httpMock.expectOne('/api/auth/pending-registrations');
+    const loadReq = httpMock.expectOne('/api/v1/auth/pending-registrations');
     loadReq.flush(mockPendingUsers);
     fixture.detectChanges();
 
     component.approve('u1');
     fixture.detectChanges();
 
-    const approveReq = httpMock.expectOne('/api/auth/approve-registration/u1');
+    const approveReq = httpMock.expectOne('/api/v1/auth/approve-registration/u1');
     expect(approveReq.request.method).toBe('POST');
     approveReq.flush({});
 
@@ -97,14 +97,14 @@ describe('PendingUsersComponent', () => {
   it('should call reject endpoint and remove user from list', () => {
     fixture.detectChanges();
 
-    const loadReq = httpMock.expectOne('/api/auth/pending-registrations');
+    const loadReq = httpMock.expectOne('/api/v1/auth/pending-registrations');
     loadReq.flush(mockPendingUsers);
     fixture.detectChanges();
 
     component.reject('u2');
     fixture.detectChanges();
 
-    const rejectReq = httpMock.expectOne('/api/auth/reject-registration/u2');
+    const rejectReq = httpMock.expectOne('/api/v1/auth/reject-registration/u2');
     expect(rejectReq.request.method).toBe('POST');
     rejectReq.flush({});
 
@@ -117,14 +117,14 @@ describe('PendingUsersComponent', () => {
   it('should show error on failed approval', () => {
     fixture.detectChanges();
 
-    const loadReq = httpMock.expectOne('/api/auth/pending-registrations');
+    const loadReq = httpMock.expectOne('/api/v1/auth/pending-registrations');
     loadReq.flush(mockPendingUsers);
     fixture.detectChanges();
 
     component.approve('u1');
     fixture.detectChanges();
 
-    const approveReq = httpMock.expectOne('/api/auth/approve-registration/u1');
+    const approveReq = httpMock.expectOne('/api/v1/auth/approve-registration/u1');
     approveReq.flush({ message: 'Internal Server Error' }, { status: 500, statusText: 'Internal Server Error' });
 
     fixture.detectChanges();
@@ -137,7 +137,7 @@ describe('PendingUsersComponent', () => {
   it('should show empty state when no pending users', () => {
     fixture.detectChanges();
 
-    const req = httpMock.expectOne('/api/auth/pending-registrations');
+    const req = httpMock.expectOne('/api/v1/auth/pending-registrations');
     req.flush([]);
 
     fixture.detectChanges();
