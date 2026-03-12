@@ -376,6 +376,61 @@ export class KeycloakAdminService {
   }
 
   /**
+   * Updates a user's classification role: removes any existing classification-* roles,
+   * then assigns the new one.
+   */
+  async updateClassification(userId: string, classificationLevel: ClassificationLevel): Promise<void> {
+    if (!VALID_CLASSIFICATIONS.includes(classificationLevel)) {
+      throw new HttpException('Invalid classification level', HttpStatus.BAD_REQUEST);
+    }
+
+    // Get current role mappings
+    const rolesResponse = await this.adminRequest(`/users/${userId}/role-mappings/realm`);
+    if (!rolesResponse.ok) {
+      throw new HttpException('Failed to fetch user roles', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    const currentRoles = (await rolesResponse.json()) as Array<{ id: string; name: string }>;
+    const existingClassificationRoles = currentRoles.filter(r =>
+      VALID_CLASSIFICATIONS.includes(r.name as ClassificationLevel),
+    );
+
+    // Remove existing classification roles
+    if (existingClassificationRoles.length > 0) {
+      const removeResponse = await this.adminRequest(`/users/${userId}/role-mappings/realm`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(existingClassificationRoles),
+      });
+      if (!removeResponse.ok) {
+        throw new HttpException('Failed to remove existing classification', HttpStatus.INTERNAL_SERVER_ERROR);
+      }
+    }
+
+    // Fetch all roles to get the new role's ID
+    const allRolesResponse = await this.adminRequest('/roles');
+    if (!allRolesResponse.ok) {
+      throw new HttpException('Failed to fetch roles', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    const allRoles = (await allRolesResponse.json()) as Array<{ id: string; name: string }>;
+    const newRole = allRoles.find(r => r.name === classificationLevel);
+    if (!newRole) {
+      throw new HttpException(`Role ${classificationLevel} not found`, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    const assignResponse = await this.adminRequest(`/users/${userId}/role-mappings/realm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([newRole]),
+    });
+
+    if (!assignResponse.ok) {
+      throw new HttpException('Failed to assign classification', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  /**
    * Returns all enabled (active) users with their classification level and roles.
    * Filters out service accounts (usernames starting with `service-account-`).
    */
