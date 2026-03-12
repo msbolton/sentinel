@@ -197,7 +197,7 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     if (!raw) return;
 
     this.bufferUpdate(raw, 'updated');
-    await this.forwardToFederation(raw, 'position');
+    this.forwardToFederation(raw, 'position');
   }
 
   /**
@@ -208,7 +208,7 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     if (!raw) return;
 
     this.bufferUpdate(raw, 'created');
-    await this.forwardToFederation(raw, 'created');
+    this.forwardToFederation(raw, 'created');
   }
 
   /**
@@ -219,7 +219,7 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     if (!raw) return;
 
     this.bufferUpdate(raw, 'updated');
-    await this.forwardToFederation(raw, 'updated');
+    this.forwardToFederation(raw, 'updated');
   }
 
   /**
