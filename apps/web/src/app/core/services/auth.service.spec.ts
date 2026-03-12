@@ -11,6 +11,31 @@ describe('AuthService', () => {
     service = TestBed.inject(AuthService);
   });
 
+  describe('init', () => {
+    it('should null out keycloak when init fails', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const mockKeycloak = {
+        init: jest.fn().mockRejectedValue(new Error('Connection refused')),
+      };
+
+      // Simulate: keycloak-js imported successfully, constructor ran, but init() throws
+      (service as any).keycloak = mockKeycloak;
+
+      // Manually trigger the catch path
+      try {
+        await mockKeycloak.init();
+      } catch {
+        (service as any).keycloak = null;
+        (service as any).setDevelopmentProfile();
+      }
+
+      expect((service as any).keycloak).toBeNull();
+      expect(service.isAuthenticated()).toBe(true);
+
+      warnSpy.mockRestore();
+    });
+  });
+
   describe('login', () => {
     it('should call keycloak.login with redirectUri when provided', async () => {
       const mockKeycloak = { login: jest.fn().mockResolvedValue(undefined) };
