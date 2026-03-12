@@ -99,9 +99,8 @@ export interface PendingUser {
   styles: [`
     :host {
       display: block;
-      padding: 24px;
-      background: #060e1f;
-      min-height: 100vh;
+      padding: 32px;
+      min-height: 100%;
     }
 
     .pending-users-panel {

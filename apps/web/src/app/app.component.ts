@@ -127,19 +127,26 @@ import { MapComponent } from './features/map/map.component';
 
       <!-- Main Content Area -->
       <main class="main-content">
-        <!-- Map is always rendered in the background -->
-        <app-map class="map-background"></app-map>
+        @if (isPageRoute()) {
+          <!-- Full-page routes (admin) render directly without map -->
+          <div class="page-content">
+            <router-outlet></router-outlet>
+          </div>
+        } @else {
+          <!-- Map is always rendered in the background -->
+          <app-map class="map-background"></app-map>
 
-        <!-- Floating pills -->
-        <div class="floating-pills">
-          <app-data-feeds></app-data-feeds>
-          <app-theme-picker></app-theme-picker>
-        </div>
+          <!-- Floating pills -->
+          <div class="floating-pills">
+            <app-data-feeds></app-data-feeds>
+            <app-theme-picker></app-theme-picker>
+          </div>
 
-        <!-- Feature panels render on top of the map -->
-        <div class="panel-overlay">
-          <router-outlet></router-outlet>
-        </div>
+          <!-- Feature panels render on top of the map -->
+          <div class="panel-overlay">
+            <router-outlet></router-outlet>
+          </div>
+        }
       </main>
 
       <!-- Status Bar -->
@@ -177,6 +184,13 @@ import { MapComponent } from './features/map/map.component';
       right: 0;
       bottom: var(--status-bar-height);
       overflow: hidden;
+    }
+
+    .page-content {
+      position: absolute;
+      inset: 0;
+      overflow-y: auto;
+      background: #060e1f;
     }
 
     .map-background {
@@ -217,6 +231,7 @@ import { MapComponent } from './features/map/map.component';
 })
 export class AppComponent implements OnInit, OnDestroy {
   isFullScreenRoute = signal<boolean>(false);
+  isPageRoute = signal<boolean>(false);
   connectionStatus = signal<ConnectionStatus>('disconnected');
   entityCount = signal<number>(0);
   unacknowledgedAlertCount = signal<number>(0);
@@ -235,14 +250,17 @@ export class AppComponent implements OnInit, OnDestroy {
   ) {}
 
   async ngOnInit(): Promise<void> {
-    // Track login route to hide app shell
-    this.isFullScreenRoute.set(['/login', '/register'].includes(this.router.url.replace(/\?.*$/, '')));
+    // Track route type for layout switching
+    const classifyRoute = (url: string) => {
+      const path = url.replace(/\?.*$/, '');
+      this.isFullScreenRoute.set(['/login', '/register'].includes(path));
+      this.isPageRoute.set(path.startsWith('/admin'));
+    };
+    classifyRoute(this.router.url);
     this.router.events.pipe(
       filter((e): e is NavigationEnd => e instanceof NavigationEnd),
       takeUntilDestroyed(this.destroyRef),
-    ).subscribe((e) => {
-      this.isFullScreenRoute.set(['/login', '/register'].includes(e.urlAfterRedirects.replace(/\?.*$/, '')));
-    });
+    ).subscribe((e) => classifyRoute(e.urlAfterRedirects));
 
     // Initialize auth
     await this.authService.init();
