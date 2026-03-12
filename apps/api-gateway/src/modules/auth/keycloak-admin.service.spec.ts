@@ -1,7 +1,7 @@
 import { HttpException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
-import { KeycloakAdminService, CreateUserDto } from './keycloak-admin.service';
+import { KeycloakAdminService, CreateUserDto, VALID_CLASSIFICATIONS } from './keycloak-admin.service';
 
 const TOKEN_RESPONSE = {
   access_token: 'test-token',
@@ -412,6 +412,57 @@ describe('KeycloakAdminService', () => {
         .mockResolvedValueOnce(mockFetchResponseEmpty(204));          // PUT re-disable
 
       await expect(service.approveUser(userId)).rejects.toThrow(HttpException);
+    });
+
+    it('should assign the specified classification role instead of classification-u', async () => {
+      const rolesWithTs = [
+        { id: 'role-viewer-id', name: 'sentinel-viewer' },
+        { id: 'role-class-u-id', name: 'classification-u' },
+        { id: 'role-class-ts-id', name: 'classification-ts' },
+        { id: 'role-admin-id', name: 'sentinel-admin' },
+      ];
+
+      fetchMock
+        .mockResolvedValueOnce(mockFetchResponse(TOKEN_RESPONSE))    // 1. token
+        .mockResolvedValueOnce(mockFetchResponse(userRepresentation)) // 2. GET user
+        .mockResolvedValueOnce(mockFetchResponseEmpty(204))           // 3. PUT enable
+        .mockResolvedValueOnce(mockFetchResponse(rolesWithTs))        // 4. GET roles
+        .mockResolvedValueOnce(mockFetchResponseEmpty(204))           // 5. POST role-mappings
+        .mockResolvedValueOnce(mockFetchResponseEmpty(204))           // 6. PUT remove registrationDate
+        .mockResolvedValueOnce(mockFetchResponseEmpty(204));          // 7. PUT execute-actions-email
+
+      await service.approveUser(userId, 'classification-ts');
+
+      const roleAssignCall = fetchMock.mock.calls.find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('role-mappings/realm') &&
+          call[1]?.method === 'POST',
+      );
+      expect(roleAssignCall).toBeDefined();
+
+      const assignedRoles = JSON.parse(roleAssignCall![1].body as string) as Array<{ name: string }>;
+      const assignedNames = assignedRoles.map((r) => r.name);
+      expect(assignedNames).toContain('sentinel-viewer');
+      expect(assignedNames).toContain('classification-ts');
+      expect(assignedNames).not.toContain('classification-u');
+    });
+
+    it('should default to classification-u when classificationLevel is omitted', async () => {
+      mockSuccessSequence();
+      await service.approveUser(userId);
+
+      const roleAssignCall = fetchMock.mock.calls.find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].includes('role-mappings/realm') &&
+          call[1]?.method === 'POST',
+      );
+      expect(roleAssignCall).toBeDefined();
+
+      const assignedRoles = JSON.parse(roleAssignCall![1].body as string) as Array<{ name: string }>;
+      const assignedNames = assignedRoles.map((r) => r.name);
+      expect(assignedNames).toContain('classification-u');
     });
 
     it('should throw NOT_FOUND when user does not exist', async () => {

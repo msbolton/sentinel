@@ -1,6 +1,9 @@
 import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+export const VALID_CLASSIFICATIONS = ['classification-u', 'classification-s', 'classification-ts'] as const;
+export type ClassificationLevel = typeof VALID_CLASSIFICATIONS[number];
+
 export interface CreateUserDto {
   username: string;
   email: string;
@@ -224,7 +227,7 @@ export class KeycloakAdminService {
    * 4. PUT remove registrationDate attribute (only after roles succeed)
    * 5. POST /execute-actions-email to trigger the VERIFY_EMAIL email
    */
-  async approveUser(userId: string): Promise<void> {
+  async approveUser(userId: string, classificationLevel: ClassificationLevel = 'classification-u'): Promise<void> {
     // Step 1: Get current user representation
     const userResponse = await this.adminRequest(`/users/${userId}`);
     if (!userResponse.ok) {
@@ -260,11 +263,11 @@ export class KeycloakAdminService {
       const allRoles = (await rolesResponse.json()) as Array<{ id: string; name: string }>;
 
       const rolesToAssign = allRoles.filter(
-        (r) => r.name === 'sentinel-viewer' || r.name === 'classification-u',
+        (r) => r.name === 'sentinel-viewer' || r.name === classificationLevel,
       );
 
       if (rolesToAssign.length === 0) {
-        throw new Error('Required roles (sentinel-viewer, classification-u) not found');
+        throw new Error(`Required roles (sentinel-viewer, ${classificationLevel}) not found`);
       }
 
       const assignResponse = await this.adminRequest(
