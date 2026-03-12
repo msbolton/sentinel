@@ -52,7 +52,7 @@ export class KeycloakAdminService {
   private get clientSecret(): string {
     return this.configService.get<string>(
       'KEYCLOAK_SERVICE_CLIENT_SECRET',
-      '',
+      'sentinel-service-secret-dev',
     );
   }
 
