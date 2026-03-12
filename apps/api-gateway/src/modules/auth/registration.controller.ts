@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Put,
   Body,
   Param,
   UseGuards,
@@ -10,10 +11,14 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
-import { KeycloakAdminService } from './keycloak-admin.service';
+import { KeycloakAdminService, VALID_CLASSIFICATIONS, ClassificationLevel } from './keycloak-admin.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { Roles } from './decorators/roles.decorator';
 import { MailerService } from '@nestjs-modules/mailer';
+
+interface ClassificationDto {
+  classificationLevel?: string;
+}
 
 interface RegisterDto {
   username: string;
@@ -77,10 +82,15 @@ export class RegistrationController {
   @Roles('sentinel-admin')
   async approveRegistration(
     @Param('userId') userId: string,
+    @Body() body: ClassificationDto,
   ): Promise<{ message: string }> {
-    await this.keycloakAdmin.approveUser(userId);
+    const level = body.classificationLevel ?? 'classification-u';
+    if (!VALID_CLASSIFICATIONS.includes(level as ClassificationLevel)) {
+      throw new HttpException('Invalid classification level', HttpStatus.BAD_REQUEST);
+    }
+    await this.keycloakAdmin.approveUser(userId, level as ClassificationLevel);
 
-    this.logger.log(`User ${userId} approved`);
+    this.logger.log(`User ${userId} approved with ${level}`);
 
     return { message: `User ${userId} has been approved.` };
   }
@@ -105,5 +115,27 @@ export class RegistrationController {
     }
 
     return { message: `User ${userId} has been rejected.` };
+  }
+
+  @Get('users')
+  @UseGuards(JwtAuthGuard)
+  @Roles('sentinel-admin')
+  async getUsers() {
+    return this.keycloakAdmin.getActiveUsers();
+  }
+
+  @Put('users/:userId/classification')
+  @UseGuards(JwtAuthGuard)
+  @Roles('sentinel-admin')
+  async updateClassification(
+    @Param('userId') userId: string,
+    @Body() body: ClassificationDto,
+  ): Promise<{ message: string }> {
+    if (!body.classificationLevel || !VALID_CLASSIFICATIONS.includes(body.classificationLevel as ClassificationLevel)) {
+      throw new HttpException('Invalid classification level', HttpStatus.BAD_REQUEST);
+    }
+    await this.keycloakAdmin.updateClassification(userId, body.classificationLevel as ClassificationLevel);
+    this.logger.log(`User ${userId} classification updated to ${body.classificationLevel}`);
+    return { message: `Classification updated for user ${userId}.` };
   }
 }

@@ -14,6 +14,8 @@ describe('RegistrationController', () => {
     getPendingRegistrations: jest.Mock;
     approveUser: jest.Mock;
     rejectUser: jest.Mock;
+    getActiveUsers: jest.Mock;
+    updateClassification: jest.Mock;
   };
   let mailerService: { sendMail: jest.Mock };
 
@@ -23,6 +25,8 @@ describe('RegistrationController', () => {
       getPendingRegistrations: jest.fn().mockResolvedValue([]),
       approveUser: jest.fn().mockResolvedValue(undefined),
       rejectUser: jest.fn().mockResolvedValue({ email: 'user@test.com', firstName: 'Test' }),
+      getActiveUsers: jest.fn().mockResolvedValue([]),
+      updateClassification: jest.fn().mockResolvedValue(undefined),
     };
     mailerService = { sendMail: jest.fn().mockResolvedValue(undefined) };
 
@@ -118,10 +122,54 @@ describe('RegistrationController', () => {
     it('should call approveUser and return a message containing "approved"', async () => {
       const userId = 'user-abc-123';
 
-      const result = await controller.approveRegistration(userId);
+      const result = await controller.approveRegistration(userId, {});
 
-      expect(keycloakAdmin.approveUser).toHaveBeenCalledWith(userId);
+      expect(keycloakAdmin.approveUser).toHaveBeenCalledWith(userId, 'classification-u');
       expect(result.message).toContain('approved');
+    });
+  });
+
+  describe('POST /approve-registration/:userId with classification', () => {
+    it('should pass classificationLevel to approveUser', async () => {
+      await controller.approveRegistration('user-1', { classificationLevel: 'classification-ts' });
+      expect(keycloakAdmin.approveUser).toHaveBeenCalledWith('user-1', 'classification-ts');
+    });
+
+    it('should default to classification-u when classificationLevel not provided', async () => {
+      await controller.approveRegistration('user-1', {});
+      expect(keycloakAdmin.approveUser).toHaveBeenCalledWith('user-1', 'classification-u');
+    });
+
+    it('should reject invalid classification level', async () => {
+      await expect(controller.approveRegistration('user-1', { classificationLevel: 'classification-x' }))
+        .rejects.toThrow();
+    });
+  });
+
+  describe('GET /users', () => {
+    it('should return active users from keycloakAdmin', async () => {
+      const mockUsers = [{ id: 'u1', username: 'jdoe', classificationLevel: 'classification-u' }];
+      keycloakAdmin.getActiveUsers.mockResolvedValue(mockUsers);
+      const result = await controller.getUsers();
+      expect(result).toEqual(mockUsers);
+    });
+  });
+
+  describe('PUT /users/:userId/classification', () => {
+    it('should call updateClassification and return success message', async () => {
+      const result = await controller.updateClassification('user-1', { classificationLevel: 'classification-ts' });
+      expect(keycloakAdmin.updateClassification).toHaveBeenCalledWith('user-1', 'classification-ts');
+      expect(result.message).toContain('updated');
+    });
+
+    it('should reject invalid classification level', async () => {
+      await expect(controller.updateClassification('user-1', { classificationLevel: 'bad' }))
+        .rejects.toThrow();
+    });
+
+    it('should reject when classificationLevel is missing', async () => {
+      await expect(controller.updateClassification('user-1', {}))
+        .rejects.toThrow();
     });
   });
 
