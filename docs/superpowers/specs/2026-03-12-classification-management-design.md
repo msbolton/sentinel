@@ -2,7 +2,7 @@
 
 ## Goal
 
-Allow admins to assign classification levels during user approval and change them at any time after, via the existing admin panel at `/admin/users`.
+Allow admins to assign classification levels during user approval and change them at any time after. Introduce a Settings page accessible via the sidebar gear icon, with a Profile tab (all users) and a User Management tab (admins only).
 
 ## Classification Levels
 
@@ -14,24 +14,46 @@ Allow admins to assign classification levels during user approval and change the
 
 These roles already exist in the Keycloak realm. No new roles needed.
 
-## Admin Panel Changes
+## Settings Page
 
-The `/admin/users` page expands from showing only pending registrations to two sections:
+New route: `/settings` — replaces the current no-op gear icon behavior. Renders as a full page (using the `isPageRoute` pattern, same as `/admin/*`). Two tabs:
 
-### 1. Pending Registrations (existing, modified)
+### Profile Tab (all users, default)
+
+- Read-only display of current user info from `AuthService.userProfile$`
+- Shows: username, email, roles (as badges), classification level
+- No edit functionality — just informational
+
+### User Management Tab (admins only)
+
+- Tab only visible/accessible when user has `sentinel-admin` role
+- Contains two sections:
+
+#### 1. Pending Registrations (moved from `/admin/users`)
 
 - Same table as today with username, email, name, organization, justification, date
 - **New:** Classification dropdown per row, defaults to UNCLASSIFIED
 - Approve sends the selected classification level to the backend
 - Reject unchanged
 
-### 2. Active Users (new section)
+#### 2. Active Users
 
 - Table showing all enabled, non-service-account users
-- Columns: username, email, name, classification level (dropdown), roles
+- Columns: username, email, name, classification level (dropdown)
 - Classification dropdown shows the user's current level and allows changing it
 - On change, immediately calls the backend to update — no separate save button
 - Loading/error states per row during update
+
+## Route Changes
+
+| Route | Change |
+|---|---|
+| `/settings` | New — lazy-loaded `SettingsComponent`, guarded by `authGuard` |
+| `/admin/users` | Remove — functionality moves into settings |
+
+The gear icon in the sidebar changes from `(click)="toggleSettings()"` to `routerLink="/settings"`.
+
+The `isPageRoute` check in `AppComponent` expands to match `/settings` in addition to `/admin`.
 
 ## Backend Changes
 
@@ -95,8 +117,12 @@ Request body gains an optional `classificationLevel` field:
 | `keycloak-admin.service.spec.ts` | Tests for modified/new methods |
 | `registration.controller.ts` | Modify approve endpoint body, add `GET /users`, add `PUT /users/:userId/classification` |
 | `registration.controller.spec.ts` | Tests for modified/new endpoints |
-| `pending-users.component.ts` | Add classification dropdown to pending table, add active users section |
-| `pending-users.component.spec.ts` | Tests for new UI behavior |
+| `settings.component.ts` | New — settings page with Profile + User Management tabs |
+| `settings.component.spec.ts` | New — tests for tab rendering, profile display, classification management |
+| `app.routes.ts` | Add `/settings` route, remove `/admin/users` route |
+| `app.component.ts` | Change gear icon to routerLink, update `isPageRoute` to include `/settings`, remove admin sidebar button |
+
+The existing `pending-users.component.ts` is deleted — its functionality is absorbed into `settings.component.ts`.
 
 ## Validation
 
@@ -114,3 +140,4 @@ Both the approve and update-classification endpoints validate against this set. 
 - **User has multiple classification roles:** Use the highest one (ts > s > u), remove the others on next update
 - **Admin changes own classification:** Allowed — no self-edit restriction needed since admin role is separate from classification
 - **Concurrent updates:** Last write wins — acceptable for low-frequency admin operations
+- **Non-admin navigates to `/settings`:** Sees only Profile tab; User Management tab is hidden
