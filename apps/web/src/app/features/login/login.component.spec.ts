@@ -7,7 +7,7 @@ import { AuthService } from '../../core/services/auth.service';
 describe('LoginComponent', () => {
   let component: LoginComponent;
   let fixture: ComponentFixture<LoginComponent>;
-  let authService: { isAuthenticated$: BehaviorSubject<boolean>; login: jest.Mock };
+  let authService: { isAuthenticated$: BehaviorSubject<boolean>; login: jest.Mock; isAuthenticated: jest.Mock };
   let router: { navigateByUrl: jest.Mock; navigate: jest.Mock };
   let queryParams: { returnUrl?: string };
 
@@ -15,6 +15,7 @@ describe('LoginComponent', () => {
     authService = {
       isAuthenticated$: new BehaviorSubject<boolean>(false),
       login: jest.fn().mockResolvedValue(undefined),
+      isAuthenticated: jest.fn().mockReturnValue(false),
     };
     router = { navigateByUrl: jest.fn(), navigate: jest.fn() };
     queryParams = {};
@@ -61,23 +62,32 @@ describe('LoginComponent', () => {
     expect(router.navigateByUrl).not.toHaveBeenCalled();
   });
 
-  it('should call authService.login with redirectUri on sign in', () => {
+  it('should call authService.login with redirectUri on sign in', async () => {
     fixture.detectChanges();
 
-    component.onSignIn();
+    await component.onSignIn();
 
     const expectedUri = window.location.origin + window.location.pathname + '#/map';
     expect(authService.login).toHaveBeenCalledWith(expectedUri);
   });
 
-  it('should use returnUrl in redirectUri on sign in', () => {
+  it('should use returnUrl in redirectUri on sign in', async () => {
     queryParams.returnUrl = '/alerts';
     fixture.detectChanges();
 
-    component.onSignIn();
+    await component.onSignIn();
 
     const expectedUri = window.location.origin + window.location.pathname + '#/alerts';
     expect(authService.login).toHaveBeenCalledWith(expectedUri);
+  });
+
+  it('should navigate directly when login() does not redirect and user is authenticated', async () => {
+    authService.isAuthenticated.mockReturnValue(true);
+    fixture.detectChanges();
+
+    await component.onSignIn();
+
+    expect(router.navigateByUrl).toHaveBeenCalledWith('/map');
   });
 
   it('should render the sign-in button', () => {

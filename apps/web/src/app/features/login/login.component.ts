@@ -345,10 +345,15 @@ export class LoginComponent implements OnInit, OnDestroy {
     this.authSub?.unsubscribe();
   }
 
-  onSignIn(): void {
+  async onSignIn(): Promise<void> {
     const returnUrl = this.route.snapshot.queryParams['returnUrl'] || '/map';
     const redirectUri =
       window.location.origin + window.location.pathname + '#' + returnUrl;
-    this.authService.login(redirectUri);
+    await this.authService.login(redirectUri);
+    // If login() didn't redirect (dev mode or keycloak not ready),
+    // check if we're already authenticated and navigate directly
+    if (this.authService.isAuthenticated()) {
+      this.router.navigateByUrl(returnUrl);
+    }
   }
 }
