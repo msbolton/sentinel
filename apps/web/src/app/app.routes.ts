@@ -55,6 +55,19 @@ export const routes: Routes = [
       import('./features/login/login.component').then((m) => m.LoginComponent),
   },
   {
+    path: 'register',
+    loadComponent: () =>
+      import('./features/register/register.component').then((m) => m.RegisterComponent),
+  },
+  {
+    path: 'admin/users',
+    canActivate: [roleGuard('sentinel-admin')],
+    loadComponent: () =>
+      import('./features/admin/pending-users/pending-users.component').then(
+        (m) => m.PendingUsersComponent,
+      ),
+  },
+  {
     path: '**',
     redirectTo: 'map',
   },
