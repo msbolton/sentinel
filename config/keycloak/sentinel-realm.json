@@ -125,7 +125,7 @@
       "directAccessGrantsEnabled": false,
       "secret": "sentinel-service-secret-dev",
       "protocol": "openid-connect",
-      "defaultClientScopes": ["openid"]
+      "defaultClientScopes": ["roles"]
     }
   ],
   "users": [
