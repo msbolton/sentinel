@@ -3,6 +3,15 @@
   "enabled": true,
   "displayName": "SENTINEL Intelligence Platform",
   "sslRequired": "external",
+  "smtpServer": {
+    "host": "mailhog",
+    "port": "1025",
+    "from": "sentinel@sentinel.local",
+    "fromDisplayName": "SENTINEL Platform",
+    "ssl": "false",
+    "starttls": "false",
+    "auth": "false"
+  },
   "registrationAllowed": false,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
@@ -168,6 +177,14 @@
         }
       ],
       "realmRoles": ["sentinel-viewer", "classification-u"]
+    },
+    {
+      "username": "service-account-sentinel-service",
+      "enabled": true,
+      "serviceAccountClientId": "sentinel-service",
+      "clientRoles": {
+        "realm-management": ["manage-users"]
+      }
     }
   ],
   "scopeMappings": [
