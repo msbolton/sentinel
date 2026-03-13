@@ -32,6 +32,8 @@ export interface EntityPositionUpdate {
   platformData?: Record<string, unknown>;
   operationalStatus?: string;
   circularError?: number;
+  sourceInstanceId?: string;
+  sourceInstanceName?: string;
 }
 
 /**
@@ -61,6 +63,8 @@ export interface EntityEvent {
     platformData?: Record<string, unknown>;
     operationalStatus?: string;
     circularError?: number;
+    sourceInstanceId?: string;
+    sourceInstanceName?: string;
   };
   timestamp: string;
 }
@@ -294,6 +298,8 @@ export class EntityGateway
             platformData: entity.platformData,
             operationalStatus: entity.operationalStatus,
             circularError: entity.circularError,
+            sourceInstanceId: entity.sourceInstanceId,
+            sourceInstanceName: entity.sourceInstanceName,
           },
           timestamp: entity.timestamp,
         },
