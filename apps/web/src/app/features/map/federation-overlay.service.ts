@@ -32,6 +32,7 @@ function presenceDotSvg(color: string): string {
 interface FederationRingEntry {
   billboard: any; // Cesium Billboard
   entityId: string;
+  instanceId: string;
 }
 
 interface PresenceMarkerEntry {
@@ -90,7 +91,7 @@ export class FederationOverlayService {
    * Adds or updates a colored ring around a federated entity billboard.
    * The ring is rendered as a separate billboard slightly larger than the entity icon.
    */
-  addOrUpdateRing(entityId: string, position: any, color: string): void {
+  addOrUpdateRing(entityId: string, position: any, color: string, instanceId: string): void {
     if (!this.Cesium || !this.ringBillboardCollection) return;
 
     const existing = this.federationRings.get(entityId);
@@ -109,10 +110,11 @@ export class FederationOverlayService {
     }
 
     // Get or create ring image for this color
-    let ringImage = this.ringImageCache.get(color);
+    const safeColor = sanitizeColor(color);
+    let ringImage = this.ringImageCache.get(safeColor);
     if (!ringImage) {
-      ringImage = svgToDataUrl(ringBillboardSvg(color));
-      this.ringImageCache.set(color, ringImage);
+      ringImage = svgToDataUrl(ringBillboardSvg(safeColor));
+      this.ringImageCache.set(safeColor, ringImage);
     }
 
     const billboard = this.ringBillboardCollection.add({
@@ -123,7 +125,16 @@ export class FederationOverlayService {
       scaleByDistance: new this.Cesium.NearFarScalar(...BILLBOARD_SCALE_BY_DISTANCE),
     });
 
-    this.federationRings.set(entityId, { billboard, entityId });
+    this.federationRings.set(entityId, { billboard, entityId, instanceId });
+  }
+
+  /** Show or hide all federation rings belonging to a given peer instance. */
+  setRingVisibility(instanceId: string, visible: boolean): void {
+    for (const [, entry] of this.federationRings) {
+      if (entry.instanceId === instanceId) {
+        entry.billboard.show = visible;
+      }
+    }
   }
 
   /** Remove a federation ring when the entity is removed. */
