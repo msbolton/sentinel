@@ -31,6 +31,11 @@ export enum EntitySource {
   OSINT = 'OSINT',
   SENSOR = 'SENSOR',
   FEDERATION = 'FEDERATION',
+  OPENSKY = 'OPENSKY',
+  ADSB_LOL = 'ADSB_LOL',
+  CELESTRAK = 'CELESTRAK',
+  LINK16 = 'LINK16',
+  GPS = 'GPS',
   UNKNOWN = 'UNKNOWN',
 }
 
