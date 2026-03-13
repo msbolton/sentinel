@@ -647,6 +647,7 @@ export class SettingsComponent {
 
   private readonly pendingClassifications = signal<Record<string, string>>({});
   private managementLoaded = false;
+  private federationLoaded = false;
 
   readonly classificationOptions = [
     { value: 'classification-u', label: 'UNCLASSIFIED' },
@@ -661,7 +662,8 @@ export class SettingsComponent {
       this.loadPendingUsers();
       this.loadActiveUsers();
     }
-    if (tab === 'federation') {
+    if (tab === 'federation' && !this.federationLoaded) {
+      this.federationLoaded = true;
       this.loadFederationData();
     }
   }
@@ -771,19 +773,15 @@ export class SettingsComponent {
   loadFederationData(): void {
     this.loadingFederation.set(true);
     this.federationError.set('');
+    let pending = 2;
+    const done = () => { if (--pending === 0) this.loadingFederation.set(false); };
     this.federationService.getConfig().subscribe({
-      next: (config) => this.federationConfig.set(config),
-      error: (err) => this.federationError.set(err.error?.message ?? 'Failed to load config'),
+      next: (config) => { this.federationConfig.set(config); done(); },
+      error: (err) => { this.federationError.set(err.error?.message ?? 'Failed to load config'); done(); },
     });
     this.federationService.getPeers().subscribe({
-      next: (peers) => {
-        this.federationPeers.set(peers);
-        this.loadingFederation.set(false);
-      },
-      error: (err) => {
-        this.federationError.set(err.error?.message ?? 'Failed to load peers');
-        this.loadingFederation.set(false);
-      },
+      next: (peers) => { this.federationPeers.set(peers); done(); },
+      error: (err) => { this.federationError.set(err.error?.message ?? 'Failed to load peers'); done(); },
     });
   }
 

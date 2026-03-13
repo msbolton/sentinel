@@ -18,10 +18,18 @@ import {
   FEDERATION_PORT_DEFAULT,
   FederationMessage,
   FederationMessageType,
+  FederationMessageTypeValue,
   HandshakePayload,
   PeerConnectionState,
   FederationCloseReason,
 } from './federation.types';
+
+/** Only these message types may be routed from inbound peers to the EventEmitter. */
+const ROUTABLE_MESSAGE_TYPES = new Set<FederationMessageTypeValue>([
+  FederationMessageType.ENTITY_BATCH,
+  FederationMessageType.PRESENCE_UPDATE,
+  FederationMessageType.PRESENCE_REMOVE,
+]);
 
 interface PeerConnection {
   ws: WebSocket;
@@ -345,7 +353,7 @@ export class PeerManagerService implements OnModuleInit, OnModuleDestroy {
       }
       if (message.type === FederationMessageType.HEARTBEAT) {
         this.handleHeartbeat(message.sourceInstanceId);
-      } else {
+      } else if (ROUTABLE_MESSAGE_TYPES.has(message.type as FederationMessageTypeValue)) {
         this.eventEmitter.emit(`federation.${message.type}`, message);
       }
     });
