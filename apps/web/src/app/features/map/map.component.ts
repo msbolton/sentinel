@@ -156,6 +156,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private cesiumColorCache = new Map<string, any>();
   private billboardImageCache = new Map<string, string>();
   private renderScheduled = false;
+  private hiddenFederationPeers = new Set<string>();
   private currentCameraAltitude = DEFAULT_CAMERA_POSITION.height;
   private themePostProcessStage: any = null;
 
@@ -496,6 +497,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const layer = this.layers.find((l) => l.entityType === entity.entityType);
     if (layer && !layer.visible) return;
 
+    // Skip hidden federation peers
+    if (entity.sourceInstanceId && this.hiddenFederationPeers.has(entity.sourceInstanceId)) return;
+
     const cesiumColor = this.getCesiumColor(entity.entityType);
 
     // Track trail
@@ -534,7 +538,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       if (entity.sourceInstanceId) {
         const color = this.federationService.getPeerColor(entity.sourceInstanceId);
         if (color) {
-          this.federationOverlay.addOrUpdateRing(entity.id, position, color);
+          this.federationOverlay.addOrUpdateRing(entity.id, position, color, entity.sourceInstanceId);
         }
       }
 
@@ -614,7 +618,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       if (entity.sourceInstanceId) {
         const color = this.federationService.getPeerColor(entity.sourceInstanceId);
         if (color) {
-          this.federationOverlay.addOrUpdateRing(entity.id, billboard.position, color);
+          this.federationOverlay.addOrUpdateRing(entity.id, billboard.position, color, entity.sourceInstanceId);
         }
       }
     }
@@ -706,8 +710,27 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.scheduleRender();
   }
 
-  toggleFederationPeer(_instanceId: string, _event: Event): void {
-    // Peer visibility filtering is implemented in Plan 3
+  toggleFederationPeer(instanceId: string, event: Event): void {
+    const checked = (event.target as HTMLInputElement).checked;
+    if (checked) {
+      this.hiddenFederationPeers.delete(instanceId);
+    } else {
+      this.hiddenFederationPeers.add(instanceId);
+    }
+
+    this.ngZone.runOutsideAngular(() => {
+      this.entityMap.forEach((entry) => {
+        if (entry.sentinelEntity.sourceInstanceId === instanceId) {
+          entry.billboard.show = checked;
+          entry.label.show = checked;
+          if (entry.polyline) {
+            entry.polyline.show = checked;
+          }
+        }
+      });
+      this.federationOverlay.setRingVisibility(instanceId, checked);
+      this.scheduleRender();
+    });
   }
 
   resetView(): void {
