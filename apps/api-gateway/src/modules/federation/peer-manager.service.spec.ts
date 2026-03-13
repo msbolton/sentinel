@@ -129,5 +129,43 @@ describe('PeerManagerService', () => {
     it('should return empty array when no peers connected', () => {
       expect(service.getConnectedPeers()).toEqual([]);
     });
+
+    it('should include color as a valid hex color when a peer is registered', async () => {
+      const mockLocalConfig = {
+        instanceId: 'local-instance',
+        displayName: 'Local',
+        classificationLevel: 'classification-u',
+        federationEnabled: true,
+      };
+      mockConfigRepo.findOne.mockResolvedValue(mockLocalConfig);
+      await service.getOrCreateConfig();
+      // Access localConfig via the service by initializing it
+      (service as unknown as Record<string, unknown>)['localConfig'] = mockLocalConfig;
+
+      mockSharingPolicy.getClassificationCeiling.mockReturnValue('classification-u');
+      mockPeerRepo.upsert.mockResolvedValue(undefined);
+
+      const mockWs = {
+        on: jest.fn(),
+        send: jest.fn(),
+        readyState: 1,
+        close: jest.fn(),
+      } as unknown as import('ws');
+
+      const payload: HandshakePayload = {
+        instanceId: 'peer-abc-123',
+        displayName: 'Remote Alpha',
+        classificationLevel: 'classification-u',
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      };
+
+      await service.registerIncomingPeer(mockWs, payload, 'ws://remote:3100');
+
+      const peers = service.getConnectedPeers();
+      expect(peers).toHaveLength(1);
+      expect(peers[0].instanceId).toBe('peer-abc-123');
+      expect(peers[0].color).toBeDefined();
+      expect(peers[0].color).toMatch(/^#[0-9a-f]{6}$/i);
+    });
   });
 });

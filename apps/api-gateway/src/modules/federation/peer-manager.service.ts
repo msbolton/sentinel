@@ -29,6 +29,7 @@ interface PeerConnection {
   displayName: string;
   classificationLevel: string;
   connectionCeiling: string;
+  color: string;
   state: PeerConnectionState;
   lastHeartbeat: number;
   reconnectAttempts: number;
@@ -219,6 +220,7 @@ export class PeerManagerService implements OnModuleInit, OnModuleDestroy {
       displayName: payload.displayName,
       classificationLevel: payload.classificationLevel,
       connectionCeiling: ceiling,
+      color: this.assignPeerColor(payload.instanceId),
       state: 'connected',
       lastHeartbeat: Date.now(),
       reconnectAttempts: 0,
@@ -326,6 +328,7 @@ export class PeerManagerService implements OnModuleInit, OnModuleDestroy {
       displayName: payload.displayName,
       classificationLevel: payload.classificationLevel,
       connectionCeiling: ceiling,
+      color: this.assignPeerColor(payload.instanceId),
       state: 'connected',
       lastHeartbeat: Date.now(),
       reconnectAttempts: 0,
@@ -377,14 +380,15 @@ export class PeerManagerService implements OnModuleInit, OnModuleDestroy {
     return this.connections.get(instanceId)?.state ?? 'disconnected';
   }
 
-  getConnectedPeers(): Array<{ instanceId: string; displayName: string; ceiling: string }> {
-    const result: Array<{ instanceId: string; displayName: string; ceiling: string }> = [];
+  getConnectedPeers(): Array<{ instanceId: string; displayName: string; ceiling: string; color: string }> {
+    const result: Array<{ instanceId: string; displayName: string; ceiling: string; color: string }> = [];
     for (const [, conn] of this.connections) {
       if (conn.state === 'connected') {
         result.push({
           instanceId: conn.instanceId,
           displayName: conn.displayName,
           ceiling: conn.connectionCeiling,
+          color: conn.color,
         });
       }
     }
