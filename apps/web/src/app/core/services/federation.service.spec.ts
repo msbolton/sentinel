@@ -1,13 +1,10 @@
 import { TestBed } from '@angular/core/testing';
-import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { FederationService } from './federation.service';
 import { WebSocketService, FederationStatusEvent, PresenceUpdateEvent } from './websocket.service';
 import { Subject } from 'rxjs';
 
 describe('FederationService', () => {
   let service: FederationService;
-  let httpMock: HttpTestingController;
   const federationStatusSubject = new Subject<FederationStatusEvent>();
   const presenceUpdateSubject = new Subject<PresenceUpdateEvent>();
 
@@ -20,18 +17,11 @@ describe('FederationService', () => {
     TestBed.configureTestingModule({
       providers: [
         FederationService,
-        provideHttpClient(),
-        provideHttpClientTesting(),
         { provide: WebSocketService, useValue: mockWsService },
       ],
     });
 
     service = TestBed.inject(FederationService);
-    httpMock = TestBed.inject(HttpTestingController);
-  });
-
-  afterEach(() => {
-    httpMock.verify();
   });
 
   it('should be created', () => {
@@ -80,8 +70,6 @@ describe('FederationService', () => {
     TestBed.configureTestingModule({
       providers: [
         FederationService,
-        provideHttpClient(),
-        provideHttpClientTesting(),
         { provide: WebSocketService, useValue: mockWsService },
       ],
     });

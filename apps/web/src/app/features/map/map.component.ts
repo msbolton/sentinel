@@ -706,10 +706,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.scheduleRender();
   }
 
-  toggleFederationPeer(instanceId: string, event: Event): void {
-    // TODO: Filter entities by peer visibility in Plan 3
-    const checked = (event.target as HTMLInputElement).checked;
-    console.log(`Federation peer ${instanceId} visibility: ${checked}`);
+  toggleFederationPeer(_instanceId: string, _event: Event): void {
+    // Peer visibility filtering is implemented in Plan 3
   }
 
   resetView(): void {

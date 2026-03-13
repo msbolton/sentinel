@@ -1,5 +1,4 @@
 import { Injectable, OnDestroy, signal, computed } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
 import { Subscription } from 'rxjs';
 import {
   WebSocketService,
@@ -29,7 +28,6 @@ export class FederationService implements OnDestroy {
   private static readonly PRESENCE_EXPIRY_MS = 5_000;
 
   constructor(
-    private readonly http: HttpClient,
     private readonly wsService: WebSocketService,
   ) {
     // Subscribe to federation status updates
@@ -54,6 +52,7 @@ export class FederationService implements OnDestroy {
 
     // Periodically expire stale presence entries
     this.presenceCleanupTimer = setInterval(() => {
+      if (this.presenceEntries().length === 0) return;
       const now = Date.now();
       const active = this.presenceEntries().filter(
         e => now - e.timestamp < FederationService.PRESENCE_EXPIRY_MS,
