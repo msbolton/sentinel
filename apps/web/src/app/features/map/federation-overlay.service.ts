@@ -8,17 +8,24 @@ import {
   svgToDataUrl,
 } from './cesium-config';
 
+/** Sanitize color to prevent SVG injection — only allow hex colors. */
+function sanitizeColor(color: string): string {
+  return /^#[0-9a-f]{3,6}$/i.test(color) ? color : '#888888';
+}
+
 /** SVG for the federation ring overlay — a simple colored circle outline. */
 function ringBillboardSvg(color: string): string {
+  const safe = sanitizeColor(color);
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-    <circle cx="32" cy="32" r="28" fill="none" stroke="${color}" stroke-width="3" opacity="0.8"/>
+    <circle cx="32" cy="32" r="28" fill="none" stroke="${safe}" stroke-width="3" opacity="0.8"/>
   </svg>`;
 }
 
 /** SVG for presence marker dot. */
 function presenceDotSvg(color: string): string {
+  const safe = sanitizeColor(color);
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-    <circle cx="12" cy="12" r="8" fill="${color}" stroke="white" stroke-width="2" opacity="0.9"/>
+    <circle cx="12" cy="12" r="8" fill="${safe}" stroke="white" stroke-width="2" opacity="0.9"/>
   </svg>`;
 }
 
@@ -90,6 +97,14 @@ export class FederationOverlayService {
 
     if (existing) {
       existing.billboard.position = position;
+      // Update ring image if peer color changed
+      const safeColor = sanitizeColor(color);
+      let ringImage = this.ringImageCache.get(safeColor);
+      if (!ringImage) {
+        ringImage = svgToDataUrl(ringBillboardSvg(safeColor));
+        this.ringImageCache.set(safeColor, ringImage);
+      }
+      existing.billboard.image = ringImage;
       return;
     }
 

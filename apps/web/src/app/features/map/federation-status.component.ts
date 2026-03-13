@@ -12,7 +12,7 @@ import { FederationService } from '../../core/services/federation.service';
         <div class="peer-list">
           @for (peer of federationService.peers(); track peer.instanceId) {
             <div class="peer-row">
-              <span class="status-dot" [class]="'status-' + peer.status"></span>
+              <span [class]="'status-dot status-' + peer.status"></span>
               <span class="peer-name">{{ peer.displayName }}</span>
               <span class="peer-stats">{{ peer.userCount }}u / {{ peer.entityCount }}e</span>
             </div>
