@@ -1,4 +1,5 @@
-import { Injectable, OnDestroy, signal, computed } from '@angular/core';
+import { Injectable, OnDestroy, signal, computed, inject } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
 import { Subscription } from 'rxjs';
 import {
   WebSocketService,
@@ -8,6 +9,8 @@ import {
 
 @Injectable({ providedIn: 'root' })
 export class FederationService implements OnDestroy {
+  private readonly http = inject(HttpClient);
+
   /** Currently connected peers with status. */
   readonly peers = signal<FederationPeerStatus[]>([]);
 
@@ -73,5 +76,33 @@ export class FederationService implements OnDestroy {
   /** Get peer color by instance ID. */
   getPeerColor(instanceId: string): string | null {
     return this.peers().find(p => p.instanceId === instanceId)?.color ?? null;
+  }
+
+  getConfig() {
+    return this.http.get<any>('/api/v1/federation/config');
+  }
+
+  updateConfig(body: { displayName?: string; federationEnabled?: boolean }) {
+    return this.http.put<any>('/api/v1/federation/config', body);
+  }
+
+  getPeers() {
+    return this.http.get<any[]>('/api/v1/federation/peers');
+  }
+
+  addPeer(url: string, displayName: string) {
+    return this.http.post<any>('/api/v1/federation/peers', { url, displayName });
+  }
+
+  removePeer(instanceId: string) {
+    return this.http.delete(`/api/v1/federation/peers/${instanceId}`);
+  }
+
+  getPolicy(peerInstanceId: string) {
+    return this.http.get<any>(`/api/v1/federation/policies/${peerInstanceId}`);
+  }
+
+  updatePolicy(peerInstanceId: string, body: { entityTypesAllowed?: string[]; geoBounds?: any; enabled?: boolean }) {
+    return this.http.put<any>(`/api/v1/federation/policies/${peerInstanceId}`, body);
   }
 }

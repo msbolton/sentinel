@@ -1,10 +1,13 @@
 import { TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { FederationService } from './federation.service';
 import { WebSocketService, FederationStatusEvent, PresenceUpdateEvent } from './websocket.service';
 import { Subject } from 'rxjs';
 
 describe('FederationService', () => {
   let service: FederationService;
+  let httpMock: HttpTestingController;
   const federationStatusSubject = new Subject<FederationStatusEvent>();
   const presenceUpdateSubject = new Subject<PresenceUpdateEvent>();
 
@@ -18,10 +21,17 @@ describe('FederationService', () => {
       providers: [
         FederationService,
         { provide: WebSocketService, useValue: mockWsService },
+        provideHttpClient(),
+        provideHttpClientTesting(),
       ],
     });
 
     service = TestBed.inject(FederationService);
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    httpMock.verify();
   });
 
   it('should be created', () => {
@@ -71,6 +81,8 @@ describe('FederationService', () => {
       providers: [
         FederationService,
         { provide: WebSocketService, useValue: mockWsService },
+        provideHttpClient(),
+        provideHttpClientTesting(),
       ],
     });
     const timerService = TestBed.inject(FederationService);
@@ -109,5 +121,12 @@ describe('FederationService', () => {
     });
 
     expect(service.federationActive()).toBe(true);
+  });
+
+  it('should call federation config endpoint', () => {
+    service.getConfig().subscribe();
+    const req = httpMock.expectOne('/api/v1/federation/config');
+    expect(req.request.method).toBe('GET');
+    req.flush({ instanceId: 'test', federationEnabled: true });
   });
 });
