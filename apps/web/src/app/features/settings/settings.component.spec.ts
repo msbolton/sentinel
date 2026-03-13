@@ -73,8 +73,9 @@ describe('SettingsComponent', () => {
     it('should show User Management tab for admin users', () => {
       fixture.detectChanges();
       const tabs = fixture.nativeElement.querySelectorAll('.tab-btn');
-      expect(tabs.length).toBe(2);
+      expect(tabs.length).toBe(3);
       expect(tabs[1].textContent).toContain('User Management');
+      expect(tabs[2].textContent).toContain('Federation');
     });
 
     it('should load pending and active users when switching to management tab', () => {
