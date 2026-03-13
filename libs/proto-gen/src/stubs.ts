@@ -34,6 +34,18 @@ export enum EntitySource {
   UNKNOWN = 'UNKNOWN',
 }
 
+export enum Affiliation {
+  PENDING = 'PENDING',
+  UNKNOWN = 'UNKNOWN',
+  ASSUMED_FRIEND = 'ASSUMED_FRIEND',
+  FRIEND = 'FRIEND',
+  NEUTRAL = 'NEUTRAL',
+  SUSPECT = 'SUSPECT',
+  HOSTILE = 'HOSTILE',
+  JOKER = 'JOKER',
+  FAKER = 'FAKER',
+}
+
 export enum Classification {
   UNCLASSIFIED = 'UNCLASSIFIED',
   CONFIDENTIAL = 'CONFIDENTIAL',
