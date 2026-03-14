@@ -33,7 +33,7 @@ interface UpdatePolicyDto {
   enabled?: boolean;
 }
 
-@Controller('api/v1/federation')
+@Controller('federation')
 @UseGuards(JwtAuthGuard)
 @Roles('sentinel-admin')
 export class FederationController {
