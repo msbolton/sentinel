@@ -7,11 +7,13 @@ import { PeerManagerService } from './peer-manager.service';
 import { FederationGateway } from './federation.gateway';
 import { DiscoveryService } from './discovery.service';
 import { FederationController } from './federation.controller';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
     ConfigModule,
     TypeOrmModule.forFeature([FederationConfig, FederationPeer, FederationPolicy]),
+    AuthModule,
   ],
   controllers: [FederationController],
   providers: [
