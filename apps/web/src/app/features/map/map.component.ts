@@ -169,7 +169,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly locationService: LocationService,
     readonly buildingsService: BuildingsService,
     private readonly federationOverlay: FederationOverlayService,
-    public readonly federationService: FederationService,
+    private readonly federationService: FederationService,
   ) {
     // Track whether a panel route is active (anything other than /map or /)
     const routerSub = this.router.events.pipe(
