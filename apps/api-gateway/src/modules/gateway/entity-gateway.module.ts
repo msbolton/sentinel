@@ -4,10 +4,13 @@ import { ClientsModule, Transport } from '@nestjs/microservices';
 import { EntityGateway } from './entity.gateway';
 import { ViewportService } from './viewport.service';
 import { KafkaConsumerService } from './kafka-consumer.service';
+import { FederationBridgeService } from './federation-bridge.service';
+import { FederationModule } from '../federation/federation.module';
 
 @Module({
   imports: [
     ConfigModule,
+    FederationModule,
     ClientsModule.registerAsync([
       {
         name: 'KAFKA_SERVICE',
@@ -28,7 +31,7 @@ import { KafkaConsumerService } from './kafka-consumer.service';
       },
     ]),
   ],
-  providers: [EntityGateway, ViewportService, KafkaConsumerService],
+  providers: [EntityGateway, ViewportService, KafkaConsumerService, FederationBridgeService],
   exports: [EntityGateway, ViewportService],
 })
 export class EntityGatewayModule {}

@@ -21,6 +21,17 @@
               <span class="layer-name">{{ layer.name }}</span>
             </label>
           }
+          @if (federationService.federationActive()) {
+            <div class="layer-divider"></div>
+            <div class="layer-section-label">Federation</div>
+            @for (peer of federationService.peers(); track peer.instanceId) {
+              <label class="layer-item">
+                <input type="checkbox" checked (change)="toggleFederationPeer(peer.instanceId, $event)" />
+                <span class="layer-color" [style.background]="peer.color"></span>
+                <span class="layer-name">{{ peer.displayName }}</span>
+              </label>
+            }
+          }
         </div>
       </div>
     }
@@ -82,4 +93,7 @@
     (close)="closeEntityPopup()"
     (flyTo)="flyToEntity($event)"
   />
+
+  <!-- Federation Status Overlay -->
+  <app-federation-status />
 </div>

@@ -61,6 +61,10 @@ export interface Entity {
 
   // Measurement quality
   circularError?: number;
+
+  // Federation metadata (set for entities received from peer instances)
+  sourceInstanceId?: string;
+  sourceInstanceName?: string;
 }
 
 export interface EntityEvent {
