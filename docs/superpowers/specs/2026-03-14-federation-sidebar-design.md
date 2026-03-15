@@ -53,7 +53,7 @@ Clicking the badge opens a floating panel anchored to the top-right, containing 
 
 **Panel chrome:**
 - Header bar with "Federation" title and close button (×)
-- Close button and clicking the badge again both close the panel
+- Close button (×) closes the panel. The badge is hidden while the panel is open (they occupy the same position)
 - Width: ~260px
 - Styled consistently: `rgba(10, 14, 23, 0.95)` background, `#333` border, `border-radius: 8px`, same font sizes as existing map controls
 
@@ -107,5 +107,5 @@ All styles are inline in the component (matching existing pattern). Key values:
 - **Federation inactive**: Nothing renders (same as current)
 - **Federation active, panel closed**: Compact badge visible, clickable
 - **Federation active, panel open**: Full panel with all three sections
-- **Closing**: Click × or click badge again
+- **Closing**: Click × button (badge is hidden while panel is open)
 - **Peer visibility**: Checkboxes emit `{ instanceId, visible }` — MapComponent handles the toggle logic
