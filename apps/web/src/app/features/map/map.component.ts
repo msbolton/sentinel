@@ -24,7 +24,7 @@ import { ThemeService, ThemePreset } from '../../core/services/theme.service';
 import { LocationService } from '../../core/services/location.service';
 import { BuildingsService } from '../../core/services/buildings.service';
 import { FederationOverlayService } from './federation-overlay.service';
-import { FederationStatusComponent } from './federation-status.component';
+import { FederationPanelComponent } from './federation-panel.component';
 import { FederationService } from '../../core/services/federation.service';
 import { Location } from '../../shared/models/location.model';
 import {
@@ -114,7 +114,7 @@ interface EntityMapEntry {
   selector: 'app-map',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, FederationStatusComponent],
+  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, FederationPanelComponent],
   templateUrl: './map.component.html',
   styleUrls: ['./map.component.scss'],
   providers: [FederationOverlayService],
@@ -710,25 +710,24 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.scheduleRender();
   }
 
-  toggleFederationPeer(instanceId: string, event: Event): void {
-    const checked = (event.target as HTMLInputElement).checked;
-    if (checked) {
-      this.hiddenFederationPeers.delete(instanceId);
+  onToggleFederationPeer(event: { instanceId: string; visible: boolean }): void {
+    if (event.visible) {
+      this.hiddenFederationPeers.delete(event.instanceId);
     } else {
-      this.hiddenFederationPeers.add(instanceId);
+      this.hiddenFederationPeers.add(event.instanceId);
     }
 
     this.ngZone.runOutsideAngular(() => {
       this.entityMap.forEach((entry) => {
-        if (entry.sentinelEntity.sourceInstanceId === instanceId) {
-          entry.billboard.show = checked;
-          entry.label.show = checked;
+        if (entry.sentinelEntity.sourceInstanceId === event.instanceId) {
+          entry.billboard.show = event.visible;
+          entry.label.show = event.visible;
           if (entry.polyline) {
-            entry.polyline.show = checked;
+            entry.polyline.show = event.visible;
           }
         }
       });
-      this.federationOverlay.setRingVisibility(instanceId, checked);
+      this.federationOverlay.setRingVisibility(event.instanceId, event.visible);
       this.scheduleRender();
     });
   }
