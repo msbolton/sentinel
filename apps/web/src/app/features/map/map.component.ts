@@ -23,6 +23,9 @@ import { WebSocketService } from '../../core/services/websocket.service';
 import { ThemeService, ThemePreset } from '../../core/services/theme.service';
 import { LocationService } from '../../core/services/location.service';
 import { BuildingsService } from '../../core/services/buildings.service';
+import { FederationOverlayService } from './federation-overlay.service';
+import { FederationPanelComponent } from './federation-panel.component';
+import { FederationService } from '../../core/services/federation.service';
 import { Location } from '../../shared/models/location.model';
 import {
   configureCesium,
@@ -111,9 +114,10 @@ interface EntityMapEntry {
   selector: 'app-map',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule, EntityDetailPanelComponent],
+  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, FederationPanelComponent],
   templateUrl: './map.component.html',
   styleUrls: ['./map.component.scss'],
+  providers: [FederationOverlayService],
 })
 export class MapComponent implements AfterViewInit, OnDestroy {
   @ViewChild('cesiumContainer', { static: true })
@@ -152,6 +156,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private cesiumColorCache = new Map<string, any>();
   private billboardImageCache = new Map<string, string>();
   private renderScheduled = false;
+  private hiddenFederationPeers = new Set<string>();
   private currentCameraAltitude = DEFAULT_CAMERA_POSITION.height;
   private themePostProcessStage: any = null;
 
@@ -163,6 +168,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly themeService: ThemeService,
     private readonly locationService: LocationService,
     readonly buildingsService: BuildingsService,
+    private readonly federationOverlay: FederationOverlayService,
+    private readonly federationService: FederationService,
   ) {
     // Track whether a panel route is active (anything other than /map or /)
     const routerSub = this.router.events.pipe(
@@ -194,11 +201,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.subscribeToThemeChanges();
     this.subscribeToFlyTo();
     this.initUserLocation();
+    this.federationOverlay.init(this.Cesium, this.viewer);
+    this.subscribeToFederation();
   }
 
   ngOnDestroy(): void {
     this.subscriptions.unsubscribe();
     if (this.viewer && !this.viewer.isDestroyed()) {
+      this.federationOverlay.destroy();
       this.viewer.destroy();
     }
     this.billboardCollection = null;
@@ -487,6 +497,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const layer = this.layers.find((l) => l.entityType === entity.entityType);
     if (layer && !layer.visible) return;
 
+    // Skip hidden federation peers
+    if (entity.sourceInstanceId && this.hiddenFederationPeers.has(entity.sourceInstanceId)) return;
+
     const cesiumColor = this.getCesiumColor(entity.entityType);
 
     // Track trail
@@ -519,7 +532,15 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       existing.billboard.rotation = rotation;
 
       existing.label.position = position;
-      existing.label.text = entity.name;
+      existing.label.text = this.federationOverlay.formatFederatedLabel(entity.name, entity.sourceInstanceName);
+
+      // Update federation ring position
+      if (entity.sourceInstanceId) {
+        const color = this.federationService.getPeerColor(entity.sourceInstanceId);
+        if (color) {
+          this.federationOverlay.addOrUpdateRing(entity.id, position, color, entity.sourceInstanceId);
+        }
+      }
 
       // Update polyline trail
       if (trail.length >= 2) {
@@ -559,7 +580,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
       const label = this.labelCollection.add({
         position,
-        text: entity.name,
+        text: this.federationOverlay.formatFederatedLabel(entity.name, entity.sourceInstanceName),
         font: '12px JetBrains Mono, monospace',
         fillColor: Cesium.Color.WHITE,
         outlineColor: Cesium.Color.BLACK,
@@ -592,6 +613,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       }
 
       this.entityMap.set(entity.id, { billboard, label, polyline, sentinelEntity: entity });
+
+      // Federation ring — add colored ring for federated entities
+      if (entity.sourceInstanceId) {
+        const color = this.federationService.getPeerColor(entity.sourceInstanceId);
+        if (color) {
+          this.federationOverlay.addOrUpdateRing(entity.id, billboard.position, color, entity.sourceInstanceId);
+        }
+      }
     }
 
     this.scheduleRender();
@@ -605,6 +634,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       if (entry.polyline) {
         this.polylineCollection.remove(entry.polyline);
       }
+      this.federationOverlay.removeRing(entityId);
       this.entityMap.delete(entityId);
       this.trackTrails.delete(entityId);
       this.scheduleRender();
@@ -678,6 +708,28 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       }
     });
     this.scheduleRender();
+  }
+
+  onToggleFederationPeer(event: { instanceId: string; visible: boolean }): void {
+    if (event.visible) {
+      this.hiddenFederationPeers.delete(event.instanceId);
+    } else {
+      this.hiddenFederationPeers.add(event.instanceId);
+    }
+
+    this.ngZone.runOutsideAngular(() => {
+      this.entityMap.forEach((entry) => {
+        if (entry.sentinelEntity.sourceInstanceId === event.instanceId) {
+          entry.billboard.show = event.visible;
+          entry.label.show = event.visible;
+          if (entry.polyline) {
+            entry.polyline.show = event.visible;
+          }
+        }
+      });
+      this.federationOverlay.setRingVisibility(event.instanceId, event.visible);
+      this.scheduleRender();
+    });
   }
 
   resetView(): void {
@@ -794,6 +846,21 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.flyToLocation(location);
     });
     this.subscriptions.add(sub);
+  }
+
+  private subscribeToFederation(): void {
+    const presenceSub = this.wsService.presenceUpdates$.pipe(
+      bufferTime(500),
+      filter((batches) => batches.length > 0),
+    ).subscribe(() => {
+      this.ngZone.runOutsideAngular(() => {
+        this.federationOverlay.updatePresenceMarkers(
+          this.federationService.presenceEntries(),
+        );
+        this.scheduleRender();
+      });
+    });
+    this.subscriptions.add(presenceSub);
   }
 
   private flyToLocation(location: Location): void {

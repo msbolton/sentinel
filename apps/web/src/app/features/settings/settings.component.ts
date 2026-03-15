@@ -3,6 +3,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { HttpClient } from '@angular/common/http';
 import { DatePipe, UpperCasePipe } from '@angular/common';
 import { AuthService, UserProfile } from '../../core/services/auth.service';
+import { FederationService } from '../../core/services/federation.service';
 
 export interface PendingUser {
   id: string;
@@ -46,6 +47,13 @@ export interface ActiveUser {
             [class.active]="activeTab() === 'management'"
             (click)="switchTab('management')"
           >User Management</button>
+        }
+        @if (isAdmin()) {
+          <button
+            class="tab-btn"
+            [class.active]="activeTab() === 'federation'"
+            (click)="switchTab('federation')"
+          >Federation</button>
         }
       </div>
 
@@ -206,6 +214,90 @@ export interface ActiveUser {
                 </tbody>
               </table>
             }
+          </div>
+        </div>
+      }
+
+      @if (activeTab() === 'federation') {
+        <div class="tab-content federation-tab">
+          @if (federationError()) {
+            <div class="toast error">{{ federationError() }}</div>
+          }
+          @if (federationSuccess()) {
+            <div class="toast success">{{ federationSuccess() }}</div>
+          }
+
+          <div class="settings-section">
+            <h2>Instance Configuration</h2>
+            @if (federationConfig(); as config) {
+              <div class="config-form">
+                <div class="form-row">
+                  <label>Instance ID</label>
+                  <span class="monospace">{{ config.instanceId }}</span>
+                </div>
+                <div class="form-row">
+                  <label>Display Name</label>
+                  <input
+                    type="text"
+                    [value]="config.displayName"
+                    (change)="updateFederationDisplayName($event)"
+                    class="input-field"
+                  />
+                </div>
+                <div class="form-row">
+                  <label>Classification</label>
+                  <span class="classification-badge">{{ config.classificationLevel | uppercase }}</span>
+                </div>
+                <div class="form-row">
+                  <label>Federation</label>
+                  <label class="toggle-label">
+                    <input
+                      type="checkbox"
+                      [checked]="config.federationEnabled"
+                      (change)="toggleFederation($event)"
+                    />
+                    {{ config.federationEnabled ? 'Enabled' : 'Disabled' }}
+                  </label>
+                </div>
+              </div>
+            } @else if (loadingFederation()) {
+              <div class="loading">Loading federation config...</div>
+            }
+          </div>
+
+          <div class="settings-section">
+            <h2>Seed Peers</h2>
+            <div class="add-peer-form">
+              <input
+                type="text"
+                placeholder="ws://hostname:3100"
+                [value]="addPeerUrl()"
+                (input)="addPeerUrl.set($any($event.target).value)"
+                class="input-field"
+              />
+              <input
+                type="text"
+                placeholder="Display Name"
+                [value]="addPeerName()"
+                (input)="addPeerName.set($any($event.target).value)"
+                class="input-field input-sm"
+              />
+              <button class="btn-primary btn-sm" (click)="addSeedPeer()">Add Peer</button>
+            </div>
+
+            <div class="peer-table">
+              @for (peer of federationPeers(); track peer.instanceId) {
+                <div class="peer-row-admin">
+                  <span class="peer-status-dot" [class]="'status-' + peer.status"></span>
+                  <span class="peer-name">{{ peer.displayName }}</span>
+                  <span class="peer-url monospace">{{ peer.url }}</span>
+                  <span class="peer-classification">{{ peer.classificationLevel | uppercase }}</span>
+                  <button class="btn-danger btn-xs" (click)="removePeer(peer.instanceId)">Remove</button>
+                </div>
+              } @empty {
+                <div class="empty-state">No peers configured</div>
+              }
+            </div>
           </div>
         </div>
       }
@@ -473,15 +565,56 @@ export interface ActiveUser {
       font-size: 11px;
       color: #4a9eff;
     }
+
+    .federation-tab .settings-section { margin-bottom: 24px; }
+    .config-form { display: flex; flex-direction: column; gap: 12px; }
+    .form-row { display: flex; align-items: center; gap: 12px; }
+    .form-row label { width: 140px; color: #888; font-size: 13px; }
+    .input-field {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 6px 10px;
+      color: #ccc;
+      font-size: 13px;
+    }
+    .input-sm { width: 160px; }
+    .toggle-label { display: flex; align-items: center; gap: 8px; cursor: pointer; color: #ccc; }
+    .add-peer-form { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
+    .peer-table { display: flex; flex-direction: column; gap: 6px; }
+    .peer-row-admin {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; background: rgba(255, 255, 255, 0.03); border-radius: 6px;
+    }
+    .peer-status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .status-connected { background: #22c55e; }
+    .status-stale { background: #eab308; }
+    .status-disconnected { background: #ef4444; }
+    .peer-name { color: #ccc; font-weight: 500; }
+    .peer-url { color: #666; font-size: 11px; flex: 1; }
+    .peer-classification { color: #888; font-size: 11px; text-transform: uppercase; }
+    .btn-primary {
+      background: #3b82f6; color: white; border: none;
+      border-radius: 4px; padding: 6px 14px; cursor: pointer; font-size: 12px;
+    }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-danger {
+      background: transparent; color: #ef4444; border: 1px solid #ef4444;
+      border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 11px;
+    }
+    .btn-danger:hover { background: rgba(239, 68, 68, 0.1); }
+    .btn-xs { padding: 2px 8px; font-size: 10px; }
+    .empty-state { color: #666; font-style: italic; padding: 12px 0; }
   `],
 })
 export class SettingsComponent {
   private readonly authService = inject(AuthService);
   private readonly http = inject(HttpClient);
+  private readonly federationService = inject(FederationService);
 
   readonly profile = toSignal(this.authService.userProfile$);
 
-  readonly activeTab = signal<'profile' | 'management'>('profile');
+  readonly activeTab = signal<'profile' | 'management' | 'federation'>('profile');
 
   readonly isAdmin = computed(() => {
     const p = this.profile();
@@ -504,8 +637,17 @@ export class SettingsComponent {
   readonly errorMessage = signal('');
   readonly successMessage = signal('');
 
+  federationConfig = signal<any>(null);
+  federationPeers = signal<any[]>([]);
+  loadingFederation = signal(false);
+  federationError = signal('');
+  federationSuccess = signal('');
+  addPeerUrl = signal('');
+  addPeerName = signal('');
+
   private readonly pendingClassifications = signal<Record<string, string>>({});
   private managementLoaded = false;
+  private federationLoaded = false;
 
   readonly classificationOptions = [
     { value: 'classification-u', label: 'UNCLASSIFIED' },
@@ -513,12 +655,16 @@ export class SettingsComponent {
     { value: 'classification-ts', label: 'TOP SECRET' },
   ] as const;
 
-  switchTab(tab: 'profile' | 'management'): void {
+  switchTab(tab: 'profile' | 'management' | 'federation'): void {
     this.activeTab.set(tab);
     if (tab === 'management' && !this.managementLoaded) {
       this.managementLoaded = true;
       this.loadPendingUsers();
       this.loadActiveUsers();
+    }
+    if (tab === 'federation' && !this.federationLoaded) {
+      this.federationLoaded = true;
+      this.loadFederationData();
     }
   }
 
@@ -621,6 +767,72 @@ export class SettingsComponent {
         this.errorMessage.set(err.error?.message || 'Failed to update classification');
         this.classificationUpdating.set(null);
       },
+    });
+  }
+
+  loadFederationData(): void {
+    this.loadingFederation.set(true);
+    this.federationError.set('');
+    let pending = 2;
+    const done = () => { if (--pending === 0) this.loadingFederation.set(false); };
+    this.federationService.getConfig().subscribe({
+      next: (config) => { this.federationConfig.set(config); done(); },
+      error: (err) => { this.federationError.set(err.error?.message ?? 'Failed to load config'); done(); },
+    });
+    this.federationService.getPeers().subscribe({
+      next: (peers) => { this.federationPeers.set(peers); done(); },
+      error: (err) => { this.federationError.set(err.error?.message ?? 'Failed to load peers'); done(); },
+    });
+  }
+
+  updateFederationDisplayName(event: Event): void {
+    const name = (event.target as HTMLInputElement).value;
+    this.federationService.updateConfig({ displayName: name }).subscribe({
+      next: (config) => {
+        this.federationConfig.set(config);
+        this.federationSuccess.set('Display name updated');
+        setTimeout(() => this.federationSuccess.set(''), 3000);
+      },
+      error: (err) => this.federationError.set(err.error?.message ?? 'Failed to update'),
+    });
+  }
+
+  toggleFederation(event: Event): void {
+    const enabled = (event.target as HTMLInputElement).checked;
+    this.federationService.updateConfig({ federationEnabled: enabled }).subscribe({
+      next: (config) => {
+        this.federationConfig.set(config);
+        this.federationSuccess.set(`Federation ${enabled ? 'enabled' : 'disabled'}`);
+        setTimeout(() => this.federationSuccess.set(''), 3000);
+      },
+      error: (err) => this.federationError.set(err.error?.message ?? 'Failed to toggle'),
+    });
+  }
+
+  addSeedPeer(): void {
+    const url = this.addPeerUrl().trim();
+    const name = this.addPeerName().trim();
+    if (!url || !name) return;
+    this.federationService.addPeer(url, name).subscribe({
+      next: () => {
+        this.addPeerUrl.set('');
+        this.addPeerName.set('');
+        this.federationSuccess.set('Peer added');
+        setTimeout(() => this.federationSuccess.set(''), 3000);
+        this.loadFederationData();
+      },
+      error: (err) => this.federationError.set(err.error?.message ?? 'Failed to add peer'),
+    });
+  }
+
+  removePeer(instanceId: string): void {
+    this.federationService.removePeer(instanceId).subscribe({
+      next: () => {
+        this.federationSuccess.set('Peer removed');
+        setTimeout(() => this.federationSuccess.set(''), 3000);
+        this.loadFederationData();
+      },
+      error: (err) => this.federationError.set(err.error?.message ?? 'Failed to remove peer'),
     });
   }
 }
