@@ -19,7 +19,7 @@ When the panel is closed and federation is active, a compact badge appears in th
 
 - Shows "FED" label + one status dot per connected peer (green/yellow/red)
 - Clickable — opens the expanded panel
-- Hidden entirely when `federationActive()` is false (no connected peers)
+- Hidden entirely when `federationActive()` is false (no currently connected peers)
 - Styled to match existing map overlays (dark translucent background, border-radius, backdrop-filter)
 
 ### Expanded State (Floating Panel)
@@ -34,6 +34,7 @@ Clicking the badge opens a floating panel anchored to the top-right, containing 
   - Entity count subtitle (e.g., "12 entities" or "Stale")
   - Color swatch (small rounded square showing the peer's assigned color)
 - Stale/disconnected peers shown at reduced opacity
+- User count is intentionally omitted — the existing `userCount` display was informational clutter
 
 **2. Visibility**
 - Section header: "VISIBILITY" (uppercase, muted)
@@ -41,7 +42,8 @@ Clicking the badge opens a floating panel anchored to the top-right, containing 
   - Checkbox (accent-color matching peer color)
   - Color swatch
   - Peer display name
-- Toggling a checkbox calls `toggleFederationPeer(instanceId, event)` — same logic as the current layer panel toggle
+- Checkboxes always initialize as checked when the panel opens. The `hiddenFederationPeers` set in MapComponent is private and not exposed to child components. Since the panel is the only UI for toggling peer visibility, and the set starts empty, checkboxes resetting to checked on panel reopen is acceptable and matches the current layer panel behavior.
+- Toggling a checkbox emits a `(togglePeer)` event with `{ instanceId: string, visible: boolean }` where `visible` is the checkbox's new checked state
 
 **3. Source Legend**
 - Section header: "SOURCE LEGEND" (uppercase, muted)
@@ -64,27 +66,29 @@ Clicking the badge opens a floating panel anchored to the top-right, containing 
 
 ### FederationPanelComponent (new)
 
+- **File:** `apps/web/src/app/features/map/federation-panel.component.ts`
+- **Test:** `apps/web/src/app/features/map/federation-panel.component.spec.ts`
 - Standalone Angular component, `OnPush` change detection
 - Selector: `app-federation-panel`
 - Injected: `FederationService` (for peer data signals), no direct Cesium dependency
 - Signals:
   - `panelOpen = signal(false)` — controls collapsed/expanded state
 - Template outputs:
-  - `(togglePeer)` — emits `{ instanceId: string, event: Event }` when a visibility checkbox changes
+  - `(togglePeer)` — emits `{ instanceId: string, visible: boolean }` when a visibility checkbox changes. The `visible` field is read from `(event.target as HTMLInputElement).checked` inside the panel, so the parent receives a clean boolean — no cross-component DOM event coupling.
 - Placed in `map.component.html` where `<app-federation-status />` currently sits
-- MapComponent handles the `(togglePeer)` output by calling `toggleFederationPeer()`
 
 ### Changes to Existing Components
 
 **MapComponent (`map.component.ts` / `.html`)**
-- Replace `<app-federation-status />` with `<app-federation-panel (togglePeer)="toggleFederationPeer($event.instanceId, $event.event)" />`
+- Replace `<app-federation-status />` with `<app-federation-panel (togglePeer)="onToggleFederationPeer($event)" />`
+- Add `onToggleFederationPeer(event: { instanceId: string, visible: boolean })` method that delegates to the existing toggle logic (updating `hiddenFederationPeers`, billboard/label/polyline visibility, ring visibility, and `scheduleRender()`)
 - Remove the federation section from the layer panel template (divider, label, checkboxes)
 - Remove `FederationStatusComponent` from imports array
 - Add `FederationPanelComponent` to imports array
 
-**FederationStatusComponent (`federation-status.component.ts`)**
-- Delete the file entirely
-- Delete `federation-status.component.spec.ts`
+**FederationStatusComponent**
+- Delete `apps/web/src/app/features/map/federation-status.component.ts`
+- Delete `apps/web/src/app/features/map/federation-status.component.spec.ts`
 
 ## Styling
 
@@ -96,6 +100,7 @@ All styles are inline in the component (matching existing pattern). Key values:
 - Peer rows: `rgba(255, 255, 255, 0.03)` background, `6px` border-radius
 - Status dot sizes: `7px` in panel, `6px` in badge
 - Matches the layer panel's visual weight and blur treatment
+- The `:host` element must use `pointer-events: none` to avoid blocking Cesium mouse interactions. The badge and panel elements receive `pointer-events: auto` individually, consistent with the pattern in `federation-status.component.ts`.
 
 ## Behavior
 
@@ -103,4 +108,4 @@ All styles are inline in the component (matching existing pattern). Key values:
 - **Federation active, panel closed**: Compact badge visible, clickable
 - **Federation active, panel open**: Full panel with all three sections
 - **Closing**: Click × or click badge again
-- **Peer visibility**: Checkboxes control the same `toggleFederationPeer` logic already implemented in MapComponent
+- **Peer visibility**: Checkboxes emit `{ instanceId, visible }` — MapComponent handles the toggle logic
