@@ -16,6 +16,7 @@ import { Subscription, debounceTime, Subject, throttleTime, bufferTime, filter }
 import {
   Entity,
   EntityType,
+  EntitySource,
   EntityEvent,
 } from '../../shared/models/entity.model';
 import { EntityService } from '../../core/services/entity.service';
@@ -30,6 +31,7 @@ import {
   ENTITY_TYPE_COLORS,
   ENTITY_TYPE_PIN_COLORS,
   ENTITY_TYPE_BILLBOARD_SVGS,
+  MILITARY_AIRCRAFT_BILLBOARD_SVG,
   HEADING_ROTATED_TYPES,
   svgToDataUrl,
   DEFAULT_CAMERA_POSITION,
@@ -557,9 +559,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       const cesiumEntity = this.viewer.entities.add({
         position,
         billboard: {
-          image: this.getBillboardImage(entity.entityType),
+          image: this.getBillboardImage(entity),
           scale: 0.5,
-          color: cesiumColor,
+          color: this.isMilitaryAircraft(entity) ? Cesium.Color.WHITE : cesiumColor,
           heightReference: heightRef,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
           verticalOrigin: Cesium.VerticalOrigin.CENTER,
@@ -728,12 +730,22 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     return cached;
   }
 
-  private getBillboardImage(entityType: string): string {
-    if (!this.billboardImageCache.has(entityType)) {
-      const svg = ENTITY_TYPE_BILLBOARD_SVGS[entityType] ?? ENTITY_TYPE_BILLBOARD_SVGS[EntityType.UNKNOWN];
-      this.billboardImageCache.set(entityType, svgToDataUrl(svg));
+  private isMilitaryAircraft(entity: Entity): boolean {
+    return entity.entityType === EntityType.AIRCRAFT
+      && entity.source === EntitySource.ADSB_LOL;
+  }
+
+  private getBillboardImage(entity: Entity): string {
+    const isMilAircraft = this.isMilitaryAircraft(entity);
+    const cacheKey = isMilAircraft ? 'MIL_AIRCRAFT' : entity.entityType;
+
+    if (!this.billboardImageCache.has(cacheKey)) {
+      const svg = isMilAircraft
+        ? MILITARY_AIRCRAFT_BILLBOARD_SVG
+        : (ENTITY_TYPE_BILLBOARD_SVGS[entity.entityType] ?? ENTITY_TYPE_BILLBOARD_SVGS[EntityType.UNKNOWN]);
+      this.billboardImageCache.set(cacheKey, svgToDataUrl(svg));
     }
-    return this.billboardImageCache.get(entityType)!;
+    return this.billboardImageCache.get(cacheKey)!;
   }
 
   private refreshTrailDecimation(): void {
