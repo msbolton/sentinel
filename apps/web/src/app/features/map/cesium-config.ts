@@ -115,6 +115,9 @@ export const ENTITY_TYPE_BILLBOARD_SVGS: Record<string, string> = {
   [EntityType.UNKNOWN]: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48"><circle cx="24" cy="24" r="10" fill="white"/></svg>`,
 };
 
+/** Orange variant of the aircraft SVG for military (adsb.lol) aircraft */
+export const MILITARY_AIRCRAFT_BILLBOARD_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 559.185 559.185" width="64" height="64"><path fill="#f97316" stroke="black" stroke-width="12" stroke-linejoin="round" d="M325.303,181.69V81.634C325.303,54.584,303.375,0,276.324,0c-27.056,0-48.984,54.584-48.984,81.634v103.973c-71.341,23.8-186.134,67.442-186.134,101.916c0,9.352,0,16.163,0,21.059c0,3.605,2.864,5.937,6.396,5.202l179.738-37.411v182.131c-43.697,27.332-99.597,66.017-99.597,85.007c0,4.4,0,7.901,0,10.661c0,3.604,2.815,5.747,6.292,4.78l138.036-38.544c3.47-0.974,9.094-0.949,12.571,0.043l133.991,38.451c3.464,0.998,6.272-1.126,6.272-4.736c0-2.767,0-6.261,0-10.661c0-19.395-56.731-59.321-99.597-86.732V273.907l186.281,39.847c3.531,0.753,6.389-1.561,6.389-5.165c0-4.896,0-11.708,0-21.06C517.967,251.067,393.021,204.34,325.303,181.69z"/></svg>`;
+
 /** Convert SVG string to data URL for Cesium billboard */
 export function svgToDataUrl(svg: string): string {
   return 'data:image/svg+xml;base64,' + btoa(svg);
