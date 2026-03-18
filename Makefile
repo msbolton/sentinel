@@ -23,7 +23,7 @@ proto-ts: ## Generate TypeScript protobuf types
 		echo "Install buf CLI: https://buf.build/docs/installation"
 	@echo "Stripping proto enum prefixes from generated TS..."
 	@for f in libs/proto-gen/src/ts/*.ts; do \
-		sed -i '' -E 's/^(  )([A-Z][A-Z_0-9]*) = "[A-Z_0-9]+",$$/\1\2 = "\2",/' "$$f"; \
+		sed -i -E 's/^(  )([A-Z][A-Z_0-9]*) = "[A-Z_0-9]+",$$/\1\2 = "\2",/' "$$f"; \
 	done
 
 proto-go: ## Generate Go protobuf types

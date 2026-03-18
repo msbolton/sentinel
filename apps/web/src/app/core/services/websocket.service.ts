@@ -74,6 +74,7 @@ export class WebSocketService implements OnDestroy {
 
     // Batched entity events (coalesced server-side for performance)
     this.socket.on('entity:batch', (events: EntityEvent[]) => {
+      console.debug(`[WS] Received entity:batch with ${events.length} events`, events[0]);
       for (const event of events) {
         this.entityUpdatesSubject.next(event);
       }

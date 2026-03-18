@@ -34,9 +34,6 @@ import {
   svgToDataUrl,
   DEFAULT_CAMERA_POSITION,
   TRACK_TRAIL_CONFIG,
-  BILLBOARD_SCALE_BY_DISTANCE,
-  LABEL_SCALE_BY_DISTANCE,
-  LABEL_TRANSLUCENCY_BY_DISTANCE,
 } from './cesium-config';
 import { CircularBuffer, decimateTrail, TrailPoint } from './trail-utils';
 
@@ -100,12 +97,6 @@ interface LayerConfig {
   color: string;
 }
 
-interface EntityMapEntry {
-  billboard: any;
-  label: any;
-  polyline: any | null;
-  sentinelEntity: Entity;
-}
 
 @Component({
   selector: 'app-map',
@@ -142,10 +133,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   private Cesium: any;
   private userLocationEntity: any = null;
-  private billboardCollection: any = null;
-  private labelCollection: any = null;
-  private polylineCollection: any = null;
-  private entityMap = new Map<string, EntityMapEntry>();
+  private entityMap = new Map<string, any>();
   private trackTrails = new Map<string, CircularBuffer<{ lat: number; lon: number; alt: number }>>();
   private subscriptions = new Subscription();
   private cameraMovedSubject = new Subject<void>();
@@ -188,7 +176,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // Initial entity fetch — computeViewRectangle() returns undefined at high
     // altitude (view covers more than a hemisphere), so the camera moveEnd
     // handler won't trigger a fetch.  Load all entities eagerly.
-    this.entityService.getEntities({ limit: 500 }).subscribe();
+    // Render directly from the response to bypass the throttled
+    // currentEntities$ subscription which drops the first emission.
+    this.entityService.getEntities({ pageSize: 500 }).subscribe((response) => {
+      this.ngZone.runOutsideAngular(() => {
+        for (const entity of response.data) {
+          this.addOrUpdateCesiumEntity(entity);
+        }
+        this.scheduleRender();
+      });
+    });
 
     this.buildingsService.init(this.viewer, this.Cesium);
     this.subscribeToThemeChanges();
@@ -201,9 +198,6 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (this.viewer && !this.viewer.isDestroyed()) {
       this.viewer.destroy();
     }
-    this.billboardCollection = null;
-    this.labelCollection = null;
-    this.polylineCollection = null;
   }
 
   private async initCesium(): Promise<void> {
@@ -229,24 +223,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.ngZone.runOutsideAngular(() => {
       this.viewer = new Cesium.Viewer(container, viewerOptions);
 
-      // Primitive collections for tracked entities
-      this.billboardCollection = this.viewer.scene.primitives.add(
-        new Cesium.BillboardCollection({ scene: this.viewer.scene })
-      );
-      this.labelCollection = this.viewer.scene.primitives.add(
-        new Cesium.LabelCollection({ scene: this.viewer.scene })
-      );
-      this.polylineCollection = this.viewer.scene.primitives.add(
-        new Cesium.PolylineCollection()
-      );
-
       // Set dark atmosphere
       this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
       this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a0e17');
 
       // Disable expensive visual features
-      this.viewer.scene.sun.show = false;
-      this.viewer.scene.moon.show = false;
+      if (this.viewer.scene.sun) this.viewer.scene.sun.show = false;
+      if (this.viewer.scene.moon) this.viewer.scene.moon.show = false;
       this.viewer.scene.fog.enabled = false;
       this.viewer.scene.globe.showGroundAtmosphere = false;
       this.viewer.scene.globe.enableLighting = false;
@@ -285,24 +268,15 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     handler.setInputAction((click: any) => {
       const pickedObject = this.viewer.scene.pick(click.position);
 
-      if (Cesium.defined(pickedObject) && pickedObject.id != null) {
-        const entry = this.entityMap.get(pickedObject.id as string);
-        if (entry) {
-          // Drive Cesium's SelectionIndicator (green brackets) by setting
-          // viewer.selectedEntity to a lightweight proxy with matching position.
-          this.viewer.selectedEntity = new Cesium.Entity({
-            position: entry.billboard.position,
-          });
-          this.ngZone.run(() => {
-            this.selectedEntity.set(entry.sentinelEntity);
-          });
-          return;
-        }
+      if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelEntity) {
+        this.ngZone.run(() => {
+          this.selectedEntity.set(pickedObject.id._sentinelEntity);
+        });
+      } else {
+        this.ngZone.run(() => {
+          this.selectedEntity.set(null);
+        });
       }
-      this.viewer.selectedEntity = undefined;
-      this.ngZone.run(() => {
-        this.selectedEntity.set(null);
-      });
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
   }
 
@@ -349,12 +323,26 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
         // Also fetch entities in this viewport
         this.entityService
-          .getEntities({ ...bounds, limit: 500 })
-          .subscribe();
+          .getEntities({ ...bounds, pageSize: 500 })
+          .subscribe((response) => {
+            this.ngZone.runOutsideAngular(() => {
+              for (const entity of response.data) {
+                this.addOrUpdateCesiumEntity(entity);
+              }
+              this.scheduleRender();
+            });
+          });
       } else {
         // computeViewRectangle() returns undefined when the camera sees the
         // full globe — fetch all entities without bounding-box filter.
-        this.entityService.getEntities({ limit: 500 }).subscribe();
+        this.entityService.getEntities({ pageSize: 500 }).subscribe((response) => {
+          this.ngZone.runOutsideAngular(() => {
+            for (const entity of response.data) {
+              this.addOrUpdateCesiumEntity(entity);
+            }
+            this.scheduleRender();
+          });
+        });
       }
     } catch {
       // Camera may not have a valid view rectangle (e.g., looking at sky)
@@ -379,11 +367,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     ).subscribe((entities) => {
       this.ngZone.runOutsideAngular(() => {
         if (!this.viewer) return;
-        entities.forEach((entity, id) => {
-          if (!this.entityMap.has(id)) {
-            this.addOrUpdateCesiumEntity(entity);
-          }
-        });
+        this.viewer.entities.suspendEvents();
+        try {
+          entities.forEach((entity, id) => {
+            if (!this.entityMap.has(id)) {
+              this.addOrUpdateCesiumEntity(entity);
+            }
+          });
+        } finally {
+          this.viewer.entities.resumeEvents();
+        }
         this.scheduleRender();
       });
     });
@@ -393,8 +386,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const evictionSub = this.entityService.entityEvictions$.subscribe((ids) => {
       this.ngZone.runOutsideAngular(() => {
         if (!this.viewer) return;
-        for (const id of ids) {
-          this.removeCesiumEntity(id);
+        this.viewer.entities.suspendEvents();
+        try {
+          for (const id of ids) {
+            this.removeCesiumEntity(id);
+          }
+        } finally {
+          this.viewer.entities.resumeEvents();
         }
         this.scheduleRender();
       });
@@ -405,10 +403,20 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private processCesiumBatch(events: EntityEvent[]): void {
     if (!this.viewer) return;
 
-    for (const event of events) {
-      this.handleEntityEvent(event);
+    console.debug(`[Map] Processing batch of ${events.length} entity events`);
+
+    this.viewer.entities.suspendEvents();
+    try {
+      for (const event of events) {
+        this.handleEntityEvent(event);
+      }
+    } catch (err) {
+      console.error('[Map] Error processing entity batch:', err);
+    } finally {
+      this.viewer.entities.resumeEvents();
     }
 
+    console.debug(`[Map] Entity map size: ${this.entityMap.size}, viewer entities: ${this.viewer.entities.values.length}`);
     this.scheduleRender();
   }
 
@@ -481,7 +489,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   private addOrUpdateCesiumEntity(entity: Entity): void {
-    if (!this.viewer || !this.Cesium || !entity.position) return;
+    if (!this.viewer || !this.Cesium) return;
+    if (!entity.position) {
+      console.warn(`[Map] Entity ${entity.id} has no position, skipping`);
+      return;
+    }
 
     const Cesium = this.Cesium;
     const layer = this.layers.find((l) => l.entityType === entity.entityType);
@@ -514,12 +526,12 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const existing = this.entityMap.get(entity.id);
 
     if (existing) {
-      // Update existing primitives
-      existing.billboard.position = position;
-      existing.billboard.rotation = rotation;
-
-      existing.label.position = position;
+      // Update existing entity
+      existing.position = position;
       existing.label.text = entity.name;
+      if (existing.billboard) {
+        existing.billboard.rotation = rotation;
+      }
 
       // Update polyline trail
       if (trail.length >= 2) {
@@ -529,82 +541,71 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         if (existing.polyline) {
           existing.polyline.positions = trailPositions;
         } else {
-          existing.polyline = this.polylineCollection.add({
+          existing.polyline = new Cesium.PolylineGraphics({
             positions: trailPositions,
             width: TRACK_TRAIL_CONFIG.width,
-            material: Cesium.Material.fromType('Color', {
-              color: cesiumColor.withAlpha(TRACK_TRAIL_CONFIG.trailOpacity),
-            }),
-            id: entity.id,
+            material: cesiumColor.withAlpha(TRACK_TRAIL_CONFIG.trailOpacity),
+            clampToGround: !hasAltitude,
           });
         }
       }
 
-      existing.sentinelEntity = entity;
+      // Update stored sentinel entity data
+      existing._sentinelEntity = entity;
     } else {
-      // Create new primitives
-      const billboard = this.billboardCollection.add({
+      // Create new entity
+      const cesiumEntity = this.viewer.entities.add({
         position,
-        image: this.getBillboardImage(entity.entityType),
-        scale: 0.5,
-        color: cesiumColor,
-        heightReference: heightRef,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        verticalOrigin: Cesium.VerticalOrigin.CENTER,
-        rotation,
-        alignedAxis: Cesium.Cartesian3.UNIT_Z,
-        scaleByDistance: new Cesium.NearFarScalar(...BILLBOARD_SCALE_BY_DISTANCE),
-        id: entity.id,
+        billboard: {
+          image: this.getBillboardImage(entity.entityType),
+          scale: 0.5,
+          color: cesiumColor,
+          heightReference: heightRef,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+          rotation,
+          alignedAxis: Cesium.Cartesian3.UNIT_Z,
+        },
+        label: {
+          text: entity.name,
+          font: '12px JetBrains Mono, monospace',
+          fillColor: Cesium.Color.WHITE,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          pixelOffset: new Cesium.Cartesian2(0, -16),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          showBackground: true,
+          backgroundColor: Cesium.Color.fromCssColorString('#0a0e17').withAlpha(0.7),
+          backgroundPadding: new Cesium.Cartesian2(6, 4),
+          heightReference: heightRef,
+        },
+        polyline:
+          trail.length >= 2
+            ? {
+                positions: trail.map((p: TrailPoint) =>
+                  Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt),
+                ),
+                width: TRACK_TRAIL_CONFIG.width,
+                material: cesiumColor.withAlpha(TRACK_TRAIL_CONFIG.trailOpacity),
+                clampToGround: !hasAltitude,
+              }
+            : undefined,
       });
 
-      const label = this.labelCollection.add({
-        position,
-        text: entity.name,
-        font: '12px JetBrains Mono, monospace',
-        fillColor: Cesium.Color.WHITE,
-        outlineColor: Cesium.Color.BLACK,
-        outlineWidth: 2,
-        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-        pixelOffset: new Cesium.Cartesian2(0, -16),
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        showBackground: true,
-        backgroundColor: Cesium.Color.fromCssColorString('#0a0e17').withAlpha(0.7),
-        backgroundPadding: new Cesium.Cartesian2(6, 4),
-        heightReference: heightRef,
-        scaleByDistance: new Cesium.NearFarScalar(...LABEL_SCALE_BY_DISTANCE),
-        translucencyByDistance: new Cesium.NearFarScalar(...LABEL_TRANSLUCENCY_BY_DISTANCE),
-        id: entity.id,
-      });
-
-      let polyline: any = null;
-      if (trail.length >= 2) {
-        polyline = this.polylineCollection.add({
-          positions: trail.map((p: TrailPoint) =>
-            Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt),
-          ),
-          width: TRACK_TRAIL_CONFIG.width,
-          material: Cesium.Material.fromType('Color', {
-            color: cesiumColor.withAlpha(TRACK_TRAIL_CONFIG.trailOpacity),
-          }),
-          id: entity.id,
-        });
-      }
-
-      this.entityMap.set(entity.id, { billboard, label, polyline, sentinelEntity: entity });
+      // Store reference to SENTINEL entity data
+      cesiumEntity._sentinelEntity = entity;
+      this.entityMap.set(entity.id, cesiumEntity);
     }
 
     this.scheduleRender();
   }
 
   private removeCesiumEntity(entityId: string): void {
-    const entry = this.entityMap.get(entityId);
-    if (entry) {
-      this.billboardCollection.remove(entry.billboard);
-      this.labelCollection.remove(entry.label);
-      if (entry.polyline) {
-        this.polylineCollection.remove(entry.polyline);
-      }
+    const cesiumEntity = this.entityMap.get(entityId);
+    if (cesiumEntity && this.viewer) {
+      this.viewer.entities.remove(cesiumEntity);
       this.entityMap.delete(entityId);
       this.trackTrails.delete(entityId);
       this.scheduleRender();
@@ -668,13 +669,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   toggleLayer(layer: LayerConfig): void {
     // Show/hide all entities of this type
-    this.entityMap.forEach((entry) => {
-      if (entry.sentinelEntity.entityType === layer.entityType) {
-        entry.billboard.show = layer.visible;
-        entry.label.show = layer.visible;
-        if (entry.polyline) {
-          entry.polyline.show = layer.visible;
-        }
+    this.entityMap.forEach((cesiumEntity) => {
+      const sentinelEntity = cesiumEntity._sentinelEntity as Entity;
+      if (sentinelEntity.entityType === layer.entityType) {
+        cesiumEntity.show = layer.visible;
       }
     });
     this.scheduleRender();
@@ -717,7 +715,6 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   closeEntityPopup(): void {
-    this.viewer.selectedEntity = undefined;
     this.selectedEntity.set(null);
   }
 
@@ -751,9 +748,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
     if (oldStride === newStride) return;
 
-    this.entityMap.forEach((entry, entityId) => {
+    this.entityMap.forEach((cesiumEntity, entityId) => {
       const trailBuffer = this.trackTrails.get(entityId);
-      if (!trailBuffer || trailBuffer.length < 2 || !entry.polyline) return;
+      if (!trailBuffer || trailBuffer.length < 2 || !cesiumEntity.polyline) return;
 
       const decimated = decimateTrail(
         trailBuffer.toArray(),
@@ -762,7 +759,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       );
 
       if (decimated.length >= 2) {
-        entry.polyline.positions = decimated.map((p: TrailPoint) =>
+        cesiumEntity.polyline.positions = decimated.map((p: TrailPoint) =>
           this.Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt),
         );
       }

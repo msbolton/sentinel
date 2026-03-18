@@ -80,7 +80,7 @@ export class AlertService implements OnDestroy {
           .set('limit', '0'),
       })
       .subscribe({
-        next: (response) => this.unacknowledgedCountSubject.next(response.total),
+        next: (response) => this.unacknowledgedCountSubject.next(response.total ?? 0),
         error: () => {
           /* silently handle - server may not be running */
         },

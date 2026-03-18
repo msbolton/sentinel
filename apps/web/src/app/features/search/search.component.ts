@@ -46,7 +46,7 @@ export class SearchComponent implements OnInit, OnDestroy {
         distinctUntilChanged(),
         switchMap((query) => {
           if (!query || query.trim().length < 2) {
-            return of({ data: [], total: 0, limit: 50, offset: 0 } as PaginatedResponse<Entity>);
+            return of({ data: [], total: 0 } as PaginatedResponse<Entity>);
           }
           this.loading.set(true);
           return this.entityService.searchEntities(query);
@@ -55,7 +55,7 @@ export class SearchComponent implements OnInit, OnDestroy {
       .subscribe({
         next: (response) => {
           this.results.set(response.data);
-          this.totalResults.set(response.total);
+          this.totalResults.set(response.pagination?.total ?? response.total ?? 0);
           this.loading.set(false);
         },
         error: () => {
@@ -150,19 +150,18 @@ export class SearchComponent implements OnInit, OnDestroy {
     if (query && query.trim().length >= 2) {
       this.loading.set(true);
       this.entityService.getEntities({
-        search: query,
-        entityType: this.selectedEntityTypes().size === 1
-          ? [...this.selectedEntityTypes()][0]
+        entityTypes: this.selectedEntityTypes().size > 0
+          ? [...this.selectedEntityTypes()]
           : undefined,
-        source: this.selectedSources().size === 1
-          ? [...this.selectedSources()][0]
+        sources: this.selectedSources().size > 0
+          ? [...this.selectedSources()]
           : undefined,
         classification: this.selectedClassification() ?? undefined,
-        limit: 50,
+        pageSize: 50,
       }).subscribe({
         next: (response) => {
           this.results.set(response.data);
-          this.totalResults.set(response.total);
+          this.totalResults.set(response.pagination?.total ?? response.total ?? 0);
           this.loading.set(false);
         },
         error: () => this.loading.set(false),

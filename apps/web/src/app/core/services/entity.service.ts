@@ -84,16 +84,15 @@ export class EntityService implements OnDestroy {
   private buildParams(query?: EntityQuery): HttpParams {
     let params = new HttpParams();
     if (query) {
-      if (query.entityType) params = params.set('entityType', query.entityType);
-      if (query.source) params = params.set('source', query.source);
+      if (query.entityTypes?.length) params = params.set('entityTypes', query.entityTypes.join(','));
+      if (query.sources?.length) params = params.set('sources', query.sources.join(','));
       if (query.classification) params = params.set('classification', query.classification);
-      if (query.search) params = params.set('search', query.search);
       if (query.north !== undefined) params = params.set('north', query.north.toString());
       if (query.south !== undefined) params = params.set('south', query.south.toString());
       if (query.east !== undefined) params = params.set('east', query.east.toString());
       if (query.west !== undefined) params = params.set('west', query.west.toString());
-      if (query.limit !== undefined) params = params.set('limit', query.limit.toString());
-      if (query.offset !== undefined) params = params.set('offset', query.offset.toString());
+      if (query.page !== undefined) params = params.set('page', query.page.toString());
+      if (query.pageSize !== undefined) params = params.set('pageSize', query.pageSize.toString());
     }
     return params;
   }

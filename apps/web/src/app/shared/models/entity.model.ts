@@ -70,21 +70,26 @@ export interface EntityEvent {
 }
 
 export interface EntityQuery {
-  entityType?: EntityType;
-  source?: EntitySource;
+  entityTypes?: EntityType[];
+  sources?: EntitySource[];
   classification?: Classification;
-  search?: string;
   north?: number;
   south?: number;
   east?: number;
   west?: number;
-  limit?: number;
-  offset?: number;
+  page?: number;
+  pageSize?: number;
 }
 
 export interface PaginatedResponse<T> {
   data: T[];
-  total: number;
-  limit: number;
-  offset: number;
+  total?: number;
+  limit?: number;
+  offset?: number;
+  pagination?: {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+  };
 }
