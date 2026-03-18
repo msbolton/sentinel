@@ -537,12 +537,9 @@ export class DataFeedsComponent implements OnInit, OnDestroy {
   private readonly LAYER_CONFIG: DataLayerConfig[] = [
     { id: 'opensky',     name: 'Live Flights',      source: 'OpenSky Network' },
     { id: 'adsb-lol',    name: 'Military Flights',   source: 'adsb.lol' },
-    { id: 'usgs',        name: 'Earthquakes (24h)',  source: 'USGS' },
     { id: 'celestrak',   name: 'Satellites',          source: 'CelesTrak' },
-    { id: 'osm-traffic', name: 'Street Traffic',      source: 'OpenStreetMap' },
     { id: 'nexrad',      name: 'Weather Radar',       source: 'NOAA NEXRAD (globe overlay)' },
     { id: 'cctv',        name: 'CCTV Mesh',           source: 'CCTV Mesh + Street View fallback' },
-    { id: 'bikeshare',   name: 'Bikeshare',           source: 'GBFS' },
   ];
 
   readonly layers = computed<DataLayer[]>(() => {
