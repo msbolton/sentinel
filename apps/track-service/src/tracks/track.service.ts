@@ -1,6 +1,7 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, MessageEvent, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { Observable } from 'rxjs';
 import { TrackPoint } from './track-point.entity';
 import { TrackBatchService } from './track-batch.service';
 
@@ -18,6 +19,7 @@ export interface TrackPointResult {
   heading: number | null;
   speedKnots: number | null;
   course: number | null;
+  altitude: number | null;
   source: string | null;
   timestamp: Date;
 }
@@ -26,6 +28,7 @@ export interface TrackPointResult {
 export class TrackService {
   private readonly logger = new Logger(TrackService.name);
   private static readonly SEGMENT_GAP_MS = 30 * 60 * 1000; // 30 minutes
+  private static readonly MAX_REPLAY_DELAY_MS = 5000;
 
   constructor(
     @InjectRepository(TrackPoint)
@@ -50,6 +53,16 @@ export class TrackService {
     velocityEast: number | null = null,
     velocityUp: number | null = null,
     circularError: number | null = null,
+    feedId: string | null = null,
+    trackProcessingState: string | null = null,
+    accelNorth: number | null = null,
+    accelEast: number | null = null,
+    accelUp: number | null = null,
+    posCovariance: number[] | null = null,
+    posVelCovariance: number[] | null = null,
+    velCovariance: number[] | null = null,
+    altitudeError: number | null = null,
+    sensorId: string | null = null,
   ): Promise<void> {
     await this.batchService.addPoint({
       entityId,
@@ -65,6 +78,16 @@ export class TrackService {
       velocityEast,
       velocityUp,
       circularError,
+      feedId,
+      trackProcessingState,
+      accelNorth,
+      accelEast,
+      accelUp,
+      posCovariance,
+      posVelCovariance,
+      velCovariance,
+      altitudeError,
+      sensorId,
     });
   }
 
@@ -88,6 +111,7 @@ export class TrackService {
         'tp.heading AS heading',
         'tp."speedKnots" AS "speedKnots"',
         'tp.course AS course',
+        'tp.altitude AS altitude',
         'tp.source AS source',
         'tp.timestamp AS timestamp',
       ])
@@ -171,6 +195,7 @@ export class TrackService {
         tp.heading,
         tp."speedKnots",
         tp.course,
+        tp.altitude,
         tp.source,
         tp.timestamp
       FROM sentinel.track_points tp
@@ -244,6 +269,7 @@ export class TrackService {
         tp.heading,
         tp."speedKnots",
         tp.course,
+        tp.altitude,
         tp.source,
         tp.timestamp
       FROM sentinel.track_points tp
@@ -252,6 +278,84 @@ export class TrackService {
     `;
 
     return this.trackPointRepo.query(sql, [entityIds]);
+  }
+
+  /**
+   * Stream track points as an Observable for SSE replay.
+   */
+  replayStream(
+    entityId: string,
+    startTime: Date,
+    endTime: Date,
+    speedMultiplier = 1,
+  ): Observable<MessageEvent> {
+    return new Observable<MessageEvent>((subscriber) => {
+      let timeoutHandle: NodeJS.Timeout | null = null;
+      let cancelled = false;
+
+      const run = async () => {
+        try {
+          const points = await this.getHistory(entityId, startTime, endTime);
+
+          if (points.length === 0) {
+            subscriber.next({
+              data: JSON.stringify({ entityId, totalPoints: 0 }),
+              type: 'complete',
+            } as MessageEvent);
+            subscriber.complete();
+            return;
+          }
+
+          for (let i = 0; i < points.length; i++) {
+            if (cancelled) return;
+
+            subscriber.next({
+              data: JSON.stringify(points[i]),
+              type: 'point',
+            } as MessageEvent);
+
+            if (i < points.length - 1) {
+              const currTime = new Date(points[i].timestamp).getTime();
+              const nextTime = new Date(points[i + 1].timestamp).getTime();
+              const rawDelay = (nextTime - currTime) / speedMultiplier;
+              const delay = Math.min(
+                Math.max(rawDelay, 0),
+                TrackService.MAX_REPLAY_DELAY_MS,
+              );
+
+              if (delay > 0) {
+                await new Promise<void>((resolve) => {
+                  timeoutHandle = setTimeout(() => {
+                    timeoutHandle = null;
+                    resolve();
+                  }, delay);
+                });
+              }
+            }
+          }
+
+          if (!cancelled) {
+            subscriber.next({
+              data: JSON.stringify({ entityId, totalPoints: points.length }),
+              type: 'complete',
+            } as MessageEvent);
+            subscriber.complete();
+          }
+        } catch (err) {
+          if (!cancelled) subscriber.error(err);
+        }
+      };
+
+      run();
+
+      return () => {
+        cancelled = true;
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+      };
+    });
   }
 
   /**
@@ -272,6 +376,16 @@ export class TrackService {
     velocityEast?: number;
     velocityUp?: number;
     circularError?: number;
+    feedId?: string;
+    trackProcessingState?: string;
+    accelNorth?: number;
+    accelEast?: number;
+    accelUp?: number;
+    posCovariance?: number[];
+    posVelCovariance?: number[];
+    velCovariance?: number[];
+    altitudeError?: number;
+    sensorId?: string;
   }): Promise<void> {
     await this.batchService.addPoint({
       entityId: payload.entityId,
@@ -287,6 +401,16 @@ export class TrackService {
       velocityEast: payload.velocityEast ?? null,
       velocityUp: payload.velocityUp ?? null,
       circularError: payload.circularError ?? null,
+      feedId: payload.feedId ?? null,
+      trackProcessingState: payload.trackProcessingState ?? null,
+      accelNorth: payload.accelNorth ?? null,
+      accelEast: payload.accelEast ?? null,
+      accelUp: payload.accelUp ?? null,
+      posCovariance: payload.posCovariance ?? null,
+      posVelCovariance: payload.posVelCovariance ?? null,
+      velCovariance: payload.velCovariance ?? null,
+      altitudeError: payload.altitudeError ?? null,
+      sensorId: payload.sensorId ?? null,
     });
 
     this.logger.debug(

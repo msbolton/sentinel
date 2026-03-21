@@ -17,6 +17,16 @@ interface BufferedPoint {
   velocityEast: number | null;
   velocityUp: number | null;
   circularError: number | null;
+  feedId: string | null;
+  trackProcessingState: string | null;
+  accelNorth: number | null;
+  accelEast: number | null;
+  accelUp: number | null;
+  posCovariance: number[] | null;
+  posVelCovariance: number[] | null;
+  velCovariance: number[] | null;
+  altitudeError: number | null;
+  sensorId: string | null;
 }
 
 /**
@@ -87,58 +97,12 @@ export class TrackBatchService implements OnModuleDestroy {
     this.buffer = [];
 
     try {
-      const values = pointsToFlush.map((p) => ({
-        entityId: p.entityId,
-        position: () =>
-          `ST_SetSRID(ST_MakePoint(${p.longitude}, ${p.latitude}), 4326)`,
-        heading: p.heading,
-        speedKnots: p.speedKnots,
-        course: p.course,
-        source: p.source,
-        timestamp: p.timestamp,
-      }));
-
-      // Use query builder for bulk insert with raw PostGIS geometry
-      const queryBuilder = this.trackPointRepo
-        .createQueryBuilder()
-        .insert()
-        .into(TrackPoint);
-
-      // Build raw SQL for bulk insert with ST_MakePoint
-      const paramIndex = { current: 1 };
-      const valuesClauses: string[] = [];
-      const params: (string | number | Date | null)[] = [];
-
-      for (const point of pointsToFlush) {
-        const idx = paramIndex.current;
-        valuesClauses.push(
-          `($${idx}, $${idx + 1}, ST_SetSRID(ST_MakePoint($${idx + 2}, $${idx + 3}), 4326), $${idx + 4}, $${idx + 5}, $${idx + 6}, $${idx + 7}, $${idx + 8}, $${idx + 9}, $${idx + 10}, $${idx + 11}, $${idx + 12})`,
-        );
-        params.push(
-          point.entityId,
-          point.source,
-          point.longitude,
-          point.latitude,
-          point.heading,
-          point.speedKnots,
-          point.course,
-          point.timestamp,
-          point.altitude,
-          point.velocityNorth,
-          point.velocityEast,
-          point.velocityUp,
-          point.circularError,
-        );
-        paramIndex.current += 13;
+      // Chunk into BATCH_SIZE groups to stay within PostgreSQL's 65535 parameter limit
+      // (each point uses 23 parameters, so 100 points = 2300 params per INSERT)
+      for (let i = 0; i < pointsToFlush.length; i += this.BATCH_SIZE) {
+        const chunk = pointsToFlush.slice(i, i + this.BATCH_SIZE);
+        await this.insertChunk(chunk);
       }
-
-      const sql = `
-        INSERT INTO sentinel.track_points
-          ("entityId", "source", "position", "heading", "speedKnots", "course", "timestamp", "altitude", "velocityNorth", "velocityEast", "velocityUp", "circularError")
-        VALUES ${valuesClauses.join(', ')}
-      `;
-
-      await this.trackPointRepo.query(sql, params);
 
       this.logger.debug(`Flushed ${pointsToFlush.length} track points`);
     } catch (error) {
@@ -161,6 +125,53 @@ export class TrackBatchService implements OnModuleDestroy {
     } finally {
       this.isFlushing = false;
     }
+  }
+
+  private async insertChunk(points: BufferedPoint[]): Promise<void> {
+    const paramIndex = { current: 1 };
+    const valuesClauses: string[] = [];
+    const params: (string | number | number[] | Date | null)[] = [];
+
+    for (const point of points) {
+      const idx = paramIndex.current;
+      valuesClauses.push(
+        `($${idx}, $${idx + 1}, ST_SetSRID(ST_MakePoint($${idx + 2}, $${idx + 3}), 4326), $${idx + 4}, $${idx + 5}, $${idx + 6}, $${idx + 7}, $${idx + 8}, $${idx + 9}, $${idx + 10}, $${idx + 11}, $${idx + 12}, $${idx + 13}, $${idx + 14}, $${idx + 15}, $${idx + 16}, $${idx + 17}, $${idx + 18}::float[], $${idx + 19}::float[], $${idx + 20}::float[], $${idx + 21}, $${idx + 22})`,
+      );
+      params.push(
+        point.entityId,
+        point.source,
+        point.longitude,
+        point.latitude,
+        point.heading,
+        point.speedKnots,
+        point.course,
+        point.timestamp,
+        point.altitude,
+        point.velocityNorth,
+        point.velocityEast,
+        point.velocityUp,
+        point.circularError,
+        point.feedId,
+        point.trackProcessingState,
+        point.accelNorth,
+        point.accelEast,
+        point.accelUp,
+        point.posCovariance,
+        point.posVelCovariance,
+        point.velCovariance,
+        point.altitudeError,
+        point.sensorId,
+      );
+      paramIndex.current += 23;
+    }
+
+    const sql = `
+      INSERT INTO sentinel.track_points
+        ("entityId", "source", "position", "heading", "speedKnots", "course", "timestamp", "altitude", "velocityNorth", "velocityEast", "velocityUp", "circularError", "feedId", "trackProcessingState", "accelNorth", "accelEast", "accelUp", "posCovariance", "posVelCovariance", "velCovariance", "altitudeError", "sensorId")
+      VALUES ${valuesClauses.join(', ')}
+    `;
+
+    await this.trackPointRepo.query(sql, params);
   }
 
   /**

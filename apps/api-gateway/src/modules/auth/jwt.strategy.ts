@@ -76,7 +76,10 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     const jwksUri = `${issuerUrl}/protocol/openid-connect/certs`;
 
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+        (req: any) => req?.query?.token as string || null,
+      ]),
       ignoreExpiration: false,
       audience: configService.get<string>('KEYCLOAK_AUDIENCE', 'sentinel-api'),
       issuer: issuerUrl,
