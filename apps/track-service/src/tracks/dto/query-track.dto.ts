@@ -33,7 +33,7 @@ export class QueryTrackDto {
   simplify?: number;
 }
 
-export class ReplayTrackDto {
+export class ReplayStreamDto {
   @IsDateString()
   startTime: string;
 
@@ -41,8 +41,9 @@ export class ReplayTrackDto {
   endTime: string;
 
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0.1)
   @Max(100)
-  speedMultiplier?: number = 1;
+  speedMultiplier?: number;
 }

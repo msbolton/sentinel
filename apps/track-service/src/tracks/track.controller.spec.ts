@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { Observable } from 'rxjs';
 import { TrackController } from './track.controller';
 import { TrackService } from './track.service';
 import { QueryTrackDto } from './dto/query-track.dto';
@@ -12,6 +13,7 @@ describe('TrackController', () => {
       getHistory: jest.fn(),
       getLatestPositions: jest.fn(),
       getSegments: jest.fn(),
+      replayStream: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -163,6 +165,29 @@ describe('TrackController', () => {
         undefined,
         undefined,
       );
+    });
+  });
+
+  describe('replayStream', () => {
+    it('should return an Observable from trackService.replayStream', () => {
+      const entityId = '550e8400-e29b-41d4-a716-446655440000';
+      const query = {
+        startTime: '2025-01-01T00:00:00Z',
+        endTime: '2025-01-02T00:00:00Z',
+        speedMultiplier: 2,
+      };
+      const mockObservable = new Observable<any>();
+      trackService.replayStream.mockReturnValue(mockObservable);
+
+      const result = controller.replayStream(entityId, query as any);
+
+      expect(trackService.replayStream).toHaveBeenCalledWith(
+        entityId,
+        new Date('2025-01-01T00:00:00Z'),
+        new Date('2025-01-02T00:00:00Z'),
+        2,
+      );
+      expect(result).toBe(mockObservable);
     });
   });
 });
