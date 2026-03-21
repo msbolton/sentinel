@@ -48,6 +48,7 @@ describe('TrackController', () => {
           heading: 90,
           speedKnots: 12,
           course: 180,
+          altitude: null,
           source: 'AIS',
           timestamp: new Date('2025-01-01T01:00:00Z'),
         },
@@ -96,6 +97,7 @@ describe('TrackController', () => {
         heading: 90,
         speedKnots: 12,
         course: 180,
+        altitude: null,
         source: 'AIS',
         timestamp: new Date('2025-01-01T12:00:00Z'),
       };
