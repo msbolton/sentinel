@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CqrsModule } from '@nestjs/cqrs';
 import { TrackModule } from './tracks/track.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { TrackModule } from './tracks/track.module';
     }),
     CqrsModule.forRoot(),
     TrackModule,
+    HealthModule,
   ],
 })
 export class AppModule {}
