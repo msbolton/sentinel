@@ -17,6 +17,16 @@ interface BufferedPoint {
   velocityEast: number | null;
   velocityUp: number | null;
   circularError: number | null;
+  feedId: string | null;
+  trackProcessingState: string | null;
+  accelNorth: number | null;
+  accelEast: number | null;
+  accelUp: number | null;
+  posCovariance: number[] | null;
+  posVelCovariance: number[] | null;
+  velCovariance: number[] | null;
+  altitudeError: number | null;
+  sensorId: string | null;
 }
 
 /**
@@ -107,12 +117,12 @@ export class TrackBatchService implements OnModuleDestroy {
       // Build raw SQL for bulk insert with ST_MakePoint
       const paramIndex = { current: 1 };
       const valuesClauses: string[] = [];
-      const params: (string | number | Date | null)[] = [];
+      const params: (string | number | number[] | Date | null)[] = [];
 
       for (const point of pointsToFlush) {
         const idx = paramIndex.current;
         valuesClauses.push(
-          `($${idx}, $${idx + 1}, ST_SetSRID(ST_MakePoint($${idx + 2}, $${idx + 3}), 4326), $${idx + 4}, $${idx + 5}, $${idx + 6}, $${idx + 7}, $${idx + 8}, $${idx + 9}, $${idx + 10}, $${idx + 11}, $${idx + 12})`,
+          `($${idx}, $${idx + 1}, ST_SetSRID(ST_MakePoint($${idx + 2}, $${idx + 3}), 4326), $${idx + 4}, $${idx + 5}, $${idx + 6}, $${idx + 7}, $${idx + 8}, $${idx + 9}, $${idx + 10}, $${idx + 11}, $${idx + 12}, $${idx + 13}, $${idx + 14}, $${idx + 15}, $${idx + 16}, $${idx + 17}, $${idx + 18}::float[], $${idx + 19}::float[], $${idx + 20}::float[], $${idx + 21}, $${idx + 22})`,
         );
         params.push(
           point.entityId,
@@ -128,13 +138,23 @@ export class TrackBatchService implements OnModuleDestroy {
           point.velocityEast,
           point.velocityUp,
           point.circularError,
+          point.feedId,
+          point.trackProcessingState,
+          point.accelNorth,
+          point.accelEast,
+          point.accelUp,
+          point.posCovariance,
+          point.posVelCovariance,
+          point.velCovariance,
+          point.altitudeError,
+          point.sensorId,
         );
-        paramIndex.current += 13;
+        paramIndex.current += 23;
       }
 
       const sql = `
         INSERT INTO sentinel.track_points
-          ("entityId", "source", "position", "heading", "speedKnots", "course", "timestamp", "altitude", "velocityNorth", "velocityEast", "velocityUp", "circularError")
+          ("entityId", "source", "position", "heading", "speedKnots", "course", "timestamp", "altitude", "velocityNorth", "velocityEast", "velocityUp", "circularError", "feedId", "trackProcessingState", "accelNorth", "accelEast", "accelUp", "posCovariance", "posVelCovariance", "velCovariance", "altitudeError", "sensorId")
         VALUES ${valuesClauses.join(', ')}
       `;
 
