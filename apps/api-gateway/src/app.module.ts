@@ -8,6 +8,7 @@ import { HealthModule } from './modules/health/health.module';
 import { EntitiesModule } from './modules/entities/entities.module';
 import { FeedsModule } from './modules/feeds/feeds.module';
 import { LocationsModule } from './modules/locations/locations.module';
+import { TracksModule } from './modules/tracks/tracks.module';
 import { SecurityHeadersMiddleware } from './modules/auth/security-headers.middleware';
 
 @Module({
@@ -49,6 +50,7 @@ import { SecurityHeadersMiddleware } from './modules/auth/security-headers.middl
     EntityGatewayModule,
     FeedsModule,
     LocationsModule,
+    TracksModule,
   ],
 })
 export class AppModule implements NestModule {
