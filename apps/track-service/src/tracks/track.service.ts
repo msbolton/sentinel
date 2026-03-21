@@ -1,6 +1,7 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, MessageEvent, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { Observable } from 'rxjs';
 import { TrackPoint } from './track-point.entity';
 import { TrackBatchService } from './track-batch.service';
 
@@ -27,6 +28,7 @@ export interface TrackPointResult {
 export class TrackService {
   private readonly logger = new Logger(TrackService.name);
   private static readonly SEGMENT_GAP_MS = 30 * 60 * 1000; // 30 minutes
+  private static readonly MAX_REPLAY_DELAY_MS = 5000;
 
   constructor(
     @InjectRepository(TrackPoint)
@@ -276,6 +278,84 @@ export class TrackService {
     `;
 
     return this.trackPointRepo.query(sql, [entityIds]);
+  }
+
+  /**
+   * Stream track points as an Observable for SSE replay.
+   */
+  replayStream(
+    entityId: string,
+    startTime: Date,
+    endTime: Date,
+    speedMultiplier = 1,
+  ): Observable<MessageEvent> {
+    return new Observable<MessageEvent>((subscriber) => {
+      let timeoutHandle: NodeJS.Timeout | null = null;
+      let cancelled = false;
+
+      const run = async () => {
+        try {
+          const points = await this.getHistory(entityId, startTime, endTime);
+
+          if (points.length === 0) {
+            subscriber.next({
+              data: JSON.stringify({ entityId, totalPoints: 0 }),
+              type: 'complete',
+            } as MessageEvent);
+            subscriber.complete();
+            return;
+          }
+
+          for (let i = 0; i < points.length; i++) {
+            if (cancelled) return;
+
+            subscriber.next({
+              data: JSON.stringify(points[i]),
+              type: 'point',
+            } as MessageEvent);
+
+            if (i < points.length - 1) {
+              const currTime = new Date(points[i].timestamp).getTime();
+              const nextTime = new Date(points[i + 1].timestamp).getTime();
+              const rawDelay = (nextTime - currTime) / speedMultiplier;
+              const delay = Math.min(
+                Math.max(rawDelay, 0),
+                TrackService.MAX_REPLAY_DELAY_MS,
+              );
+
+              if (delay > 0) {
+                await new Promise<void>((resolve) => {
+                  timeoutHandle = setTimeout(() => {
+                    timeoutHandle = null;
+                    resolve();
+                  }, delay);
+                });
+              }
+            }
+          }
+
+          if (!cancelled) {
+            subscriber.next({
+              data: JSON.stringify({ entityId, totalPoints: points.length }),
+              type: 'complete',
+            } as MessageEvent);
+            subscriber.complete();
+          }
+        } catch (err) {
+          if (!cancelled) subscriber.error(err);
+        }
+      };
+
+      run();
+
+      return () => {
+        cancelled = true;
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+      };
+    });
   }
 
   /**
