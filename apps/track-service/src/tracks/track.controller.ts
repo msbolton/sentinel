@@ -113,6 +113,21 @@ export class TrackController {
       course?: number;
       source?: string;
       timestamp: string;
+      altitude?: number;
+      velocityNorth?: number;
+      velocityEast?: number;
+      velocityUp?: number;
+      circularError?: number;
+      feedId?: string;
+      trackProcessingState?: string;
+      accelNorth?: number;
+      accelEast?: number;
+      accelUp?: number;
+      posCovariance?: number[];
+      posVelCovariance?: number[];
+      velCovariance?: number[];
+      altitudeError?: number;
+      sensorId?: string;
     },
   ) {
     await this.trackService.handlePositionEvent(payload);
