@@ -18,6 +18,7 @@ export interface TrackPointResult {
   heading: number | null;
   speedKnots: number | null;
   course: number | null;
+  altitude: number | null;
   source: string | null;
   timestamp: Date;
 }
@@ -50,6 +51,16 @@ export class TrackService {
     velocityEast: number | null = null,
     velocityUp: number | null = null,
     circularError: number | null = null,
+    feedId: string | null = null,
+    trackProcessingState: string | null = null,
+    accelNorth: number | null = null,
+    accelEast: number | null = null,
+    accelUp: number | null = null,
+    posCovariance: number[] | null = null,
+    posVelCovariance: number[] | null = null,
+    velCovariance: number[] | null = null,
+    altitudeError: number | null = null,
+    sensorId: string | null = null,
   ): Promise<void> {
     await this.batchService.addPoint({
       entityId,
@@ -65,6 +76,16 @@ export class TrackService {
       velocityEast,
       velocityUp,
       circularError,
+      feedId,
+      trackProcessingState,
+      accelNorth,
+      accelEast,
+      accelUp,
+      posCovariance,
+      posVelCovariance,
+      velCovariance,
+      altitudeError,
+      sensorId,
     });
   }
 
@@ -88,6 +109,7 @@ export class TrackService {
         'tp.heading AS heading',
         'tp."speedKnots" AS "speedKnots"',
         'tp.course AS course',
+        'tp.altitude AS altitude',
         'tp.source AS source',
         'tp.timestamp AS timestamp',
       ])
@@ -171,6 +193,7 @@ export class TrackService {
         tp.heading,
         tp."speedKnots",
         tp.course,
+        tp.altitude,
         tp.source,
         tp.timestamp
       FROM sentinel.track_points tp
@@ -244,6 +267,7 @@ export class TrackService {
         tp.heading,
         tp."speedKnots",
         tp.course,
+        tp.altitude,
         tp.source,
         tp.timestamp
       FROM sentinel.track_points tp
@@ -272,6 +296,16 @@ export class TrackService {
     velocityEast?: number;
     velocityUp?: number;
     circularError?: number;
+    feedId?: string;
+    trackProcessingState?: string;
+    accelNorth?: number;
+    accelEast?: number;
+    accelUp?: number;
+    posCovariance?: number[];
+    posVelCovariance?: number[];
+    velCovariance?: number[];
+    altitudeError?: number;
+    sensorId?: string;
   }): Promise<void> {
     await this.batchService.addPoint({
       entityId: payload.entityId,
@@ -287,6 +321,16 @@ export class TrackService {
       velocityEast: payload.velocityEast ?? null,
       velocityUp: payload.velocityUp ?? null,
       circularError: payload.circularError ?? null,
+      feedId: payload.feedId ?? null,
+      trackProcessingState: payload.trackProcessingState ?? null,
+      accelNorth: payload.accelNorth ?? null,
+      accelEast: payload.accelEast ?? null,
+      accelUp: payload.accelUp ?? null,
+      posCovariance: payload.posCovariance ?? null,
+      posVelCovariance: payload.posVelCovariance ?? null,
+      velCovariance: payload.velCovariance ?? null,
+      altitudeError: payload.altitudeError ?? null,
+      sensorId: payload.sensorId ?? null,
     });
 
     this.logger.debug(
