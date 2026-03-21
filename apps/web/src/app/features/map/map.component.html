@@ -82,4 +82,12 @@
     (close)="closeEntityPopup()"
     (flyTo)="flyToEntity($event)"
   />
+
+  <app-context-menu
+    #contextMenu
+    [items]="contextMenuItems"
+    (itemSelected)="onContextMenuAction($event)"
+  />
+
+  <app-track-panel />
 </div>
