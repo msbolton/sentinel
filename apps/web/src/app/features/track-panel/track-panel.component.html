@@ -1,0 +1,58 @@
+@if (store.isOpen()) {
+  <div class="track-panel" [class.expanded]="store.isExpanded()" [class.collapsed]="!store.isExpanded()">
+    <div class="panel-header" (click)="store.toggleExpanded()">
+      <span class="entity-name">Track: {{ store.selectedEntityName() }}</span>
+      <div class="header-controls">
+        <button class="btn-icon" (click)="$event.stopPropagation(); store.toggleExpanded()">
+          {{ store.isExpanded() ? '&#9660;' : '&#9650;' }}
+        </button>
+        <button class="btn-icon" (click)="$event.stopPropagation(); close()">&times;</button>
+      </div>
+    </div>
+
+    @if (store.isExpanded()) {
+      <div class="panel-body">
+        <div class="playback-controls">
+          <button class="btn-play" (click)="togglePlay()">
+            {{ store.isPlaying() ? '&#9646;&#9646;' : '&#9654;' }}
+          </button>
+
+          <select
+            class="speed-select"
+            [ngModel]="store.speedMultiplier()"
+            (ngModelChange)="onSpeedChange($event)"
+          >
+            @for (s of speeds; track s) {
+              <option [ngValue]="s">{{ s }}x</option>
+            }
+          </select>
+
+          <input
+            type="range"
+            class="timeline-scrubber"
+            [min]="0"
+            [max]="store.allPoints().length - 1"
+            [value]="store.currentIndex() >= 0 ? store.currentIndex() : 0"
+            (input)="onScrub($event)"
+          />
+        </div>
+
+        @if (store.currentPoint(); as point) {
+          <div class="status-line">
+            <span class="status-item">{{ point.timestamp }}</span>
+            <span class="status-item">{{ point.latitude | number:'1.4-4' }}, {{ point.longitude | number:'1.4-4' }}</span>
+            @if (point.altitude !== null) {
+              <span class="status-item">Alt: {{ point.altitude | number:'1.0-0' }}m</span>
+            }
+            @if (point.speedKnots !== null) {
+              <span class="status-item">Spd: {{ point.speedKnots | number:'1.1-1' }}kn</span>
+            }
+            @if (point.heading !== null) {
+              <span class="status-item">Hdg: {{ point.heading | number:'1.0-0' }}&deg;</span>
+            }
+          </div>
+        }
+      </div>
+    }
+  </div>
+}
