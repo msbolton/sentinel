@@ -12,6 +12,11 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, NavigationEnd } from '@angular/router';
 import { EntityDetailPanelComponent } from '../../shared/components/entity-detail-panel.component';
+import { TrackPanelComponent } from '../track-panel/track-panel.component';
+import { TrackPanelStore } from '../track-panel/track-panel.store';
+import { TrackRenderService } from '../track-panel/track-render.service';
+import { TrackApiService } from '../../core/services/track-api.service';
+import { ContextMenuComponent, ContextMenuItem } from '../../shared/components/context-menu/context-menu.component';
 import { Subscription, debounceTime, Subject, throttleTime, bufferTime, filter } from 'rxjs';
 import {
   Entity,
@@ -104,19 +109,26 @@ interface LayerConfig {
   selector: 'app-map',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule, EntityDetailPanelComponent],
+  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, TrackPanelComponent, ContextMenuComponent],
   templateUrl: './map.component.html',
   styleUrls: ['./map.component.scss'],
+  providers: [TrackPanelStore, TrackRenderService],
 })
 export class MapComponent implements AfterViewInit, OnDestroy {
   @ViewChild('cesiumContainer', { static: true })
   cesiumContainer!: ElementRef<HTMLDivElement>;
+  @ViewChild('contextMenu') contextMenu!: ContextMenuComponent;
 
   viewer: any = null;
   selectedEntity = signal<Entity | null>(null);
   showLayerPanel = signal<boolean>(false);
   flyingTo = signal<string | null>(null);
   panelRouteActive = signal<boolean>(false);
+
+  readonly contextMenuItems: ContextMenuItem[] = [
+    { label: 'Show Track History', action: 'show-track' },
+  ];
+  private contextMenuEntityId: string | null = null;
 
   layers: LayerConfig[] = [
     { name: 'Persons', entityType: EntityType.PERSON, visible: true, color: ENTITY_TYPE_PIN_COLORS[EntityType.PERSON] },
@@ -153,6 +165,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly themeService: ThemeService,
     private readonly locationService: LocationService,
     readonly buildingsService: BuildingsService,
+    readonly trackRenderService: TrackRenderService,
+    private readonly trackApiService: TrackApiService,
+    private readonly trackPanelStore: TrackPanelStore,
   ) {
     // Track whether a panel route is active (anything other than /map or /)
     const routerSub = this.router.events.pipe(
@@ -190,6 +205,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     });
 
     this.buildingsService.init(this.viewer, this.Cesium);
+    this.trackRenderService.init(this.viewer, this.Cesium);
     this.subscribeToThemeChanges();
     this.subscribeToFlyTo();
     this.initUserLocation();
@@ -280,6 +296,19 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         });
       }
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+    // Right click - context menu
+    const rightClickHandler = new Cesium.ScreenSpaceEventHandler(this.viewer.scene.canvas);
+    rightClickHandler.setInputAction((movement: any) => {
+      const picked = this.viewer.scene.pick(movement.position);
+      if (picked?.id?._sentinelEntity) {
+        const entity = picked.id._sentinelEntity as Entity;
+        this.ngZone.run(() => {
+          this.contextMenuEntityId = entity.id;
+          this.contextMenu.show(movement.position.x, movement.position.y);
+        });
+      }
+    }, Cesium.ScreenSpaceEventType.RIGHT_CLICK);
   }
 
   private setupCameraMoveHandler(): void {
@@ -718,6 +747,20 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   closeEntityPopup(): void {
     this.selectedEntity.set(null);
+  }
+
+  onContextMenuAction(action: string): void {
+    if (action === 'show-track' && this.contextMenuEntityId) {
+      const entityId = this.contextMenuEntityId;
+      const cesiumEntity = this.entityMap.get(entityId);
+      const sentinelEntity = cesiumEntity?._sentinelEntity as Entity | undefined;
+      const entityName = sentinelEntity?.name ?? entityId;
+
+      this.trackApiService.getHistory(entityId).subscribe((points) => {
+        this.trackPanelStore.open(entityId, entityName, points);
+        this.trackRenderService.drawStaticTrack(points);
+      });
+    }
   }
 
   private getCesiumColor(entityType: EntityType): any {
