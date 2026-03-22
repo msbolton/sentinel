@@ -16,6 +16,7 @@ import {
   DamageAssessment,
   CharacterizationState,
   Affiliation,
+  AgeoutState,
 } from './enums';
 
 /**
@@ -36,6 +37,7 @@ import {
 @Index('idx_entities_operational_status', ['operationalStatus'])
 @Index('idx_entities_country_of_origin', ['countryOfOrigin'])
 @Index('idx_entities_source_entity_id_col', ['sourceEntityId'])
+@Index('idx_entities_ageout_state', ['ageoutState'])
 export class EntityRecord {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -170,4 +172,7 @@ export class EntityRecord {
 
   @Column({ type: 'timestamptz', nullable: true })
   deletedAt!: Date | null;
+
+  @Column({ type: 'varchar', default: 'LIVE' })
+  ageoutState!: string;
 }

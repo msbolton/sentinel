@@ -127,6 +127,19 @@ export class EntitiesController {
   }
 
   /**
+   * Bulk soft-delete all entities.
+   * Requires the 'admin' role.
+   */
+  @Delete()
+  @Roles('admin')
+  @ApiOperation({ summary: 'Delete all entities' })
+  @ApiResponse({ status: 200, description: 'Count of deleted entities' })
+  async deleteAllEntities(): Promise<{ deleted: number }> {
+    this.logger.log('Bulk delete all entities');
+    return this.entitiesService.deleteAllEntities();
+  }
+
+  /**
    * Delete (soft-delete) an entity.
    * Requires the 'admin' role.
    * Entities classified SECRET or above require TOP_SECRET clearance to delete.

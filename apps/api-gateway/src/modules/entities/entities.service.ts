@@ -157,7 +157,7 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
           "updatedAt",
           "lastSeenAt"
         FROM sentinel.entities
-        WHERE position IS NOT NULL
+        WHERE position IS NOT NULL AND deleted = false
       `);
 
       if (rows.length === 0) {
@@ -345,7 +345,7 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
           "updatedAt",
           "lastSeenAt"
         FROM sentinel.entities
-        WHERE position IS NOT NULL
+        WHERE position IS NOT NULL AND deleted = false
       `;
 
       const params: (string | number)[] = [];
@@ -634,6 +634,62 @@ export class EntitiesService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.logger.log(`Entity deleted: ${id}`);
+  }
+
+  /**
+   * Bulk soft-deletes all active entities. Flushes the Redis geo index
+   * and entity cache, updates the database, and emits a bulk deletion event.
+   */
+  async deleteAllEntities(): Promise<{ deleted: number }> {
+    // Bulk soft-delete in the database
+    let count = 0;
+    try {
+      const result = await this.dataSource.query(`
+        UPDATE sentinel.entities
+        SET deleted = true, "deletedAt" = NOW(), "ageoutState" = 'AGED_OUT'
+        WHERE deleted = false
+      `);
+      count = result[1] ?? 0;
+    } catch (error) {
+      this.logger.error(`Failed to bulk soft-delete entities: ${error}`);
+      throw error;
+    }
+
+    // Flush Redis geo index
+    try {
+      await this.redis.del(ENTITY_GEO_KEY);
+    } catch (error) {
+      this.logger.warn(`Failed to flush Redis geo index: ${error}`);
+    }
+
+    // Scan and delete all entity cache keys
+    try {
+      let cursor = '0';
+      do {
+        const [nextCursor, keys] = await this.redis.scan(
+          cursor, 'MATCH', `${ENTITY_CACHE_PREFIX}:*`, 'COUNT', '500',
+        );
+        cursor = nextCursor;
+        if (keys.length > 0) {
+          await this.redis.del(...keys);
+        }
+      } while (cursor !== '0');
+    } catch (error) {
+      this.logger.warn(`Failed to flush entity cache keys: ${error}`);
+    }
+
+    // Emit bulk deletion event
+    this.kafkaClient.emit('events.entity.deleted', {
+      key: 'bulk',
+      value: {
+        bulk: true,
+        count,
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    this.logger.log(`Bulk soft-deleted ${count} entities`);
+    return { deleted: count };
   }
 
   /**

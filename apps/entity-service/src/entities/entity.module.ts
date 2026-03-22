@@ -10,10 +10,13 @@ import { IngestConsumer } from './ingest.consumer';
 import { ObservationRecord } from '../observations/observation.entity';
 import { ObservationRepository } from '../observations/observation.repository';
 import { ObservationService } from '../observations/observation.service';
+import { AgeoutConfigRecord } from './ageout-config.entity';
+import { AgeoutConfigController } from './ageout-config.controller';
+import { AgeoutService } from './ageout.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EntityRecord, ObservationRecord]),
+    TypeOrmModule.forFeature([EntityRecord, ObservationRecord, AgeoutConfigRecord]),
 
     ClientsModule.registerAsync([
       {
@@ -35,8 +38,8 @@ import { ObservationService } from '../observations/observation.service';
       },
     ]),
   ],
-  controllers: [EntityController, IngestConsumer],
-  providers: [EntityService, EntityRepository, ObservationService, ObservationRepository],
+  controllers: [EntityController, IngestConsumer, AgeoutConfigController],
+  providers: [EntityService, EntityRepository, ObservationService, ObservationRepository, AgeoutService],
   exports: [EntityService, EntityRepository, ObservationService],
 })
 export class EntityModule {}

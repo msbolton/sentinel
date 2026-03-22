@@ -47,19 +47,11 @@ describe('LoginComponent', () => {
     expect(component).toBeTruthy();
   });
 
-  it('should redirect to /map when already authenticated', () => {
+  it('should not auto-redirect when already authenticated', () => {
     authService.isAuthenticated$.next(true);
     fixture.detectChanges();
 
-    expect(router.navigateByUrl).toHaveBeenCalledWith('/map');
-  });
-
-  it('should redirect to returnUrl when already authenticated', () => {
-    queryParams.returnUrl = '/alerts';
-    authService.isAuthenticated$.next(true);
-    fixture.detectChanges();
-
-    expect(router.navigateByUrl).toHaveBeenCalledWith('/alerts');
+    expect(router.navigateByUrl).not.toHaveBeenCalled();
   });
 
   it('should not redirect when not authenticated', () => {
