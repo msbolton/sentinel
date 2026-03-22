@@ -74,6 +74,12 @@ export enum CharacterizationState {
   UNCHARACTERIZED = 'UNCHARACTERIZED',
 }
 
+export enum AgeoutState {
+  LIVE = 'LIVE',
+  STALE = 'STALE',
+  AGED_OUT = 'AGED_OUT',
+}
+
 /**
  * Ordered classification levels for comparison queries.
  * Lower index = lower classification.
