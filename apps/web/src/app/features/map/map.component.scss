@@ -59,6 +59,12 @@
     color: var(--accent-blue);
     border-color: var(--accent-blue);
   }
+
+  &--danger:hover {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+    border-color: #ef4444;
+  }
 }
 
 // --- Layer Panel ---

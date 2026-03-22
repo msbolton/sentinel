@@ -302,6 +302,24 @@ export class EntityRepository extends Repository<EntityRecord> {
   }
 
   /**
+   * Soft-delete ALL active entities in a single bulk UPDATE.
+   * Returns the number of affected rows.
+   */
+  async softDeleteAll(): Promise<number> {
+    const result = await this.createQueryBuilder()
+      .update(EntityRecord)
+      .set({
+        deleted: true,
+        deletedAt: new Date(),
+        ageoutState: 'AGED_OUT' as any,
+      })
+      .where('deleted = :deleted', { deleted: false })
+      .execute();
+
+    return result.affected ?? 0;
+  }
+
+  /**
    * Get aggregate counts of entities grouped by type and classification.
    */
   async getEntityCounts(): Promise<EntityCountByType[]> {

@@ -147,6 +147,12 @@ export class EntityService implements OnDestroy {
     this.entitiesSubject.next(new Map());
   }
 
+  deleteAllEntities(): Observable<{ deleted: number }> {
+    return this.http.delete<{ deleted: number }>(this.apiUrl).pipe(
+      tap(() => this.clearEntities()),
+    );
+  }
+
   private evictStaleEntities(): void {
     const map = this.entitiesSubject.value;
     if (map.size === 0) return;
