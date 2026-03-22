@@ -9,6 +9,7 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { HttpClient } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { Router, NavigationEnd } from '@angular/router';
 import { EntityDetailPanelComponent } from '../../shared/components/entity-detail-panel.component';
@@ -145,6 +146,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private currentCameraAltitude = DEFAULT_CAMERA_POSITION.height;
   private themePostProcessStage: any = null;
 
+  /** Cached ageout configs fetched from backend, refreshed every 60s */
+  private ageoutConfigs: Array<{ sourceType: string | null; staleThresholdMs: number }> = [];
+  private ageoutConfigTimer: ReturnType<typeof setInterval> | null = null;
+
   constructor(
     private readonly ngZone: NgZone,
     private readonly router: Router,
@@ -153,6 +158,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly themeService: ThemeService,
     private readonly locationService: LocationService,
     readonly buildingsService: BuildingsService,
+    private readonly http: HttpClient,
   ) {
     // Track whether a panel route is active (anything other than /map or /)
     const routerSub = this.router.events.pipe(
@@ -189,6 +195,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       });
     });
 
+    this.fetchAgeoutConfigs();
+    this.ageoutConfigTimer = setInterval(() => this.fetchAgeoutConfigs(), 60_000);
+
     this.buildingsService.init(this.viewer, this.Cesium);
     this.subscribeToThemeChanges();
     this.subscribeToFlyTo();
@@ -196,6 +205,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    if (this.ageoutConfigTimer) clearInterval(this.ageoutConfigTimer);
     this.subscriptions.unsubscribe();
     if (this.viewer && !this.viewer.isDestroyed()) {
       this.viewer.destroy();
@@ -497,11 +507,20 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       return;
     }
 
+    // Don't render aged-out entities
+    if (entity.ageoutState === 'AGED_OUT') {
+      this.removeCesiumEntity(entity.id);
+      return;
+    }
+
     const Cesium = this.Cesium;
     const layer = this.layers.find((l) => l.entityType === entity.entityType);
     if (layer && !layer.visible) return;
 
     const cesiumColor = this.getCesiumColor(entity.entityType);
+    const isStale = this.isEntityStale(entity);
+    const billboardAlpha = isStale ? 0.4 : 1.0;
+    const trailAlpha = isStale ? TRACK_TRAIL_CONFIG.trailOpacity * 0.4 : TRACK_TRAIL_CONFIG.trailOpacity;
 
     // Track trail
     this.updateTrackTrail(entity);
@@ -533,6 +552,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       existing.label.text = entity.name;
       if (existing.billboard) {
         existing.billboard.rotation = rotation;
+        existing.billboard.color = (this.isMilitaryAircraft(entity) ? this.Cesium.Color.WHITE : cesiumColor).withAlpha(billboardAlpha);
+      }
+      if (existing.label) {
+        existing.label.fillColor = this.Cesium.Color.WHITE.withAlpha(billboardAlpha);
       }
 
       // Update polyline trail
@@ -546,7 +569,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
           existing.polyline = new Cesium.PolylineGraphics({
             positions: trailPositions,
             width: TRACK_TRAIL_CONFIG.width,
-            material: cesiumColor.withAlpha(TRACK_TRAIL_CONFIG.trailOpacity),
+            material: cesiumColor.withAlpha(trailAlpha),
             clampToGround: !hasAltitude,
           });
         }
@@ -561,7 +584,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         billboard: {
           image: this.getBillboardImage(entity),
           scale: 0.5,
-          color: this.isMilitaryAircraft(entity) ? Cesium.Color.WHITE : cesiumColor,
+          color: (this.isMilitaryAircraft(entity) ? Cesium.Color.WHITE : cesiumColor).withAlpha(billboardAlpha),
           heightReference: heightRef,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
           verticalOrigin: Cesium.VerticalOrigin.CENTER,
@@ -571,7 +594,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         label: {
           text: entity.name,
           font: '12px JetBrains Mono, monospace',
-          fillColor: Cesium.Color.WHITE,
+          fillColor: Cesium.Color.WHITE.withAlpha(billboardAlpha),
           outlineColor: Cesium.Color.BLACK,
           outlineWidth: 2,
           style: Cesium.LabelStyle.FILL_AND_OUTLINE,
@@ -590,7 +613,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
                   Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt),
                 ),
                 width: TRACK_TRAIL_CONFIG.width,
-                material: cesiumColor.withAlpha(TRACK_TRAIL_CONFIG.trailOpacity),
+                material: cesiumColor.withAlpha(trailAlpha),
                 clampToGround: !hasAltitude,
               }
             : undefined,
@@ -716,8 +739,53 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     });
   }
 
+  clearAllEntities(): void {
+    if (!confirm('Clear all entities? This will permanently remove all tracked entities from the system.')) {
+      return;
+    }
+
+    this.entityService.deleteAllEntities().subscribe({
+      next: (result) => {
+        // Remove all entities from the Cesium viewer
+        if (this.viewer) {
+          this.viewer.entities.removeAll();
+        }
+        this.trackTrails.clear();
+        this.selectedEntity.set(null);
+      },
+      error: (err) => {
+        console.error('Failed to clear entities:', err);
+      },
+    });
+  }
+
   closeEntityPopup(): void {
     this.selectedEntity.set(null);
+  }
+
+  private fetchAgeoutConfigs(): void {
+    this.http.get<Array<{ sourceType: string | null; staleThresholdMs: number }>>('/api/v1/entities/ageout-config')
+      .subscribe({
+        next: (configs) => { this.ageoutConfigs = configs; },
+        error: () => { /* use cached or defaults */ },
+      });
+  }
+
+  private getStaleThresholdForSource(source: string): number {
+    const specific = this.ageoutConfigs.find((c) => c.sourceType === source);
+    if (specific) return specific.staleThresholdMs;
+    const global = this.ageoutConfigs.find((c) => c.sourceType === null);
+    return global?.staleThresholdMs ?? 300_000;
+  }
+
+  private isEntityStale(entity: Entity): boolean {
+    if (entity.ageoutState === 'STALE') return true;
+    if (entity.ageoutState === 'AGED_OUT') return true;
+    if (entity.lastSeenAt && entity.source) {
+      const elapsed = Date.now() - new Date(entity.lastSeenAt).getTime();
+      return elapsed > this.getStaleThresholdForSource(entity.source);
+    }
+    return false;
   }
 
   private getCesiumColor(entityType: EntityType): any {

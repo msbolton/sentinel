@@ -58,6 +58,9 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
   private static readonly ENTITY_CREATED_TOPIC = 'events.entity.created';
   private static readonly ENTITY_UPDATED_TOPIC = 'events.entity.updated';
   private static readonly ENTITY_DELETED_TOPIC = 'events.entity.deleted';
+  private static readonly ENTITY_STALE_TOPIC = 'events.entity.stale';
+  private static readonly ENTITY_AGEDOUT_TOPIC = 'events.entity.agedout';
+  private static readonly ENTITY_RESTORED_TOPIC = 'events.entity.restored';
 
   constructor(
     private readonly configService: ConfigService,
@@ -96,6 +99,9 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
           KafkaConsumerService.ENTITY_CREATED_TOPIC,
           KafkaConsumerService.ENTITY_UPDATED_TOPIC,
           KafkaConsumerService.ENTITY_DELETED_TOPIC,
+          KafkaConsumerService.ENTITY_STALE_TOPIC,
+          KafkaConsumerService.ENTITY_AGEDOUT_TOPIC,
+          KafkaConsumerService.ENTITY_RESTORED_TOPIC,
         ],
         fromBeginning: false,
       });
@@ -107,7 +113,7 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
       });
 
       this.logger.log(
-        `Subscribed to topics: ${KafkaConsumerService.ENTITY_POSITION_TOPIC}, ${KafkaConsumerService.ENTITY_CREATED_TOPIC}, ${KafkaConsumerService.ENTITY_UPDATED_TOPIC}, ${KafkaConsumerService.ENTITY_DELETED_TOPIC}`,
+        `Subscribed to topics: ${KafkaConsumerService.ENTITY_POSITION_TOPIC}, ${KafkaConsumerService.ENTITY_CREATED_TOPIC}, ${KafkaConsumerService.ENTITY_UPDATED_TOPIC}, ${KafkaConsumerService.ENTITY_DELETED_TOPIC}, ${KafkaConsumerService.ENTITY_STALE_TOPIC}, ${KafkaConsumerService.ENTITY_AGEDOUT_TOPIC}, ${KafkaConsumerService.ENTITY_RESTORED_TOPIC}`,
       );
 
       // Start batch flush timer
@@ -170,6 +176,15 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
           break;
         case KafkaConsumerService.ENTITY_DELETED_TOPIC:
           await this.handleEntityDeletedEvent(message.value);
+          break;
+        case KafkaConsumerService.ENTITY_STALE_TOPIC:
+          await this.handleAgeoutEvent(KafkaConsumerService.ENTITY_STALE_TOPIC, message.value);
+          break;
+        case KafkaConsumerService.ENTITY_AGEDOUT_TOPIC:
+          await this.handleAgeoutEvent(KafkaConsumerService.ENTITY_AGEDOUT_TOPIC, message.value);
+          break;
+        case KafkaConsumerService.ENTITY_RESTORED_TOPIC:
+          await this.handleAgeoutEvent(KafkaConsumerService.ENTITY_RESTORED_TOPIC, message.value);
           break;
         default:
           this.logger.warn(`Unhandled topic: ${topic}`);
@@ -280,6 +295,18 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     };
 
     this.entityGateway.broadcastEntityEvent(event);
+  }
+
+  /**
+   * Handles ageout-related events (stale, agedout, restored).
+   * Broadcasts to ALL connected clients regardless of viewport, because any
+   * client may have cached the entity and must be told about the state change.
+   */
+  private async handleAgeoutEvent(eventName: string, value: Buffer): Promise<void> {
+    const payload = this.deserializeMessage<unknown>(value);
+    if (payload === null) return;
+
+    this.entityGateway.broadcastAgeoutEvent(eventName, payload);
   }
 
   /**
