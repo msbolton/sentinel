@@ -373,7 +373,8 @@ export class EntityService implements OnModuleInit {
     page: number,
   ): Promise<{ data: EntityRecord[]; total: number; page: number; pageSize: number }> {
     const qb = this.entityRepository.createQueryBuilder('e')
-      .where('e.deleted = :deleted', { deleted: false });
+      .where('e.deleted = :deleted', { deleted: false })
+      .andWhere('e.ageoutState != :agedOut', { agedOut: 'AGED_OUT' });
 
     if (query.types && query.types.length > 0) {
       qb.andWhere('e.entityType IN (:...types)', { types: query.types });
