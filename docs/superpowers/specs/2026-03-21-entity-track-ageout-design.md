@@ -38,7 +38,10 @@ All tables live in the `sentinel` schema, consistent with the existing `entities
 | `createdAt` | timestamptz | |
 | `updatedAt` | timestamptz | |
 
-Unique constraint on `(feedId, sourceType)` — NULLs are treated as equal via a unique partial index.
+Uniqueness enforced via partial indexes to handle NULL semantics:
+- `CREATE UNIQUE INDEX ON feed_ageout_config ("feedId", "sourceType") WHERE "feedId" IS NOT NULL AND "sourceType" IS NOT NULL` — feed-specific overrides
+- `CREATE UNIQUE INDEX ON feed_ageout_config ("sourceType") WHERE "feedId" IS NULL AND "sourceType" IS NOT NULL` — source-type defaults
+- `CREATE UNIQUE INDEX ON feed_ageout_config ((1)) WHERE "feedId" IS NULL AND "sourceType" IS NULL` — single global default row
 
 `sourceType` is varchar (not the PostgreSQL `entity_source` enum) because the global default row uses `NULL` and should not pollute the EntitySource enum with a non-source value.
 
@@ -62,6 +65,7 @@ Indexed for the polling query. Uses varchar (consistent with `trackProcessingSta
 | AIS | 10min | 30min |
 | CELESTRAK | 24h | 7d |
 | LINK16 | 30s | 2min |
+| RADAR | 30s | 2min |
 | *(global default, sourceType=NULL)* | 5min | 30min |
 
 ### Migration Strategy
@@ -93,26 +97,29 @@ New `AgeoutService` in `apps/entity-service/src/entities/ageout.service.ts`.
 **SQL strategy for per-feed thresholds:** Use a CTE that joins `sentinel.entities` to `sentinel.feed_ageout_config` with COALESCE fallback:
 
 ```sql
-WITH thresholds AS (
-  SELECT e.id, e."lastSeenAt",
+WITH candidates AS (
+  SELECT e.id,
     COALESCE(feed_cfg."staleThresholdMs", source_cfg."staleThresholdMs", default_cfg."staleThresholdMs") AS stale_ms
   FROM sentinel.entities e
   LEFT JOIN sentinel.feed_ageout_config feed_cfg
-    ON feed_cfg."feedId" = e."feedId" AND feed_cfg."sourceType" = e.source
+    ON feed_cfg."feedId" = e."feedId" AND feed_cfg."sourceType" = e.source::varchar
   LEFT JOIN sentinel.feed_ageout_config source_cfg
-    ON source_cfg."feedId" IS NULL AND source_cfg."sourceType" = e.source
+    ON source_cfg."feedId" IS NULL AND source_cfg."sourceType" = e.source::varchar
   LEFT JOIN sentinel.feed_ageout_config default_cfg
     ON default_cfg."feedId" IS NULL AND default_cfg."sourceType" IS NULL
   WHERE e."ageoutState" = 'LIVE' AND e.deleted = false
+    AND EXTRACT(EPOCH FROM (NOW() - e."lastSeenAt")) * 1000 >
+      COALESCE(feed_cfg."staleThresholdMs", source_cfg."staleThresholdMs", default_cfg."staleThresholdMs")
+  LIMIT 1000
 )
 UPDATE sentinel.entities SET "ageoutState" = 'STALE'
-FROM thresholds t
-WHERE sentinel.entities.id = t.id
-  AND EXTRACT(EPOCH FROM (NOW() - t."lastSeenAt")) * 1000 > t.stale_ms
+FROM candidates c
+WHERE sentinel.entities.id = c.id
 RETURNING sentinel.entities.id, sentinel.entities."entityType", sentinel.entities.source,
-  sentinel.entities."feedId", sentinel.entities."lastSeenAt"
-LIMIT 1000;
+  sentinel.entities."feedId", sentinel.entities."lastSeenAt";
 ```
+
+Note: `e.source::varchar` casts the PostgreSQL `entity_source` enum to varchar for comparison with the varchar `sourceType` column in `feed_ageout_config`.
 
 Similar query for STALE → AGED_OUT transition.
 
@@ -121,7 +128,8 @@ Similar query for STALE → AGED_OUT transition.
 In `IngestConsumer` flush logic (`ingest.consumer.ts`), during the existing bulk position update:
 
 - The `bulkUpdatePositions` SQL already updates `lastSeenAt`. Add `"ageoutState" = 'LIVE'` to the SET clause.
-- After the bulk update, check which entities had a previous `ageoutState != 'LIVE'` (from the pre-update lookup in `findBySourceEntityIds`) and emit `events.entity.restored` for those.
+- The `findBySourceEntityIds` method and its `ExistingEntityInfo` interface must be updated to also select and return `ageoutState`.
+- After the bulk update, check which entities had a previous `ageoutState != 'LIVE'` (from the pre-update lookup) and emit `events.entity.restored` for those.
 
 This requires no new queries — it piggybacks on the existing ingest flow.
 
@@ -137,7 +145,7 @@ Stale entities remain in list/spatial query results — they're just rendered di
 
 ## Backend: Ageout Config API
 
-New endpoints on the entity controller (or a dedicated `AgeoutConfigController`):
+New dedicated `AgeoutConfigController`:
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -148,7 +156,7 @@ New endpoints on the entity controller (or a dedicated `AgeoutConfigController`)
 
 **DTOs:**
 
-- `AgeoutConfigDto`: `feedId?` (UUID), `sourceType` (EntitySource), `staleThresholdMs` (positive int), `ageoutThresholdMs` (positive int, must be > staleThresholdMs)
+- `AgeoutConfigDto`: `feedId?` (UUID), `sourceType?` (EntitySource — optional, omit for global default), `staleThresholdMs` (positive int), `ageoutThresholdMs` (positive int, must be > staleThresholdMs)
 - `AgeoutConfigResponseDto`: all fields + `id`, `createdAt`, `updatedAt`
 
 Protected by `JwtAuthGuard` with `sentinel-operator` or `sentinel-admin` role.
@@ -187,7 +195,7 @@ Consistent shape for all three events:
 The existing `EntityGateway` (in `apps/api-gateway/src/modules/gateway/`) currently forwards only position updates. Add subscriptions for the three new Kafka topics:
 
 - Subscribe to `events.entity.stale`, `events.entity.agedout`, `events.entity.restored` in the gateway's Kafka consumer
-- Forward each event to connected WebSocket clients using the same event name
+- Forward each event to **all** connected WebSocket clients (bypasses viewport filtering — a stale/aged-out entity must be removed from any client that has it cached, regardless of current viewport)
 - No transformation needed — the Kafka payload is forwarded as-is
 
 ## Track Data for Aged-Out Entities
@@ -224,7 +232,7 @@ Listen for ageout events via existing WebSocket gateway:
 
 - `events.entity.stale` → update local entity `ageoutState`, triggers dimmed rendering
 - `events.entity.agedout` → remove entity from local state
-- `events.entity.restored` → update local entity `ageoutState` to LIVE, render normally
+- `events.entity.restored` → update local entity `ageoutState` to LIVE, render normally. The restored entity's position comes from the next `events.entity.position` event (which fires in the same ingest flush cycle), so there is no visible gap.
 
 ## Files to Create or Modify
 
