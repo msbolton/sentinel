@@ -307,6 +307,31 @@ export class EntityService implements OnModuleInit {
     this.logger.log(`Entity soft-deleted: ${id}`);
   }
 
+  // ─── DELETE ALL ─────────────────────────────────────────────────
+
+  async deleteAll(): Promise<{ deleted: number }> {
+    const count = await this.entityRepository.softDeleteAll();
+
+    // Flush Redis geospatial index
+    if (this.redis) {
+      try {
+        await this.redis.del(REDIS_GEO_KEY);
+      } catch (error) {
+        this.logger.warn(`Failed to flush Redis geo index: ${error}`);
+      }
+    }
+
+    // Emit bulk deletion event to Kafka
+    this.emitKafka(TOPIC_ENTITY_DELETED, 'bulk', {
+      bulk: true,
+      count,
+      timestamp: new Date().toISOString(),
+    });
+
+    this.logger.log(`Bulk soft-deleted ${count} entities`);
+    return { deleted: count };
+  }
+
   // ─── STATS ────────────────────────────────────────────────────────────
 
   async getEntityCount(): Promise<EntityCountByType[]> {

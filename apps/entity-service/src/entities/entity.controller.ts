@@ -158,4 +158,17 @@ export class EntityController {
     this.logger.log(`Deleting entity: ${id}`);
     return this.entityService.delete(id);
   }
+
+  // ─── DELETE ALL ─────────────────────────────────────────────────────
+
+  @Delete()
+  @ApiOperation({
+    summary: 'Delete all entities',
+    description: 'Soft-delete all active entities. Clears the Redis geo index and emits a bulk deletion event.',
+  })
+  @ApiResponse({ status: 200, description: 'Count of deleted entities' })
+  async deleteAll(): Promise<{ deleted: number }> {
+    this.logger.log('Bulk deleting all entities');
+    return this.entityService.deleteAll();
+  }
 }

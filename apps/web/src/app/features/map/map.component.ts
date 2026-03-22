@@ -739,6 +739,26 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     });
   }
 
+  clearAllEntities(): void {
+    if (!confirm('Clear all entities? This will permanently remove all tracked entities from the system.')) {
+      return;
+    }
+
+    this.entityService.deleteAllEntities().subscribe({
+      next: (result) => {
+        // Remove all entities from the Cesium viewer
+        if (this.viewer) {
+          this.viewer.entities.removeAll();
+        }
+        this.trackTrails.clear();
+        this.selectedEntity.set(null);
+      },
+      error: (err) => {
+        console.error('Failed to clear entities:', err);
+      },
+    });
+  }
+
   closeEntityPopup(): void {
     this.selectedEntity.set(null);
   }
