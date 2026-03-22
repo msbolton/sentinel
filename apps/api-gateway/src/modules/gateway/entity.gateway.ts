@@ -344,6 +344,16 @@ export class EntityGateway
   }
 
   /**
+   * Broadcasts an ageout event to ALL connected clients.
+   * Ageout events bypass viewport filtering — a stale/aged-out entity must
+   * be removed from any client that has it cached, regardless of viewport.
+   */
+  broadcastAgeoutEvent(eventName: string, payload: unknown): void {
+    if (!this.server) return;
+    this.server.emit(eventName, payload);
+  }
+
+  /**
    * Synchronous point-in-viewport check using already-fetched bounds.
    * Handles antimeridian crossing where west > east.
    */
