@@ -18,6 +18,7 @@ export class EntityService implements OnDestroy {
   private readonly apiUrl = '/api/v1/entities';
   private readonly searchUrl = '/api/v1/search';
   private readonly wsSubscription: Subscription;
+  private readonly ageoutSubscription: Subscription;
   private readonly evictionSubscription: Subscription;
 
   private readonly entitiesSubject = new BehaviorSubject<Map<string, Entity>>(new Map());
@@ -48,6 +49,11 @@ export class EntityService implements OnDestroy {
       this.mergeEntityEvent(event);
     });
 
+    // Subscribe to ageout events
+    this.ageoutSubscription = this.wsService.ageoutEvents$.subscribe((event) => {
+      this.handleAgeoutEvent(event);
+    });
+
     // Deduplicated entity query pipeline
     this.entityQuery$ = this.querySubject.pipe(
       switchMap((query) => {
@@ -72,6 +78,7 @@ export class EntityService implements OnDestroy {
 
   ngOnDestroy(): void {
     this.wsSubscription.unsubscribe();
+    this.ageoutSubscription.unsubscribe();
     this.queryPipelineSubscription.unsubscribe();
     this.evictionSubscription.unsubscribe();
   }
@@ -174,6 +181,36 @@ export class EntityService implements OnDestroy {
     if (evictedIds.length > 0) {
       this.entitiesSubject.next(map);
       this.entityEvictionsSubject.next(evictedIds);
+    }
+  }
+
+  private handleAgeoutEvent(event: { eventType: string; payload: any }): void {
+    const map = this.entitiesSubject.value;
+    const entityId = event.payload.entity_id;
+
+    switch (event.eventType) {
+      case 'stale': {
+        const entity = map.get(entityId);
+        if (entity) {
+          entity.ageoutState = 'STALE';
+          this.entitiesSubject.next(map);
+        }
+        break;
+      }
+      case 'agedout': {
+        map.delete(entityId);
+        this.entitiesSubject.next(map);
+        this.entityEvictionsSubject.next([entityId]);
+        break;
+      }
+      case 'restored': {
+        const entity = map.get(entityId);
+        if (entity) {
+          entity.ageoutState = 'LIVE';
+          this.entitiesSubject.next(map);
+        }
+        break;
+      }
     }
   }
 
