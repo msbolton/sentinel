@@ -24,74 +24,94 @@ Fresh data arrives     Fresh data arrives
 
 ## Data Model
 
+All tables live in the `sentinel` schema, consistent with the existing `entities` table (`@Entity('...', { schema: 'sentinel' })`). Column names use camelCase (TypeORM default) — raw SQL must quote them (e.g., `"ageoutState"`).
+
 ### New Table: `feed_ageout_config`
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | UUID (PK) | Auto-generated |
 | `feedId` | UUID, nullable | Null = default for this source type |
-| `sourceType` | `entity_source` enum | ADS_B, AIS, TLE, LINK16, COT, etc. |
+| `sourceType` | varchar, nullable | EntitySource value (ADS_B, AIS, etc.). Null = global default |
 | `staleThresholdMs` | integer | Milliseconds after `lastSeenAt` before marking STALE |
 | `ageoutThresholdMs` | integer | Milliseconds after `lastSeenAt` before marking AGED_OUT |
 | `createdAt` | timestamptz | |
 | `updatedAt` | timestamptz | |
 
-Unique constraint on `(feedId, sourceType)`.
+Unique constraint on `(feedId, sourceType)` — NULLs are treated as equal via a unique partial index.
 
-**Threshold resolution order:** feed-specific config (matching `feedId` + `sourceType`) → source-type default (`feedId IS NULL` + matching `sourceType`) → global default (`feedId IS NULL` + `sourceType = 'DEFAULT'`).
+`sourceType` is varchar (not the PostgreSQL `entity_source` enum) because the global default row uses `NULL` and should not pollute the EntitySource enum with a non-source value.
 
-### New Column on `entity_record`
+**Threshold resolution order:** feed-specific config (matching `feedId` + `sourceType`) → source-type default (`feedId IS NULL` + matching `sourceType`) → global default (`feedId IS NULL` + `sourceType IS NULL`).
+
+### New Column on `entities` table
 
 | Column | Type | Default |
 |--------|------|---------|
-| `ageoutState` | enum (`LIVE`, `STALE`, `AGED_OUT`) | `LIVE` |
+| `ageoutState` | varchar | `'LIVE'` |
 
-Indexed for the polling query.
+Indexed for the polling query. Uses varchar (consistent with `trackProcessingState`, `operationalStatus`, etc.) with a TypeScript `AgeoutState` enum for type safety.
 
 ### Default Threshold Seeds
 
 | Source | Stale | Aged Out |
 |--------|-------|----------|
 | ADS_B | 60s | 5min |
+| OPENSKY | 60s | 5min |
+| ADSB_LOL | 60s | 5min |
 | AIS | 10min | 30min |
-| TLE | 24h | 7d |
+| CELESTRAK | 24h | 7d |
 | LINK16 | 30s | 2min |
-| COT | 30s | 2min |
-| DEFAULT | 5min | 30min |
+| *(global default, sourceType=NULL)* | 5min | 30min |
+
+### Migration Strategy
+
+TypeORM synchronize handles schema changes in development. For production, generate a TypeORM migration that:
+1. Adds `"ageoutState"` column to `sentinel.entities` with default `'LIVE'`
+2. Creates `sentinel.feed_ageout_config` table
+3. Seeds default threshold rows
 
 ## Backend: Ageout Polling Service
 
 New `AgeoutService` in `apps/entity-service/src/entities/ageout.service.ts`.
 
-**Dependencies:** `@nestjs/schedule` (new dependency — `ScheduleModule.forRoot()` in app module).
+**Dependencies:** `@nestjs/schedule` (new dependency — `ScheduleModule.forRoot()` in `app.module.ts` only, not in `entities.module.ts`).
 
 **Polling cycle** (runs every 15 seconds via `@Interval(15000)`):
 
-1. Load all rows from `feed_ageout_config` into a map keyed by `(feedId, sourceType)`
-2. For each source type with a configured threshold:
+1. Guard against concurrent execution with an `isRunning` boolean — skip if previous cycle is still in progress
+2. Load all rows from `feed_ageout_config` into a map keyed by `(feedId, sourceType)`
+3. For each source type with a configured threshold:
    - Query entities where `ageoutState = 'LIVE'` and `lastSeenAt < NOW() - staleThresholdMs` (joined/grouped by source and feedId for per-feed thresholds)
-   - Bulk update matching entities to `ageoutState = 'STALE'`
+   - Bulk update matching entities to `ageoutState = 'STALE'` (limit 1000 per cycle to avoid backpressure)
    - Emit `events.entity.stale` for each transitioned entity
-3. Same pattern for `STALE` → `AGED_OUT` using `ageoutThresholdMs`
-4. All updates use bulk SQL (consistent with existing `bulkUpdatePositions` pattern)
+4. Same pattern for `STALE` → `AGED_OUT` using `ageoutThresholdMs` (also limited to 1000)
+5. All updates use bulk SQL (consistent with existing `bulkUpdatePositions` pattern)
 
-**SQL strategy for per-feed thresholds:** Use a CTE that joins `entity_record` to `feed_ageout_config` with COALESCE fallback:
+**Note:** The 15-second polling interval introduces up to 15s of latency for backend state transitions. The frontend compensates with client-side staleness calculation for immediate visual feedback. If the batch limit is reached, remaining entities are processed in subsequent cycles.
+
+**SQL strategy for per-feed thresholds:** Use a CTE that joins `sentinel.entities` to `sentinel.feed_ageout_config` with COALESCE fallback:
 
 ```sql
 WITH thresholds AS (
-  SELECT e.id, e.last_seen_at,
-    COALESCE(feed_cfg.stale_threshold_ms, source_cfg.stale_threshold_ms, default_cfg.stale_threshold_ms) AS stale_ms
-  FROM entity_record e
-  LEFT JOIN feed_ageout_config feed_cfg ON feed_cfg.feed_id = e.feed_id AND feed_cfg.source_type = e.source
-  LEFT JOIN feed_ageout_config source_cfg ON source_cfg.feed_id IS NULL AND source_cfg.source_type = e.source
-  LEFT JOIN feed_ageout_config default_cfg ON default_cfg.feed_id IS NULL AND default_cfg.source_type = 'DEFAULT'
-  WHERE e.ageout_state = 'LIVE' AND e.deleted = false
+  SELECT e.id, e."lastSeenAt",
+    COALESCE(feed_cfg."staleThresholdMs", source_cfg."staleThresholdMs", default_cfg."staleThresholdMs") AS stale_ms
+  FROM sentinel.entities e
+  LEFT JOIN sentinel.feed_ageout_config feed_cfg
+    ON feed_cfg."feedId" = e."feedId" AND feed_cfg."sourceType" = e.source
+  LEFT JOIN sentinel.feed_ageout_config source_cfg
+    ON source_cfg."feedId" IS NULL AND source_cfg."sourceType" = e.source
+  LEFT JOIN sentinel.feed_ageout_config default_cfg
+    ON default_cfg."feedId" IS NULL AND default_cfg."sourceType" IS NULL
+  WHERE e."ageoutState" = 'LIVE' AND e.deleted = false
 )
-UPDATE entity_record SET ageout_state = 'STALE'
+UPDATE sentinel.entities SET "ageoutState" = 'STALE'
 FROM thresholds t
-WHERE entity_record.id = t.id
-  AND EXTRACT(EPOCH FROM (NOW() - t.last_seen_at)) * 1000 > t.stale_ms
-RETURNING entity_record.id, entity_record.entity_type, entity_record.source, entity_record.feed_id, entity_record.last_seen_at;
+WHERE sentinel.entities.id = t.id
+  AND EXTRACT(EPOCH FROM (NOW() - t."lastSeenAt")) * 1000 > t.stale_ms
+RETURNING sentinel.entities.id, sentinel.entities."entityType", sentinel.entities.source,
+  sentinel.entities."feedId", sentinel.entities."lastSeenAt"
+LIMIT 1000;
 ```
 
 Similar query for STALE → AGED_OUT transition.
@@ -100,8 +120,8 @@ Similar query for STALE → AGED_OUT transition.
 
 In `IngestConsumer` flush logic (`ingest.consumer.ts`), during the existing bulk position update:
 
-- The `bulkUpdatePositions` SQL already updates `lastSeenAt`. Add `ageout_state = 'LIVE'` to the SET clause.
-- After the bulk update, check which entities had a previous `ageoutState != 'LIVE'` (from the pre-update lookup) and emit `events.entity.restored` for those.
+- The `bulkUpdatePositions` SQL already updates `lastSeenAt`. Add `"ageoutState" = 'LIVE'` to the SET clause.
+- After the bulk update, check which entities had a previous `ageoutState != 'LIVE'` (from the pre-update lookup in `findBySourceEntityIds`) and emit `events.entity.restored` for those.
 
 This requires no new queries — it piggybacks on the existing ingest flow.
 
@@ -109,11 +129,11 @@ This requires no new queries — it piggybacks on the existing ingest flow.
 
 Modify existing repository methods:
 
-- `findWithinBoundingBox()` — add `WHERE ageout_state != 'AGED_OUT'` (default), with optional `includeAgedOut` param
+- `findWithinBoundingBox()` — add `WHERE "ageoutState" != 'AGED_OUT'` (default), with optional `includeAgedOut` query param
 - `findNearby()` — same filter
-- `findActiveById()` — same filter (already filters `deleted = false`)
+- `findActiveById()` — no ageout filter. Direct by-ID lookups return entities regardless of ageout state so operators can still inspect them.
 
-Stale entities remain in query results — they're just rendered differently by the frontend.
+Stale entities remain in list/spatial query results — they're just rendered differently by the frontend.
 
 ## Backend: Ageout Config API
 
@@ -161,6 +181,20 @@ Consistent shape for all three events:
   timestamp: string;       // event timestamp ISO 8601
 }
 ```
+
+## WebSocket Gateway Changes
+
+The existing `EntityGateway` (in `apps/api-gateway/src/modules/gateway/`) currently forwards only position updates. Add subscriptions for the three new Kafka topics:
+
+- Subscribe to `events.entity.stale`, `events.entity.agedout`, `events.entity.restored` in the gateway's Kafka consumer
+- Forward each event to connected WebSocket clients using the same event name
+- No transformation needed — the Kafka payload is forwarded as-is
+
+## Track Data for Aged-Out Entities
+
+Track point data in TimescaleDB is **not** purged when an entity ages out. The track history remains available for historical queries via `getHistory()` and `getSegments()`. TimescaleDB's built-in retention policies (if configured) handle long-term data lifecycle independently.
+
+The frontend stops rendering track trails for aged-out entities because the entity itself is removed from the active view. If the entity is restored, track rendering resumes normally.
 
 ## Frontend: Client-Side Staleness Rendering
 
@@ -213,9 +247,10 @@ Listen for ageout events via existing WebSocket gateway:
 | `apps/entity-service/src/entities/entity.repository.ts` | Add ageout filter to queries, restoration in bulk update |
 | `apps/entity-service/src/entities/ingest.consumer.ts` | Set `ageoutState = 'LIVE'` on position update, emit restored event |
 | `apps/entity-service/src/entities/enums.ts` | Add `AgeoutState` enum |
-| `apps/entity-service/src/entities/entities.module.ts` | Register new service, controller, entity, ScheduleModule |
+| `apps/entity-service/src/entities/entities.module.ts` | Register new service, controller, entity |
 | `apps/entity-service/src/app.module.ts` | Import `ScheduleModule.forRoot()` |
 | `libs/common/src/kafka-topics.ts` | Add three new topic constants |
+| `apps/api-gateway/src/modules/gateway/entity.gateway.ts` | Subscribe to ageout Kafka topics, forward to WebSocket clients |
 | `apps/web/src/app/...` (entity rendering) | Staleness visual treatment, config fetch, WebSocket listeners |
 
 ## Testing Strategy
