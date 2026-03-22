@@ -746,10 +746,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
     this.entityService.deleteAllEntities().subscribe({
       next: (result) => {
-        // Remove all entities from the Cesium viewer
+        // Remove tracked entities from the Cesium viewer (preserve user location dot)
         if (this.viewer) {
-          this.viewer.entities.removeAll();
+          for (const cesiumEntity of this.entityMap.values()) {
+            this.viewer.entities.remove(cesiumEntity);
+          }
         }
+        this.entityMap.clear();
         this.trackTrails.clear();
         this.selectedEntity.set(null);
       },
