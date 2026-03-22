@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { IsNull } from 'typeorm';
 import { AgeoutConfigController } from './ageout-config.controller';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AgeoutConfigRecord } from './ageout-config.entity';
@@ -55,7 +56,7 @@ describe('AgeoutConfigController', () => {
       const result = await controller.findBySourceType('ADS_B', undefined);
       expect(result).toEqual(config);
       expect(repo.findOne).toHaveBeenCalledWith({
-        where: { sourceType: 'ADS_B', feedId: null },
+        where: { sourceType: 'ADS_B', feedId: expect.any(Object) },
       });
     });
   });

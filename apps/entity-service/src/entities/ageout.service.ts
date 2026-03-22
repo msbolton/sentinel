@@ -4,7 +4,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { ClientKafka } from '@nestjs/microservices';
 import { AgeoutConfigRecord } from './ageout-config.entity';
-import { KafkaTopics } from '@sentinel/common';
+
+/** Kafka topic constants (local to avoid CJS/ESM cross-project resolution) */
+const TOPIC_ENTITY_STALE = 'events.entity.stale';
+const TOPIC_ENTITY_AGED_OUT = 'events.entity.agedout';
 
 const DEFAULT_SEEDS = [
   { sourceType: 'ADS_B', staleThresholdMs: 60_000, ageoutThresholdMs: 300_000 },
@@ -94,7 +97,7 @@ export class AgeoutService implements OnModuleInit {
       `);
 
       for (const row of staleTransitions) {
-        this.emitAgeoutEvent(KafkaTopics.ENTITY_STALE, row, 'STALE');
+        this.emitAgeoutEvent(TOPIC_ENTITY_STALE, row, 'STALE');
       }
 
       const agedOutTransitions = await this.dataSource.query(`
@@ -131,7 +134,7 @@ export class AgeoutService implements OnModuleInit {
       `);
 
       for (const row of agedOutTransitions) {
-        this.emitAgeoutEvent(KafkaTopics.ENTITY_AGED_OUT, row, 'AGED_OUT');
+        this.emitAgeoutEvent(TOPIC_ENTITY_AGED_OUT, row, 'AGED_OUT');
       }
 
       const total = staleTransitions.length + agedOutTransitions.length;
