@@ -4,7 +4,8 @@ import { DataSource } from 'typeorm';
 import { EntityService } from './entity.service';
 import { EntityRepository } from './entity.repository';
 import { EntityType, EntitySource, Classification } from './enums';
-import { KafkaTopics } from '@sentinel/common';
+
+const TOPIC_ENTITY_RESTORED = 'events.entity.restored';
 
 interface IngestMessage {
   entity_id: string;
@@ -283,7 +284,7 @@ export class IngestConsumer implements OnModuleInit, OnModuleDestroy {
 
   private emitRestoredEvent(entityId: string, entityType: string, source: string, feedId: string | null): void {
     try {
-      this.kafkaClient.emit(KafkaTopics.ENTITY_RESTORED, {
+      this.kafkaClient.emit(TOPIC_ENTITY_RESTORED, {
         key: entityId,
         value: JSON.stringify({
           entity_id: entityId,

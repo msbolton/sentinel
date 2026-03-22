@@ -1,6 +1,6 @@
 import { Controller, Get, Put, Delete, Param, Query, Body } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, IsNull } from 'typeorm';
 import { AgeoutConfigRecord } from './ageout-config.entity';
 import { AgeoutConfigDto } from './dto/ageout-config.dto';
 
@@ -24,7 +24,7 @@ export class AgeoutConfigController {
     @Query('feedId') feedId?: string,
   ): Promise<AgeoutConfigRecord | null> {
     return this.configRepo.findOne({
-      where: { sourceType, feedId: feedId ?? null },
+      where: { sourceType, feedId: feedId ?? IsNull() },
     });
   }
 
@@ -32,8 +32,8 @@ export class AgeoutConfigController {
   async upsert(@Body() dto: AgeoutConfigDto): Promise<AgeoutConfigRecord> {
     const existing = await this.configRepo.findOne({
       where: {
-        sourceType: dto.sourceType ?? null,
-        feedId: dto.feedId ?? null,
+        sourceType: dto.sourceType ?? IsNull(),
+        feedId: dto.feedId ?? IsNull(),
       },
     });
 
