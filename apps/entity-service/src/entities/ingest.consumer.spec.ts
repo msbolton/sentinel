@@ -263,6 +263,95 @@ describe('IngestConsumer', () => {
     });
   });
 
+  // ─── Ageout restoration ──────────────────────────────────────────
+
+  describe('ageout restoration', () => {
+    it('should emit restored event when a stale entity receives a position update', async () => {
+      const existingMap = new Map([
+        ['MMSI-111', { id: 'uuid-1', name: 'Stale Ship', entityType: 'VESSEL', classification: 'UNCLASSIFIED', source: 'AIS', metadata: {}, sourceEntityId: 'MMSI-111', ageoutState: 'STALE' }],
+      ]);
+      entityRepository.findBySourceEntityIds.mockResolvedValue(existingMap);
+
+      await consumer.handleIngestMessage({
+        entity_id: 'MMSI-111',
+        entity_type: 'vessel',
+        name: 'Stale Ship',
+        source: 'ais',
+        latitude: 38.9,
+        longitude: -77.0,
+        altitude: 0,
+        heading: 180,
+        speed_knots: 12,
+        course: 180,
+        timestamp: '2025-01-15T12:00:00Z',
+      });
+      await consumer.flushBuffer();
+
+      expect(kafkaClient.emit).toHaveBeenCalledWith(
+        'events.entity.restored',
+        expect.objectContaining({
+          key: 'uuid-1',
+        }),
+      );
+    });
+
+    it('should emit restored event for AGED_OUT entity receiving update', async () => {
+      const existingMap = new Map([
+        ['ICAO-ABC', { id: 'uuid-2', name: 'Old Plane', entityType: 'AIRCRAFT', classification: 'UNCLASSIFIED', source: 'ADS_B', metadata: {}, sourceEntityId: 'ICAO-ABC', ageoutState: 'AGED_OUT' }],
+      ]);
+      entityRepository.findBySourceEntityIds.mockResolvedValue(existingMap);
+
+      await consumer.handleIngestMessage({
+        entity_id: 'ICAO-ABC',
+        entity_type: 'aircraft',
+        name: 'Old Plane',
+        source: 'adsb',
+        latitude: 51.5,
+        longitude: -0.1,
+        altitude: 10000,
+        heading: 90,
+        speed_knots: 450,
+        course: 90,
+        timestamp: '2025-01-15T12:00:00Z',
+      });
+      await consumer.flushBuffer();
+
+      expect(kafkaClient.emit).toHaveBeenCalledWith(
+        'events.entity.restored',
+        expect.objectContaining({
+          key: 'uuid-2',
+        }),
+      );
+    });
+
+    it('should not emit restored event for LIVE entity receiving update', async () => {
+      const existingMap = new Map([
+        ['MMSI-222', { id: 'uuid-3', name: 'Active Ship', entityType: 'VESSEL', classification: 'UNCLASSIFIED', source: 'AIS', metadata: {}, sourceEntityId: 'MMSI-222', ageoutState: 'LIVE' }],
+      ]);
+      entityRepository.findBySourceEntityIds.mockResolvedValue(existingMap);
+
+      await consumer.handleIngestMessage({
+        entity_id: 'MMSI-222',
+        entity_type: 'vessel',
+        name: 'Active Ship',
+        source: 'ais',
+        latitude: 38.9,
+        longitude: -77.0,
+        altitude: 0,
+        heading: 90,
+        speed_knots: 10,
+        course: 90,
+        timestamp: '2025-01-15T12:00:00Z',
+      });
+      await consumer.flushBuffer();
+
+      expect(kafkaClient.emit).not.toHaveBeenCalledWith(
+        'events.entity.restored',
+        expect.anything(),
+      );
+    });
+  });
+
   // ─── New entity creation (via batch) ──────────────────────────────
 
   describe('new ADS-B entity', () => {

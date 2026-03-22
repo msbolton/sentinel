@@ -9,6 +9,7 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { HttpClient } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { Router, NavigationEnd } from '@angular/router';
 import { EntityDetailPanelComponent } from '../../shared/components/entity-detail-panel.component';
@@ -157,6 +158,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly themeService: ThemeService,
     private readonly locationService: LocationService,
     readonly buildingsService: BuildingsService,
+    private readonly http: HttpClient,
   ) {
     // Track whether a panel route is active (anything other than /map or /)
     const routerSub = this.router.events.pipe(
@@ -742,10 +744,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   private fetchAgeoutConfigs(): void {
-    fetch('/api/v1/entities/ageout-config')
-      .then((r) => r.json())
-      .then((configs: any[]) => { this.ageoutConfigs = configs; })
-      .catch(() => { /* use cached or defaults */ });
+    this.http.get<Array<{ sourceType: string | null; staleThresholdMs: number }>>('/api/v1/entities/ageout-config')
+      .subscribe({
+        next: (configs) => { this.ageoutConfigs = configs; },
+        error: () => { /* use cached or defaults */ },
+      });
   }
 
   private getStaleThresholdForSource(source: string): number {
