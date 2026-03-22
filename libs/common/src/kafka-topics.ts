@@ -15,6 +15,11 @@ export const KafkaTopics = {
   // Analytics events
   ANALYTICS_PATTERN: 'analytics.pattern',
 
+  // Entity ageout events
+  ENTITY_STALE: 'events.entity.stale',
+  ENTITY_AGED_OUT: 'events.entity.agedout',
+  ENTITY_RESTORED: 'events.entity.restored',
+
   // Raw ingest
   INGEST_RAW: 'ingest.raw',
 } as const;
