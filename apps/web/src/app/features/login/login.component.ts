@@ -1,8 +1,8 @@
-import { Component, OnInit, OnDestroy, inject, signal } from '@angular/core';
+import { Component, OnDestroy, inject, signal } from '@angular/core';
 import { Router, ActivatedRoute } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
-import { Subscription, filter, take } from 'rxjs';
+
 import { AuthService } from '../../core/services/auth.service';
 
 @Component({
@@ -439,29 +439,17 @@ import { AuthService } from '../../core/services/auth.service';
     }
   `],
 })
-export class LoginComponent implements OnInit, OnDestroy {
+export class LoginComponent implements OnDestroy {
   private readonly authService = inject(AuthService);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
-  private authSub: Subscription | null = null;
 
   username = '';
   password = '';
   loading = signal(false);
   errorMessage = signal('');
 
-  ngOnInit(): void {
-    this.authSub = this.authService.isAuthenticated$.pipe(
-      filter((isAuth) => isAuth),
-      take(1),
-    ).subscribe(() => {
-      const returnUrl = this.route.snapshot.queryParams['returnUrl'] || '/map';
-      this.router.navigateByUrl(returnUrl);
-    });
-  }
-
   ngOnDestroy(): void {
-    this.authSub?.unsubscribe();
   }
 
   async onSignIn(): Promise<void> {
