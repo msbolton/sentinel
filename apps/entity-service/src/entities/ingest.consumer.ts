@@ -1,9 +1,10 @@
-import { Controller, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { EventPattern, Payload } from '@nestjs/microservices';
+import { Controller, Logger, OnModuleInit, OnModuleDestroy, Inject } from '@nestjs/common';
+import { EventPattern, Payload, ClientKafka } from '@nestjs/microservices';
 import { DataSource } from 'typeorm';
 import { EntityService } from './entity.service';
 import { EntityRepository } from './entity.repository';
 import { EntityType, EntitySource, Classification } from './enums';
+import { KafkaTopics } from '@sentinel/common';
 
 interface IngestMessage {
   entity_id: string;
@@ -70,6 +71,7 @@ export class IngestConsumer implements OnModuleInit, OnModuleDestroy {
     private readonly entityService: EntityService,
     private readonly entityRepository: EntityRepository,
     private readonly dataSource: DataSource,
+    @Inject('KAFKA_CLIENT') private readonly kafkaClient: ClientKafka,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -159,6 +161,8 @@ export class IngestConsumer implements OnModuleInit, OnModuleDestroy {
         kinematics?: Record<string, unknown> | null;
         trackEnvironment?: string | null;
         circularError?: number | null;
+        ageoutState: string;
+        feedId: string | null;
       }> = [];
       const nameUpdates: Array<{ id: string; name: string }> = [];
 
@@ -184,6 +188,8 @@ export class IngestConsumer implements OnModuleInit, OnModuleDestroy {
               kinematics: buildKinematics(msg),
               trackEnvironment: msg.track_environment || null,
               circularError: msg.circular_error || null,
+              ageoutState: existing.ageoutState,
+              feedId: msg.feed_id || null,
             });
           }
           if (msg.name && msg.name !== existing.name) {
@@ -198,6 +204,11 @@ export class IngestConsumer implements OnModuleInit, OnModuleDestroy {
       if (positionUpdates.length > 0) {
         await this.entityRepository.bulkUpdatePositions(positionUpdates);
         for (const u of positionUpdates) {
+          // Emit restored event if entity was previously stale/aged-out
+          if (u.ageoutState !== 'LIVE') {
+            this.emitRestoredEvent(u.id, u.entityType, u.source, u.feedId);
+          }
+
           this.entityService.emitPositionEvent({
             ...u,
             trackEnvironment: u.trackEnvironment ?? undefined,
@@ -267,6 +278,31 @@ export class IngestConsumer implements OnModuleInit, OnModuleDestroy {
       );
     } catch (error) {
       this.logger.error(`Batch processing failed: ${error}`);
+    }
+  }
+
+  private emitRestoredEvent(entityId: string, entityType: string, source: string, feedId: string | null): void {
+    try {
+      this.kafkaClient.emit(KafkaTopics.ENTITY_RESTORED, {
+        key: entityId,
+        value: JSON.stringify({
+          entity_id: entityId,
+          entity_type: entityType,
+          source,
+          feed_id: feedId,
+          ageout_state: 'LIVE',
+          last_seen_at: new Date().toISOString(),
+          threshold_ms: 0,
+          timestamp: new Date().toISOString(),
+        }),
+        headers: {
+          'sentinel-service': 'entity-service',
+          'sentinel-timestamp': new Date().toISOString(),
+        },
+      });
+      this.logger.log(`Entity restored from ageout: ${entityId}`);
+    } catch (error) {
+      this.logger.error(`Failed to emit restored event for ${entityId}: ${error}`);
     }
   }
 }
