@@ -44,8 +44,6 @@ export class AuthService implements OnDestroy {
       });
 
       const authenticated = await this.keycloak.init({
-        onLoad: 'check-sso',
-        silentCheckSsoRedirectUri: window.location.origin + '/assets/silent-check-sso.html',
         pkceMethod: 'S256',
       });
 

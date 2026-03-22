@@ -39,6 +39,7 @@ export interface ExistingEntityInfo {
   source: EntitySource;
   metadata: Record<string, unknown>;
   sourceEntityId: string | null;
+  ageoutState: string;
 }
 
 @Injectable()
@@ -67,6 +68,7 @@ export class EntityRepository extends Repository<EntityRecord> {
     const qb = this.createQueryBuilder('e')
       .where('e.deleted = :deleted', { deleted: false })
       .andWhere('e.position IS NOT NULL')
+      .andWhere('e.ageoutState != :agedOut', { agedOut: 'AGED_OUT' })
       .andWhere(
         'ST_Within(e.position, ST_MakeEnvelope(:west, :south, :east, :north, 4326))',
         { west, south, east, north },
@@ -98,6 +100,7 @@ export class EntityRepository extends Repository<EntityRecord> {
         'distance',
       )
       .where('e.deleted = :deleted', { deleted: false })
+      .andWhere('e.ageoutState != :agedOut', { agedOut: 'AGED_OUT' })
       .andWhere('e.position IS NOT NULL')
       .andWhere(
         `ST_DWithin(
@@ -206,6 +209,7 @@ export class EntityRepository extends Repository<EntityRecord> {
         'e.source',
         'e.metadata',
         'e.sourceEntityId',
+        'e.ageoutState',
       ])
       .where('e.deleted = :deleted', { deleted: false })
       .andWhere('e.sourceEntityId IN (:...sourceEntityIds)', { sourceEntityIds })
@@ -221,6 +225,7 @@ export class EntityRepository extends Repository<EntityRecord> {
         source: row.e_source,
         metadata: row.e_metadata,
         sourceEntityId: row.e_sourceEntityId,
+        ageoutState: row.e_ageoutState,
       });
     }
     return map;
@@ -275,7 +280,8 @@ export class EntityRepository extends Repository<EntityRecord> {
            kinematics = COALESCE(b.kinematics, e.kinematics),
            "trackEnvironment" = COALESCE(b.track_env, e."trackEnvironment"),
            "circularError" = COALESCE(b.circular_err, e."circularError"),
-           "lastSeenAt" = NOW()
+           "lastSeenAt" = NOW(),
+           "ageoutState" = 'LIVE'
        FROM (VALUES ${valueClauses.join(',')}) AS b(id, lng, lat, heading, speed_knots, course, altitude, platform_data, kinematics, track_env, circular_err)
        WHERE e.id = b.id AND e.deleted = false`,
       params,
@@ -293,6 +299,24 @@ export class EntityRepository extends Repository<EntityRecord> {
       .execute();
 
     return (result.affected ?? 0) > 0;
+  }
+
+  /**
+   * Soft-delete ALL active entities in a single bulk UPDATE.
+   * Returns the number of affected rows.
+   */
+  async softDeleteAll(): Promise<number> {
+    const result = await this.createQueryBuilder()
+      .update(EntityRecord)
+      .set({
+        deleted: true,
+        deletedAt: new Date(),
+        ageoutState: 'AGED_OUT' as any,
+      })
+      .where('deleted = :deleted', { deleted: false })
+      .execute();
+
+    return result.affected ?? 0;
   }
 
   /**

@@ -61,6 +61,9 @@ export interface Entity {
 
   // Measurement quality
   circularError?: number;
+
+  // Ageout state
+  ageoutState?: 'LIVE' | 'STALE' | 'AGED_OUT';
 }
 
 export interface EntityEvent {

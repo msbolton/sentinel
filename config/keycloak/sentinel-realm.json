@@ -12,69 +12,7 @@
     "starttls": "false",
     "auth": "false"
   },
-  "attributes": {
-    "userProfileEnabled": "true"
-  },
-  "userProfile": {
-    "attributes": [
-      {
-        "name": "username",
-        "displayName": "${username}",
-        "validations": {"length": {"min": 3, "max": 255}, "username-prohibited-characters": {}, "up-username-not-idn-homograph": {}},
-        "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
-        "multivalued": false
-      },
-      {
-        "name": "email",
-        "displayName": "${email}",
-        "validations": {"email": {}, "length": {"max": 255}},
-        "required": {"roles": ["user"]},
-        "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
-        "multivalued": false
-      },
-      {
-        "name": "firstName",
-        "displayName": "${firstName}",
-        "validations": {"length": {"max": 255}, "person-name-prohibited-characters": {}},
-        "required": {"roles": ["user"]},
-        "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
-        "multivalued": false
-      },
-      {
-        "name": "lastName",
-        "displayName": "${lastName}",
-        "validations": {"length": {"max": 255}, "person-name-prohibited-characters": {}},
-        "required": {"roles": ["user"]},
-        "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
-        "multivalued": false
-      },
-      {
-        "name": "organization",
-        "displayName": "Organization",
-        "permissions": {"view": ["admin"], "edit": ["admin"]},
-        "multivalued": false
-      },
-      {
-        "name": "justification",
-        "displayName": "Access Justification",
-        "permissions": {"view": ["admin"], "edit": ["admin"]},
-        "multivalued": false
-      },
-      {
-        "name": "registrationDate",
-        "displayName": "Registration Date",
-        "permissions": {"view": ["admin"], "edit": ["admin"]},
-        "multivalued": false
-      }
-    ],
-    "groups": [
-      {
-        "name": "user-metadata",
-        "displayHeader": "User metadata",
-        "displayDescription": "Attributes, which refer to user metadata"
-      }
-    ]
-  },
+  "attributes": {},
   "registrationAllowed": false,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
@@ -202,7 +140,7 @@
         {
           "type": "password",
           "value": "admin",
-          "temporary": true
+          "temporary": false
         }
       ],
       "realmRoles": [

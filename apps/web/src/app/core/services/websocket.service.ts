@@ -13,10 +13,12 @@ export class WebSocketService implements OnDestroy {
   private readonly entityUpdatesSubject = new Subject<EntityEvent>();
   private readonly alertSubject = new Subject<Alert>();
   private readonly connectionStatusSubject = new BehaviorSubject<ConnectionStatus>('disconnected');
+  private readonly ageoutSubject = new Subject<{ eventType: string; payload: any }>();
 
   readonly entityUpdates$ = this.entityUpdatesSubject.asObservable();
   readonly alertStream$ = this.alertSubject.asObservable();
   readonly connectionStatus$ = this.connectionStatusSubject.asObservable();
+  readonly ageoutEvents$ = this.ageoutSubject.asObservable();
 
   connect(): void {
     if (this.socket) {
@@ -78,6 +80,19 @@ export class WebSocketService implements OnDestroy {
       for (const event of events) {
         this.entityUpdatesSubject.next(event);
       }
+    });
+
+    // Ageout events (broadcast to all clients, not viewport-filtered)
+    this.socket.on('events.entity.stale', (payload: any) => {
+      this.ageoutSubject.next({ eventType: 'stale', payload });
+    });
+
+    this.socket.on('events.entity.agedout', (payload: any) => {
+      this.ageoutSubject.next({ eventType: 'agedout', payload });
+    });
+
+    this.socket.on('events.entity.restored', (payload: any) => {
+      this.ageoutSubject.next({ eventType: 'restored', payload });
     });
 
     // Alert events
