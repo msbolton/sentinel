@@ -9,7 +9,7 @@ import {
   USER_ID_HEADER,
   USER_ROLES_HEADER,
   USER_CLASSIFICATION_HEADER,
-} from '@sentinel/common';
+} from '../../common';
 import type { AuthenticatedUser } from './jwt.strategy';
 
 /**

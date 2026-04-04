@@ -2,6 +2,9 @@
 
 SHELL := /bin/bash
 
+# Go services
+GO_SERVICES := ingest-service entity-service track-service search-service link-analysis-service alert-service
+
 # ============================================================================
 # SENTINEL - Geospatial Intelligence Platform
 # ============================================================================
@@ -47,7 +50,11 @@ proto-lint: ## Lint protobuf definitions
 
 install: ## Install all dependencies
 	npm install
-	cd apps/ingest-service && go mod tidy
+	@for svc in $(GO_SERVICES); do \
+		echo "Tidying $$svc..."; \
+		cd apps/$$svc && go mod tidy && cd ../..; \
+	done
+	cd libs/common-go && go mod tidy
 	cd apps/analytics-service && pip install -e ".[dev]"
 
 build: ## Build all applications
@@ -59,8 +66,29 @@ build-web: ## Build Angular frontend
 build-api: ## Build NestJS API gateway
 	npx nx build api-gateway
 
+build-go: ## Build all Go services
+	@for svc in $(GO_SERVICES); do \
+		echo "Building $$svc..."; \
+		npx nx build $$svc; \
+	done
+
+build-entity: ## Build Go entity service
+	npx nx build entity-service
+
+build-track: ## Build Go track service
+	npx nx build track-service
+
+build-search: ## Build Go search service
+	npx nx build search-service
+
+build-links: ## Build Go link analysis service
+	npx nx build link-analysis-service
+
+build-alerts: ## Build Go alert service
+	npx nx build alert-service
+
 build-ingest: ## Build Go ingest service
-	cd apps/ingest-service && CGO_ENABLED=1 go build -o ../../dist/apps/ingest-service/server ./cmd/server
+	npx nx build ingest-service
 
 build-analytics: ## Build Python analytics service (no-op, interpreted)
 	@echo "Python analytics service requires no build step"
@@ -75,7 +103,7 @@ dev: ## Start all services in development mode
 	@echo "Waiting for services to be healthy..."
 	@sleep 10
 	@echo "Starting application services..."
-	npx nx run-many --target=serve --projects=web,api-gateway --parallel=2
+	npx nx run-many --target=serve --projects=web,api-gateway,entity-service,track-service,search-service,link-analysis-service,alert-service,ingest-service --parallel=10
 
 dev-web: ## Start Angular dev server
 	npx nx serve web
@@ -83,8 +111,23 @@ dev-web: ## Start Angular dev server
 dev-api: ## Start NestJS API gateway
 	npx nx serve api-gateway
 
+dev-entity: ## Start Go entity service
+	npx nx serve entity-service
+
+dev-track: ## Start Go track service
+	npx nx serve track-service
+
+dev-search: ## Start Go search service
+	npx nx serve search-service
+
+dev-links: ## Start Go link analysis service
+	npx nx serve link-analysis-service
+
+dev-alerts: ## Start Go alert service
+	npx nx serve alert-service
+
 dev-ingest: ## Start Go ingest service
-	cd apps/ingest-service && go run ./cmd/server
+	npx nx serve ingest-service
 
 dev-analytics: ## Start Python analytics service
 	cd apps/analytics-service && uvicorn sentinel_analytics.main:app --reload --port 5000
@@ -124,8 +167,29 @@ test-web: ## Run Angular tests
 test-api: ## Run NestJS tests
 	npx nx test api-gateway
 
-test-ingest: ## Run Go tests
-	cd apps/ingest-service && go test ./...
+test-go: ## Run all Go tests
+	@for svc in $(GO_SERVICES); do \
+		echo "Testing $$svc..."; \
+		npx nx test $$svc; \
+	done
+
+test-entity: ## Run entity service tests
+	npx nx test entity-service
+
+test-track: ## Run track service tests
+	npx nx test track-service
+
+test-search: ## Run search service tests
+	npx nx test search-service
+
+test-links: ## Run link analysis service tests
+	npx nx test link-analysis-service
+
+test-alerts: ## Run alert service tests
+	npx nx test alert-service
+
+test-ingest: ## Run ingest service tests
+	npx nx test ingest-service
 
 test-analytics: ## Run Python tests
 	cd apps/analytics-service && pytest
@@ -143,9 +207,6 @@ lint-fix: ## Fix linting issues
 # ----------------------------------------------------------------------------
 # Database
 # ----------------------------------------------------------------------------
-
-db-migrate: ## Run database migrations
-	npx nx run entity-service:migration:run
 
 db-seed: ## Seed database with sample data
 	npx ts-node scripts/seed-data.ts
@@ -171,5 +232,8 @@ k8s-deploy-prod: ## Deploy to production K8s cluster
 
 clean: ## Clean all build artifacts
 	rm -rf dist/ node_modules/.cache
-	cd apps/ingest-service && go clean
+	@for svc in $(GO_SERVICES); do \
+		cd apps/$$svc && go clean && cd ../..; \
+	done
+	cd libs/common-go && go clean
 	find . -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true

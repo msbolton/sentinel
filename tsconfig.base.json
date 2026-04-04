@@ -23,9 +23,7 @@
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "@sentinel/shared-models": ["libs/shared-models/src/index.ts"],
-      "@sentinel/proto-gen": ["libs/proto-gen/src/index.ts"],
-      "@sentinel/common": ["libs/common/src/index.ts"]
+      "@sentinel/proto-gen": ["libs/proto-gen/src/index.ts"]
     }
   },
   "exclude": ["node_modules", "tmp"]
