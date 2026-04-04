@@ -1,40 +1,33 @@
 {
   "name": "link-analysis-service",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "apps/link-analysis-service/src",
+  "sourceRoot": "apps/link-analysis-service",
   "projectType": "application",
+  "tags": ["scope:link-analysis-service", "type:microservice"],
   "targets": {
     "build": {
-      "executor": "@nx/js:tsc",
-      "outputs": ["{options.outputPath}"],
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/dist/apps/link-analysis-service"],
       "options": {
-        "outputPath": "dist/apps/link-analysis-service",
-        "main": "apps/link-analysis-service/src/main.ts",
-        "tsConfig": "apps/link-analysis-service/tsconfig.app.json",
-        "assets": []
+        "commands": [
+          "cd apps/link-analysis-service && CGO_ENABLED=1 go build -o ../../dist/apps/link-analysis-service/server ./cmd/server"
+        ],
+        "cwd": "{workspaceRoot}"
       }
     },
     "serve": {
-      "executor": "@nx/js:node",
+      "executor": "nx:run-commands",
       "options": {
-        "buildTarget": "link-analysis-service:build",
-        "port": 3004
-      }
-    },
-    "lint": {
-      "executor": "@nx/eslint:lint",
-      "options": {
-        "lintFilePatterns": ["apps/link-analysis-service/**/*.ts"]
+        "commands": ["cd apps/link-analysis-service && go run ./cmd/server"],
+        "cwd": "{workspaceRoot}"
       }
     },
     "test": {
-      "executor": "@nx/jest:jest",
-      "outputs": ["{workspaceRoot}/coverage/apps/link-analysis-service"],
+      "executor": "nx:run-commands",
       "options": {
-        "jestConfig": "apps/link-analysis-service/jest.config.ts",
-        "passWithNoTests": true
+        "commands": ["cd apps/link-analysis-service && go test -v -race ./..."],
+        "cwd": "{workspaceRoot}"
       }
     }
-  },
-  "tags": ["scope:link-analysis-service", "type:microservice"]
+  }
 }

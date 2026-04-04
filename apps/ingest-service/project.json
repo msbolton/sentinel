@@ -1,31 +1,28 @@
 {
-  "name": "alert-service",
+  "name": "ingest-service",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "apps/alert-service",
+  "sourceRoot": "apps/ingest-service",
   "projectType": "application",
-  "tags": ["scope:alert-service", "type:microservice"],
   "targets": {
     "build": {
       "executor": "nx:run-commands",
-      "outputs": ["{workspaceRoot}/dist/apps/alert-service"],
+      "outputs": ["{workspaceRoot}/dist/apps/ingest-service"],
       "options": {
-        "commands": [
-          "cd apps/alert-service && CGO_ENABLED=1 go build -o ../../dist/apps/alert-service/server ./cmd/server"
-        ],
+        "commands": ["cd apps/ingest-service && CGO_ENABLED=1 go build -o ../../dist/apps/ingest-service/server ./cmd/server"],
         "cwd": "{workspaceRoot}"
       }
     },
     "serve": {
       "executor": "nx:run-commands",
       "options": {
-        "commands": ["cd apps/alert-service && go run ./cmd/server"],
+        "commands": ["cd apps/ingest-service && go run ./cmd/server"],
         "cwd": "{workspaceRoot}"
       }
     },
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "commands": ["cd apps/alert-service && go test -v -race ./..."],
+        "commands": ["cd apps/ingest-service && go test -v -race ./..."],
         "cwd": "{workspaceRoot}"
       }
     }
