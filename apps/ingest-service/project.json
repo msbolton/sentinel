@@ -1,0 +1,30 @@
+{
+  "name": "ingest-service",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/ingest-service",
+  "projectType": "application",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/dist/apps/ingest-service"],
+      "options": {
+        "commands": ["cd apps/ingest-service && CGO_ENABLED=1 go build -o ../../dist/apps/ingest-service/server ./cmd/server"],
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": ["cd apps/ingest-service && go run ./cmd/server"],
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": ["cd apps/ingest-service && go test -v -race ./..."],
+        "cwd": "{workspaceRoot}"
+      }
+    }
+  }
+}

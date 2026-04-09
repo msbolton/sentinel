@@ -11,5 +11,6 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
+  "references": [{ "path": "../../libs/proto-gen/tsconfig.lib.json" }],
   "exclude": ["node_modules", "dist", "**/*.spec.ts", "**/*.test.ts"]
 }

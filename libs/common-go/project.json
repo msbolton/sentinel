@@ -1,0 +1,22 @@
+{
+  "name": "common-go",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/common-go",
+  "projectType": "library",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": ["cd libs/common-go && go build ./..."],
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": ["cd libs/common-go && go test -v -race ./..."],
+        "cwd": "{workspaceRoot}"
+      }
+    }
+  }
+}

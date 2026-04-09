@@ -1,40 +1,33 @@
 {
   "name": "alert-service",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "apps/alert-service/src",
+  "sourceRoot": "apps/alert-service",
   "projectType": "application",
+  "tags": ["scope:alert-service", "type:microservice"],
   "targets": {
     "build": {
-      "executor": "@nx/js:tsc",
-      "outputs": ["{options.outputPath}"],
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/dist/apps/alert-service"],
       "options": {
-        "outputPath": "dist/apps/alert-service",
-        "main": "apps/alert-service/src/main.ts",
-        "tsConfig": "apps/alert-service/tsconfig.app.json",
-        "assets": []
+        "commands": [
+          "cd apps/alert-service && CGO_ENABLED=1 go build -o ../../dist/apps/alert-service/server ./cmd/server"
+        ],
+        "cwd": "{workspaceRoot}"
       }
     },
     "serve": {
-      "executor": "@nx/js:node",
+      "executor": "nx:run-commands",
       "options": {
-        "buildTarget": "alert-service:build",
-        "port": 3005
-      }
-    },
-    "lint": {
-      "executor": "@nx/eslint:lint",
-      "options": {
-        "lintFilePatterns": ["apps/alert-service/**/*.ts"]
+        "commands": ["cd apps/alert-service && go run ./cmd/server"],
+        "cwd": "{workspaceRoot}"
       }
     },
     "test": {
-      "executor": "@nx/jest:jest",
-      "outputs": ["{workspaceRoot}/coverage/apps/alert-service"],
+      "executor": "nx:run-commands",
       "options": {
-        "jestConfig": "apps/alert-service/jest.config.ts",
-        "passWithNoTests": true
+        "commands": ["cd apps/alert-service && go test -v -race ./..."],
+        "cwd": "{workspaceRoot}"
       }
     }
-  },
-  "tags": ["scope:alert-service", "type:microservice"]
+  }
 }
