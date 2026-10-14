@@ -13,13 +13,22 @@ type Consumer struct {
 	logger   *zap.Logger
 }
 
-// NewConsumer creates a Kafka consumer with the given group and configuration.
+// NewConsumer creates a Kafka consumer that starts from the earliest offset
+// when the group has no committed position.
 func NewConsumer(brokers, groupID, clientID string, logger *zap.Logger) (*Consumer, error) {
+	return NewConsumerWithOffset(brokers, groupID, clientID, "earliest", logger)
+}
+
+// NewConsumerWithOffset creates a Kafka consumer with an explicit
+// auto.offset.reset policy ("earliest" or "latest"). Live fan-out consumers
+// such as the gateway's websocket bridge use "latest" so a fresh group does
+// not replay history to the first connected client.
+func NewConsumerWithOffset(brokers, groupID, clientID, offsetReset string, logger *zap.Logger) (*Consumer, error) {
 	c, err := kafka.NewConsumer(&kafka.ConfigMap{
 		"bootstrap.servers":  brokers,
 		"group.id":           groupID,
 		"client.id":          clientID,
-		"auto.offset.reset":  "earliest",
+		"auto.offset.reset":  offsetReset,
 		"enable.auto.commit": true,
 	})
 	if err != nil {

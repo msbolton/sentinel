@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 
 	commonCfg "github.com/sentinel/go-common/config"
@@ -12,6 +13,8 @@ type Config struct {
 	AppEnv      string
 	DatabaseURL string
 	KafkaBrokers string
+	// WSConsumerGroup is unique per gateway instance so every instance sees every event.
+	WSConsumerGroup string
 	CORSOrigin  string
 
 	// Auth
@@ -65,8 +68,9 @@ func Load() Config {
 		Port:         commonCfg.EnvOrDefault("PORT", "3000"),
 		AppEnv:       commonCfg.EnvOrDefault("APP_ENV", commonCfg.EnvOrDefault("NODE_ENV", "development")),
 		DatabaseURL:  commonCfg.DatabaseURL(),
-		KafkaBrokers: commonCfg.EnvOrDefault("KAFKA_BROKERS", "localhost:9092"),
-		CORSOrigin:   commonCfg.EnvOrDefault("CORS_ORIGIN", "http://localhost:4200"),
+		KafkaBrokers:    commonCfg.EnvOrDefault("KAFKA_BROKERS", "localhost:9092"),
+		WSConsumerGroup: commonCfg.EnvOrDefault("KAFKA_WS_CONSUMER_GROUP", "sentinel-gateway-ws-"+hostname()),
+		CORSOrigin:      commonCfg.EnvOrDefault("CORS_ORIGIN", "http://localhost:4200"),
 
 		AuthDevBypass:    commonCfg.EnvOrDefaultBool("AUTH_DEV_BYPASS", false),
 		KeycloakURL:      keycloakURL,
@@ -88,4 +92,11 @@ func Load() Config {
 		AlertServiceURL:        commonCfg.EnvOrDefault("ALERT_SERVICE_URL", "http://localhost:3005"),
 		IngestServiceURL:       commonCfg.EnvOrDefault("INGEST_SERVICE_URL", "http://localhost:4000"),
 	}
+}
+
+func hostname() string {
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return "local"
 }
