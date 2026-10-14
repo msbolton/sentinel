@@ -7,7 +7,7 @@ Geospatial intelligence platform for real-time entity tracking, link analysis, a
 ### Prerequisites
 
 - Node.js 22+ (frontend tooling)
-- Go 1.24+
+- Go 1.25+
 - Docker & Docker Compose
 - npm
 

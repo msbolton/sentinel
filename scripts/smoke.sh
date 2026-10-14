@@ -13,19 +13,20 @@ CLIENT="${2:-http://localhost:4200}"
 TOKEN="${SENTINEL_TOKEN:-}"   # optional bearer token when AUTH_DEV_BYPASS is off
 fail=0
 
+# bash 3.2 (macOS) treats an empty array as unset under `set -u`; expand with a default.
 auth=()
 [ -n "$TOKEN" ] && auth=(-H "Authorization: Bearer $TOKEN")
 
 check() { # method path expected-status [json-body]
   local method=$1 path=$2 want=$3 body=${4:-}
-  local args=(-s -o /tmp/smoke-body -w '%{http_code}' -X "$method" "${auth[@]}")
+  local args=(-s -o /tmp/smoke-body -w '%{http_code}' -X "$method" ${auth[@]+"${auth[@]}"})
   [ -n "$body" ] && args+=(-H 'Content-Type: application/json' -d "$body")
   local code
   code=$(curl "${args[@]}" "$GW$path" 2>/dev/null)
   if [ "$code" = "$want" ]; then
     printf '  ok   %-6s %-55s %s\n' "$method" "$path" "$code"
   else
-    printf '  FAIL %-6s %-55s %s (want %s) %s\n' "$method" "$path" "$code" "$want" "$(head -c 160 /tmp/smoke-body)"
+    printf '  FAIL %-6s %-55s %s (want %s) %s\n' "$method" "$path" "$code" "$want" "$(head -c 160 /tmp/smoke-body 2>/dev/null)"
     fail=1
   fi
 }
@@ -48,7 +49,7 @@ check POST /api/v1/entities 400 '{}'
 check GET /api/v1/locations/not-a-uuid 400
 
 echo "== location round trip"
-new=$(curl -s "${auth[@]}" -X POST -H 'Content-Type: application/json' -d '{"name":"Smoke Test","latitude":1,"longitude":2}' "$GW/api/v1/locations")
+new=$(curl -s ${auth[@]+"${auth[@]}"} -X POST -H 'Content-Type: application/json' -d '{"name":"Smoke Test","latitude":1,"longitude":2}' "$GW/api/v1/locations")
 id=$(printf '%s' "$new" | sed -nE 's/.*"id":"([0-9a-f-]{36})".*/\1/p')
 if [ -n "$id" ]; then
   check PATCH "/api/v1/locations/$id" 200 '{"name":"Smoke Test 2"}'

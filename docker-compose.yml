@@ -621,7 +621,8 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
-      OPENSEARCH_URL: http://opensearch:9200
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: "9200"
     ports:
       - "3003:3003"
     depends_on:
@@ -887,7 +888,7 @@ services:
       api-gateway:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:4200/ || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4200/ || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5

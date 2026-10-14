@@ -5,7 +5,7 @@
 - **Node.js** 22+ (Angular tooling)
 - **npm** (comes with Node.js)
 - **Docker** & **Docker Compose** (for infrastructure services)
-- **Go 1.24+** (API gateway and all backend services)
+- **Go 1.25+** (API gateway and all backend services)
 - **Python 3.12+** (for analytics-service, optional)
 
 ## First-Time Setup
@@ -70,6 +70,7 @@ The entity-service warms its Redis geo cache from PostgreSQL on startup, so seed
 | `make test-client` | Angular unit tests |
 | `make test-api` | API gateway Go tests |
 | `make test-go` | All Go service tests (vet + race) |
+| `scripts/smoke.sh` | Exercise every gateway route, the nginx proxy, and the WebSocket against a running stack |
 | `make lint` | Lint all code |
 | `make lint-fix` | Auto-fix linting issues |
 
