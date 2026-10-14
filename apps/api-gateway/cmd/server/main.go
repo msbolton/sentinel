@@ -19,6 +19,7 @@ import (
 	"github.com/sentinel/api-gateway/internal/proxy"
 	"github.com/sentinel/api-gateway/internal/registration"
 	"github.com/sentinel/api-gateway/internal/server"
+	"github.com/sentinel/api-gateway/internal/stream"
 )
 
 func main() {
@@ -84,6 +85,17 @@ func main() {
 	regHandler := registration.NewHandler(keycloakAdmin, mailer,
 		registration.NewIPLimiter(5, 15*time.Minute), logger)
 
+	// Real-time entity stream: Kafka -> hub -> websocket clients.
+	hub := stream.NewHub(logger)
+	batcher := stream.NewBatcher(hub, 200*time.Millisecond)
+	batcher.Start()
+	bridge, err := stream.NewBridge(cfg.KafkaBrokers, cfg.WSConsumerGroup, hub, batcher, logger)
+	if err != nil {
+		logger.Fatal("failed to create websocket kafka bridge", zap.Error(err))
+	}
+	bridge.Start()
+	wsHandler := stream.NewHandler(hub, cfg.CORSOrigin, logger)
+
 	handler := server.New(server.Deps{
 		Logger:     logger,
 		Auth:       authMw,
@@ -93,6 +105,9 @@ func main() {
 		Locations:  locations.NewHandler(locStore, logger),
 		Public:     []func(*http.ServeMux){regHandler.RegisterPublicRoutes},
 		Protected:  []func(*http.ServeMux){regHandler.RegisterAdminRoutes},
+		Root: []func(*http.ServeMux){func(mux *http.ServeMux) {
+			mux.Handle("GET /ws/entities", authMw.RequireAuth(wsHandler))
+		}},
 		ReadyChecks: map[string]func() error{
 			"database": func() error { return locStore.Ping(context.Background()) },
 		},
@@ -119,6 +134,9 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	sig := <-sigCh
 	logger.Info("shutdown signal received", zap.String("signal", sig.String()))
+
+	bridge.Stop()
+	batcher.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
