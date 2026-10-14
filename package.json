@@ -46,6 +46,7 @@
     "@angular/compiler-cli": "^19.0.0",
     "@nx/angular": "^20.0.0",
     "@nx/eslint-plugin": "^20.0.0",
+    "@nx/jest": "^20.8.4",
     "@nx/js": "^20.0.0",
     "@nx/workspace": "^20.0.0",
     "@types/d3": "^7.4.3",
