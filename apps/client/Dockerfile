@@ -1,9 +1,10 @@
 FROM node:22-alpine AS builder
 WORKDIR /build
-COPY package.json package-lock.json tsconfig.base.json ./
+COPY package.json package-lock.json tsconfig.base.json nx.json ./
 COPY libs/ ./libs/
 COPY apps/client/ ./apps/client/
-RUN npm ci --ignore-scripts
+# --legacy-peer-deps: jest 30 vs the Angular devkit optional peer (jest 29), same as local installs
+RUN npm ci --ignore-scripts --legacy-peer-deps
 RUN npx nx build client --configuration=production
 
 FROM nginx:1.27-alpine
