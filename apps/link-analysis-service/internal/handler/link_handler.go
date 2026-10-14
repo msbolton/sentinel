@@ -2,7 +2,9 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -41,22 +43,11 @@ func (h *LinkHandler) handleGetLinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var linkTypes []string
-	if types := q.Get("types"); types != "" {
-		linkTypes = strings.Split(types, ",")
-	}
-	if typesArr, ok := q["types"]; ok && len(typesArr) > 1 {
-		linkTypes = typesArr
-	}
-
-	var minConfidence *float64
-	if mc := q.Get("minConfidence"); mc != "" {
-		v, err := strconv.ParseFloat(mc, 64)
-		if err != nil || v < 0 || v > 1 {
-			httputil.Error(w, http.StatusBadRequest, "minConfidence must be between 0 and 1")
-			return
-		}
-		minConfidence = &v
+	linkTypes := parseLinkTypes(q)
+	minConfidence, err := parseMinConfidence(q)
+	if err != nil {
+		httputil.Error(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	links, err := h.store.GetLinks(r.Context(), entityID, linkTypes, minConfidence)
@@ -78,29 +69,16 @@ func (h *LinkHandler) handleGetGraph(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	maxDepth := 3
-	if md := q.Get("maxDepth"); md != "" {
-		v, err := strconv.Atoi(md)
-		if err != nil || v < 1 || v > 10 {
-			httputil.Error(w, http.StatusBadRequest, "maxDepth must be between 1 and 10")
-			return
-		}
-		maxDepth = v
+	maxDepth, err := parseMaxDepth(q)
+	if err != nil {
+		httputil.Error(w, http.StatusBadRequest, err.Error())
+		return
 	}
-
-	var linkTypes []string
-	if types := q.Get("types"); types != "" {
-		linkTypes = strings.Split(types, ",")
-	}
-
-	var minConfidence *float64
-	if mc := q.Get("minConfidence"); mc != "" {
-		v, err := strconv.ParseFloat(mc, 64)
-		if err != nil || v < 0 || v > 1 {
-			httputil.Error(w, http.StatusBadRequest, "minConfidence must be between 0 and 1")
-			return
-		}
-		minConfidence = &v
+	linkTypes := parseLinkTypes(q)
+	minConfidence, err := parseMinConfidence(q)
+	if err != nil {
+		httputil.Error(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	result, err := h.store.GetGraph(r.Context(), centerID, maxDepth, linkTypes, minConfidence)
@@ -210,4 +188,43 @@ func (h *LinkHandler) handleDeleteLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.NoContent(w)
+}
+
+// parseLinkTypes accepts repeated ?types=A&types=B or comma-separated ?types=A,B.
+func parseLinkTypes(q url.Values) []string {
+	var out []string
+	for _, v := range q["types"] {
+		for _, part := range strings.Split(v, ",") {
+			if p := strings.TrimSpace(part); p != "" {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+// parseMinConfidence reads an optional minConfidence in [0, 1].
+func parseMinConfidence(q url.Values) (*float64, error) {
+	mc := q.Get("minConfidence")
+	if mc == "" {
+		return nil, nil
+	}
+	v, err := strconv.ParseFloat(mc, 64)
+	if err != nil || v < 0 || v > 1 {
+		return nil, errors.New("minConfidence must be between 0 and 1")
+	}
+	return &v, nil
+}
+
+// parseMaxDepth reads an optional maxDepth in [1, 10], defaulting to 3.
+func parseMaxDepth(q url.Values) (int, error) {
+	md := q.Get("maxDepth")
+	if md == "" {
+		return 3, nil
+	}
+	v, err := strconv.Atoi(md)
+	if err != nil || v < 1 || v > 10 {
+		return 0, errors.New("maxDepth must be between 1 and 10")
+	}
+	return v, nil
 }

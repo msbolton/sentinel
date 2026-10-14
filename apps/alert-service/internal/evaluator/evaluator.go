@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/sentinel/go-common/kafka"
 	"github.com/sentinel/alert-service/internal/store"
+	"github.com/sentinel/go-common/kafka"
 	"go.uber.org/zap"
 )
 
@@ -42,38 +42,13 @@ func (e *Evaluator) evaluateGeofence(ctx context.Context, entityID string, lat, 
 		if !ok {
 			continue
 		}
-
-		triggerOn := "BOTH"
-		if t, ok := rule.Config["triggerOn"].(string); ok {
-			triggerOn = t
-		}
-
-		// Build polygon WKT from config.
-		polygonJSON, err := json.Marshal(polygonRaw)
-		if err != nil {
+		coords, ok := parsePolygon(polygonRaw)
+		if !ok {
+			e.logger.Warn("geofence rule has no usable polygon", zap.String("ruleId", rule.ID))
 			continue
 		}
-
-		var coords [][]float64
-		if err := json.Unmarshal(polygonJSON, &coords); err != nil {
-			continue
-		}
-
-		if len(coords) < 3 {
-			continue
-		}
-
-		// Close the ring if needed.
-		if coords[0][0] != coords[len(coords)-1][0] || coords[0][1] != coords[len(coords)-1][1] {
-			coords = append(coords, coords[0])
-		}
-
-		// Build WKT polygon string.
-		points := make([]string, len(coords))
-		for i, c := range coords {
-			points[i] = fmt.Sprintf("%f %f", c[0], c[1])
-		}
-		wkt := fmt.Sprintf("POLYGON((%s))", joinStrings(points, ","))
+		wkt := polygonWKT(coords)
+		triggerOn := triggerMode(rule.Config)
 
 		// Check containment using PostGIS.
 		var contains bool
@@ -88,13 +63,8 @@ func (e *Evaluator) evaluateGeofence(ctx context.Context, entityID string, lat, 
 			continue
 		}
 
-		var alertType string
-		switch {
-		case contains && (triggerOn == "ENTRY" || triggerOn == "BOTH"):
-			alertType = "GEOFENCE_ENTRY"
-		case !contains && (triggerOn == "EXIT" || triggerOn == "BOTH"):
-			alertType = "GEOFENCE_EXIT"
-		default:
+		alertType := geofenceAlertType(contains, triggerOn)
+		if alertType == "" {
 			continue
 		}
 
@@ -130,19 +100,7 @@ func (e *Evaluator) evaluateSpeed(ctx context.Context, entityID string, speedKno
 	}
 
 	for _, rule := range rules {
-		var triggered bool
-		var description string
-
-		if maxSpeed, ok := rule.Config["maxSpeedKnots"].(float64); ok && speedKnots > maxSpeed {
-			triggered = true
-			description = fmt.Sprintf("Entity %s speed %.1f kn exceeds max %.1f kn", entityID, speedKnots, maxSpeed)
-		}
-
-		if minSpeed, ok := rule.Config["minSpeedKnots"].(float64); ok && speedKnots < minSpeed {
-			triggered = true
-			description = fmt.Sprintf("Entity %s speed %.1f kn below min %.1f kn", entityID, speedKnots, minSpeed)
-		}
-
+		triggered, description := evaluateSpeedRule(entityID, rule.Config, speedKnots)
 		if !triggered {
 			continue
 		}
@@ -196,15 +154,4 @@ func (e *Evaluator) publishAlert(topic, entityID string, alert *store.AlertRecor
 	if err := e.producer.ProduceRaw(topic, []byte(entityID), data, nil); err != nil {
 		e.logger.Error("failed to publish alert", zap.String("topic", topic), zap.Error(err))
 	}
-}
-
-func joinStrings(s []string, sep string) string {
-	result := ""
-	for i, v := range s {
-		if i > 0 {
-			result += sep
-		}
-		result += v
-	}
-	return result
 }
