@@ -37,7 +37,7 @@ The API Gateway will warm the Redis cache from PostgreSQL on startup, so seeded 
 | Target | Command | Description |
 |--------|---------|-------------|
 | `make dev` | Starts infra + web + api-gateway | Full development environment |
-| `make dev-web` | `npx nx serve web` | Angular dev server on `:4200` |
+| `make dev-client` | `npx nx serve client` | Angular dev server on `:4200` |
 | `make dev-api` | `npx nx serve api-gateway` | NestJS dev server on `:3000` |
 | `make dev-ingest` | `go run ./cmd/server` | Go ingest service on `:4000` |
 | `make dev-analytics` | `uvicorn ... --reload` | Python analytics on `:5000` |
@@ -47,7 +47,7 @@ The API Gateway will warm the Redis cache from PostgreSQL on startup, so seeded 
 | Target | Command | Description |
 |--------|---------|-------------|
 | `make build` | `npx nx run-many --target=build` | Build all apps |
-| `make build-web` | `npx nx build web --production` | Angular production build |
+| `make build-client` | `npx nx build client --production` | Angular production build |
 | `make build-api` | `npx nx build api-gateway` | NestJS production build |
 
 ### Docker
@@ -66,7 +66,7 @@ The API Gateway will warm the Redis cache from PostgreSQL on startup, so seeded 
 | Target | Description |
 |--------|-------------|
 | `make test` | Run all tests across all apps |
-| `make test-web` | Angular unit tests |
+| `make test-client` | Angular unit tests |
 | `make test-api` | NestJS unit tests |
 | `make lint` | Lint all code |
 | `make lint-fix` | Auto-fix linting issues |
@@ -92,7 +92,7 @@ The API Gateway will warm the Redis cache from PostgreSQL on startup, so seeded 
 
 ```bash
 npm start           # Start web + api-gateway
-npm run start:web   # Angular dev server
+npm run start:client   # Angular dev server
 npm run start:api   # NestJS dev server
 npm run build       # Build all
 npm test            # Test all

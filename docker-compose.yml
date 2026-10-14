@@ -874,13 +874,13 @@ services:
   # ===========================================================================
   # Web UI (Angular)
   # ===========================================================================
-  web:
+  client:
     build:
       context: .
-      dockerfile: ./apps/web/Dockerfile
-    image: sentinel/web:dev
-    container_name: sentinel-web
-    hostname: web
+      dockerfile: ./apps/client/Dockerfile
+    image: sentinel/client:dev
+    container_name: sentinel-client
+    hostname: client
     restart: unless-stopped
     environment:
       NODE_ENV: development

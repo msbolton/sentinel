@@ -1,13 +1,13 @@
 # Frontend
 
-The web UI (`apps/web/`) is an Angular 19 application with CesiumJS 3D globe rendering, real-time WebSocket updates, and a sidebar-based navigation layout.
+The web UI (`apps/client/`) is an Angular 19 application with CesiumJS 3D globe rendering, real-time WebSocket updates, and a sidebar-based navigation layout.
 
 ## Running
 
 ```bash
-npx nx serve web    # Development server on :4200
-npx nx build web    # Production build
-npx nx test web     # Run tests
+npx nx serve client    # Development server on :4200
+npx nx build client    # Production build
+npx nx test client     # Run tests
 ```
 
 The dev server proxies `/api` and `/socket.io` requests to `localhost:3000` via `proxy.conf.json`.
@@ -15,7 +15,7 @@ The dev server proxies `/api` and `/socket.io` requests to `localhost:3000` via 
 ## Application Structure
 
 ```
-apps/web/src/
+apps/client/src/
 ├── main.ts                         # Angular bootstrap
 ├── index.html                      # Shell HTML
 ├── styles.scss                     # Global styles
@@ -107,7 +107,7 @@ The app uses a fixed layout with three zones:
 
 ## Proxy Configuration
 
-`apps/web/proxy.conf.json` forwards API and WebSocket traffic to the API Gateway:
+`apps/client/proxy.conf.json` forwards API and WebSocket traffic to the API Gateway:
 
 ```json
 {
