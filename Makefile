@@ -3,7 +3,7 @@
 SHELL := /bin/bash
 
 # Go services
-GO_SERVICES := ingest-service entity-service track-service search-service link-analysis-service alert-service
+GO_SERVICES := api-gateway ingest-service entity-service track-service search-service link-analysis-service alert-service
 
 # ============================================================================
 # SENTINEL - Geospatial Intelligence Platform
@@ -63,10 +63,10 @@ build: ## Build all applications
 build-client: ## Build Angular frontend
 	npx nx build client --configuration=production
 
-build-api: ## Build NestJS API gateway
+build-api: ## Build Go API gateway
 	npx nx build api-gateway
 
-build-go: ## Build all Go services
+build-go: ## Build all Go services (including the API gateway)
 	@for svc in $(GO_SERVICES); do \
 		echo "Building $$svc..."; \
 		npx nx build $$svc; \
@@ -108,7 +108,7 @@ dev: ## Start all services in development mode
 dev-client: ## Start Angular dev server
 	npx nx serve client
 
-dev-api: ## Start NestJS API gateway
+dev-api: ## Start Go API gateway (AUTH_DEV_BYPASS=true)
 	npx nx serve api-gateway
 
 dev-entity: ## Start Go entity service
@@ -164,7 +164,7 @@ test: ## Run all tests
 test-client: ## Run Angular tests
 	npx nx test client
 
-test-api: ## Run NestJS tests
+test-api: ## Run Go API gateway tests
 	npx nx test api-gateway
 
 test-go: ## Run all Go tests

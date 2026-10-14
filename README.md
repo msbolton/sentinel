@@ -1,12 +1,13 @@
 # SENTINEL
 
-Geospatial intelligence platform for real-time entity tracking, link analysis, and alerting. Built as an Nx monorepo with NestJS microservices, an Angular 19 frontend with CesiumJS 3D mapping, and a polyglot backend (TypeScript, Go, Python).
+Geospatial intelligence platform for real-time entity tracking, link analysis, and alerting. Built as an Nx monorepo with Go microservices behind a Go API gateway, an Angular 19 frontend with CesiumJS 3D mapping, and a Python analytics service.
 
 ## Quickstart
 
 ### Prerequisites
 
-- Node.js 20+
+- Node.js 22+ (frontend tooling)
+- Go 1.24+
 - Docker & Docker Compose
 - npm
 
@@ -41,7 +42,7 @@ make dev
 Or individually:
 
 ```bash
-make dev-api   # NestJS on :3000
+make dev-api   # Go API gateway on :3000
 make dev-client   # Angular on :4200
 ```
 
@@ -51,7 +52,6 @@ make dev-client   # Angular on :4200
 curl http://localhost:3000/api/v1/health          # Health check
 curl http://localhost:3000/api/v1/entities         # List entities
 open http://localhost:4200                         # Web UI
-open http://localhost:3000/api/docs                # Swagger
 ```
 
 ## Architecture
@@ -59,7 +59,7 @@ open http://localhost:3000/api/docs                # Swagger
 ```
 Angular 19 UI (:4200)
         |
-  API Gateway (NestJS :3000) ── Redis (geospatial cache)
+  API Gateway (Go :3000) ── WebSocket /ws/entities
         |                           |
      Kafka ─────────────────────────┤
         |                           |
@@ -73,7 +73,7 @@ Entity Track   Search   Alert   Link Analysis
    PostgreSQL/PostGIS ──────── OpenSearch
 ```
 
-**9 microservices**: API Gateway (NestJS), Entity Service (NestJS), Track Service (NestJS), Search Service (NestJS), Link Analysis Service (NestJS), Alert Service (NestJS), Ingest Service (Go :4000), Analytics Service (Python :5000), Web UI (Angular :4200)
+**9 services**: API Gateway (Go :3000), Entity Service (Go :3001), Track Service (Go :3002), Search Service (Go :3003), Link Analysis Service (Go :3004), Alert Service (Go :3005), Ingest Service (Go :4000), Analytics Service (Python :5000), Web UI (Angular :4200)
 
 **Infrastructure**: PostgreSQL 16 + PostGIS + TimescaleDB, Redis 7, Kafka 3.7 (KRaft), OpenSearch 2.17, Keycloak 24, GeoServer 2.25, MinIO
 
@@ -83,7 +83,7 @@ Entity Track   Search   Alert   Link Analysis
 sentinel/
 ├── apps/
 │   ├── client/               # Angular 19 frontend
-│   ├── api-gateway/          # NestJS API gateway (:3000)
+│   ├── api-gateway/          # Go API gateway: auth, proxy, WebSocket (:3000)
 │   ├── entity-service/       # Entity CRUD microservice (:3001)
 │   ├── track-service/        # Track history microservice (:3002)
 │   ├── search-service/       # OpenSearch integration (:3003)
@@ -92,12 +92,11 @@ sentinel/
 │   ├── ingest-service/       # Go data ingest (:4000)
 │   └── analytics-service/    # Python analytics (:5000)
 ├── libs/
-│   ├── shared-models/        # TypeScript interfaces & enums
-│   ├── common/               # Kafka topics, geo utils, constants
-│   └── proto-gen/            # Protobuf generated code
+│   ├── common-go/            # Shared Go: config, Kafka, health, auth headers, models
+│   └── proto-gen/            # Protobuf generated code (TS for the client, Go, Python)
 ├── proto/                    # Protobuf definitions
-├── config/                   # Docker init scripts, Keycloak realm
-├── scripts/                  # Seed data, utilities
+├── db/                       # SQL migrations (golang-migrate) and seed data
+├── config/                   # Docker init scripts, Kafka topics, Keycloak realm
 ├── k8s/                      # Kubernetes manifests
 ├── docs/                     # Detailed documentation
 ├── docker-compose.yml        # Full stack
@@ -122,6 +121,7 @@ sentinel/
 |---------|-------------|
 | `make dev` | Start infra + api-gateway + client |
 | `make docker-infra` | Start infrastructure only |
+| `make db-migrate` | Apply SQL migrations |
 | `make db-seed` | Seed database with sample data |
 | `make build` | Build all applications |
 | `make test` | Run all tests |
@@ -131,9 +131,8 @@ sentinel/
 ## Tech Stack
 
 - **Frontend**: Angular 19, CesiumJS 1.120, vis-network
-- **Backend**: NestJS 10, TypeORM, Passport JWT, Socket.io
+- **Backend**: Go 1.24 (net/http, pgx, confluent-kafka-go, golang-jwt), native WebSocket
 - **Data**: PostgreSQL 16 + PostGIS, Redis 7, Kafka 3.7, OpenSearch 2.17
 - **Auth**: Keycloak 24 (OIDC/JWT), RBAC + classification-based access
-- **Ingest**: Go 1.22
 - **Analytics**: Python 3.12, FastAPI
 - **DevOps**: Docker Compose, Kubernetes, Nx monorepo

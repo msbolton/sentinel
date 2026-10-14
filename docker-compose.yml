@@ -503,7 +503,7 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Entity Service (NestJS - Node 22)
+  # Entity Service (Go)
   # ===========================================================================
   entity-service:
     build:
@@ -514,7 +514,6 @@ services:
     hostname: entity-service
     restart: unless-stopped
     environment:
-      NODE_ENV: development
       PORT: "3001"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -536,7 +535,7 @@ services:
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3001/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -553,7 +552,7 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Track Service (NestJS - Node 22)
+  # Track Service (Go)
   # ===========================================================================
   track-service:
     build:
@@ -564,7 +563,6 @@ services:
     hostname: track-service
     restart: unless-stopped
     environment:
-      NODE_ENV: development
       PORT: "3002"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -586,7 +584,7 @@ services:
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3002/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3002/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -603,7 +601,7 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Search Service (NestJS - Node 22)
+  # Search Service (Go)
   # ===========================================================================
   search-service:
     build:
@@ -614,7 +612,6 @@ services:
     hostname: search-service
     restart: unless-stopped
     environment:
-      NODE_ENV: development
       PORT: "3003"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -637,7 +634,7 @@ services:
       opensearch:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3003/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3003/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -654,7 +651,7 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Link Analysis Service (NestJS - Node 22)
+  # Link Analysis Service (Go)
   # ===========================================================================
   link-analysis-service:
     build:
@@ -665,7 +662,6 @@ services:
     hostname: link-analysis-service
     restart: unless-stopped
     environment:
-      NODE_ENV: development
       PORT: "3004"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -687,7 +683,7 @@ services:
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3004/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3004/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -704,7 +700,7 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Alert Service (NestJS - Node 22)
+  # Alert Service (Go)
   # ===========================================================================
   alert-service:
     build:
@@ -715,7 +711,6 @@ services:
     hostname: alert-service
     restart: unless-stopped
     environment:
-      NODE_ENV: development
       PORT: "3005"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -737,7 +732,7 @@ services:
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3005/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3005/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -758,9 +753,8 @@ services:
   # ===========================================================================
   ingest-service:
     build:
-      context: ./services/ingest-service
+      context: ./apps/ingest-service
       dockerfile: Dockerfile
-      # Go service lives outside the Nx monorepo under services/
     image: sentinel/ingest-service:dev
     container_name: sentinel-ingest-service
     hostname: ingest-service
@@ -817,9 +811,8 @@ services:
   # ===========================================================================
   analytics-service:
     build:
-      context: ./services/analytics-service
+      context: ./apps/analytics-service
       dockerfile: Dockerfile
-      # Python service lives outside the Nx monorepo under services/
     image: sentinel/analytics-service:dev
     container_name: sentinel-analytics-service
     hostname: analytics-service

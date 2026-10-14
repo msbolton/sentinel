@@ -114,7 +114,7 @@ sequenceDiagram
 ### Synchronous
 
 - **REST API**: Client-to-Gateway communication for CRUD operations and queries
-- **WebSocket (Socket.io)**: Real-time entity position updates and alert notifications via the `/entities` namespace
+- **WebSocket**: Real-time entity, ageout, and alert events over native WebSocket at `/ws/entities` (JSON envelopes, viewport-filtered, batched every 200 ms)
 - **gRPC** (planned): Inter-service communication for low-latency request-reply
 
 ### Asynchronous
@@ -130,18 +130,18 @@ sequenceDiagram
 
 - **Redis GEOSEARCH**: Entity positions stored as a geospatial sorted set (`sentinel:entities:geo`). Bounding-box queries use `GEOSEARCH FROMLONLAT BYBOX` for sub-millisecond spatial lookups.
 - **Redis JSON cache**: Full entity data cached at `sentinel:entities:cache:{id}` with a 300-second TTL.
-- **Cache warming**: On API Gateway startup, all entities are loaded from PostgreSQL into Redis. If Redis returns empty results at query time, a direct PostgreSQL fallback is used and the cache is re-warmed.
+- **Ownership**: the entity-service maintains the Redis geo cache as it ingests; the API gateway is a stateless proxy and keeps no entity cache of its own.
 
 ## Service Responsibilities
 
 | Service | Language | Port | Role |
 |---------|----------|------|------|
-| **API Gateway** | TypeScript/NestJS | 3000 | REST API, WebSocket gateway, auth, Redis cache orchestration |
-| **Entity Service** | TypeScript/NestJS | 3001 | Entity CRUD, PostgreSQL persistence, domain events |
-| **Track Service** | TypeScript/NestJS | 3002 | Track point storage in TimescaleDB hypertable, historical replay |
-| **Search Service** | TypeScript/NestJS | 3003 | Full-text and geospatial search via OpenSearch |
-| **Link Analysis Service** | TypeScript/NestJS | 3004 | Entity relationship graph, link scoring |
-| **Alert Service** | TypeScript/NestJS | 3005 | Geofence breach detection, anomaly alerting, rule engine |
+| **API Gateway** | Go | 3000 | Auth (Keycloak JWKS), role/clearance policy, reverse proxy, WebSocket stream, locations, registration |
+| **Entity Service** | Go | 3001 | Entity CRUD, PostgreSQL persistence, Redis geo cache, ageout, domain events |
+| **Track Service** | Go | 3002 | Track point storage (TimescaleDB hypertable when available), history, timeline, replay |
+| **Search Service** | Go | 3003 | Full-text and geospatial search via OpenSearch |
+| **Link Analysis Service** | Go | 3004 | Entity relationship graph (SQL traversal), link scoring |
+| **Alert Service** | Go | 3005 | Geofence breach detection, anomaly alerting, rule engine |
 | **Ingest Service** | Go | 4000 | High-throughput data ingestion from external feeds |
 | **Analytics Service** | Python | 5000 | Pattern detection, ML-based anomaly analysis |
 | **Web UI** | TypeScript/Angular | 4200 | CesiumJS 3D map, entity management, alerts dashboard |

@@ -24,12 +24,12 @@ SENTINEL uses two Compose files:
 
 | Service | Port | Stack |
 |---------|------|-------|
-| API Gateway | 3000 | NestJS |
-| Entity Service | 3001 | NestJS |
-| Track Service | 3002 | NestJS |
-| Search Service | 3003 | NestJS |
-| Link Analysis | 3004 | NestJS |
-| Alert Service | 3005 | NestJS |
+| API Gateway | 3000 | Go |
+| Entity Service | 3001 | Go |
+| Track Service | 3002 | Go |
+| Search Service | 3003 | Go |
+| Link Analysis | 3004 | Go |
+| Alert Service | 3005 | Go |
 | Ingest Service | 4000 | Go |
 | Analytics Service | 5000 | Python |
 | Web UI | 4200 | Angular |
