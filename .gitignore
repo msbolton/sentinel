@@ -35,9 +35,9 @@ coverage/
 # Docker
 docker-compose.override.yml
 
-# Go
-apps/ingest-service/vendor/
-apps/ingest-service/server
+# Go build outputs
+apps/*/vendor/
+apps/*/server
 
 # Python
 __pycache__/

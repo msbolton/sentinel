@@ -25,7 +25,7 @@ apiGateway:
       cpu: 1000m
       memory: 1Gi
   env:
-    DATABASE_HOST: "{{ .Release.Name }}-postgresql"
+    DB_HOST: "{{ .Release.Name }}-postgresql"
     REDIS_HOST: "{{ .Release.Name }}-redis-master"
     KAFKA_BROKERS: "{{ .Release.Name }}-kafka:9092"
     KEYCLOAK_URL: "http://{{ .Release.Name }}-keycloak"
