@@ -1,15 +1,13 @@
-FROM node:22-alpine AS builder
+FROM golang:1.24-alpine AS builder
+RUN apk add --no-cache gcc musl-dev librdkafka-dev
 WORKDIR /build
-COPY package.json package-lock.json tsconfig.base.json ./
-COPY libs/proto-gen/ ./libs/proto-gen/
+COPY libs/common-go/ ./libs/common-go/
 COPY apps/api-gateway/ ./apps/api-gateway/
-RUN npm ci --ignore-scripts
-RUN npx nx build api-gateway
+WORKDIR /build/apps/api-gateway
+RUN CGO_ENABLED=1 go build -o /server ./cmd/server
 
-FROM node:22-alpine
-WORKDIR /app
-COPY --from=builder /build/package.json /build/package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts
-COPY --from=builder /build/dist/apps/api-gateway ./dist/apps/api-gateway
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates librdkafka
+COPY --from=builder /server /server
 EXPOSE 3000
-CMD ["node", "dist/apps/api-gateway/main.js"]
+CMD ["/server"]
