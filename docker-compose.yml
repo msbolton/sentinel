@@ -151,41 +151,42 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Apache Kafka 3.7 (KRaft mode - no Zookeeper)
+  # Apache Kafka 3.7 (KRaft mode, official apache/kafka image)
   # ===========================================================================
   kafka:
-    image: bitnami/kafka:3.7
+    image: apache/kafka:3.7.0
     container_name: sentinel-kafka
     hostname: kafka
     restart: unless-stopped
     environment:
-      KAFKA_CFG_NODE_ID: "1"
-      KAFKA_CFG_PROCESS_ROLES: "broker,controller"
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9094"
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
-      KAFKA_CFG_LISTENERS: "EXTERNAL://:9092,INTERNAL://:9093,CONTROLLER://:9094"
-      KAFKA_CFG_ADVERTISED_LISTENERS: "EXTERNAL://localhost:9092,INTERNAL://kafka:9093"
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"
-      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: "INTERNAL"
-      KAFKA_KRAFT_CLUSTER_ID: "sentinel-kafka-cluster-001"
-      KAFKA_CFG_LOG_DIRS: "/bitnami/kafka/data"
-      KAFKA_CFG_NUM_PARTITIONS: "6"
-      KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: "1"
-      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
-      KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
-      KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: "1"
-      KAFKA_CFG_LOG_RETENTION_HOURS: "168"
-      KAFKA_CFG_LOG_SEGMENT_BYTES: "1073741824"
-      KAFKA_CFG_LOG_RETENTION_CHECK_INTERVAL_MS: "300000"
-      KAFKA_CFG_MESSAGE_MAX_BYTES: "10485760"
-      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9094"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LISTENERS: "EXTERNAL://:9092,INTERNAL://:9093,CONTROLLER://:9094"
+      KAFKA_ADVERTISED_LISTENERS: "EXTERNAL://localhost:9092,INTERNAL://kafka:9093"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+      KAFKA_NUM_PARTITIONS: "6"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_LOG_RETENTION_HOURS: "168"
+      KAFKA_LOG_SEGMENT_BYTES: "1073741824"
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: "300000"
+      KAFKA_MESSAGE_MAX_BYTES: "10485760"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
     ports:
       - "9092:9092"
       - "9093:9093"
     volumes:
-      - kafka-data:/bitnami/kafka/data
+      - kafka-data:/var/lib/kafka
     healthcheck:
-      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9093 > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9093 > /dev/null 2>&1"]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -205,7 +206,7 @@ services:
   # Kafka Topic Initialization (runs once then exits)
   # ===========================================================================
   kafka-init:
-    image: bitnami/kafka:3.7
+    image: apache/kafka:3.7.0
     container_name: sentinel-kafka-init
     depends_on:
       kafka:
