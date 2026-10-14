@@ -231,6 +231,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ageout_config_feed_source
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ageout_config_source_default
   ON sentinel.feed_ageout_config ("sourceType")
   WHERE "feedId" IS NULL AND "sourceType" IS NOT NULL;
+-- Databases created by the former TypeORM schema may already hold duplicate
+-- global defaults (one per entity-service restart). Keep the newest row.
+DELETE FROM sentinel.feed_ageout_config a
+  USING sentinel.feed_ageout_config b
+  WHERE a."feedId" IS NULL AND a."sourceType" IS NULL
+    AND b."feedId" IS NULL AND b."sourceType" IS NULL
+    AND (a."createdAt", a.id) < (b."createdAt", b.id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ageout_config_global_default
   ON sentinel.feed_ageout_config ((1))
   WHERE "feedId" IS NULL AND "sourceType" IS NULL;
