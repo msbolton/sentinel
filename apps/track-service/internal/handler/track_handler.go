@@ -26,6 +26,7 @@ func NewTrackHandler(store *store.TrackStore, logger *zap.Logger) *TrackHandler 
 
 // RegisterRoutes registers all track-related HTTP routes on the given mux.
 func (h *TrackHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/tracks/timeline", h.getTimeline)
 	mux.HandleFunc("GET /api/v1/tracks/{entityId}", h.getTrackHistory)
 	mux.HandleFunc("GET /api/v1/tracks/{entityId}/latest", h.getLatestPosition)
 	mux.HandleFunc("GET /api/v1/tracks/{entityId}/segments", h.getTrackSegments)
@@ -94,6 +95,74 @@ func (h *TrackHandler) replayTrack(w http.ResponseWriter, r *http.Request) {
 		"wsUrl":           "/ws/track-replay/" + channelID,
 		"message":         fmt.Sprintf("Subscribe to WebSocket channel '%s' to receive replay events", channelID),
 	})
+}
+
+// Timeline defaults and limits.
+const (
+	defaultTimelineWindow  = 24 * time.Hour
+	defaultTimelineBuckets = 100
+	maxTimelineBuckets     = 1000
+)
+
+// timelineParams is the parsed query for GET /api/v1/tracks/timeline.
+type timelineParams struct {
+	Start   time.Time
+	End     time.Time
+	Buckets int
+}
+
+// parseTimelineParams reads startTime, endTime (RFC3339) and buckets. Missing
+// times default to the last 24 hours; buckets defaults to 100 and is clamped.
+func parseTimelineParams(r *http.Request) (timelineParams, error) {
+	p := timelineParams{Buckets: defaultTimelineBuckets}
+	q := r.URL.Query()
+
+	if v := q.Get("endTime"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return p, fmt.Errorf("endTime must be an RFC3339 timestamp")
+		}
+		p.End = t
+	} else {
+		p.End = time.Now().UTC()
+	}
+	if v := q.Get("startTime"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return p, fmt.Errorf("startTime must be an RFC3339 timestamp")
+		}
+		p.Start = t
+	} else {
+		p.Start = p.End.Add(-defaultTimelineWindow)
+	}
+	if !p.Start.Before(p.End) {
+		return p, fmt.Errorf("startTime must be before endTime")
+	}
+	if v := q.Get("buckets"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return p, fmt.Errorf("buckets must be a positive integer")
+		}
+		if n > maxTimelineBuckets {
+			n = maxTimelineBuckets
+		}
+		p.Buckets = n
+	}
+	return p, nil
+}
+
+func (h *TrackHandler) getTimeline(w http.ResponseWriter, r *http.Request) {
+	p, err := parseTimelineParams(r)
+	if err != nil {
+		httputil.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	buckets, err := h.store.GetTimeline(r.Context(), p.Start, p.End, p.Buckets)
+	if err != nil {
+		httputil.ErrorWithLogger(w, http.StatusInternalServerError, "failed to query timeline", h.logger, err)
+		return
+	}
+	httputil.JSON(w, http.StatusOK, buckets)
 }
 
 const segmentGapMs = 30 * 60 * 1000 // 30 minutes

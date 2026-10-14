@@ -129,3 +129,50 @@ func scanTrackPoints(rows pgx.Rows) ([]models.TrackPointResult, error) {
 	}
 	return results, rows.Err()
 }
+
+// TimelineBucket is one time slice of track activity.
+type TimelineBucket struct {
+	Timestamp   time.Time      `json:"timestamp"`
+	Count       int64          `json:"count"`
+	EntityTypes map[string]int `json:"entityTypes"`
+}
+
+// GetTimeline counts track points in `buckets` equal slices of [start, end),
+// with a per-entity-type breakdown. Empty slices are returned with zero counts.
+func (s *TrackStore) GetTimeline(ctx context.Context, start, end time.Time, buckets int) ([]TimelineBucket, error) {
+	rows, err := s.pool.Query(ctx, `
+		WITH counts AS (
+			SELECT width_bucket(EXTRACT(EPOCH FROM t."timestamp"), EXTRACT(EPOCH FROM $1::timestamptz), EXTRACT(EPOCH FROM $2::timestamptz), $3::int) - 1 AS i,
+			       COALESCE(e."entityType", 'UNKNOWN') AS entity_type,
+			       COUNT(*) AS cnt
+			FROM sentinel.track_points t
+			LEFT JOIN sentinel.entities e ON e.id = t."entityId"
+			WHERE t."timestamp" >= $1 AND t."timestamp" < $2
+			GROUP BY 1, 2
+		)
+		SELECT $1::timestamptz + (($2::timestamptz - $1::timestamptz) / $3::int) * g.i AS bucket_start,
+		       COALESCE(SUM(c.cnt), 0)::bigint AS total,
+		       COALESCE(jsonb_object_agg(c.entity_type, c.cnt) FILTER (WHERE c.entity_type IS NOT NULL), '{}'::jsonb) AS entity_types
+		FROM generate_series(0, $3::int - 1) AS g(i)
+		LEFT JOIN counts c ON c.i = g.i
+		GROUP BY g.i
+		ORDER BY g.i
+	`, start, end, buckets)
+	if err != nil {
+		return nil, fmt.Errorf("querying timeline: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]TimelineBucket, 0, buckets)
+	for rows.Next() {
+		var b TimelineBucket
+		if err := rows.Scan(&b.Timestamp, &b.Count, &b.EntityTypes); err != nil {
+			return nil, fmt.Errorf("scanning timeline bucket: %w", err)
+		}
+		if b.EntityTypes == nil {
+			b.EntityTypes = map[string]int{}
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}

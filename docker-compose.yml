@@ -419,7 +419,7 @@ services:
   # ===========================================================================
 
   # ===========================================================================
-  # API Gateway (NestJS - Node 22)
+  # API Gateway (Go)
   # ===========================================================================
   api-gateway:
     build:
@@ -430,8 +430,11 @@ services:
     hostname: api-gateway
     restart: unless-stopped
     environment:
-      NODE_ENV: development
+      APP_ENV: development
       PORT: "3000"
+      # Dev only: every request runs as the built-in dev user. Never set in production.
+      AUTH_DEV_BYPASS: "true"
+      CORS_ORIGIN: http://localhost:4200
       # Database
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -448,6 +451,13 @@ services:
       # Keycloak
       KEYCLOAK_URL: http://keycloak:8080
       KEYCLOAK_REALM: sentinel
+      # Tokens are issued through the browser-facing hostname, so accept both issuers.
+      KEYCLOAK_ISSUERS: http://keycloak:8080/realms/sentinel,http://localhost:8080/realms/sentinel
+      KEYCLOAK_SERVICE_CLIENT_ID: sentinel-service
+      KEYCLOAK_SERVICE_CLIENT_SECRET: sentinel-service-secret-dev
+      # SMTP (mailhog in docker-compose.infra.yml)
+      MAIL_HOST: mailhog
+      MAIL_PORT: "1025"
       # Downstream services
       ENTITY_SERVICE_URL: http://entity-service:3001
       TRACK_SERVICE_URL: http://track-service:3002
@@ -475,7 +485,7 @@ services:
       keycloak:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
