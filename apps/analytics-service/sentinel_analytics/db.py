@@ -114,16 +114,16 @@ async def fetch_track_points(
     """Retrieve recent track points for an entity from TimescaleDB."""
     query = """
         SELECT
-            entity_id,
+            "entityId" AS entity_id,
             ST_Y(position::geometry) AS latitude,
             ST_X(position::geometry) AS longitude,
             altitude,
             heading,
-            speed_knots,
+            "speedKnots" AS speed_knots,
             course,
             "timestamp"
         FROM sentinel.track_points
-        WHERE entity_id = %s
+        WHERE "entityId" = %s
           AND "timestamp" >= NOW() - INTERVAL '%s hours'
         ORDER BY "timestamp" ASC
     """

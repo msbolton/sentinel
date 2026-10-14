@@ -2,6 +2,15 @@
 
 ## PostgreSQL Schema
 
+### Schema management
+
+The schema is defined by versioned SQL migrations in `db/migrations/`, applied with [golang-migrate](https://github.com/golang-migrate/migrate). The `db-migrate` compose service runs them before any application service starts, `make db-migrate` runs them against a running infra stack, and the Helm chart runs the same image as a pre-install hook. Extensions (`postgis`, `timescaledb`, `age`) and the `sentinel` schema are created once by `config/postgres/init-extensions.sql` at database initialisation.
+
+Column names are camelCase and must be quoted in SQL (for example `"entityType"`, `"lastSeenAt"`). Enum-like columns are `VARCHAR`; the Go stores bind plain strings. Tables with an `"updatedAt"` column keep it current through the `sentinel.set_updated_at()` trigger.
+
+To add a migration, create `db/migrations/NNNNNN_<name>.up.sql` and `.down.sql` with the next sequence number.
+
+
 All tables live under the `sentinel` schema. PostGIS provides the `geometry` type for spatial columns.
 
 ### sentinel.entities
@@ -158,7 +167,7 @@ Events flow through typed Kafka topics. Each service consumes the topics relevan
 
 ## Seed Data
 
-The seed script (`scripts/seed-data.ts`) populates 13 sample entities across the Middle East region:
+`db/seed/seed.sql` (run with `make db-seed`) populates 13 sample entities across the Middle East region, one geofence alert rule, and 10 saved camera locations. Entities:
 
 | Entity | Type | Source | Classification | Location |
 |--------|------|--------|----------------|----------|

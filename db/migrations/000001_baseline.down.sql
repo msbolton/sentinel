@@ -1,0 +1,9 @@
+DROP TABLE IF EXISTS sentinel.anomalies;
+DROP TABLE IF EXISTS sentinel.feed_ageout_config;
+DROP TABLE IF EXISTS sentinel.locations;
+DROP TABLE IF EXISTS sentinel.links;
+DROP TABLE IF EXISTS sentinel.alert_rules;
+DROP TABLE IF EXISTS sentinel.alerts;
+DROP TABLE IF EXISTS sentinel.track_points;
+DROP TABLE IF EXISTS sentinel.entities;
+DROP FUNCTION IF EXISTS sentinel.set_updated_at();

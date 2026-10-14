@@ -75,8 +75,10 @@ The API Gateway will warm the Redis cache from PostgreSQL on startup, so seeded 
 
 | Target | Description |
 |--------|-------------|
-| `make db-migrate` | Run TypeORM migrations |
-| `make db-seed` | Seed database with 13 sample entities |
+| `make db-migrate` | Apply SQL migrations from `db/migrations` (golang-migrate) |
+| `make db-migrate-down` | Roll back the most recent migration |
+| `make db-migrate-version` | Show the applied migration version |
+| `make db-seed` | Load `db/seed/seed.sql`: 13 entities, a geofence rule, 10 locations |
 
 ### Protobuf
 
