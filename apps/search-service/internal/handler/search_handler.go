@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -32,39 +34,9 @@ func (h *SearchHandler) RegisterRoutes(mux *http.ServeMux) {
 func (h *SearchHandler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
-	query := opensearch.SearchQuery{
-		Q:               q.Get("q"),
-		Types:           parseStringSlice(q, "types"),
-		Sources:         parseStringSlice(q, "sources"),
-		Classifications: parseStringSlice(q, "classifications"),
-		Page:            parseIntDefault(q.Get("page"), 1),
-		PageSize:        parseIntDefault(q.Get("pageSize"), 20),
-	}
-
-	if v := q.Get("north"); v != "" {
-		f := parseFloat(v)
-		query.North = &f
-	}
-	if v := q.Get("south"); v != "" {
-		f := parseFloat(v)
-		query.South = &f
-	}
-	if v := q.Get("east"); v != "" {
-		f := parseFloat(v)
-		query.East = &f
-	}
-	if v := q.Get("west"); v != "" {
-		f := parseFloat(v)
-		query.West = &f
-	}
-
-	// Validate bounding box if partially provided.
-	if query.North != nil && query.South != nil && *query.South >= *query.North {
-		httputil.Error(w, http.StatusBadRequest, "Invalid bounding box: south must be less than north")
-		return
-	}
-	if query.East != nil && query.West != nil && *query.West >= *query.East {
-		httputil.Error(w, http.StatusBadRequest, "Invalid bounding box: west must be less than east")
+	query, err := parseSearchQuery(q)
+	if err != nil {
+		httputil.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -81,40 +53,10 @@ func (h *SearchHandler) handleSearch(w http.ResponseWriter, r *http.Request) {
 func (h *SearchHandler) handleNearby(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
-	latStr := q.Get("lat")
-	lngStr := q.Get("lng")
-	radiusStr := q.Get("radiusKm")
-
-	if latStr == "" || lngStr == "" || radiusStr == "" {
-		httputil.Error(w, http.StatusBadRequest, "lat, lng, and radiusKm are required")
+	query, err := parseNearbyQuery(q)
+	if err != nil {
+		httputil.Error(w, http.StatusBadRequest, err.Error())
 		return
-	}
-
-	lat, err := strconv.ParseFloat(latStr, 64)
-	if err != nil || lat < -90 || lat > 90 {
-		httputil.Error(w, http.StatusBadRequest, "lat must be between -90 and 90")
-		return
-	}
-
-	lng, err := strconv.ParseFloat(lngStr, 64)
-	if err != nil || lng < -180 || lng > 180 {
-		httputil.Error(w, http.StatusBadRequest, "lng must be between -180 and 180")
-		return
-	}
-
-	radiusKm, err := strconv.ParseFloat(radiusStr, 64)
-	if err != nil || radiusKm < 0.1 || radiusKm > 20000 {
-		httputil.Error(w, http.StatusBadRequest, "radiusKm must be between 0.1 and 20000")
-		return
-	}
-
-	query := opensearch.NearbyQuery{
-		Lat:      lat,
-		Lng:      lng,
-		RadiusKm: radiusKm,
-		Q:        q.Get("q"),
-		Page:     parseIntDefault(q.Get("page"), 1),
-		PageSize: parseIntDefault(q.Get("pageSize"), 20),
 	}
 
 	result, err := h.osClient.SearchNearby(r.Context(), query)
@@ -187,4 +129,64 @@ func parseIntDefault(s string, def int) int {
 func parseFloat(s string) float64 {
 	v, _ := strconv.ParseFloat(s, 64)
 	return v
+}
+
+// parseSearchQuery reads the full-text search parameters and validates any
+// partially supplied bounding box.
+func parseSearchQuery(q url.Values) (opensearch.SearchQuery, error) {
+	query := opensearch.SearchQuery{
+		Q:               q.Get("q"),
+		Types:           parseStringSlice(q, "types"),
+		Sources:         parseStringSlice(q, "sources"),
+		Classifications: parseStringSlice(q, "classifications"),
+		Page:            parseIntDefault(q.Get("page"), 1),
+		PageSize:        parseIntDefault(q.Get("pageSize"), 20),
+	}
+	if v := q.Get("north"); v != "" {
+		f := parseFloat(v)
+		query.North = &f
+	}
+	if v := q.Get("south"); v != "" {
+		f := parseFloat(v)
+		query.South = &f
+	}
+	if v := q.Get("east"); v != "" {
+		f := parseFloat(v)
+		query.East = &f
+	}
+	if v := q.Get("west"); v != "" {
+		f := parseFloat(v)
+		query.West = &f
+	}
+	if query.North != nil && query.South != nil && *query.South >= *query.North {
+		return query, errors.New("Invalid bounding box: south must be less than north")
+	}
+	if query.East != nil && query.West != nil && *query.West >= *query.East {
+		return query, errors.New("Invalid bounding box: west must be less than east")
+	}
+	return query, nil
+}
+
+// parseNearbyQuery reads and validates lat, lng, and radiusKm.
+func parseNearbyQuery(q url.Values) (opensearch.NearbyQuery, error) {
+	latStr, lngStr, radiusStr := q.Get("lat"), q.Get("lng"), q.Get("radiusKm")
+	if latStr == "" || lngStr == "" || radiusStr == "" {
+		return opensearch.NearbyQuery{}, errors.New("lat, lng, and radiusKm are required")
+	}
+	lat, err := strconv.ParseFloat(latStr, 64)
+	if err != nil || lat < -90 || lat > 90 {
+		return opensearch.NearbyQuery{}, errors.New("lat must be between -90 and 90")
+	}
+	lng, err := strconv.ParseFloat(lngStr, 64)
+	if err != nil || lng < -180 || lng > 180 {
+		return opensearch.NearbyQuery{}, errors.New("lng must be between -180 and 180")
+	}
+	radiusKm, err := strconv.ParseFloat(radiusStr, 64)
+	if err != nil || radiusKm < 0.1 || radiusKm > 20000 {
+		return opensearch.NearbyQuery{}, errors.New("radiusKm must be between 0.1 and 20000")
+	}
+	return opensearch.NearbyQuery{
+		Lat: lat, Lng: lng, RadiusKm: radiusKm, Q: q.Get("q"),
+		Page: parseIntDefault(q.Get("page"), 1), PageSize: parseIntDefault(q.Get("pageSize"), 20),
+	}, nil
 }

@@ -48,12 +48,20 @@ INSERT INTO sentinel.entities ("entityType", name, source, classification, posit
 SELECT 'UNIT', '3RD BDE, 1ST AD', 'MANUAL', 'CONFIDENTIAL', ST_SetSRID(ST_MakePoint(44.789, 32.456), 4326), 0, 0, 'SFGPUCA---', ARRAY['US_ARMY','1ST_ARMORED_DIV'], NOW()
 WHERE NOT EXISTS (SELECT 1 FROM sentinel.entities WHERE name = '3RD BDE, 1ST AD');
 
--- Sample geofence rule covering the Persian Gulf.
+-- Sample geofence rule covering the Persian Gulf. The alert-service looks up
+-- rules by "ruleType" = 'GEOFENCE' and reads config.polygon as [lng, lat] pairs
+-- with config.triggerOn in ENTRY | EXIT | BOTH.
 INSERT INTO sentinel.alert_rules (name, "ruleType", config, "monitoredEntityTypes", severity)
-SELECT 'Persian Gulf Exclusion Zone', 'GEOFENCE_BREACH',
-       '{"polygon": [{"latitude": 27.0, "longitude": 51.0}, {"latitude": 27.0, "longitude": 56.0}, {"latitude": 24.0, "longitude": 56.0}, {"latitude": 24.0, "longitude": 51.0}], "trigger_on_enter": true, "trigger_on_exit": false}'::jsonb,
+SELECT 'Persian Gulf Exclusion Zone', 'GEOFENCE',
+       '{"polygon": [[51.0, 27.0], [56.0, 27.0], [56.0, 24.0], [51.0, 24.0]], "triggerOn": "ENTRY"}'::jsonb,
        ARRAY['VESSEL','AIRCRAFT'], 'HIGH'
 WHERE NOT EXISTS (SELECT 1 FROM sentinel.alert_rules WHERE name = 'Persian Gulf Exclusion Zone');
+
+-- Normalise the same rule if an older seed inserted it with the retired shape.
+UPDATE sentinel.alert_rules
+   SET "ruleType" = 'GEOFENCE',
+       config = '{"polygon": [[51.0, 27.0], [56.0, 27.0], [56.0, 24.0], [51.0, 24.0]], "triggerOn": "ENTRY"}'::jsonb
+ WHERE name = 'Persian Gulf Exclusion Zone' AND "ruleType" = 'GEOFENCE_BREACH';
 
 -- Saved camera locations.
 INSERT INTO sentinel.locations (name, description, latitude, longitude, altitude, heading, pitch, "range", "has3dTiles", category)

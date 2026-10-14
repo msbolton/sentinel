@@ -3,11 +3,12 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
-	"github.com/sentinel/go-common/httputil"
 	"github.com/sentinel/alert-service/internal/store"
+	"github.com/sentinel/go-common/httputil"
 	"go.uber.org/zap"
 )
 
@@ -34,33 +35,7 @@ func (h *AlertHandler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *AlertHandler) handleGetAlerts(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-
-	params := store.AlertQueryParams{
-		Page:     parseIntDefault(q.Get("page"), 1),
-		PageSize: parseIntDefault(q.Get("pageSize"), 20),
-	}
-
-	if v := q.Get("severity"); v != "" {
-		params.Severity = &v
-	}
-	if v := q.Get("entityId"); v != "" {
-		params.EntityID = &v
-	}
-	if types := q["types"]; len(types) > 0 {
-		for _, t := range types {
-			for _, part := range strings.Split(t, ",") {
-				trimmed := strings.TrimSpace(part)
-				if trimmed != "" {
-					params.Types = append(params.Types, trimmed)
-				}
-			}
-		}
-	}
-	if v := q.Get("acknowledged"); v != "" {
-		ack := v == "true"
-		params.Acknowledged = &ack
-	}
+	params := parseAlertQuery(r.URL.Query())
 
 	result, err := h.store.GetAlerts(r.Context(), params)
 	if err != nil {
@@ -236,4 +211,31 @@ func parseIntDefault(s string, def int) int {
 		return def
 	}
 	return v
+}
+
+// parseAlertQuery reads list filters: severity, entityId, types (repeated or
+// comma-separated), acknowledged, and paging.
+func parseAlertQuery(q url.Values) store.AlertQueryParams {
+	params := store.AlertQueryParams{
+		Page:     parseIntDefault(q.Get("page"), 1),
+		PageSize: parseIntDefault(q.Get("pageSize"), 20),
+	}
+	if v := q.Get("severity"); v != "" {
+		params.Severity = &v
+	}
+	if v := q.Get("entityId"); v != "" {
+		params.EntityID = &v
+	}
+	for _, t := range q["types"] {
+		for _, part := range strings.Split(t, ",") {
+			if trimmed := strings.TrimSpace(part); trimmed != "" {
+				params.Types = append(params.Types, trimmed)
+			}
+		}
+	}
+	if v := q.Get("acknowledged"); v != "" {
+		ack := v == "true"
+		params.Acknowledged = &ack
+	}
+	return params
 }
