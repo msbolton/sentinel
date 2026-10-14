@@ -131,7 +131,12 @@ func (v *KeycloakVerifier) Verify(_ context.Context, rawToken string) (*User, er
 		all = append(all, r)
 	}
 
+	// Clearance: an explicit claim wins; otherwise derive it from the
+	// classification-* realm roles the registration flow assigns.
 	classification := claims.ClassificationLevel
+	if classification == "" {
+		classification = ClassificationFromRoles(realmRoles)
+	}
 	if classification == "" {
 		classification = "UNCLASSIFIED"
 	}

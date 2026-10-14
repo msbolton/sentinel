@@ -35,11 +35,11 @@ type Deps struct {
 	// Locations registers its routes on the protected API mux.
 	Locations interface{ RegisterRoutes(*http.ServeMux) }
 	// Public registers unauthenticated routes (e.g. registration) on the root mux.
-	Public interface{ RegisterRoutes(*http.ServeMux) }
+	Public []func(*http.ServeMux)
 	// Protected registers additional authenticated routes on the API mux.
-	Protected []interface{ RegisterRoutes(*http.ServeMux) }
+	Protected []func(*http.ServeMux)
 	// Root registers routes outside /api/v1 that handle their own auth (e.g. websocket).
-	Root []interface{ RegisterRoutes(*http.ServeMux) }
+	Root []func(*http.ServeMux)
 	// ReadyChecks run on readiness probes.
 	ReadyChecks map[string]func() error
 	StartTime   time.Time
@@ -65,8 +65,8 @@ func New(d Deps) http.Handler {
 	if d.Locations != nil {
 		d.Locations.RegisterRoutes(api)
 	}
-	for _, p := range d.Protected {
-		p.RegisterRoutes(api)
+	for _, register := range d.Protected {
+		register(api)
 	}
 	protected := d.Auth.RequireAuth(EnforcePolicies(d.Policies, d.Auth)(api))
 
@@ -75,11 +75,11 @@ func New(d Deps) http.Handler {
 	root.HandleFunc("GET /api/v1/health/ready", d.handleReadiness)
 	root.HandleFunc("GET /health", d.handleLiveness)
 	root.HandleFunc("GET /ready", d.handleReadiness)
-	if d.Public != nil {
-		d.Public.RegisterRoutes(root)
+	for _, register := range d.Public {
+		register(root)
 	}
-	for _, r := range d.Root {
-		r.RegisterRoutes(root)
+	for _, register := range d.Root {
+		register(root)
 	}
 	root.Handle("/api/v1/", protected)
 

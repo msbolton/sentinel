@@ -8,6 +8,7 @@ require (
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/sentinel/go-common v0.0.0
 	go.uber.org/zap v1.27.0
+	golang.org/x/time v0.15.0
 )
 
 require (
@@ -18,7 +19,6 @@ require (
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
-	golang.org/x/time v0.15.0 // indirect
 )
 
 replace github.com/sentinel/go-common => ../../libs/common-go

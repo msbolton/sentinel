@@ -188,3 +188,20 @@ func TestClassificationRank(t *testing.T) {
 		t.Error("MeetsClassification wrong")
 	}
 }
+
+func TestVerify_ClassificationFromRoles(t *testing.T) {
+	key, kf := newTestKey(t)
+	c := baseClaims()
+	delete(c, "classification_level")
+	c["realm_access"] = map[string]interface{}{"roles": []string{"sentinel-viewer", "classification-u", "classification-ts"}}
+	u, err := newVerifier(kf, testAudience).Verify(context.Background(), sign(t, key, jwt.SigningMethodRS256, c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.ClassificationLevel != "TOP_SECRET" {
+		t.Errorf("classification = %q, want TOP_SECRET (highest role wins)", u.ClassificationLevel)
+	}
+	if ClassificationFromRoles([]string{"sentinel-admin"}) != "" {
+		t.Error("no classification role should yield empty")
+	}
+}
