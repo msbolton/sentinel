@@ -60,8 +60,8 @@ install: ## Install all dependencies
 build: ## Build all applications
 	npx nx run-many --target=build --all --parallel=5
 
-build-web: ## Build Angular frontend
-	npx nx build web --configuration=production
+build-client: ## Build Angular frontend
+	npx nx build client --configuration=production
 
 build-api: ## Build NestJS API gateway
 	npx nx build api-gateway
@@ -103,10 +103,10 @@ dev: ## Start all services in development mode
 	@echo "Waiting for services to be healthy..."
 	@sleep 10
 	@echo "Starting application services..."
-	npx nx run-many --target=serve --projects=web,api-gateway,entity-service,track-service,search-service,link-analysis-service,alert-service,ingest-service --parallel=10
+	npx nx run-many --target=serve --projects=client,api-gateway,entity-service,track-service,search-service,link-analysis-service,alert-service,ingest-service --parallel=10
 
-dev-web: ## Start Angular dev server
-	npx nx serve web
+dev-client: ## Start Angular dev server
+	npx nx serve client
 
 dev-api: ## Start NestJS API gateway
 	npx nx serve api-gateway
@@ -161,8 +161,8 @@ docker-build: ## Build all Docker images
 test: ## Run all tests
 	npx nx run-many --target=test --all --parallel=5
 
-test-web: ## Run Angular tests
-	npx nx test web
+test-client: ## Run Angular tests
+	npx nx test client
 
 test-api: ## Run NestJS tests
 	npx nx test api-gateway

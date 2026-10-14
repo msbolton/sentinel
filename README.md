@@ -42,7 +42,7 @@ Or individually:
 
 ```bash
 make dev-api   # NestJS on :3000
-make dev-web   # Angular on :4200
+make dev-client   # Angular on :4200
 ```
 
 ### 5. Verify
@@ -82,7 +82,7 @@ Entity Track   Search   Alert   Link Analysis
 ```
 sentinel/
 ├── apps/
-│   ├── web/                  # Angular 19 frontend
+│   ├── client/               # Angular 19 frontend
 │   ├── api-gateway/          # NestJS API gateway (:3000)
 │   ├── entity-service/       # Entity CRUD microservice (:3001)
 │   ├── track-service/        # Track history microservice (:3002)
@@ -120,7 +120,7 @@ sentinel/
 
 | Command | Description |
 |---------|-------------|
-| `make dev` | Start infra + api-gateway + web |
+| `make dev` | Start infra + api-gateway + client |
 | `make docker-infra` | Start infrastructure only |
 | `make db-seed` | Seed database with sample data |
 | `make build` | Build all applications |
