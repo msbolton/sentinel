@@ -82,6 +82,15 @@ CREATE OR REPLACE TRIGGER trg_entities_updated_at
 -- No primary key: TimescaleDB requires the partition column in every unique
 -- index, and the service never looks points up by id.
 -- -----------------------------------------------------------------------------
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'sentinel' AND table_name = 'track_points' AND column_name = 'entity_id') THEN
+    DROP TABLE sentinel.track_points;
+    RAISE NOTICE 'Dropped legacy snake_case sentinel.track_points';
+  END IF;
+END
+$$;
+
 CREATE TABLE IF NOT EXISTS sentinel.track_points (
   id                     UUID NOT NULL DEFAULT gen_random_uuid(),
   "entityId"             UUID NOT NULL,
@@ -117,6 +126,29 @@ BEGIN
     RAISE NOTICE 'sentinel.track_points is a TimescaleDB hypertable.';
   ELSE
     RAISE NOTICE 'TimescaleDB not installed; sentinel.track_points is a regular table.';
+  END IF;
+END
+$$;
+
+-- -----------------------------------------------------------------------------
+-- Legacy repair: the retired scripts/seed-data.ts created alerts, alert_rules,
+-- and links with snake_case columns that no service could ever write to. When
+-- such a table is found it is dropped so the camelCase definition below can
+-- replace it. Any seed rule is restored by db/seed/seed.sql.
+-- -----------------------------------------------------------------------------
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'sentinel' AND table_name = 'alerts' AND column_name = 'entity_id') THEN
+    DROP TABLE sentinel.alerts;
+    RAISE NOTICE 'Dropped legacy snake_case sentinel.alerts';
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'sentinel' AND table_name = 'alert_rules' AND column_name = 'rule_type') THEN
+    DROP TABLE sentinel.alert_rules;
+    RAISE NOTICE 'Dropped legacy snake_case sentinel.alert_rules';
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'sentinel' AND table_name = 'links' AND column_name = 'source_entity_id') THEN
+    DROP TABLE sentinel.links;
+    RAISE NOTICE 'Dropped legacy snake_case sentinel.links';
   END IF;
 END
 $$;
@@ -245,6 +277,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ageout_config_global_default
 CREATE OR REPLACE TRIGGER trg_feed_ageout_config_updated_at
   BEFORE UPDATE ON sentinel.feed_ageout_config
   FOR EACH ROW EXECUTE FUNCTION sentinel.set_updated_at();
+
+-- Legacy repair: TypeORM created several columns as enum types whose value
+-- sets drifted from what the feeds and client emit. Convert them to VARCHAR so
+-- the column types match this baseline on every database.
+DO $$
+DECLARE
+  pair TEXT[];
+BEGIN
+  FOREACH pair SLICE 1 IN ARRAY ARRAY[
+    ['entities', 'entityType'], ['entities', 'source'], ['entities', 'classification'],
+    ['locations', 'category']
+  ] LOOP
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'sentinel' AND table_name = pair[1] AND column_name = pair[2] AND data_type = 'USER-DEFINED'
+    ) THEN
+      EXECUTE format('ALTER TABLE sentinel.%I ALTER COLUMN %I TYPE VARCHAR(50) USING %I::text', pair[1], pair[2], pair[2]);
+      RAISE NOTICE 'Converted sentinel.%.% from enum to varchar', pair[1], pair[2];
+    END IF;
+  END LOOP;
+END
+$$;
 
 -- -----------------------------------------------------------------------------
 -- anomalies  (apps/analytics-service/sentinel_analytics/db.py)
