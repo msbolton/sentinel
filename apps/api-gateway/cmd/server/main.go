@@ -17,6 +17,7 @@ import (
 	"github.com/sentinel/api-gateway/internal/config"
 	"github.com/sentinel/api-gateway/internal/locations"
 	"github.com/sentinel/api-gateway/internal/proxy"
+	"github.com/sentinel/api-gateway/internal/registration"
 	"github.com/sentinel/api-gateway/internal/server"
 )
 
@@ -73,6 +74,16 @@ func main() {
 
 	locStore := locations.NewPGStore(pool)
 
+	// Registration and user administration (Keycloak Admin API + SMTP).
+	keycloakAdmin := registration.NewKeycloakClient(cfg.KeycloakURL, cfg.KeycloakRealm,
+		cfg.KeycloakServiceClientID, cfg.KeycloakServiceClientSecret, logger)
+	var mailer registration.Mailer = registration.NopMailer{}
+	if cfg.MailHost != "" {
+		mailer = registration.NewSMTPMailer(cfg.MailHost, cfg.MailPort, cfg.MailFrom)
+	}
+	regHandler := registration.NewHandler(keycloakAdmin, mailer,
+		registration.NewIPLimiter(5, 15*time.Minute), logger)
+
 	handler := server.New(server.Deps{
 		Logger:     logger,
 		Auth:       authMw,
@@ -80,6 +91,8 @@ func main() {
 		CORSOrigin: cfg.CORSOrigin,
 		Upstreams:  up,
 		Locations:  locations.NewHandler(locStore, logger),
+		Public:     []func(*http.ServeMux){regHandler.RegisterPublicRoutes},
+		Protected:  []func(*http.ServeMux){regHandler.RegisterAdminRoutes},
 		ReadyChecks: map[string]func() error{
 			"database": func() error { return locStore.Ping(context.Background()) },
 		},

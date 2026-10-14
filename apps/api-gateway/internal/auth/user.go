@@ -32,6 +32,26 @@ var classificationHierarchy = map[string]int{
 	"TOP_SECRET":   3,
 }
 
+// classificationRoles maps the realm roles Keycloak assigns to clearance levels.
+var classificationRoles = map[string]string{
+	"classification-ts": "TOP_SECRET",
+	"classification-s":  "SECRET",
+	"classification-c":  "CONFIDENTIAL",
+	"classification-u":  "UNCLASSIFIED",
+}
+
+// ClassificationFromRoles returns the highest clearance encoded by the given
+// realm roles, or "" when none is present.
+func ClassificationFromRoles(roles []string) string {
+	best, bestRank := "", -1
+	for _, r := range roles {
+		if level, ok := classificationRoles[r]; ok && ClassificationRank(level) > bestRank {
+			best, bestRank = level, ClassificationRank(level)
+		}
+	}
+	return best
+}
+
 // ClassificationRank returns the numeric rank of a classification level.
 // Unknown levels rank as UNCLASSIFIED.
 func ClassificationRank(level string) int {
