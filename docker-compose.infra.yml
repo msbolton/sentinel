@@ -53,6 +53,26 @@ services:
       - sentinel-network
 
   # ===========================================================================
+  # Schema migrations (runs once then exits)
+  # ===========================================================================
+  # Applies db/migrations with golang-migrate. Application services wait for
+  # this container to complete successfully before starting.
+  # ===========================================================================
+  db-migrate:
+    image: migrate/migrate:v4.18.1
+    platform: linux/amd64
+    container_name: sentinel-db-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./db/migrations:/migrations:ro
+    command: ["-path=/migrations", "-database", "postgres://sentinel:sentinel_dev@postgres:5432/sentinel?sslmode=disable", "up"]
+    restart: "no"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
   # Keycloak PostgreSQL (dedicated instance for Keycloak)
   # ===========================================================================
   keycloak-db:
