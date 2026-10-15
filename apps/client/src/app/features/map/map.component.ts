@@ -39,6 +39,7 @@ import {
   TRACK_TRAIL_CONFIG,
 } from './cesium-config';
 import { CircularBuffer, decimateTrail, TrailPoint } from './trail-utils';
+import { isGlobalBounds, rectangleToBounds } from './viewport-bounds';
 import { environment } from '../../../environments/environment';
 
 // Configure Cesium before imports
@@ -203,6 +204,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.subscribeToThemeChanges();
     this.subscribeToFlyTo();
     this.initUserLocation();
+
+    // Report the initial viewport: a saved camera position is restored with
+    // setView, which does not fire moveEnd. A later flyTo (geolocation)
+    // fires moveEnd and refreshes it.
+    this.sendViewportBounds();
   }
 
   ngOnDestroy(): void {
@@ -321,51 +327,33 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (!this.viewer || !this.Cesium) return;
 
     const Cesium = this.Cesium;
-    const canvas = this.viewer.scene.canvas;
     const camera = this.viewer.camera;
 
+    let rect: { north: number; south: number; east: number; west: number } | undefined;
     try {
-      const rect = camera.computeViewRectangle(
-        this.viewer.scene.globe.ellipsoid,
-        new Cesium.Rectangle(),
-      );
-
-      if (rect) {
-        const bounds = {
-          north: Cesium.Math.toDegrees(rect.north),
-          south: Cesium.Math.toDegrees(rect.south),
-          east: Cesium.Math.toDegrees(rect.east),
-          west: Cesium.Math.toDegrees(rect.west),
-        };
-
-        this.wsService.sendViewportUpdate(bounds);
-
-        // Also fetch entities in this viewport
-        this.entityService
-          .getEntities({ ...bounds, pageSize: 500 })
-          .subscribe((response) => {
-            this.ngZone.runOutsideAngular(() => {
-              for (const entity of response.data) {
-                this.addOrUpdateCesiumEntity(entity);
-              }
-              this.scheduleRender();
-            });
-          });
-      } else {
-        // computeViewRectangle() returns undefined when the camera sees the
-        // full globe — fetch all entities without bounding-box filter.
-        this.entityService.getEntities({ pageSize: 500 }).subscribe((response) => {
-          this.ngZone.runOutsideAngular(() => {
-            for (const entity of response.data) {
-              this.addOrUpdateCesiumEntity(entity);
-            }
-            this.scheduleRender();
-          });
-        });
-      }
+      rect = camera.computeViewRectangle(this.viewer.scene.globe.ellipsoid, new Cesium.Rectangle());
     } catch {
-      // Camera may not have a valid view rectangle (e.g., looking at sky)
+      // Camera may not have a valid view rectangle (e.g., looking at sky);
+      // treat it as the whole globe so the server still knows our state.
+      rect = undefined;
     }
+
+    // Always tell the gateway what we see, including the whole globe:
+    // the server keeps the previous bounds otherwise, and the ingest area
+    // is derived from these bounds.
+    const bounds = rectangleToBounds(rect, Cesium.Math.toDegrees);
+    this.wsService.sendViewportUpdate(bounds);
+
+    // Also fetch entities in this viewport (no bbox when the globe is visible).
+    const query = isGlobalBounds(bounds) ? { pageSize: 500 } : { ...bounds, pageSize: 500 };
+    this.entityService.getEntities(query).subscribe((response) => {
+      this.ngZone.runOutsideAngular(() => {
+        for (const entity of response.data) {
+          this.addOrUpdateCesiumEntity(entity);
+        }
+        this.scheduleRender();
+      });
+    });
   }
 
   private subscribeToEntities(): void {

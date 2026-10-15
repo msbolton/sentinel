@@ -31,7 +31,7 @@ type Config struct {
 	// Viewport-driven polling: the gateway pushes the area connected map
 	// clients can see (PUT /feeds/opensky/viewport) and OpenSky is polled only
 	// for that area while the lease is fresh.
-	OpenSkyViewportMode      bool    // OPENSKY_VIEWPORT_MODE (default: false) poll only while a pushed viewport lease is active
+	OpenSkyViewportMode      bool    // OPENSKY_VIEWPORT_MODE (default: true) poll only while a pushed viewport lease is active
 	OpenSkyViewportTTLSec    int     // OPENSKY_VIEWPORT_TTL_SEC (default: 90) lease lifetime; must exceed the gateway heartbeat
 	OpenSkyMinPollSpacingSec int     // OPENSKY_MIN_POLL_SPACING_SEC (default: 3) floor between two polls, also after a viewport change
 	OpenSkyMaxAreaSqDeg      float64 // OPENSKY_MAX_AREA_SQDEG (default: 400) above this area the interval is stretched
@@ -84,7 +84,7 @@ func Load() *Config {
 		OpenSkyClientSecret: envOrDefault("OPENSKY_CLIENT_SECRET", ""),
 		OpenSkyTokenURL:     envOrDefault("OPENSKY_TOKEN_URL", "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"),
 
-		OpenSkyViewportMode:      os.Getenv("OPENSKY_VIEWPORT_MODE") == "true",
+		OpenSkyViewportMode:      envOrDefault("OPENSKY_VIEWPORT_MODE", "true") == "true",
 		OpenSkyViewportTTLSec:    envOrDefaultInt("OPENSKY_VIEWPORT_TTL_SEC", 90),
 		OpenSkyMinPollSpacingSec: envOrDefaultInt("OPENSKY_MIN_POLL_SPACING_SEC", 3),
 		OpenSkyMaxAreaSqDeg:      envOrDefaultFloat("OPENSKY_MAX_AREA_SQDEG", 400),

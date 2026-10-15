@@ -466,6 +466,10 @@ services:
       LINK_ANALYSIS_SERVICE_URL: http://link-analysis-service:3004
       ALERT_SERVICE_URL: http://alert-service:3005
       INGEST_SERVICE_URL: http://ingest-service:4000
+      # Push the area connected map clients see to ingest-service (OpenSky polling area)
+      VIEWPORT_SYNC_ENABLED: "true"
+      VIEWPORT_SYNC_HEARTBEAT_SEC: "30"
+      VIEWPORT_SYNC_DEBOUNCE_MS: "1000"
       ANALYTICS_SERVICE_URL: http://analytics-service:5000
       # MinIO / S3
       S3_ENDPOINT: http://minio:9000
@@ -786,7 +790,7 @@ services:
       OPENSKY_INTERVAL_SEC: "10"
       # Viewport-driven polling: poll only the area connected map clients see,
       # as pushed by the api-gateway. false = continuous polling of OPENSKY_BBOX.
-      OPENSKY_VIEWPORT_MODE: "false"
+      OPENSKY_VIEWPORT_MODE: "true"
       OPENSKY_VIEWPORT_TTL_SEC: "90"
       OPENSKY_MIN_POLL_SPACING_SEC: "3"
       OPENSKY_MAX_AREA_SQDEG: "400"
