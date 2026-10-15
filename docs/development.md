@@ -138,6 +138,19 @@ The API Gateway skips token verification when `AUTH_DEV_BYPASS=true` (set by `nx
 
 The Angular frontend similarly falls back to an unauthenticated dev profile when Keycloak is unavailable.
 
+## Live Aircraft (OpenSky)
+
+OpenSky is polled only for the area connected map clients can see, so nothing is fetched until a browser has the map open. To watch it work:
+
+1. Put your OpenSky API client credentials in `.env` (`OPENSKY_CLIENT_ID`, `OPENSKY_CLIENT_SECRET`) and set `OPENSKY_ENABLED=true`. `nx serve` loads `.env`; a bare `go run` does not.
+2. Start the infrastructure and the services: `docker compose up -d postgres db-migrate redis kafka kafka-init opensearch keycloak`, then `npx nx serve ingest-service`, `npx nx serve entity-service`, `npx nx serve api-gateway`, `npx nx serve client`.
+3. The ingest log shows `opensky idle: waiting for an active viewport`; `curl -s localhost:4000/feeds/opensky/viewport` reports `active: false`.
+4. Open http://localhost:4200 and zoom to a region. The gateway logs `viewport sync push`, the ingest service logs `opensky viewport updated` and then `opensky poll complete` every 10 s, and the viewport endpoint shows the box, `effectiveIntervalSec: 10` and `creditsRemaining`.
+5. Aircraft glide between fixes (dead reckoning on the client). Pan a little and nothing is pushed; pan far or zoom in by half and one push plus an immediate poll follows. Zoom out to the globe and the interval stretches to 60 s.
+6. Close the tab: the gateway pushes `active: false` and the ingest service idles. Kill and restart the ingest service: polling resumes within the 30 s heartbeat.
+
+See `docs/architecture.md` (OpenSky viewport-driven polling) for the contract, the credit budget, and the environment variables.
+
 ## Debugging Tips
 
 ### API Gateway won't start

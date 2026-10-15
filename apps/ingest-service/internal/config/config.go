@@ -36,6 +36,7 @@ type Config struct {
 	OpenSkyMinPollSpacingSec int     // OPENSKY_MIN_POLL_SPACING_SEC (default: 3) floor between two polls, also after a viewport change
 	OpenSkyMaxAreaSqDeg      float64 // OPENSKY_MAX_AREA_SQDEG (default: 400) above this area the interval is stretched
 	OpenSkyMaxIntervalSec    int     // OPENSKY_MAX_INTERVAL_SEC (default: 60) cap on the stretched interval
+	OpenSkyCreditFloor       int     // OPENSKY_CREDIT_FLOOR (default: 200) below this many remaining daily credits, poll at the max interval
 
 	ADSBLolEnabled     bool // ADSBLOL_ENABLED (default: false)
 	ADSBLolIntervalSec int  // ADSBLOL_INTERVAL_SEC (default: 10)
@@ -89,6 +90,7 @@ func Load() *Config {
 		OpenSkyMinPollSpacingSec: envOrDefaultInt("OPENSKY_MIN_POLL_SPACING_SEC", 3),
 		OpenSkyMaxAreaSqDeg:      envOrDefaultFloat("OPENSKY_MAX_AREA_SQDEG", 400),
 		OpenSkyMaxIntervalSec:    envOrDefaultInt("OPENSKY_MAX_INTERVAL_SEC", 60),
+		OpenSkyCreditFloor:       envOrDefaultInt("OPENSKY_CREDIT_FLOOR", 200),
 
 		ADSBLolEnabled:     os.Getenv("ADSBLOL_ENABLED") == "true",
 		ADSBLolIntervalSec: envOrDefaultInt("ADSBLOL_INTERVAL_SEC", 10),

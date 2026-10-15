@@ -131,6 +131,8 @@ type viewportResponse struct {
 	AreaSqDeg            float64        `json:"areaSqDeg"`
 	EffectiveIntervalSec int            `json:"effectiveIntervalSec"`
 	Idle                 bool           `json:"idle"`
+	CreditsRemaining     *int           `json:"creditsRemaining"` // OpenSky daily credits left; null when unknown
+	LowCredits           bool           `json:"lowCredits"`
 	LastPollAt           *time.Time     `json:"lastPollAt"`
 	NextPollInSec        int            `json:"nextPollInSec"`
 	ExpiresAt            *time.Time     `json:"expiresAt"`
@@ -316,7 +318,12 @@ func toViewportResponse(state ViewportState) viewportResponse {
 		AreaSqDeg:            st.AreaSqDeg,
 		EffectiveIntervalSec: int(st.EffectiveInterval / time.Second),
 		Idle:                 st.Idle,
+		LowCredits:           st.LowCredits,
 		NextPollInSec:        int((st.NextPollIn + time.Second - 1) / time.Second),
+	}
+	if st.CreditsRemaining >= 0 {
+		c := st.CreditsRemaining
+		resp.CreditsRemaining = &c
 	}
 	if resp.Boxes == nil {
 		resp.Boxes = []sources.BBox{}

@@ -403,8 +403,43 @@ func (s *EntityStore) FindBySourceEntityIDs(ctx context.Context, ids []string) (
 	return result, nil
 }
 
-// Create inserts a new entity.
+// Create inserts one entity and returns the stored row.
 func (s *EntityStore) Create(ctx context.Context, rec *EntityRecord) (*EntityRecord, error) {
+	query, args := insertEntityQuery(rec)
+	return scanEntity(s.pool.QueryRow(ctx, query, args...))
+}
+
+// CreateBatch inserts many entities in one round trip (a pgx batch of the
+// same INSERT ... RETURNING as Create). Results keep the input order; a
+// failed insert leaves a nil in its slot and is reported in errs.
+func (s *EntityStore) CreateBatch(ctx context.Context, recs []*EntityRecord) ([]*EntityRecord, []error) {
+	out := make([]*EntityRecord, len(recs))
+	errs := make([]error, len(recs))
+	if len(recs) == 0 {
+		return out, errs
+	}
+
+	batch := &pgx.Batch{}
+	for _, rec := range recs {
+		query, args := insertEntityQuery(rec)
+		batch.Queue(query, args...)
+	}
+
+	results := s.pool.SendBatch(ctx, batch)
+	defer results.Close()
+	for i := range recs {
+		created, err := scanEntity(results.QueryRow())
+		if err != nil {
+			errs[i] = err
+			continue
+		}
+		out[i] = created
+	}
+	return out, errs
+}
+
+// insertEntityQuery builds the INSERT ... RETURNING statement for a record.
+func insertEntityQuery(rec *EntityRecord) (string, []interface{}) {
 	metadata, _ := json.Marshal(rec.Metadata)
 	platformData, _ := json.Marshal(rec.PlatformData)
 	kinematics, _ := json.Marshal(rec.Kinematics)
@@ -446,8 +481,7 @@ func (s *EntityStore) Create(ctx context.Context, rec *EntityRecord) (*EntityRec
 		RETURNING %s
 	`, posExpr, posExpr, entitySelectColumns)
 
-	row := s.pool.QueryRow(ctx, query, args...)
-	return scanEntity(row)
+	return query, args
 }
 
 // SoftDelete marks an entity as deleted.

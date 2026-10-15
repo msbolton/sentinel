@@ -61,6 +61,7 @@ type OpenSkyListener struct {
 	minSpacing   time.Duration
 	maxInterval  time.Duration
 	maxArea      float64
+	creditFloor  int
 
 	vpMu          sync.RWMutex // guards everything below
 	viewport      Viewport
@@ -69,6 +70,7 @@ type OpenSkyListener struct {
 	lastAttemptAt time.Time // last poll attempt, success or not
 	dirty         bool      // viewport changed since the last attempt
 	idle          bool
+	credits       int // X-Rate-Limit-Remaining from the last response; -1 unknown
 
 	wake chan struct{} // cap 1; nudges the poll loop after a viewport change
 
@@ -96,6 +98,8 @@ func NewOpenSkyListener(cfg *config.Config, input chan<- *models.IngestMessage, 
 		minSpacing:   secondsOr(cfg.OpenSkyMinPollSpacingSec, defaultOpenSkyMinSpacing),
 		maxInterval:  secondsOr(cfg.OpenSkyMaxIntervalSec, defaultOpenSkyMaxInterval),
 		maxArea:      cfg.OpenSkyMaxAreaSqDeg,
+		creditFloor:  cfg.OpenSkyCreditFloor,
+		credits:      -1,
 		wake:         make(chan struct{}, 1),
 		stop:         make(chan struct{}),
 	}
@@ -221,9 +225,11 @@ func (l *OpenSkyListener) statusLocked() ViewportStatus {
 		Clients:           vp.Clients,
 		Boxes:             append([]BBox(nil), vp.Boxes...),
 		AreaSqDeg:         vp.Area(),
-		EffectiveInterval: effectiveInterval(l.interval, l.maxInterval, vp.Area(), l.maxArea),
+		EffectiveInterval: l.effectiveIntervalLocked(),
 		LastPollAt:        l.lastPollAt,
 		Idle:              l.idleLocked(),
+		CreditsRemaining:  l.credits,
+		LowCredits:        l.lowCreditsLocked(),
 	}
 	if l.viewportMode && !l.viewportAt.IsZero() {
 		st.ExpiresAt = l.viewportAt.Add(l.ttl)
@@ -253,11 +259,26 @@ func (l *OpenSkyListener) nextAttemptLocked(backoff time.Duration) time.Time {
 	if l.lastAttemptAt.IsZero() {
 		return time.Now()
 	}
-	wait := effectiveInterval(l.interval, l.maxInterval, l.viewport.Area(), l.maxArea)
+	wait := l.effectiveIntervalLocked()
 	if l.dirty {
 		wait = l.minSpacing
 	}
 	return l.lastAttemptAt.Add(wait + backoff)
+}
+
+// lowCreditsLocked reports whether OpenSky's remaining daily credits, as
+// last reported, are below the floor. Unknown counts as fine.
+func (l *OpenSkyListener) lowCreditsLocked() bool {
+	return l.creditFloor > 0 && l.credits >= 0 && l.credits < l.creditFloor
+}
+
+// effectiveIntervalLocked is the area-stretched interval, or the maximum
+// interval while OpenSky credits are running low.
+func (l *OpenSkyListener) effectiveIntervalLocked() time.Duration {
+	if l.lowCreditsLocked() {
+		return l.maxInterval
+	}
+	return effectiveInterval(l.interval, l.maxInterval, l.viewport.Area(), l.maxArea)
 }
 
 // effectiveInterval stretches the base interval for large areas: up to
@@ -448,7 +469,17 @@ func (l *OpenSkyListener) pollBox(box *BBox) ([]stateVector, error) {
 	defer resp.Body.Close()
 
 	if remaining := resp.Header.Get("X-Rate-Limit-Remaining"); remaining != "" {
-		l.logger.Debug("opensky credits remaining", zap.String("remaining", remaining))
+		if n, err := strconv.Atoi(strings.TrimSpace(remaining)); err == nil {
+			l.vpMu.Lock()
+			wasLow := l.lowCreditsLocked()
+			l.credits = n
+			isLow := l.lowCreditsLocked()
+			l.vpMu.Unlock()
+			if isLow && !wasLow {
+				l.logger.Warn("opensky credits running low, slowing to the maximum interval",
+					zap.Int("remaining", n), zap.Int("floor", l.creditFloor), zap.Duration("interval", l.maxInterval))
+			}
+		}
 	}
 
 	if resp.StatusCode != http.StatusOK {

@@ -366,6 +366,9 @@ func TestHandleViewport_PUT_OK(t *testing.T) {
 	if resp.Feed != "opensky" || !resp.Enabled || !resp.Active || resp.Clients != 1 || resp.AreaSqDeg != 50 || resp.EffectiveIntervalSec != 10 {
 		t.Errorf("unexpected response %+v", resp)
 	}
+	if resp.CreditsRemaining != nil || resp.LowCredits {
+		t.Errorf("mock listener reports no credits; got %+v", resp)
+	}
 	if ml.sets.Load() != 1 {
 		t.Errorf("listener not updated, sets=%d", ml.sets.Load())
 	}

@@ -795,6 +795,7 @@ services:
       OPENSKY_MIN_POLL_SPACING_SEC: "3"
       OPENSKY_MAX_AREA_SQDEG: "400"
       OPENSKY_MAX_INTERVAL_SEC: "60"
+      OPENSKY_CREDIT_FLOOR: "200"
     ports:
       - "4000:4000"
     depends_on:

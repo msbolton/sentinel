@@ -350,11 +350,11 @@ type mockViewportListener struct {
 func (m *mockViewportListener) SetViewport(v sources.Viewport) sources.ViewportStatus {
 	m.viewport = v
 	m.sets.Add(1)
-	return sources.ViewportStatus{Active: v.Active, Clients: v.Clients, Boxes: v.Boxes, AreaSqDeg: v.Area(), EffectiveInterval: 10 * time.Second}
+	return sources.ViewportStatus{Active: v.Active, Clients: v.Clients, Boxes: v.Boxes, AreaSqDeg: v.Area(), EffectiveInterval: 10 * time.Second, CreditsRemaining: -1}
 }
 
 func (m *mockViewportListener) ViewportStatus() sources.ViewportStatus {
-	return sources.ViewportStatus{Active: m.viewport.Active, Clients: m.viewport.Clients, Boxes: m.viewport.Boxes, AreaSqDeg: m.viewport.Area()}
+	return sources.ViewportStatus{Active: m.viewport.Active, Clients: m.viewport.Clients, Boxes: m.viewport.Boxes, AreaSqDeg: m.viewport.Area(), CreditsRemaining: -1}
 }
 
 var testBox = sources.BBox{South: 40, West: -90, North: 45, East: -80}

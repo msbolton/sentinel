@@ -272,7 +272,7 @@ func (m *Manager) SetViewport(id string, v sources.Viewport) (ViewportState, err
 		}
 		state.Status = va.SetViewport(v)
 	} else {
-		state.Status = sources.ViewportStatus{Active: v.Active, Clients: v.Clients, Boxes: v.Boxes, AreaSqDeg: v.Area(), Idle: true}
+		state.Status = sources.ViewportStatus{Active: v.Active, Clients: v.Clients, Boxes: v.Boxes, AreaSqDeg: v.Area(), Idle: true, CreditsRemaining: -1}
 	}
 
 	stored := v
@@ -301,11 +301,11 @@ func (m *Manager) GetViewport(id string) (ViewportState, error) {
 		return state, nil
 	}
 	if f.viewport == nil {
-		state.Status = sources.ViewportStatus{Idle: true}
+		state.Status = sources.ViewportStatus{Idle: true, CreditsRemaining: -1}
 		return state, nil
 	}
 	v := *f.viewport
-	state.Status = sources.ViewportStatus{Active: v.Active, Clients: v.Clients, Boxes: v.Boxes, AreaSqDeg: v.Area(), Idle: true}
+	state.Status = sources.ViewportStatus{Active: v.Active, Clients: v.Clients, Boxes: v.Boxes, AreaSqDeg: v.Area(), Idle: true, CreditsRemaining: -1}
 	return state, nil
 }
 

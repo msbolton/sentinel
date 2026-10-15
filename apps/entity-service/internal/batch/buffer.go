@@ -122,6 +122,12 @@ func (b *Buffer) flush() {
 func (b *Buffer) processBatch(batch []IngestMessage) {
 	ctx := context.Background()
 
+	// A feed can report the same entity more than once within one flush
+	// window (two polls landing back to back). Keep the latest report only;
+	// otherwise a brand-new entity would be inserted twice, since the
+	// sourceEntityId index is not unique.
+	batch = dedupeLatest(batch)
+
 	// Collect sourceEntityIDs for bulk lookup.
 	sourceIDs := make([]string, 0, len(batch))
 	for _, msg := range batch {
@@ -138,6 +144,7 @@ func (b *Buffer) processBatch(batch []IngestMessage) {
 	}
 
 	var positionUpdates []store.BulkPositionUpdate
+	var geoEntries []redis.GeoEntry
 	var newEntities []IngestMessage
 
 	for _, msg := range batch {
@@ -165,12 +172,10 @@ func (b *Buffer) processBatch(batch []IngestMessage) {
 			TrackEnvironment: msg.TrackEnvironment,
 			CircularError:    msg.CircularError,
 		})
+		geoEntries = append(geoEntries, redis.GeoEntry{EntityID: info.ID, Lng: msg.Longitude, Lat: msg.Latitude})
 
 		// Emit position event.
 		b.emitPositionEvent(info.ID, info.EntityType, msg)
-
-		// Update geo cache.
-		b.geoCache.Add(ctx, info.ID, msg.Longitude, msg.Latitude)
 
 		// Emit restored event if entity was stale/aged out.
 		if info.AgeoutState == "STALE" || info.AgeoutState == "AGED_OUT" {
@@ -178,27 +183,77 @@ func (b *Buffer) processBatch(batch []IngestMessage) {
 		}
 	}
 
-	// Bulk update existing entities.
+	// Bulk update existing entities, then refresh the geo cache in one call.
 	if len(positionUpdates) > 0 {
 		if err := b.entityStore.BulkUpdatePositions(ctx, positionUpdates); err != nil {
 			b.logger.Error("bulk position update failed", zap.Error(err), zap.Int("count", len(positionUpdates)))
 		}
+		b.geoCache.AddBatch(ctx, geoEntries)
 	}
 
-	// Create new entities.
-	for _, msg := range newEntities {
-		b.createEntity(ctx, msg)
+	// Create new entities in one round trip.
+	if len(newEntities) > 0 {
+		b.createEntities(ctx, newEntities)
 	}
 }
 
-func (b *Buffer) createEntity(ctx context.Context, msg IngestMessage) {
+// dedupeLatest keeps the last message for each source entity id, preserving
+// the order of first appearance. Messages without an id are kept as they are.
+func dedupeLatest(batch []IngestMessage) []IngestMessage {
+	if len(batch) < 2 {
+		return batch
+	}
+	latest := make(map[string]int, len(batch))
+	for i, msg := range batch {
+		if sid := resolveSourceEntityID(msg); sid != "" {
+			latest[sid] = i
+		}
+	}
+	out := make([]IngestMessage, 0, len(latest))
+	seen := make(map[string]struct{}, len(latest))
+	for _, msg := range batch {
+		sid := resolveSourceEntityID(msg)
+		if sid == "" {
+			out = append(out, msg)
+			continue
+		}
+		if _, done := seen[sid]; done {
+			continue
+		}
+		seen[sid] = struct{}{}
+		out = append(out, batch[latest[sid]])
+	}
+	return out
+}
+
+// createEntities inserts a batch of new entities and emits their events.
+func (b *Buffer) createEntities(ctx context.Context, msgs []IngestMessage) {
+	recs := make([]*store.EntityRecord, len(msgs))
+	for i, msg := range msgs {
+		recs[i] = newEntityRecord(msg)
+	}
+
+	created, errs := b.entityStore.CreateBatch(ctx, recs)
+
+	var geoEntries []redis.GeoEntry
+	for i, rec := range created {
+		if errs[i] != nil {
+			b.logger.Error("create entity failed", zap.String("sourceEntityId", resolveSourceEntityID(msgs[i])), zap.Error(errs[i]))
+			continue
+		}
+		b.emitCreatedEvent(rec, msgs[i])
+		geoEntries = append(geoEntries, redis.GeoEntry{EntityID: rec.ID, Lng: msgs[i].Longitude, Lat: msgs[i].Latitude})
+	}
+	b.geoCache.AddBatch(ctx, geoEntries)
+}
+
+// newEntityRecord maps an ingest message to a record for insertion.
+func newEntityRecord(msg IngestMessage) *store.EntityRecord {
 	entityType := mapEntityType(msg.EntityType)
 	source := mapSource(msg.Source)
 	sid := resolveSourceEntityID(msg)
-	platformData := buildPlatformData(msg)
-	kinematics := buildKinematics(msg)
 
-	rec := &store.EntityRecord{
+	return &store.EntityRecord{
 		EntityType:       entityType,
 		Name:             msg.Name,
 		Source:           source,
@@ -214,22 +269,13 @@ func (b *Buffer) createEntity(ctx context.Context, msg IngestMessage) {
 		SourceEntityID:   &sid,
 		TrackEnvironment: msg.TrackEnvironment,
 		CircularError:    msg.CircularError,
-		PlatformData:     platformData,
-		Kinematics:       kinematics,
+		PlatformData:     buildPlatformData(msg),
+		Kinematics:       buildKinematics(msg),
 		CountryOfOrigin:  msg.CountryOfOrigin,
 		DimensionLength:  msg.DimensionLength,
 		DimensionWidth:   msg.DimensionWidth,
 		Affiliation:      msg.Affiliation,
 	}
-
-	created, err := b.entityStore.Create(ctx, rec)
-	if err != nil {
-		b.logger.Error("create entity failed", zap.String("sourceEntityId", sid), zap.Error(err))
-		return
-	}
-
-	b.emitCreatedEvent(created, msg)
-	b.geoCache.Add(ctx, created.ID, msg.Longitude, msg.Latitude)
 }
 
 func (b *Buffer) emitPositionEvent(entityID, entityType string, msg IngestMessage) {

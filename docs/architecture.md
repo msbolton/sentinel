@@ -106,7 +106,9 @@ Rules the OpenSky listener applies:
 - Each box is one OpenSky request; aircraft returned by more than one box are forwarded once.
 - With `OPENSKY_VIEWPORT_MODE=false` the listener behaves as before: it polls `OPENSKY_BBOX` (empty = global) continuously, with the same area-based stretching, and never expires.
 
-OpenSky credits: an authenticated account has 4,000 credits per day. A bounding box under 25 square degrees costs 1 credit per request, a global request costs 4. One viewport box polled every 10 s is 8,640 credits per day if a client stays connected around the clock, so continuous viewing is good for roughly 11 hours a day; polling stops as soon as the last client disconnects.
+OpenSky credits: an authenticated account has 4,000 credits per day. A bounding box under 25 square degrees costs 1 credit per request, a global request costs 4. One viewport box polled every 10 s is 8,640 credits per day if a client stays connected around the clock, so continuous viewing is good for roughly 11 hours a day; polling stops as soon as the last client disconnects. The listener reads `X-Rate-Limit-Remaining` from every response and, below `OPENSKY_CREDIT_FLOOR` (200), drops to the maximum interval so the last credits last; the viewport endpoint reports `creditsRemaining` and `lowCredits`.
+
+The ingest pipeline's duplicate filter compares a report's feed timestamp and position with the last one seen. An aircraft whose `time_position` has not advanced (parked, or a cached OpenSky snapshot) is still forwarded at least every 5 s of wall-clock time, so its `lastSeenAt` keeps moving and it is not aged out while the feed still reports it.
 
 ### Entity Query (REST)
 

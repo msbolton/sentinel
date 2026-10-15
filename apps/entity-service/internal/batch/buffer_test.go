@@ -113,3 +113,41 @@ func TestCreatedEventPayloadCarriesMotion(t *testing.T) {
 		t.Errorf("last_seen_at = %v", p["last_seen_at"])
 	}
 }
+
+func TestDedupeLatestKeepsLastReportPerEntity(t *testing.T) {
+	batch := []IngestMessage{
+		{EntityID: "a", Latitude: 1},
+		{EntityID: "b", Latitude: 1},
+		{Latitude: 9}, // no id: kept as is
+		{EntityID: "a", Latitude: 2},
+		{EntityID: "c", Latitude: 1},
+		{EntityID: "a", Latitude: 3},
+	}
+	got := dedupeLatest(batch)
+	if len(got) != 4 {
+		t.Fatalf("expected 4 messages, got %d: %+v", len(got), got)
+	}
+	if got[0].EntityID != "a" || got[0].Latitude != 3 {
+		t.Errorf("a should be the latest report in first-seen position, got %+v", got[0])
+	}
+	if got[1].EntityID != "b" || got[2].EntityID != "" || got[3].EntityID != "c" {
+		t.Errorf("order not preserved: %+v", got)
+	}
+	// Small batches pass through untouched.
+	one := []IngestMessage{{EntityID: "x"}}
+	if len(dedupeLatest(one)) != 1 || len(dedupeLatest(nil)) != 0 {
+		t.Error("small batches should pass through")
+	}
+}
+
+func TestNewEntityRecordMapsFields(t *testing.T) {
+	country := "United States"
+	msg := IngestMessage{EntityID: "ICAO-ABC", EntityType: "aircraft", Source: "opensky", Name: "UAL1", Latitude: 1, Longitude: 2, Altitude: 300, CountryOfOrigin: &country}
+	rec := newEntityRecord(msg)
+	if rec.EntityType != "AIRCRAFT" || rec.Source != "OPENSKY" || *rec.SourceEntityID != "ICAO-ABC" || rec.Position.Lat != 1 || *rec.Altitude != 300 || rec.CountryOfOrigin != &country {
+		t.Errorf("unexpected record %+v", rec)
+	}
+	if rec.Metadata == nil || rec.Affiliations == nil {
+		t.Error("metadata and affiliations must be non-nil")
+	}
+}

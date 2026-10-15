@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -632,4 +633,41 @@ var testMetrics = metrics.New()
 
 func newTestMetrics() *metrics.Metrics {
 	return testMetrics
+}
+
+func TestLowCreditsSlowPolling(t *testing.T) {
+	var remaining atomic.Int32
+	remaining.Store(500)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Rate-Limit-Remaining", strconv.Itoa(int(remaining.Load())))
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(openSkyFixture))
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{OpenSkyViewportMode: true, OpenSkyIntervalSec: 10, OpenSkyMaxIntervalSec: 60, OpenSkyCreditFloor: 200}
+	l := NewOpenSkyListener(cfg, make(chan *models.IngestMessage, 100), zap.NewNop(), newTestMetrics(), nil, nil)
+	l.baseURL = server.URL
+	l.client = server.Client()
+	l.SetViewport(Viewport{Active: true, Boxes: []BBox{{South: 40, West: -90, North: 45, East: -80}}})
+
+	if st := l.ViewportStatus(); st.CreditsRemaining != -1 || st.LowCredits {
+		t.Errorf("credits should be unknown before the first poll, got %+v", st)
+	}
+	if err := l.poll(); err != nil {
+		t.Fatal(err)
+	}
+	st := l.ViewportStatus()
+	if st.CreditsRemaining != 500 || st.LowCredits || st.EffectiveInterval != 10*time.Second {
+		t.Errorf("with plenty of credits expected the base interval, got %+v", st)
+	}
+
+	remaining.Store(150)
+	if err := l.poll(); err != nil {
+		t.Fatal(err)
+	}
+	st = l.ViewportStatus()
+	if st.CreditsRemaining != 150 || !st.LowCredits || st.EffectiveInterval != 60*time.Second {
+		t.Errorf("below the floor expected the max interval, got %+v", st)
+	}
 }

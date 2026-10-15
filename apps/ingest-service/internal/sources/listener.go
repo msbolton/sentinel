@@ -109,6 +109,8 @@ type ViewportStatus struct {
 	NextPollIn        time.Duration
 	ExpiresAt         time.Time // zero when the lease never expires (legacy mode)
 	Idle              bool      // true when the listener is not polling
+	CreditsRemaining  int       // OpenSky daily credits left per its last response; -1 when unknown
+	LowCredits        bool      // true when CreditsRemaining is below the configured floor
 }
 
 // ViewportAware is implemented by listeners whose polling area can be
