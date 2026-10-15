@@ -25,15 +25,37 @@ func NewTrackStore(pool *pgxpool.Pool, logger *zap.Logger) *TrackStore {
 }
 
 // BulkInsert performs a bulk INSERT of track points using parameterized SQL.
-func (s *TrackStore) BulkInsert(ctx context.Context, points []models.BufferedPoint) error {
-	if len(points) == 0 {
-		return nil
-	}
+// paramsPerRow is the number of bind parameters one track point needs.
+const paramsPerRow = 13
 
+// maxRowsPerInsert keeps a multi-row INSERT under PostgreSQL's 65,535 bind
+// parameter limit (13 parameters per row allows 5,041). A backlog replayed
+// at startup can easily exceed that in one flush.
+const maxRowsPerInsert = 4000
+
+// BulkInsert writes points with as few multi-row INSERTs as the parameter
+// limit allows. On error the whole batch is reported failed so the batcher
+// can retry it; rows already written in earlier chunks are not rolled back
+// (track points are append-only and a duplicate is harmless).
+func (s *TrackStore) BulkInsert(ctx context.Context, points []models.BufferedPoint) error {
+	for start := 0; start < len(points); start += maxRowsPerInsert {
+		end := start + maxRowsPerInsert
+		if end > len(points) {
+			end = len(points)
+		}
+		query, args := buildInsert(points[start:end])
+		if _, err := s.pool.Exec(ctx, query, args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// buildInsert renders one multi-row INSERT for up to maxRowsPerInsert points.
+func buildInsert(points []models.BufferedPoint) (string, []interface{}) {
 	var b strings.Builder
 	b.WriteString(`INSERT INTO sentinel.track_points ("entityId", "source", "position", "heading", "speedKnots", "course", "timestamp", "altitude", "velocityNorth", "velocityEast", "velocityUp", "circularError") VALUES `)
 
-	const paramsPerRow = 13
 	args := make([]interface{}, 0, len(points)*paramsPerRow)
 	for i, p := range points {
 		if i > 0 {
@@ -46,9 +68,7 @@ func (s *TrackStore) BulkInsert(ctx context.Context, points []models.BufferedPoi
 		))
 		args = append(args, p.EntityID, p.Source, p.Longitude, p.Latitude, p.Heading, p.SpeedKnots, p.Course, p.Timestamp, p.Altitude, p.VelocityNorth, p.VelocityEast, p.VelocityUp, p.CircularError)
 	}
-
-	_, err := s.pool.Exec(ctx, b.String(), args...)
-	return err
+	return b.String(), args
 }
 
 // GetHistory queries track history for an entity with optional time range and limit.
