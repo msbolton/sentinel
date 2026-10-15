@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/sentinel/alert-service/internal/store"
 	"github.com/sentinel/go-common/kafka"
@@ -15,11 +16,13 @@ type Evaluator struct {
 	store    *store.AlertStore
 	producer *kafka.Producer
 	logger   *zap.Logger
+	geofence *ruleStateTracker
+	speed    *ruleStateTracker
 }
 
 // NewEvaluator creates a new alert evaluator.
 func NewEvaluator(store *store.AlertStore, producer *kafka.Producer, logger *zap.Logger) *Evaluator {
-	return &Evaluator{store: store, producer: producer, logger: logger}
+	return &Evaluator{store: store, producer: producer, logger: logger, geofence: newRuleStateTracker(), speed: newRuleStateTracker()}
 }
 
 // EvaluatePosition evaluates geofence and speed rules for a position event.
@@ -63,7 +66,10 @@ func (e *Evaluator) evaluateGeofence(ctx context.Context, entityID string, lat, 
 			continue
 		}
 
-		alertType := geofenceAlertType(contains, triggerOn)
+		// Fire on the crossing, not on every fix inside the zone.
+		alertType := e.geofence.transition(rule.ID, entityID, contains, time.Now(), func(prev *bool, cur bool) string {
+			return geofenceTransition(prev, cur, triggerOn)
+		})
 		if alertType == "" {
 			continue
 		}
@@ -101,7 +107,14 @@ func (e *Evaluator) evaluateSpeed(ctx context.Context, entityID string, speedKno
 
 	for _, rule := range rules {
 		triggered, description := evaluateSpeedRule(entityID, rule.Config, speedKnots)
-		if !triggered {
+		// Fire when the entity starts violating the threshold, not on every fix.
+		fired := e.speed.transition(rule.ID, entityID, triggered, time.Now(), func(prev *bool, cur bool) string {
+			if cur && (prev == nil || !*prev) {
+				return "SPEED_ANOMALY"
+			}
+			return ""
+		})
+		if fired == "" {
 			continue
 		}
 
