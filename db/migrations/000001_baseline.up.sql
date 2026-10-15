@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS sentinel.entities (
   "dimensionLength"       DOUBLE PRECISION,
   "dimensionWidth"        DOUBLE PRECISION,
   "dimensionHeight"       DOUBLE PRECISION,
-  "countryOfOrigin"       VARCHAR(8),
+  "countryOfOrigin"       VARCHAR(100),   -- OpenSky sends full country names
   kinematics              JSONB DEFAULT '{}'::jsonb,
   "platformData"          JSONB DEFAULT '{}'::jsonb,
   "circularError"         DOUBLE PRECISION,
@@ -299,6 +299,52 @@ BEGIN
   END LOOP;
 END
 $$;
+
+-- Legacy repair: align the remaining TypeORM-era column definitions with the
+-- CREATE TABLE statements above. Every statement is a no-op on a database this
+-- file created. On a legacy database it relaxes NOT NULL on columns the Go
+-- stores write as NULL, widens countryOfOrigin, turns feedId from UUID into
+-- VARCHAR, moves timestamps to TIMESTAMPTZ, and replaces enum-typed defaults
+-- so the enum types themselves can be dropped.
+ALTER TABLE sentinel.entities
+  ALTER COLUMN metadata               DROP NOT NULL,
+  ALTER COLUMN affiliations           DROP NOT NULL,
+  ALTER COLUMN affiliation            DROP NOT NULL,
+  ALTER COLUMN "identityConfidence"   DROP NOT NULL,
+  ALTER COLUMN characterization       DROP NOT NULL,
+  ALTER COLUMN "trackEnvironment"     DROP NOT NULL,
+  ALTER COLUMN "trackProcessingState" DROP NOT NULL,
+  ALTER COLUMN "operationalStatus"    DROP NOT NULL,
+  ALTER COLUMN "damageAssessment"     DROP NOT NULL,
+  ALTER COLUMN "damageConfidence"     DROP NOT NULL,
+  ALTER COLUMN kinematics             DROP NOT NULL,
+  ALTER COLUMN "platformData"         DROP NOT NULL,
+  ALTER COLUMN "countryOfOrigin"      TYPE VARCHAR(100),
+  ALTER COLUMN "feedId"               TYPE VARCHAR(255) USING "feedId"::text,
+  ALTER COLUMN "createdAt"            TYPE TIMESTAMPTZ,
+  ALTER COLUMN "updatedAt"            TYPE TIMESTAMPTZ,
+  ALTER COLUMN classification         SET DEFAULT 'UNCLASSIFIED',
+  ALTER COLUMN id                     SET DEFAULT gen_random_uuid();
+
+ALTER TABLE sentinel.track_points
+  ALTER COLUMN "feedId" TYPE VARCHAR(255) USING "feedId"::text;
+
+ALTER TABLE sentinel.locations
+  ALTER COLUMN category    SET DEFAULT 'CUSTOM',
+  ALTER COLUMN "createdAt" TYPE TIMESTAMPTZ,
+  ALTER COLUMN "updatedAt" TYPE TIMESTAMPTZ,
+  ALTER COLUMN id          SET DEFAULT gen_random_uuid();
+
+ALTER TABLE sentinel.feed_ageout_config
+  ALTER COLUMN "feedId"    TYPE VARCHAR(255) USING "feedId"::text,
+  ALTER COLUMN "createdAt" TYPE TIMESTAMPTZ,
+  ALTER COLUMN "updatedAt" TYPE TIMESTAMPTZ,
+  ALTER COLUMN id          SET DEFAULT gen_random_uuid();
+
+DROP TYPE IF EXISTS sentinel.entities_entitytype_enum;
+DROP TYPE IF EXISTS sentinel.entities_source_enum;
+DROP TYPE IF EXISTS sentinel.entities_classification_enum;
+DROP TYPE IF EXISTS sentinel.locations_category_enum;
 
 -- -----------------------------------------------------------------------------
 -- anomalies  (apps/analytics-service/sentinel_analytics/db.py)

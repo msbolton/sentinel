@@ -26,7 +26,7 @@ type Config struct {
 	OpenSkyBBox         string // OPENSKY_BBOX (default: "" = global)
 	OpenSkyClientID     string // OPENSKY_CLIENT_ID (default: "")
 	OpenSkyClientSecret string // OPENSKY_CLIENT_SECRET (default: "")
-	OpenSkyTokenURL     string // OPENSKY_TOKEN_URL (default: "https://opensky-network.org/api/oauth/token")
+	OpenSkyTokenURL     string // OPENSKY_TOKEN_URL (default: "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token")
 
 	ADSBLolEnabled     bool // ADSBLOL_ENABLED (default: false)
 	ADSBLolIntervalSec int  // ADSBLOL_INTERVAL_SEC (default: 10)
@@ -73,7 +73,7 @@ func Load() *Config {
 		OpenSkyBBox:         envOrDefault("OPENSKY_BBOX", ""),
 		OpenSkyClientID:     envOrDefault("OPENSKY_CLIENT_ID", ""),
 		OpenSkyClientSecret: envOrDefault("OPENSKY_CLIENT_SECRET", ""),
-		OpenSkyTokenURL:     envOrDefault("OPENSKY_TOKEN_URL", "https://opensky-network.org/api/oauth/token"),
+		OpenSkyTokenURL:     envOrDefault("OPENSKY_TOKEN_URL", "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"),
 
 		ADSBLolEnabled:     os.Getenv("ADSBLOL_ENABLED") == "true",
 		ADSBLolIntervalSec: envOrDefaultInt("ADSBLOL_INTERVAL_SEC", 10),
