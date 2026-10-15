@@ -1,40 +1,33 @@
 {
   "name": "search-service",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "apps/search-service/src",
+  "sourceRoot": "apps/search-service",
   "projectType": "application",
+  "tags": ["scope:search-service", "type:microservice"],
   "targets": {
     "build": {
-      "executor": "@nx/js:tsc",
-      "outputs": ["{options.outputPath}"],
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/dist/apps/search-service"],
       "options": {
-        "outputPath": "dist/apps/search-service",
-        "main": "apps/search-service/src/main.ts",
-        "tsConfig": "apps/search-service/tsconfig.app.json",
-        "assets": []
+        "commands": [
+          "cd apps/search-service && CGO_ENABLED=1 go build -o ../../dist/apps/search-service/server ./cmd/server"
+        ],
+        "cwd": "{workspaceRoot}"
       }
     },
     "serve": {
-      "executor": "@nx/js:node",
+      "executor": "nx:run-commands",
       "options": {
-        "buildTarget": "search-service:build",
-        "port": 3003
-      }
-    },
-    "lint": {
-      "executor": "@nx/eslint:lint",
-      "options": {
-        "lintFilePatterns": ["apps/search-service/**/*.ts"]
+        "commands": ["cd apps/search-service && go run ./cmd/server"],
+        "cwd": "{workspaceRoot}"
       }
     },
     "test": {
-      "executor": "@nx/jest:jest",
-      "outputs": ["{workspaceRoot}/coverage/apps/search-service"],
+      "executor": "nx:run-commands",
       "options": {
-        "jestConfig": "apps/search-service/jest.config.ts",
-        "passWithNoTests": true
+        "commands": ["cd apps/search-service && go test -v -race ./..."],
+        "cwd": "{workspaceRoot}"
       }
     }
-  },
-  "tags": ["scope:search-service", "type:microservice"]
+  }
 }

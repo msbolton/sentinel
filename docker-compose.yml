@@ -60,6 +60,26 @@ services:
       - sentinel-network
 
   # ===========================================================================
+  # Schema migrations (runs once then exits)
+  # ===========================================================================
+  # Applies db/migrations with golang-migrate. Application services wait for
+  # this container to complete successfully before starting.
+  # ===========================================================================
+  db-migrate:
+    image: migrate/migrate:v4.18.1
+    platform: linux/amd64
+    container_name: sentinel-db-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./db/migrations:/migrations:ro
+    command: ["-path=/migrations", "-database", "postgres://sentinel:sentinel_dev@postgres:5432/sentinel?sslmode=disable", "up"]
+    restart: "no"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
   # Keycloak PostgreSQL (dedicated instance)
   # ===========================================================================
   keycloak-db:
@@ -131,41 +151,42 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Apache Kafka 3.7 (KRaft mode - no Zookeeper)
+  # Apache Kafka 3.7 (KRaft mode, official apache/kafka image)
   # ===========================================================================
   kafka:
-    image: bitnami/kafka:3.7
+    image: apache/kafka:3.7.0
     container_name: sentinel-kafka
     hostname: kafka
     restart: unless-stopped
     environment:
-      KAFKA_CFG_NODE_ID: "1"
-      KAFKA_CFG_PROCESS_ROLES: "broker,controller"
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9094"
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
-      KAFKA_CFG_LISTENERS: "EXTERNAL://:9092,INTERNAL://:9093,CONTROLLER://:9094"
-      KAFKA_CFG_ADVERTISED_LISTENERS: "EXTERNAL://localhost:9092,INTERNAL://kafka:9093"
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"
-      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: "INTERNAL"
-      KAFKA_KRAFT_CLUSTER_ID: "sentinel-kafka-cluster-001"
-      KAFKA_CFG_LOG_DIRS: "/bitnami/kafka/data"
-      KAFKA_CFG_NUM_PARTITIONS: "6"
-      KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: "1"
-      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
-      KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
-      KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: "1"
-      KAFKA_CFG_LOG_RETENTION_HOURS: "168"
-      KAFKA_CFG_LOG_SEGMENT_BYTES: "1073741824"
-      KAFKA_CFG_LOG_RETENTION_CHECK_INTERVAL_MS: "300000"
-      KAFKA_CFG_MESSAGE_MAX_BYTES: "10485760"
-      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9094"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LISTENERS: "EXTERNAL://:9092,INTERNAL://:9093,CONTROLLER://:9094"
+      KAFKA_ADVERTISED_LISTENERS: "EXTERNAL://localhost:9092,INTERNAL://kafka:9093"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+      KAFKA_NUM_PARTITIONS: "6"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_LOG_RETENTION_HOURS: "168"
+      KAFKA_LOG_SEGMENT_BYTES: "1073741824"
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: "300000"
+      KAFKA_MESSAGE_MAX_BYTES: "10485760"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
     ports:
       - "9092:9092"
       - "9093:9093"
     volumes:
-      - kafka-data:/bitnami/kafka/data
+      - kafka-data:/var/lib/kafka
     healthcheck:
-      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9093 > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9093 > /dev/null 2>&1"]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -185,7 +206,7 @@ services:
   # Kafka Topic Initialization (runs once then exits)
   # ===========================================================================
   kafka-init:
-    image: bitnami/kafka:3.7
+    image: apache/kafka:3.7.0
     container_name: sentinel-kafka-init
     depends_on:
       kafka:
@@ -399,7 +420,7 @@ services:
   # ===========================================================================
 
   # ===========================================================================
-  # API Gateway (NestJS - Node 22)
+  # API Gateway (Go)
   # ===========================================================================
   api-gateway:
     build:
@@ -410,8 +431,11 @@ services:
     hostname: api-gateway
     restart: unless-stopped
     environment:
-      NODE_ENV: development
+      APP_ENV: development
       PORT: "3000"
+      # Dev only: every request runs as the built-in dev user. Never set in production.
+      AUTH_DEV_BYPASS: "true"
+      CORS_ORIGIN: http://localhost:4200
       # Database
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -428,6 +452,13 @@ services:
       # Keycloak
       KEYCLOAK_URL: http://keycloak:8080
       KEYCLOAK_REALM: sentinel
+      # Tokens are issued through the browser-facing hostname, so accept both issuers.
+      KEYCLOAK_ISSUERS: http://keycloak:8080/realms/sentinel,http://localhost:8080/realms/sentinel
+      KEYCLOAK_SERVICE_CLIENT_ID: sentinel-service
+      KEYCLOAK_SERVICE_CLIENT_SECRET: sentinel-service-secret-dev
+      # SMTP (mailhog in docker-compose.infra.yml)
+      MAIL_HOST: mailhog
+      MAIL_PORT: "1025"
       # Downstream services
       ENTITY_SERVICE_URL: http://entity-service:3001
       TRACK_SERVICE_URL: http://track-service:3002
@@ -446,6 +477,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       kafka:
@@ -453,7 +486,7 @@ services:
       keycloak:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -470,7 +503,7 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Entity Service (NestJS - Node 22)
+  # Entity Service (Go)
   # ===========================================================================
   entity-service:
     build:
@@ -481,7 +514,6 @@ services:
     hostname: entity-service
     restart: unless-stopped
     environment:
-      NODE_ENV: development
       PORT: "3001"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -496,12 +528,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3001/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -518,7 +552,7 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Track Service (NestJS - Node 22)
+  # Track Service (Go)
   # ===========================================================================
   track-service:
     build:
@@ -529,7 +563,6 @@ services:
     hostname: track-service
     restart: unless-stopped
     environment:
-      NODE_ENV: development
       PORT: "3002"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -544,12 +577,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3002/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3002/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -566,7 +601,7 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Search Service (NestJS - Node 22)
+  # Search Service (Go)
   # ===========================================================================
   search-service:
     build:
@@ -577,7 +612,6 @@ services:
     hostname: search-service
     restart: unless-stopped
     environment:
-      NODE_ENV: development
       PORT: "3003"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -587,18 +621,21 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
-      OPENSEARCH_URL: http://opensearch:9200
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: "9200"
     ports:
       - "3003:3003"
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       opensearch:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3003/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3003/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -615,7 +652,7 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Link Analysis Service (NestJS - Node 22)
+  # Link Analysis Service (Go)
   # ===========================================================================
   link-analysis-service:
     build:
@@ -626,7 +663,6 @@ services:
     hostname: link-analysis-service
     restart: unless-stopped
     environment:
-      NODE_ENV: development
       PORT: "3004"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -641,12 +677,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3004/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3004/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -663,7 +701,7 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Alert Service (NestJS - Node 22)
+  # Alert Service (Go)
   # ===========================================================================
   alert-service:
     build:
@@ -674,7 +712,6 @@ services:
     hostname: alert-service
     restart: unless-stopped
     environment:
-      NODE_ENV: development
       PORT: "3005"
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -689,12 +726,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3005/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3005/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -715,9 +754,8 @@ services:
   # ===========================================================================
   ingest-service:
     build:
-      context: ./services/ingest-service
+      context: ./apps/ingest-service
       dockerfile: Dockerfile
-      # Go service lives outside the Nx monorepo under services/
     image: sentinel/ingest-service:dev
     container_name: sentinel-ingest-service
     hostname: ingest-service
@@ -774,9 +812,8 @@ services:
   # ===========================================================================
   analytics-service:
     build:
-      context: ./services/analytics-service
+      context: ./apps/analytics-service
       dockerfile: Dockerfile
-      # Python service lives outside the Nx monorepo under services/
     image: sentinel/analytics-service:dev
     container_name: sentinel-analytics-service
     hostname: analytics-service
@@ -803,6 +840,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       kafka:
@@ -829,13 +868,13 @@ services:
   # ===========================================================================
   # Web UI (Angular)
   # ===========================================================================
-  web:
+  client:
     build:
       context: .
-      dockerfile: ./apps/web/Dockerfile
-    image: sentinel/web:dev
-    container_name: sentinel-web
-    hostname: web
+      dockerfile: ./apps/client/Dockerfile
+    image: sentinel/client:dev
+    container_name: sentinel-client
+    hostname: client
     restart: unless-stopped
     environment:
       NODE_ENV: development
@@ -849,7 +888,7 @@ services:
       api-gateway:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:4200/ || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4200/ || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5

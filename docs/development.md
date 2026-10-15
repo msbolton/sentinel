@@ -2,10 +2,10 @@
 
 ## Prerequisites
 
-- **Node.js** 20+ (for NestJS and Angular)
+- **Node.js** 22+ (Angular tooling)
 - **npm** (comes with Node.js)
 - **Docker** & **Docker Compose** (for infrastructure services)
-- **Go 1.22+** (for ingest-service, optional)
+- **Go 1.25+** (API gateway and all backend services)
 - **Python 3.12+** (for analytics-service, optional)
 
 ## First-Time Setup
@@ -21,14 +21,15 @@ cp .env.example .env
 # 3. Start infrastructure (PostgreSQL, Redis, Kafka, etc.)
 make docker-infra
 
-# 4. Wait ~15 seconds for services to be healthy, then seed the database
+# 4. Wait ~15 seconds for services to be healthy, then create the schema and seed it
+make db-migrate
 make db-seed
 
 # 5. Start the API gateway and web UI
 make dev
 ```
 
-The API Gateway will warm the Redis cache from PostgreSQL on startup, so seeded entities are immediately queryable.
+The entity-service warms its Redis geo cache from PostgreSQL on startup, so seeded entities are immediately queryable through the gateway.
 
 ## Makefile Targets
 
@@ -36,9 +37,9 @@ The API Gateway will warm the Redis cache from PostgreSQL on startup, so seeded 
 
 | Target | Command | Description |
 |--------|---------|-------------|
-| `make dev` | Starts infra + web + api-gateway | Full development environment |
-| `make dev-web` | `npx nx serve web` | Angular dev server on `:4200` |
-| `make dev-api` | `npx nx serve api-gateway` | NestJS dev server on `:3000` |
+| `make dev` | Starts infra + client + every Go service | Full development environment |
+| `make dev-client` | `npx nx serve client` | Angular dev server on `:4200` |
+| `make dev-api` | `npx nx serve api-gateway` | Go API gateway on `:3000` (auth bypass on) |
 | `make dev-ingest` | `go run ./cmd/server` | Go ingest service on `:4000` |
 | `make dev-analytics` | `uvicorn ... --reload` | Python analytics on `:5000` |
 
@@ -47,8 +48,8 @@ The API Gateway will warm the Redis cache from PostgreSQL on startup, so seeded 
 | Target | Command | Description |
 |--------|---------|-------------|
 | `make build` | `npx nx run-many --target=build` | Build all apps |
-| `make build-web` | `npx nx build web --production` | Angular production build |
-| `make build-api` | `npx nx build api-gateway` | NestJS production build |
+| `make build-client` | `npx nx build client --production` | Angular production build |
+| `make build-api` | `npx nx build api-gateway` | Go API gateway binary |
 
 ### Docker
 
@@ -66,8 +67,10 @@ The API Gateway will warm the Redis cache from PostgreSQL on startup, so seeded 
 | Target | Description |
 |--------|-------------|
 | `make test` | Run all tests across all apps |
-| `make test-web` | Angular unit tests |
-| `make test-api` | NestJS unit tests |
+| `make test-client` | Angular unit tests |
+| `make test-api` | API gateway Go tests |
+| `make test-go` | All Go service tests (vet + race) |
+| `scripts/smoke.sh` | Exercise every gateway route, the nginx proxy, and the WebSocket against a running stack |
 | `make lint` | Lint all code |
 | `make lint-fix` | Auto-fix linting issues |
 
@@ -75,8 +78,10 @@ The API Gateway will warm the Redis cache from PostgreSQL on startup, so seeded 
 
 | Target | Description |
 |--------|-------------|
-| `make db-migrate` | Run TypeORM migrations |
-| `make db-seed` | Seed database with 13 sample entities |
+| `make db-migrate` | Apply SQL migrations from `db/migrations` (golang-migrate) |
+| `make db-migrate-down` | Roll back the most recent migration |
+| `make db-migrate-version` | Show the applied migration version |
+| `make db-seed` | Load `db/seed/seed.sql`: 13 entities, a geofence rule, 10 locations |
 
 ### Protobuf
 
@@ -89,9 +94,9 @@ The API Gateway will warm the Redis cache from PostgreSQL on startup, so seeded 
 ## npm Scripts
 
 ```bash
-npm start           # Start web + api-gateway
-npm run start:web   # Angular dev server
-npm run start:api   # NestJS dev server
+npm start           # Start client + api-gateway
+npm run start:client   # Angular dev server
+npm run start:api   # Go API gateway (nx serve)
 npm run build       # Build all
 npm test            # Test all
 npm run lint        # Lint all
@@ -125,10 +130,10 @@ npm run docker:down  # Stop everything
 
 ## Auth in Development
 
-The API Gateway uses a dev-mode auth bypass when `NODE_ENV` is not `production`. No Keycloak configuration is needed. The bypass injects a synthetic user:
+The API Gateway skips token verification when `AUTH_DEV_BYPASS=true` (set by `nx serve api-gateway` and by `docker-compose.yml`; refused when `APP_ENV=production`). No Keycloak configuration is needed. The bypass injects a synthetic user:
 
 - **Username**: `dev-operator`
-- **Roles**: `analyst`, `operator`, `admin`
+- **Roles**: `sentinel-analyst`, `sentinel-operator`, `sentinel-admin`
 - **Classification**: `TOP_SECRET`
 
 The Angular frontend similarly falls back to an unauthenticated dev profile when Keycloak is unavailable.
@@ -140,28 +145,28 @@ The Angular frontend similarly falls back to an unauthenticated dev profile when
 1. Check infrastructure is running: `docker ps`
 2. Verify PostgreSQL is accessible: `psql -h localhost -U sentinel -d sentinel`
 3. Check Redis: `redis-cli ping`
-4. Check Kafka: `docker logs sentinel-kafka-1`
+4. Check Kafka: `docker logs sentinel-kafka`
 
 ### Entities endpoint returns empty `[]`
 
-The entities endpoint reads from Redis first, then falls back to PostgreSQL. If both are empty:
+The gateway proxies `/api/v1/entities` to the entity-service, which reads its Redis geo cache first and falls back to PostgreSQL. If the list is empty:
 
-1. Run `make db-seed` to populate PostgreSQL
-2. Restart the API Gateway — it will warm the Redis cache on startup
-3. Or just hit the endpoint — the DB fallback will re-warm the cache automatically
+1. Run `make db-migrate` then `make db-seed` to populate PostgreSQL
+2. Restart the entity-service so it re-warms its Redis cache, or just hit the endpoint and let the DB fallback do it
+3. Check `curl localhost:3001/api/v1/entities` directly to rule out the gateway
 
 ### WebSocket not connecting
 
 1. Verify the API Gateway is running on `:3000`
-2. Check the Angular proxy config (`proxy.conf.json`) forwards `/socket.io` to `:3000`
+2. Check the Angular proxy config (`proxy.conf.json`) forwards `/ws` to `:3000` with `ws: true`
 3. Check browser dev tools Network tab for WebSocket connection attempts
 
 ### Kafka consumer lag
 
 If events aren't flowing through:
 
-1. Check Kafka topics exist: `docker exec -it sentinel-kafka-1 kafka-topics.sh --bootstrap-server localhost:9092 --list`
-2. Check consumer groups: `docker exec -it sentinel-kafka-1 kafka-consumer-groups.sh --bootstrap-server localhost:9092 --list`
+1. Check Kafka topics exist: `docker exec sentinel-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9093 --list`
+2. Check consumer groups: `docker exec sentinel-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9093 --list`
 3. Verify `KAFKA_BROKER` env var matches the expected listener (use `localhost:9092` from host, `kafka:9093` from containers)
 
 ### Database connection issues

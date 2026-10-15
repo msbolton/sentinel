@@ -1,38 +1,29 @@
 {
   "name": "track-service",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "apps/track-service/src",
+  "sourceRoot": "apps/track-service",
   "projectType": "application",
   "targets": {
     "build": {
-      "executor": "@nx/js:tsc",
-      "outputs": ["{options.outputPath}"],
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/dist/apps/track-service"],
       "options": {
-        "outputPath": "dist/apps/track-service",
-        "main": "apps/track-service/src/main.ts",
-        "tsConfig": "apps/track-service/tsconfig.app.json",
-        "assets": []
+        "commands": ["cd apps/track-service && CGO_ENABLED=1 go build -o ../../dist/apps/track-service/server ./cmd/server"],
+        "cwd": "{workspaceRoot}"
       }
     },
     "serve": {
-      "executor": "@nx/js:node",
+      "executor": "nx:run-commands",
       "options": {
-        "buildTarget": "track-service:build",
-        "port": 3002
-      }
-    },
-    "lint": {
-      "executor": "@nx/eslint:lint",
-      "options": {
-        "lintFilePatterns": ["apps/track-service/**/*.ts"]
+        "commands": ["cd apps/track-service && go run ./cmd/server"],
+        "cwd": "{workspaceRoot}"
       }
     },
     "test": {
-      "executor": "@nx/jest:jest",
-      "outputs": ["{workspaceRoot}/coverage/apps/track-service"],
+      "executor": "nx:run-commands",
       "options": {
-        "jestConfig": "apps/track-service/jest.config.ts",
-        "passWithNoTests": true
+        "commands": ["cd apps/track-service && go test -v -race ./..."],
+        "cwd": "{workspaceRoot}"
       }
     }
   },

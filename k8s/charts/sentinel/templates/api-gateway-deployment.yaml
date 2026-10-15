@@ -29,18 +29,18 @@ spec:
           env:
             - name: PORT
               value: "3000"
-            - name: DATABASE_HOST
+            - name: DB_HOST
               value: {{ .Release.Name }}-postgresql
-            - name: DATABASE_PORT
+            - name: DB_PORT
               value: "5432"
-            - name: DATABASE_NAME
+            - name: DB_DATABASE
               value: sentinel
-            - name: DATABASE_USER
+            - name: DB_USERNAME
               valueFrom:
                 secretKeyRef:
                   name: {{ .Release.Name }}-postgresql
                   key: username
-            - name: DATABASE_PASSWORD
+            - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Release.Name }}-postgresql
@@ -55,15 +55,17 @@ spec:
               value: http://{{ .Release.Name }}-keycloak
             - name: KEYCLOAK_REALM
               value: sentinel
+            - name: APP_ENV
+              value: production
           livenessProbe:
             httpGet:
-              path: /api/v1/health
+              path: /health
               port: http
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /api/v1/health
+              path: /ready
               port: http
             initialDelaySeconds: 10
             periodSeconds: 5

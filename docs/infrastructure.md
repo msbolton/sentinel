@@ -13,7 +13,7 @@ SENTINEL uses two Compose files:
 |---------|-------|-----------|----------------|---------|
 | PostgreSQL | `postgis/postgis:16-3.4` | 5432 | 5432 | Primary database with PostGIS, TimescaleDB, Apache AGE |
 | Redis | `redis:7-alpine` | 6379 | 6379 | Geospatial cache, session store |
-| Kafka | `bitnami/kafka:3.7` | 9092, 9093 | 9092, 9093 | Event streaming (KRaft mode, no Zookeeper) |
+| Kafka | `apache/kafka:3.7.0` | 9092, 9093 | 9092, 9093 | Event streaming (KRaft mode, no Zookeeper) |
 | OpenSearch | `opensearchproject/opensearch:2.17.1` | 9200 | 9200 | Full-text + geospatial search |
 | Keycloak | `quay.io/keycloak/keycloak:24.0` | 8080 | 8080 | Identity provider (OIDC/JWT) |
 | Keycloak DB | `postgres:16-alpine` | — | 5432 | Dedicated Keycloak database |
@@ -24,12 +24,12 @@ SENTINEL uses two Compose files:
 
 | Service | Port | Stack |
 |---------|------|-------|
-| API Gateway | 3000 | NestJS |
-| Entity Service | 3001 | NestJS |
-| Track Service | 3002 | NestJS |
-| Search Service | 3003 | NestJS |
-| Link Analysis | 3004 | NestJS |
-| Alert Service | 3005 | NestJS |
+| API Gateway | 3000 | Go |
+| Entity Service | 3001 | Go |
+| Track Service | 3002 | Go |
+| Search Service | 3003 | Go |
+| Link Analysis | 3004 | Go |
+| Alert Service | 3005 | Go |
 | Ingest Service | 4000 | Go |
 | Analytics Service | 5000 | Python |
 | Web UI | 4200 | Angular |
@@ -41,7 +41,7 @@ SENTINEL uses two Compose files:
 | `sentinel-postgres-data` | `/var/lib/postgresql/data` | PostgreSQL persistence |
 | `sentinel-keycloak-db-data` | `/var/lib/postgresql/data` | Keycloak DB persistence |
 | `sentinel-redis-data` | `/data` | Redis AOF + RDB persistence |
-| `sentinel-kafka-data` | `/bitnami/kafka` | Kafka log segments |
+| `sentinel-kafka-data` | `/var/lib/kafka` | Kafka log segments |
 | `sentinel-opensearch-data` | `/usr/share/opensearch/data` | OpenSearch indices |
 | `sentinel-geoserver-data` | `/opt/geoserver/data_dir` | GeoServer configuration |
 | `sentinel-minio-data` | `/data` | S3 object storage |

@@ -1,0 +1,66 @@
+{
+  "name": "client",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/client/src",
+  "projectType": "application",
+  "targets": {
+    "build": {
+      "executor": "@angular-devkit/build-angular:application",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/apps/client",
+        "index": "apps/client/src/index.html",
+        "browser": "apps/client/src/main.ts",
+        "polyfills": [],
+        "tsConfig": "apps/client/tsconfig.app.json",
+        "assets": [
+          "apps/client/src/favicon.ico",
+          "apps/client/src/assets",
+          { "glob": "**/*", "input": "node_modules/cesium/Build/Cesium/Workers", "output": "/assets/cesium/Workers" },
+          { "glob": "**/*", "input": "node_modules/cesium/Build/Cesium/ThirdParty", "output": "/assets/cesium/ThirdParty" },
+          { "glob": "**/*", "input": "node_modules/cesium/Build/Cesium/Assets", "output": "/assets/cesium/Assets" },
+          { "glob": "**/*", "input": "node_modules/cesium/Build/Cesium/Widgets", "output": "/assets/cesium/Widgets" }
+        ],
+        "styles": [
+          "node_modules/cesium/Build/Cesium/Widgets/widgets.css",
+          "apps/client/src/styles.scss"
+        ],
+        "scripts": []
+      },
+      "configurations": {
+        "production": {
+          "budgets": [
+            { "type": "initial", "maximumWarning": "2mb", "maximumError": "5mb" }
+          ],
+          "outputHashing": "all"
+        },
+        "development": {
+          "optimization": false,
+          "extractLicenses": false,
+          "sourceMap": true
+        }
+      },
+      "defaultConfiguration": "production"
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/apps/client"],
+      "options": {
+        "jestConfig": "apps/client/jest.config.ts",
+        "passWithNoTests": true
+      }
+    },
+    "serve": {
+      "executor": "@angular-devkit/build-angular:dev-server",
+      "configurations": {
+        "production": { "buildTarget": "client:build:production" },
+        "development": { "buildTarget": "client:build:development" }
+      },
+      "defaultConfiguration": "development",
+      "options": {
+        "port": 4200,
+        "proxyConfig": "apps/client/proxy.conf.json"
+      }
+    }
+  }
+}

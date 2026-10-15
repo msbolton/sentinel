@@ -1,31 +1,32 @@
 {
   "name": "entity-service",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "apps/entity-service/src",
+  "sourceRoot": "apps/entity-service",
   "projectType": "application",
+  "tags": ["scope:entity-service", "type:microservice"],
   "targets": {
     "build": {
-      "executor": "@nx/js:tsc",
-      "outputs": ["{options.outputPath}"],
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/dist/apps/entity-service"],
       "options": {
-        "outputPath": "dist/apps/entity-service",
-        "main": "apps/entity-service/src/main.ts",
-        "tsConfig": "apps/entity-service/tsconfig.app.json",
-        "assets": []
+        "commands": [
+          "cd apps/entity-service && CGO_ENABLED=1 go build -o ../../dist/apps/entity-service/server ./cmd/server"
+        ],
+        "cwd": "{workspaceRoot}"
       }
     },
     "serve": {
-      "executor": "@nx/js:node",
+      "executor": "nx:run-commands",
       "options": {
-        "buildTarget": "entity-service:build"
+        "commands": ["cd apps/entity-service && go run ./cmd/server"],
+        "cwd": "{workspaceRoot}"
       }
     },
     "test": {
-      "executor": "@nx/jest:jest",
-      "outputs": ["{workspaceRoot}/coverage/apps/entity-service"],
+      "executor": "nx:run-commands",
       "options": {
-        "jestConfig": "apps/entity-service/jest.config.ts",
-        "passWithNoTests": true
+        "commands": ["cd apps/entity-service && go test -v -race ./..."],
+        "cwd": "{workspaceRoot}"
       }
     }
   }
