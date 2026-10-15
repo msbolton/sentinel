@@ -339,3 +339,97 @@ func TestCustomFeedStatus_HasFields(t *testing.T) {
 		t.Errorf("Format = %q, want json", feeds[0].Format)
 	}
 }
+
+// mockViewportListener is a viewport-aware test double.
+type mockViewportListener struct {
+	mockListener
+	viewport sources.Viewport
+	sets     atomic.Int32
+}
+
+func (m *mockViewportListener) SetViewport(v sources.Viewport) sources.ViewportStatus {
+	m.viewport = v
+	m.sets.Add(1)
+	return sources.ViewportStatus{Active: v.Active, Clients: v.Clients, Boxes: v.Boxes, AreaSqDeg: v.Area(), EffectiveInterval: 10 * time.Second, CreditsRemaining: -1}
+}
+
+func (m *mockViewportListener) ViewportStatus() sources.ViewportStatus {
+	return sources.ViewportStatus{Active: m.viewport.Active, Clients: m.viewport.Clients, Boxes: m.viewport.Boxes, AreaSqDeg: m.viewport.Area(), CreditsRemaining: -1}
+}
+
+var testBox = sources.BBox{South: 40, West: -90, North: 45, East: -80}
+
+func TestSetViewport_AppliesToRunningListener(t *testing.T) {
+	mgr := NewManager(testLogger(), nil, nil, nil)
+	ml := &mockViewportListener{}
+	mgr.Register("opensky", "OpenSky", "opensky", "desc", func() (sources.Listener, error) { return ml, nil }, true)
+
+	state, err := mgr.SetViewport("opensky", sources.Viewport{Active: true, Clients: 2, Boxes: []sources.BBox{testBox}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Enabled || state.Feed != "opensky" || !state.Status.Active || state.Status.AreaSqDeg != 50 {
+		t.Errorf("unexpected state %+v", state)
+	}
+	if ml.sets.Load() != 1 || ml.viewport.Clients != 2 {
+		t.Errorf("listener did not receive the viewport: sets=%d viewport=%+v", ml.sets.Load(), ml.viewport)
+	}
+
+	got, err := mgr.GetViewport("opensky")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Status.Boxes) != 1 || got.Status.Boxes[0] != testBox {
+		t.Errorf("GetViewport returned %+v", got.Status)
+	}
+
+	// The list exposes the stored viewport.
+	if feeds := mgr.List(); feeds[0].Viewport == nil || feeds[0].Viewport.Clients != 2 {
+		t.Errorf("List should carry the viewport, got %+v", feeds[0].Viewport)
+	}
+}
+
+func TestSetViewport_StoredWhenDisabledAndAppliedOnEnable(t *testing.T) {
+	mgr := NewManager(testLogger(), nil, nil, nil)
+	ml := &mockViewportListener{}
+	mgr.Register("opensky", "OpenSky", "opensky", "desc", func() (sources.Listener, error) { return ml, nil }, false)
+
+	state, err := mgr.SetViewport("opensky", sources.Viewport{Active: true, Clients: 1, Boxes: []sources.BBox{testBox}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Enabled || !state.Status.Idle {
+		t.Errorf("disabled feed should report enabled=false idle=true, got %+v", state)
+	}
+	if ml.sets.Load() != 0 {
+		t.Error("listener must not be touched while disabled")
+	}
+
+	if _, err := mgr.SetEnabled("opensky", true); err != nil {
+		t.Fatal(err)
+	}
+	if ml.sets.Load() != 1 || len(ml.viewport.Boxes) != 1 {
+		t.Errorf("viewport not reapplied on enable: sets=%d viewport=%+v", ml.sets.Load(), ml.viewport)
+	}
+}
+
+func TestSetViewport_UnknownFeed(t *testing.T) {
+	mgr := NewManager(testLogger(), nil, nil, nil)
+	if _, err := mgr.SetViewport("nope", sources.Viewport{}); !errors.Is(err, ErrUnknownFeed) {
+		t.Errorf("expected ErrUnknownFeed, got %v", err)
+	}
+	if _, err := mgr.GetViewport("nope"); !errors.Is(err, ErrUnknownFeed) {
+		t.Errorf("expected ErrUnknownFeed, got %v", err)
+	}
+}
+
+func TestSetViewport_Unsupported(t *testing.T) {
+	mgr := NewManager(testLogger(), nil, nil, nil)
+	mgr.Register("tcp", "TCP", "tcp", "desc", newMockFactory(&mockListener{}), true)
+	if _, err := mgr.SetViewport("tcp", sources.Viewport{Active: true, Boxes: []sources.BBox{testBox}}); !errors.Is(err, ErrViewportUnsupported) {
+		t.Errorf("expected ErrViewportUnsupported, got %v", err)
+	}
+	if _, err := mgr.GetViewport("tcp"); !errors.Is(err, ErrViewportUnsupported) {
+		t.Errorf("expected ErrViewportUnsupported, got %v", err)
+	}
+}

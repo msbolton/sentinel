@@ -57,6 +57,26 @@ func (g *GeoCache) Add(ctx context.Context, entityID string, lng, lat float64) {
 	}
 }
 
+// GeoEntry is one entity position for AddBatch.
+type GeoEntry struct {
+	EntityID string
+	Lng, Lat float64
+}
+
+// AddBatch adds or updates many entities with a single GEOADD.
+func (g *GeoCache) AddBatch(ctx context.Context, entries []GeoEntry) {
+	if !g.enabled || len(entries) == 0 {
+		return
+	}
+	locations := make([]*redis.GeoLocation, len(entries))
+	for i, e := range entries {
+		locations[i] = &redis.GeoLocation{Name: e.EntityID, Longitude: e.Lng, Latitude: e.Lat}
+	}
+	if err := g.client.GeoAdd(ctx, geoKey, locations...).Err(); err != nil {
+		g.logger.Warn("geo cache batch add failed", zap.Int("count", len(entries)), zap.Error(err))
+	}
+}
+
 // Remove removes an entity from the geo index.
 func (g *GeoCache) Remove(ctx context.Context, entityID string) {
 	if !g.enabled {

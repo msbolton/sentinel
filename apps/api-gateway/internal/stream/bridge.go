@@ -111,7 +111,8 @@ func (b *Bridge) Handle(topic string, value []byte) {
 			b.logger.Debug("bad ageout event", zap.String("topic", topic))
 			return
 		}
-		b.hub.BroadcastRaw(topic, value)
+		// Coalesced into one array frame per flush; see Batcher.AddRaw.
+		b.batcher.AddRaw(topic, append(json.RawMessage(nil), value...))
 	case kafka.TopicAlertGeofence, kafka.TopicAlertAnomaly:
 		var raw rawAlertEvent
 		if err := json.Unmarshal(value, &raw); err != nil || raw.ID == "" {
@@ -164,6 +165,29 @@ type rawEntityEvent struct {
 	PlatformData      map[string]interface{} `json:"platform_data"`
 	OperationalStatus string                 `json:"operational_status"`
 	CircularError     *float64               `json:"circular_error"`
+	VelocityNorth     *float64               `json:"velocity_north"`
+	VelocityEast      *float64               `json:"velocity_east"`
+	VelocityUp        *float64               `json:"velocity_up"`
+	LastSeenAt        string                 `json:"last_seen_at"`
+}
+
+// kinematics builds the client's `kinematics.velocity` object when the event
+// carries any velocity component; m/s, as the feeds report them.
+func (r rawEntityEvent) kinematics() map[string]interface{} {
+	if r.VelocityNorth == nil && r.VelocityEast == nil && r.VelocityUp == nil {
+		return nil
+	}
+	velocity := map[string]interface{}{}
+	if r.VelocityNorth != nil {
+		velocity["north"] = *r.VelocityNorth
+	}
+	if r.VelocityEast != nil {
+		velocity["east"] = *r.VelocityEast
+	}
+	if r.VelocityUp != nil {
+		velocity["up"] = *r.VelocityUp
+	}
+	return map[string]interface{}{"velocity": velocity}
 }
 
 func (r rawEntityEvent) toPositioned(eventType string) (PositionedEvent, bool) {
@@ -202,6 +226,8 @@ func (r rawEntityEvent) toPositioned(eventType string) (PositionedEvent, bool) {
 				Affiliations:      []string{},
 				CreatedAt:         orNow(firstNonEmpty(r.CreatedAt, ts)),
 				UpdatedAt:         ts,
+				LastSeenAt:        firstNonEmpty(r.LastSeenAt, ts),
+				Kinematics:        r.kinematics(),
 				TrackEnvironment:  r.TrackEnvironment,
 				CountryOfOrigin:   r.CountryOfOrigin,
 				PlatformData:      r.PlatformData,
@@ -222,13 +248,13 @@ type rawDeletedEvent struct {
 
 // rawAlertEvent is what apps/alert-service/internal/evaluator publishes.
 type rawAlertEvent struct {
-	ID          string            `json:"alertId"`
-	AlertType   string            `json:"alertType"`
-	Severity    string            `json:"severity"`
-	Title       string            `json:"title"`
-	Description string            `json:"description"`
-	EntityID    string            `json:"entityId"`
-	RuleID      string            `json:"ruleId"`
+	ID          string `json:"alertId"`
+	AlertType   string `json:"alertType"`
+	Severity    string `json:"severity"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	EntityID    string `json:"entityId"`
+	RuleID      string `json:"ruleId"`
 	Position    *struct {
 		Lat float64 `json:"lat"`
 		Lon float64 `json:"lon"`

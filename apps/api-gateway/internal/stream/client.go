@@ -24,9 +24,10 @@ type Client struct {
 	send chan []byte
 	log  *zap.Logger
 
-	mu       sync.RWMutex
-	viewport Bounds
-	subs     map[string]struct{}
+	mu          sync.RWMutex
+	viewport    Bounds
+	hasViewport bool // false until the client sends its first viewport:update
+	subs        map[string]struct{}
 
 	closeOnce sync.Once
 	done      chan struct{}
@@ -52,10 +53,23 @@ func (c *Client) Viewport() Bounds {
 	return c.viewport
 }
 
+// HasViewport reports whether the client has told us what it is looking at.
+// Until then its viewport is the whole globe for filtering purposes only and
+// must not widen the ingest area.
+func (c *Client) HasViewport() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.hasViewport
+}
+
 func (c *Client) setViewport(b Bounds) {
 	c.mu.Lock()
 	c.viewport = b
+	c.hasViewport = true
 	c.mu.Unlock()
+	if c.hub != nil {
+		c.hub.viewportsChanged()
+	}
 }
 
 func (c *Client) subscribe(entityID string) {

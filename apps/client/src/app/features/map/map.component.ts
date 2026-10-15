@@ -39,6 +39,11 @@ import {
   TRACK_TRAIL_CONFIG,
 } from './cesium-config';
 import { CircularBuffer, decimateTrail, TrailPoint } from './trail-utils';
+import { isGlobalBounds, rectangleToBounds } from './viewport-bounds';
+import { DeadReckoningTracker } from './dead-reckoning';
+
+/** Dead-reckoning frame cap: ~30 fps is plenty for gliding markers. */
+const DR_FRAME_INTERVAL_MS = 33;
 import { environment } from '../../../environments/environment';
 
 // Configure Cesium before imports
@@ -145,6 +150,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private billboardImageCache = new Map<string, string>();
   private renderScheduled = false;
   private currentCameraAltitude = DEFAULT_CAMERA_POSITION.height;
+  /** Moving aircraft are advanced between fixes; see dead-reckoning.ts. */
+  private readonly deadReckoning = new DeadReckoningTracker();
+  private drFrame: number | null = null;
+  private drLastTickMs = 0;
+  private drScratch: any = null;
   private themePostProcessStage: any = null;
 
   /** Cached ageout configs fetched from backend, refreshed every 60s */
@@ -203,10 +213,20 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.subscribeToThemeChanges();
     this.subscribeToFlyTo();
     this.initUserLocation();
+
+    // Report the initial viewport: a saved camera position is restored with
+    // setView, which does not fire moveEnd. A later flyTo (geolocation)
+    // fires moveEnd and refreshes it.
+    this.sendViewportBounds();
   }
 
   ngOnDestroy(): void {
     if (this.ageoutConfigTimer) clearInterval(this.ageoutConfigTimer);
+    if (this.drFrame !== null) {
+      cancelAnimationFrame(this.drFrame);
+      this.drFrame = null;
+    }
+    this.deadReckoning.clear();
     this.subscriptions.unsubscribe();
     if (this.viewer && !this.viewer.isDestroyed()) {
       this.viewer.destroy();
@@ -321,51 +341,33 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (!this.viewer || !this.Cesium) return;
 
     const Cesium = this.Cesium;
-    const canvas = this.viewer.scene.canvas;
     const camera = this.viewer.camera;
 
+    let rect: { north: number; south: number; east: number; west: number } | undefined;
     try {
-      const rect = camera.computeViewRectangle(
-        this.viewer.scene.globe.ellipsoid,
-        new Cesium.Rectangle(),
-      );
-
-      if (rect) {
-        const bounds = {
-          north: Cesium.Math.toDegrees(rect.north),
-          south: Cesium.Math.toDegrees(rect.south),
-          east: Cesium.Math.toDegrees(rect.east),
-          west: Cesium.Math.toDegrees(rect.west),
-        };
-
-        this.wsService.sendViewportUpdate(bounds);
-
-        // Also fetch entities in this viewport
-        this.entityService
-          .getEntities({ ...bounds, pageSize: 500 })
-          .subscribe((response) => {
-            this.ngZone.runOutsideAngular(() => {
-              for (const entity of response.data) {
-                this.addOrUpdateCesiumEntity(entity);
-              }
-              this.scheduleRender();
-            });
-          });
-      } else {
-        // computeViewRectangle() returns undefined when the camera sees the
-        // full globe — fetch all entities without bounding-box filter.
-        this.entityService.getEntities({ pageSize: 500 }).subscribe((response) => {
-          this.ngZone.runOutsideAngular(() => {
-            for (const entity of response.data) {
-              this.addOrUpdateCesiumEntity(entity);
-            }
-            this.scheduleRender();
-          });
-        });
-      }
+      rect = camera.computeViewRectangle(this.viewer.scene.globe.ellipsoid, new Cesium.Rectangle());
     } catch {
-      // Camera may not have a valid view rectangle (e.g., looking at sky)
+      // Camera may not have a valid view rectangle (e.g., looking at sky);
+      // treat it as the whole globe so the server still knows our state.
+      rect = undefined;
     }
+
+    // Always tell the gateway what we see, including the whole globe:
+    // the server keeps the previous bounds otherwise, and the ingest area
+    // is derived from these bounds.
+    const bounds = rectangleToBounds(rect, Cesium.Math.toDegrees);
+    this.wsService.sendViewportUpdate(bounds);
+
+    // Also fetch entities in this viewport (no bbox when the globe is visible).
+    const query = isGlobalBounds(bounds) ? { pageSize: 500 } : { ...bounds, pageSize: 500 };
+    this.entityService.getEntities(query).subscribe((response) => {
+      this.ngZone.runOutsideAngular(() => {
+        for (const entity of response.data) {
+          this.addOrUpdateCesiumEntity(entity);
+        }
+        this.scheduleRender();
+      });
+    });
   }
 
   private subscribeToEntities(): void {
@@ -553,9 +555,18 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
     const existing = this.entityMap.get(entity.id);
 
+    // Moving aircraft are dead-reckoned: the tracker owns their displayed
+    // position and blends this fix in instead of jumping to it.
+    const now = this.wsService.serverNow();
+    const tracked = this.deadReckoning.upsert(entity, now);
+    const shownPosition = tracked ? this.deadReckoning.positionOf(entity.id, now) : null;
+    const displayPosition = shownPosition
+      ? Cesium.Cartesian3.fromDegrees(shownPosition.lon, shownPosition.lat, shownPosition.alt)
+      : position;
+
     if (existing) {
       // Update existing entity
-      existing.position = position;
+      existing._posProp.setValue(displayPosition);
       existing.label.text = entity.name;
       if (existing.billboard) {
         existing.billboard.rotation = rotation;
@@ -563,6 +574,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       }
       if (existing.label) {
         existing.label.fillColor = this.Cesium.Color.WHITE.withAlpha(billboardAlpha);
+      }
+      // An entity first seen without an altitude was clamped to ground;
+      // lift it once a fix with altitude arrives (and vice versa).
+      if (existing._heightRef !== heightRef) {
+        existing._heightRef = heightRef;
+        if (existing.billboard) existing.billboard.heightReference = heightRef;
+        if (existing.label) existing.label.heightReference = heightRef;
       }
 
       // Update polyline trail
@@ -585,9 +603,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       // Update stored sentinel entity data
       existing._sentinelEntity = entity;
     } else {
-      // Create new entity
+      // Create new entity. The position is a property we keep a handle on so
+      // the dead-reckoning loop can move it without touching the entity.
+      const posProp = new Cesium.ConstantPositionProperty(displayPosition);
       const cesiumEntity = this.viewer.entities.add({
-        position,
+        position: posProp,
         billboard: {
           image: this.getBillboardImage(entity),
           scale: 0.5,
@@ -628,13 +648,62 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
       // Store reference to SENTINEL entity data
       cesiumEntity._sentinelEntity = entity;
+      cesiumEntity._posProp = posProp;
+      cesiumEntity._heightRef = heightRef;
       this.entityMap.set(entity.id, cesiumEntity);
     }
 
+    if (tracked) {
+      this.ensureDeadReckoningLoop();
+    }
     this.scheduleRender();
   }
 
+  /**
+   * Run a requestAnimationFrame loop while any entity is dead-reckoned,
+   * advancing displayed positions between fixes. The loop stops itself once
+   * nothing is tracked so an idle map renders nothing.
+   */
+  private ensureDeadReckoningLoop(): void {
+    if (this.drFrame !== null || this.deadReckoning.size === 0) return;
+    this.ngZone.runOutsideAngular(() => {
+      const tick = () => {
+        this.drFrame = null;
+        if (!this.viewer || this.viewer.isDestroyed() || this.deadReckoning.size === 0) return;
+        const now = this.wsService.serverNow();
+        if (now - this.drLastTickMs >= DR_FRAME_INTERVAL_MS) {
+          this.drLastTickMs = now;
+          this.applyDeadReckoning(now);
+        }
+        this.drFrame = requestAnimationFrame(tick);
+      };
+      this.drFrame = requestAnimationFrame(tick);
+    });
+  }
+
+  private applyDeadReckoning(now: number): void {
+    const Cesium = this.Cesium;
+    if (!this.drScratch) this.drScratch = new Cesium.Cartesian3();
+    let moved = 0;
+    for (const [id, pos] of this.deadReckoning.step(now)) {
+      const cesiumEntity = this.entityMap.get(id);
+      if (!cesiumEntity?._posProp || cesiumEntity.show === false) {
+        if (!cesiumEntity) this.deadReckoning.remove(id);
+        continue;
+      }
+      // setValue clones, so the scratch Cartesian3 is safe to reuse.
+      cesiumEntity._posProp.setValue(
+        Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.alt, undefined, this.drScratch),
+      );
+      moved++;
+    }
+    if (moved > 0) {
+      this.viewer.scene.requestRender();
+    }
+  }
+
   private removeCesiumEntity(entityId: string): void {
+    this.deadReckoning.remove(entityId);
     const cesiumEntity = this.entityMap.get(entityId);
     if (cesiumEntity && this.viewer) {
       this.viewer.entities.remove(cesiumEntity);
@@ -761,6 +830,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         }
         this.entityMap.clear();
         this.trackTrails.clear();
+        this.deadReckoning.clear();
         this.selectedEntity.set(null);
       },
       error: (err) => {

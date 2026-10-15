@@ -1,6 +1,6 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
-import { BehaviorSubject, Observable, Subject, Subscription, shareReplay, switchMap, tap, interval } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, Subscription, interval, map, shareReplay, switchMap, tap } from 'rxjs';
 import { WebSocketService } from './websocket.service';
 import {
   Entity,
@@ -8,6 +8,35 @@ import {
   EntityQuery,
   PaginatedResponse,
 } from '../../shared/models/entity.model';
+
+/**
+ * The entity-service REST API serialises a position as `{ lat, lon }` with
+ * the altitude as a top-level field, while the WebSocket stream (and the
+ * rest of the client) uses `{ latitude, longitude, altitude }`. Normalise
+ * REST responses to the client shape.
+ */
+export function normalizeEntity<T extends Partial<Entity>>(raw: T): T {
+  const anyRaw = raw as Record<string, unknown>;
+  const position = anyRaw['position'] as Record<string, unknown> | null | undefined;
+  if (!position || typeof position !== 'object') {
+    return raw;
+  }
+  const hasRestShape = 'lat' in position || 'lon' in position;
+  if (!hasRestShape && position['altitude'] !== undefined) {
+    return raw;
+  }
+  const latitude = (hasRestShape ? position['lat'] : position['latitude']) as number | undefined;
+  const longitude = (hasRestShape ? position['lon'] : position['longitude']) as number | undefined;
+  const altitude = (anyRaw['altitude'] ?? position['altitude']) as number | null | undefined;
+  return {
+    ...raw,
+    position: {
+      latitude,
+      longitude,
+      ...(altitude !== null && altitude !== undefined ? { altitude } : {}),
+    },
+  };
+}
 
 @Injectable({ providedIn: 'root' })
 export class EntityService implements OnDestroy {
@@ -60,10 +89,11 @@ export class EntityService implements OnDestroy {
         const params = this.buildParams(query);
         return this.http.get<PaginatedResponse<Entity>>(this.apiUrl, { params });
       }),
+      map((response) => ({ ...response, data: (response.data ?? []).map(normalizeEntity) })),
       tap((response) => {
-        const map = this.entitiesSubject.value;
-        response.data.forEach((entity) => map.set(entity.id, entity));
-        this.entitiesSubject.next(map);
+        const entities = this.entitiesSubject.value;
+        response.data.forEach((entity) => entities.set(entity.id, entity));
+        this.entitiesSubject.next(entities);
       }),
       shareReplay({ bufferSize: 1, refCount: true }),
     );
@@ -91,7 +121,8 @@ export class EntityService implements OnDestroy {
   private buildParams(query?: EntityQuery): HttpParams {
     let params = new HttpParams();
     if (query) {
-      if (query.entityTypes?.length) params = params.set('entityTypes', query.entityTypes.join(','));
+      // entity-service reads `types`, not `entityTypes`
+      if (query.entityTypes?.length) params = params.set('types', query.entityTypes.join(','));
       if (query.sources?.length) params = params.set('sources', query.sources.join(','));
       if (query.classification) params = params.set('classification', query.classification);
       if (query.north !== undefined) params = params.set('north', query.north.toString());
@@ -106,6 +137,7 @@ export class EntityService implements OnDestroy {
 
   getEntity(id: string): Observable<Entity> {
     return this.http.get<Entity>(`${this.apiUrl}/${id}`).pipe(
+      map(normalizeEntity),
       tap((entity) => {
         const map = this.entitiesSubject.value;
         map.set(entity.id, entity);
@@ -116,6 +148,7 @@ export class EntityService implements OnDestroy {
 
   createEntity(dto: Partial<Entity>): Observable<Entity> {
     return this.http.post<Entity>(this.apiUrl, dto).pipe(
+      map(normalizeEntity),
       tap((entity) => {
         const map = this.entitiesSubject.value;
         map.set(entity.id, entity);
@@ -126,6 +159,7 @@ export class EntityService implements OnDestroy {
 
   updateEntity(id: string, dto: Partial<Entity>): Observable<Entity> {
     return this.http.patch<Entity>(`${this.apiUrl}/${id}`, dto).pipe(
+      map(normalizeEntity),
       tap((entity) => {
         const map = this.entitiesSubject.value;
         map.set(entity.id, entity);

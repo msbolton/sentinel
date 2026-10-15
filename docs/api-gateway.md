@@ -34,6 +34,9 @@ Listens on port **3000** (`PORT`).
 | `CORS_ORIGIN` | `http://localhost:4200` | Allowed origin for REST and WebSocket |
 | `KAFKA_BROKERS` | `localhost:9092` | Brokers for the WebSocket bridge |
 | `KAFKA_WS_CONSUMER_GROUP` | `sentinel-gateway-ws-{hostname}` | Unique per instance so every gateway sees every event |
+| `VIEWPORT_SYNC_ENABLED` | `true` | Push the area clients are looking at to ingest-service (see Viewport-driven ingestion) |
+| `VIEWPORT_SYNC_HEARTBEAT_SEC` | `30` | Re-push the viewport while clients are connected so the ingest lease stays fresh |
+| `VIEWPORT_SYNC_DEBOUNCE_MS` | `1000` | Trailing debounce after viewport changes before pushing |
 | `ENTITY_SERVICE_URL`, `TRACK_SERVICE_URL`, `SEARCH_SERVICE_URL`, `LINK_ANALYSIS_SERVICE_URL`, `ALERT_SERVICE_URL`, `INGEST_SERVICE_URL` | `http://localhost:300x` | Upstreams |
 | `DB_HOST` … or `DATABASE_URL` | | PostgreSQL for the locations table |
 
@@ -96,7 +99,7 @@ Every frame is a JSON envelope: `{ "type": string, "data": object, "ts": RFC3339
 
 | Type | Data | Description |
 |------|------|-------------|
-| `viewport:update` | `{ north, south, east, west }` | Only entities inside these bounds are streamed. Bounds with `west > east` cross the antimeridian |
+| `viewport:update` | `{ north, south, east, west }` | Only entities inside these bounds are streamed. Bounds with `west > east` cross the antimeridian. The client sends it after every camera settle, including the whole globe (`{90, -90, 180, -180}`), and once right after the map initialises |
 | `entity:subscribe` | `{ entityId }` | Always receive this entity, regardless of viewport |
 | `entity:unsubscribe` | `{ entityId }` | Drop the subscription |
 | `ping` | | Answered with `pong` |
@@ -109,11 +112,22 @@ Every frame is a JSON envelope: `{ "type": string, "data": object, "ts": RFC3339
 | `viewport:updated`, `entity:subscribed`, `entity:unsubscribed` | | Acknowledgements |
 | `entity:batch` | `EntityEvent[]` | Created and updated entities coalesced over 200 ms, filtered per client |
 | `entity:deleted` | `EntityEvent` | Broadcast to all clients; `bulk` and `count` are set for a clear-all |
-| `events.entity.stale`, `events.entity.agedout`, `events.entity.restored` | raw Kafka payload | Broadcast to all clients |
+| `events.entity.stale`, `events.entity.agedout`, `events.entity.restored` | raw Kafka payload[] | Broadcast to all clients, coalesced into one array frame per type per 200 ms flush (the ageout service can emit a thousand per cycle) |
 | `alert:new` | `Alert` | New alert from `alerts.geofence` or `alerts.anomaly` |
 | `error` | `{ code, message }` | Rejected inbound frame |
 
 `EntityEvent` is `{ type: 'created' | 'updated' | 'deleted', entity: Entity, timestamp }` with the same `Entity` shape the REST API returns. A client whose send buffer fills (256 frames) is disconnected and reconnects.
+
+### Viewport-driven ingestion
+
+The gateway is the only component that knows what every connected client is looking at, so it also decides which area the OpenSky feed polls (`internal/stream/viewport_agg.go`, `viewport_sync.go`):
+
+1. Every `viewport:update` and every disconnect notifies the `ViewportSync` loop. Clients that have not sent a viewport yet are ignored, so a fresh connection does not widen the area to the globe.
+2. After a 1 s debounce the loop pads each client viewport by 10 % of its span (at least 0.25°), takes the smallest box covering all of them with the longitude union computed on the circle, and splits it at the antimeridian into at most two boxes. A padded extent covering 90 % of the globe becomes the global box.
+3. It pushes `PUT {INGEST_SERVICE_URL}/feeds/opensky/viewport` with `{ active, clients, boxes }` only when the change matters: the first time, when the unpadded extent leaves the last pushed padded one, when the area shrinks below 70 % of the previous one, or when the client count crosses zero. Small pans stay inside the padding and cost nothing. Pushes are at least 2 s apart.
+4. Every 30 s it re-pushes while clients are connected; the ingest lease expires after 90 s without a push, so a dead gateway stops polling and a restarted ingest-service recovers within one heartbeat. Shutdown pushes `active: false`.
+
+Failed pushes retry with a 1 s doubling to 30 s backoff. `GET /api/v1/feeds/opensky/viewport` (proxied to ingest-service) shows the area currently being polled.
 
 ### Kafka bridge
 

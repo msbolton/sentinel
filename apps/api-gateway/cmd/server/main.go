@@ -96,6 +96,18 @@ func main() {
 	bridge.Start()
 	wsHandler := stream.NewHandler(hub, cfg.CORSOrigin, logger)
 
+	// Push the area clients are looking at to ingest-service so OpenSky is
+	// polled only for that area.
+	var viewportSync *stream.ViewportSync
+	if cfg.ViewportSyncEnabled {
+		viewportSync = stream.NewViewportSync(hub, stream.NewIngestHTTPSink(cfg.IngestServiceURL), stream.ViewportSyncOptions{
+			Debounce:  cfg.ViewportSyncDebounce,
+			Heartbeat: cfg.ViewportSyncHeartbeat,
+		}, logger)
+		hub.SetViewportListener(viewportSync.Notify)
+		viewportSync.Start()
+	}
+
 	handler := server.New(server.Deps{
 		Logger:     logger,
 		Auth:       authMw,
@@ -135,6 +147,9 @@ func main() {
 	sig := <-sigCh
 	logger.Info("shutdown signal received", zap.String("signal", sig.String()))
 
+	if viewportSync != nil {
+		viewportSync.Stop()
+	}
 	bridge.Stop()
 	batcher.Stop()
 

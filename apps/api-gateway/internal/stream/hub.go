@@ -18,6 +18,8 @@ type Hub struct {
 	mu      sync.RWMutex
 	clients map[*Client]struct{}
 	logger  *zap.Logger
+
+	viewportListener func() // called when the set of client viewports may have changed
 }
 
 // NewHub creates an empty hub.
@@ -41,7 +43,36 @@ func (h *Hub) unregister(c *Client) {
 	h.mu.Unlock()
 	if present {
 		h.logger.Info("ws client disconnected", zap.String("clientId", c.ID), zap.Int("clients", n))
+		h.viewportsChanged()
 	}
+}
+
+// SetViewportListener registers a callback invoked whenever a client sends
+// a viewport or disconnects. The callback must not block.
+func (h *Hub) SetViewportListener(fn func()) {
+	h.mu.Lock()
+	h.viewportListener = fn
+	h.mu.Unlock()
+}
+
+func (h *Hub) viewportsChanged() {
+	h.mu.RLock()
+	fn := h.viewportListener
+	h.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// Viewports returns the bounds of every client that has sent one.
+func (h *Hub) Viewports() []Bounds {
+	var out []Bounds
+	for _, c := range h.snapshot() {
+		if c.HasViewport() {
+			out = append(out, c.Viewport())
+		}
+	}
+	return out
 }
 
 // ClientCount returns the number of connected clients.

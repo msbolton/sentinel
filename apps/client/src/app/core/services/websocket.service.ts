@@ -43,6 +43,8 @@ export class WebSocketService implements OnDestroy {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastViewport: ViewportBounds | null = null;
   private readonly subscribedEntities = new Set<string>();
+  /** Server clock minus local clock, from connection:ack; 0 until known. */
+  private clockSkewMs = 0;
 
   private readonly entityUpdatesSubject = new Subject<EntityEvent>();
   private readonly alertSubject = new Subject<Alert>();
@@ -60,6 +62,15 @@ export class WebSocketService implements OnDestroy {
     }
     this.intentionalClose = false;
     this.open();
+  }
+
+  /**
+   * Current time on the server's clock, in ms. Entity timestamps come from
+   * the server, so extrapolation must measure elapsed time against it rather
+   * than a possibly skewed local clock.
+   */
+  serverNow(): number {
+    return Date.now() + this.clockSkewMs;
   }
 
   sendViewportUpdate(bounds: ViewportBounds): void {
@@ -170,6 +181,19 @@ export class WebSocketService implements OnDestroy {
     }
   }
 
+  /**
+   * Ageout frames carry one payload or, since the gateway coalesces them per
+   * flush, an array of payloads. Emit one event per payload either way.
+   */
+  private emitAgeout(eventType: 'stale' | 'agedout' | 'restored', data: unknown): void {
+    const payloads = Array.isArray(data) ? data : [data];
+    for (const payload of payloads) {
+      if (payload && typeof payload === 'object') {
+        this.ageoutSubject.next({ eventType, payload });
+      }
+    }
+  }
+
   private handleFrame(raw: string): void {
     let envelope: Envelope;
     try {
@@ -196,13 +220,13 @@ export class WebSocketService implements OnDestroy {
         });
         break;
       case 'events.entity.stale':
-        this.ageoutSubject.next({ eventType: 'stale', payload: envelope.data });
+        this.emitAgeout('stale', envelope.data);
         break;
       case 'events.entity.agedout':
-        this.ageoutSubject.next({ eventType: 'agedout', payload: envelope.data });
+        this.emitAgeout('agedout', envelope.data);
         break;
       case 'events.entity.restored':
-        this.ageoutSubject.next({ eventType: 'restored', payload: envelope.data });
+        this.emitAgeout('restored', envelope.data);
         break;
       case 'alert:new':
         this.alertSubject.next(envelope.data as Alert);
@@ -210,8 +234,15 @@ export class WebSocketService implements OnDestroy {
       case 'error':
         console.warn('[WS] Server error:', envelope.data);
         break;
+      case 'connection:ack': {
+        const serverTime = Date.parse((envelope.data as { serverTime?: string })?.serverTime ?? '');
+        if (Number.isFinite(serverTime)) {
+          this.clockSkewMs = serverTime - Date.now();
+        }
+        break;
+      }
       default:
-        // connection:ack, viewport:updated, entity:subscribed, pong: nothing to do
+        // viewport:updated, entity:subscribed, pong: nothing to do
         break;
     }
   }

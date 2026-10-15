@@ -3,19 +3,20 @@ package config
 import (
 	"os"
 	"strings"
+	"time"
 
 	commonCfg "github.com/sentinel/go-common/config"
 )
 
 // Config holds the API gateway configuration.
 type Config struct {
-	Port        string
-	AppEnv      string
-	DatabaseURL string
+	Port         string
+	AppEnv       string
+	DatabaseURL  string
 	KafkaBrokers string
 	// WSConsumerGroup is unique per gateway instance so every instance sees every event.
 	WSConsumerGroup string
-	CORSOrigin  string
+	CORSOrigin      string
 
 	// Auth
 	AuthDevBypass    bool
@@ -31,6 +32,12 @@ type Config struct {
 	MailHost                    string
 	MailPort                    string
 	MailFrom                    string
+
+	// Viewport sync: push the area connected map clients see to ingest-service
+	// so OpenSky is polled only for that area.
+	ViewportSyncEnabled   bool
+	ViewportSyncHeartbeat time.Duration
+	ViewportSyncDebounce  time.Duration
 
 	// Downstream services
 	EntityServiceURL       string
@@ -65,9 +72,9 @@ func Load() Config {
 	}
 
 	return Config{
-		Port:         commonCfg.EnvOrDefault("PORT", "3000"),
-		AppEnv:       commonCfg.EnvOrDefault("APP_ENV", commonCfg.EnvOrDefault("NODE_ENV", "development")),
-		DatabaseURL:  commonCfg.DatabaseURL(),
+		Port:            commonCfg.EnvOrDefault("PORT", "3000"),
+		AppEnv:          commonCfg.EnvOrDefault("APP_ENV", commonCfg.EnvOrDefault("NODE_ENV", "development")),
+		DatabaseURL:     commonCfg.DatabaseURL(),
 		KafkaBrokers:    commonCfg.EnvOrDefault("KAFKA_BROKERS", "localhost:9092"),
 		WSConsumerGroup: commonCfg.EnvOrDefault("KAFKA_WS_CONSUMER_GROUP", "sentinel-gateway-ws-"+hostname()),
 		CORSOrigin:      commonCfg.EnvOrDefault("CORS_ORIGIN", "http://localhost:4200"),
@@ -84,6 +91,10 @@ func Load() Config {
 		MailHost:                    commonCfg.EnvOrDefault("MAIL_HOST", "localhost"),
 		MailPort:                    commonCfg.EnvOrDefault("MAIL_PORT", "1025"),
 		MailFrom:                    commonCfg.EnvOrDefault("MAIL_FROM", "\"SENTINEL Platform\" <sentinel@sentinel.local>"),
+
+		ViewportSyncEnabled:   commonCfg.EnvOrDefaultBool("VIEWPORT_SYNC_ENABLED", true),
+		ViewportSyncHeartbeat: time.Duration(commonCfg.EnvOrDefaultInt("VIEWPORT_SYNC_HEARTBEAT_SEC", 30)) * time.Second,
+		ViewportSyncDebounce:  time.Duration(commonCfg.EnvOrDefaultInt("VIEWPORT_SYNC_DEBOUNCE_MS", 1000)) * time.Millisecond,
 
 		EntityServiceURL:       commonCfg.EnvOrDefault("ENTITY_SERVICE_URL", "http://localhost:3001"),
 		TrackServiceURL:        commonCfg.EnvOrDefault("TRACK_SERVICE_URL", "http://localhost:3002"),

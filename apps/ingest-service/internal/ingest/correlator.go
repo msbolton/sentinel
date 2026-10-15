@@ -20,6 +20,12 @@ const (
 	// identical position reports before treating them as duplicates.
 	duplicateTimeThresholdSec = 1.0
 
+	// duplicateForwardInterval bounds duplicate suppression by wall-clock
+	// time: a report is forwarded at least this often even when the feed
+	// keeps repeating the same fix (an aircraft parked on the apron, or a
+	// cached OpenSky snapshot), so downstream last-seen times stay fresh.
+	duplicateForwardInterval = 5 * time.Second
+
 	// trackExpiryDuration is how long an entity track is kept before expiration.
 	trackExpiryDuration = 15 * time.Minute
 
@@ -34,7 +40,9 @@ type trackEntry struct {
 	Name       string
 	Latitude   float64
 	Longitude  float64
-	LastSeen   time.Time
+	LastSeen   time.Time // timestamp of the last report (feed time)
+	// LastForwarded is the wall-clock time the last report was passed on.
+	LastForwarded time.Time
 }
 
 // TrackCorrelator maintains an in-memory map of recently observed entities and
@@ -76,6 +84,7 @@ func (tc *TrackCorrelator) Correlate(entity *models.EntityPosition) (correlated 
 			existing.Latitude = entity.Latitude
 			existing.Longitude = entity.Longitude
 			existing.LastSeen = entity.Timestamp
+			existing.LastForwarded = time.Now()
 			if entity.Name != "" {
 				existing.Name = entity.Name
 			}
@@ -84,12 +93,13 @@ func (tc *TrackCorrelator) Correlate(entity *models.EntityPosition) (correlated 
 
 		// New entity with an ID; register it.
 		tc.tracks[entity.EntityID] = &trackEntry{
-			EntityID:   entity.EntityID,
-			EntityType: entity.EntityType,
-			Name:       entity.Name,
-			Latitude:   entity.Latitude,
-			Longitude:  entity.Longitude,
-			LastSeen:   entity.Timestamp,
+			EntityID:      entity.EntityID,
+			EntityType:    entity.EntityType,
+			Name:          entity.Name,
+			Latitude:      entity.Latitude,
+			Longitude:     entity.Longitude,
+			LastSeen:      entity.Timestamp,
+			LastForwarded: time.Now(),
 		}
 		return entity, false
 	}
@@ -109,18 +119,20 @@ func (tc *TrackCorrelator) Correlate(entity *models.EntityPosition) (correlated 
 		matched.Latitude = entity.Latitude
 		matched.Longitude = entity.Longitude
 		matched.LastSeen = entity.Timestamp
+		matched.LastForwarded = time.Now()
 		return entity, false
 	}
 
 	// No match found; assign a new entity ID.
 	entity.EntityID = fmt.Sprintf("TRK-%s", uuid.New().String()[:8])
 	tc.tracks[entity.EntityID] = &trackEntry{
-		EntityID:   entity.EntityID,
-		EntityType: entity.EntityType,
-		Name:       entity.Name,
-		Latitude:   entity.Latitude,
-		Longitude:  entity.Longitude,
-		LastSeen:   entity.Timestamp,
+		EntityID:      entity.EntityID,
+		EntityType:    entity.EntityType,
+		Name:          entity.Name,
+		Latitude:      entity.Latitude,
+		Longitude:     entity.Longitude,
+		LastSeen:      entity.Timestamp,
+		LastForwarded: time.Now(),
 	}
 	return entity, false
 }
@@ -152,8 +164,18 @@ func (tc *TrackCorrelator) findNearestMatch(entity *models.EntityPosition) *trac
 // isDuplicate returns true if the incoming position is essentially identical
 // to the existing track's last known position within time and distance thresholds.
 func (tc *TrackCorrelator) isDuplicate(existing *trackEntry, incoming *models.EntityPosition) bool {
+	return tc.isDuplicateAt(existing, incoming, time.Now())
+}
+
+// isDuplicateAt is isDuplicate with an injectable wall clock.
+func (tc *TrackCorrelator) isDuplicateAt(existing *trackEntry, incoming *models.EntityPosition, now time.Time) bool {
 	timeDelta := incoming.Timestamp.Sub(existing.LastSeen).Seconds()
 	if timeDelta > duplicateTimeThresholdSec {
+		return false
+	}
+	// Even an identical fix must get through periodically so the entity is
+	// not aged out while the feed still reports it.
+	if !existing.LastForwarded.IsZero() && now.Sub(existing.LastForwarded) >= duplicateForwardInterval {
 		return false
 	}
 

@@ -2,11 +2,20 @@ package feeds
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/sentinel/ingest-service/internal/sources"
 )
+
+// maxViewportBoxes bounds a viewport push; the gateway sends at most two
+// (one split at the antimeridian).
+const maxViewportBoxes = 4
 
 // Handler provides HTTP endpoints for listing, creating, and managing data feeds.
 type Handler struct {
@@ -105,11 +114,43 @@ func (h *Handler) createFeed(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleFeedByID serves PUT, DELETE, PATCH /feeds/{id}.
+// viewportRequest is the JSON body for PUT /feeds/{id}/viewport.
+type viewportRequest struct {
+	Active  bool           `json:"active"`
+	Clients int            `json:"clients"`
+	Boxes   []sources.BBox `json:"boxes"`
+}
+
+// viewportResponse is the JSON body returned by GET and PUT /feeds/{id}/viewport.
+type viewportResponse struct {
+	Feed                 string         `json:"feed"`
+	Enabled              bool           `json:"enabled"`
+	Active               bool           `json:"active"`
+	Clients              int            `json:"clients"`
+	Boxes                []sources.BBox `json:"boxes"`
+	AreaSqDeg            float64        `json:"areaSqDeg"`
+	EffectiveIntervalSec int            `json:"effectiveIntervalSec"`
+	Idle                 bool           `json:"idle"`
+	CreditsRemaining     *int           `json:"creditsRemaining"` // OpenSky daily credits left; null when unknown
+	LowCredits           bool           `json:"lowCredits"`
+	LastPollAt           *time.Time     `json:"lastPollAt"`
+	NextPollInSec        int            `json:"nextPollInSec"`
+	ExpiresAt            *time.Time     `json:"expiresAt"`
+}
+
+// handleFeedByID serves PUT, DELETE, PATCH /feeds/{id} and GET, PUT /feeds/{id}/viewport.
 func (h *Handler) handleFeedByID(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/feeds/")
+	id, sub, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/feeds/"), "/")
 	if id == "" {
 		http.Error(w, "missing feed id", http.StatusBadRequest)
+		return
+	}
+	if sub == "viewport" {
+		h.handleViewport(w, r, id)
+		return
+	}
+	if sub != "" {
+		http.NotFound(w, r)
 		return
 	}
 
@@ -202,4 +243,98 @@ func (h *Handler) updateFeed(w http.ResponseWriter, r *http.Request, id string) 
 	if err := json.NewEncoder(w).Encode(feed); err != nil {
 		h.logger.Error("failed to encode feed response", zap.Error(err))
 	}
+}
+
+// handleViewport serves GET and PUT /feeds/{id}/viewport.
+func (h *Handler) handleViewport(w http.ResponseWriter, r *http.Request, id string) {
+	var (
+		state ViewportState
+		err   error
+	)
+	switch r.Method {
+	case http.MethodGet:
+		state, err = h.manager.GetViewport(id)
+	case http.MethodPut:
+		var req viewportRequest
+		if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if msg := validateViewport(req); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		state, err = h.manager.SetViewport(id, sources.Viewport{Active: req.Active, Clients: req.Clients, Boxes: req.Boxes})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrUnknownFeed):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, ErrViewportUnsupported):
+			http.Error(w, err.Error(), http.StatusConflict)
+		default:
+			h.logger.Error("viewport request failed", zap.String("id", id), zap.Error(err))
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(toViewportResponse(state)); err != nil {
+		h.logger.Error("failed to encode viewport response", zap.Error(err))
+	}
+}
+
+// validateViewport returns a problem description or "" when the request is valid.
+func validateViewport(req viewportRequest) string {
+	if len(req.Boxes) > maxViewportBoxes {
+		return fmt.Sprintf("at most %d boxes allowed", maxViewportBoxes)
+	}
+	if req.Active && len(req.Boxes) == 0 {
+		return "an active viewport needs at least one box"
+	}
+	if req.Clients < 0 {
+		return "clients must not be negative"
+	}
+	for i, b := range req.Boxes {
+		if err := b.Validate(); err != nil {
+			return fmt.Sprintf("box %d: %v", i, err)
+		}
+	}
+	return ""
+}
+
+func toViewportResponse(state ViewportState) viewportResponse {
+	st := state.Status
+	resp := viewportResponse{
+		Feed:                 state.Feed,
+		Enabled:              state.Enabled,
+		Active:               st.Active,
+		Clients:              st.Clients,
+		Boxes:                st.Boxes,
+		AreaSqDeg:            st.AreaSqDeg,
+		EffectiveIntervalSec: int(st.EffectiveInterval / time.Second),
+		Idle:                 st.Idle,
+		LowCredits:           st.LowCredits,
+		NextPollInSec:        int((st.NextPollIn + time.Second - 1) / time.Second),
+	}
+	if st.CreditsRemaining >= 0 {
+		c := st.CreditsRemaining
+		resp.CreditsRemaining = &c
+	}
+	if resp.Boxes == nil {
+		resp.Boxes = []sources.BBox{}
+	}
+	if !st.LastPollAt.IsZero() {
+		t := st.LastPollAt.UTC()
+		resp.LastPollAt = &t
+	}
+	if !st.ExpiresAt.IsZero() {
+		t := st.ExpiresAt.UTC()
+		resp.ExpiresAt = &t
+	}
+	return resp
 }

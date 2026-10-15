@@ -1,8 +1,11 @@
 package batch
 
 import (
+	"encoding/json"
+	"github.com/sentinel/entity-service/internal/store"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func f(v float64) *float64 { return &v }
@@ -67,5 +70,84 @@ func TestBuildKinematics(t *testing.T) {
 func TestResolveSourceEntityID(t *testing.T) {
 	if resolveSourceEntityID(IngestMessage{EntityID: "abc"}) != "abc" {
 		t.Error("source entity id should be the feed's entity id")
+	}
+}
+
+func TestPositionEventPayloadCarriesVelocityAndLastSeen(t *testing.T) {
+	vn, ve, vu := 100.0, -20.0, 2.5
+	msg := IngestMessage{
+		Latitude: 41.9, Longitude: -87.9, Altitude: 10000, Heading: 270, SpeedKnots: 200, Course: 271,
+		VelocityNorth: &vn, VelocityEast: &ve, VelocityUp: &vu, Source: "opensky", Timestamp: "2026-10-14T00:00:00Z",
+	}
+	seen := time.Date(2026, 10, 14, 0, 0, 5, 0, time.UTC)
+	p := positionEventPayload("id-1", "AIRCRAFT", msg, seen)
+
+	if p["entity_id"] != "id-1" || p["entity_type"] != "AIRCRAFT" || p["latitude"] != 41.9 {
+		t.Errorf("identity/position fields wrong: %+v", p)
+	}
+	if p["velocity_north"] != &vn || p["velocity_east"] != &ve || p["velocity_up"] != &vu {
+		t.Errorf("velocity pointers not passed through: %+v", p)
+	}
+	if p["last_seen_at"] != "2026-10-14T00:00:05Z" {
+		t.Errorf("last_seen_at = %v", p["last_seen_at"])
+	}
+
+	// Missing velocities serialise as null, not as zero.
+	raw, _ := json.Marshal(positionEventPayload("id-2", "AIRCRAFT", IngestMessage{}, seen))
+	var decoded map[string]interface{}
+	_ = json.Unmarshal(raw, &decoded)
+	if v, ok := decoded["velocity_north"]; !ok || v != nil {
+		t.Errorf("absent velocity should be null, got %v", v)
+	}
+}
+
+func TestCreatedEventPayloadCarriesMotion(t *testing.T) {
+	vn := 50.0
+	entity := &store.EntityRecord{ID: "id-1", EntityType: "AIRCRAFT", Name: "UAL123", Source: "OPENSKY", Classification: "UNCLASSIFIED", CreatedAt: "2026-10-14T00:00:00Z", UpdatedAt: "2026-10-14T00:00:00Z"}
+	msg := IngestMessage{Latitude: 1, Longitude: 2, Altitude: 3000, Heading: 90, SpeedKnots: 150, Course: 90, VelocityNorth: &vn}
+	p := createdEventPayload(entity, msg)
+	if p["id"] != "id-1" || p["altitude"] != 3000.0 || p["heading"] != 90.0 || p["speed_knots"] != 150.0 || p["velocity_north"] != &vn {
+		t.Errorf("created payload missing motion fields: %+v", p)
+	}
+	if p["last_seen_at"] != "2026-10-14T00:00:00Z" {
+		t.Errorf("last_seen_at = %v", p["last_seen_at"])
+	}
+}
+
+func TestDedupeLatestKeepsLastReportPerEntity(t *testing.T) {
+	batch := []IngestMessage{
+		{EntityID: "a", Latitude: 1},
+		{EntityID: "b", Latitude: 1},
+		{Latitude: 9}, // no id: kept as is
+		{EntityID: "a", Latitude: 2},
+		{EntityID: "c", Latitude: 1},
+		{EntityID: "a", Latitude: 3},
+	}
+	got := dedupeLatest(batch)
+	if len(got) != 4 {
+		t.Fatalf("expected 4 messages, got %d: %+v", len(got), got)
+	}
+	if got[0].EntityID != "a" || got[0].Latitude != 3 {
+		t.Errorf("a should be the latest report in first-seen position, got %+v", got[0])
+	}
+	if got[1].EntityID != "b" || got[2].EntityID != "" || got[3].EntityID != "c" {
+		t.Errorf("order not preserved: %+v", got)
+	}
+	// Small batches pass through untouched.
+	one := []IngestMessage{{EntityID: "x"}}
+	if len(dedupeLatest(one)) != 1 || len(dedupeLatest(nil)) != 0 {
+		t.Error("small batches should pass through")
+	}
+}
+
+func TestNewEntityRecordMapsFields(t *testing.T) {
+	country := "United States"
+	msg := IngestMessage{EntityID: "ICAO-ABC", EntityType: "aircraft", Source: "opensky", Name: "UAL1", Latitude: 1, Longitude: 2, Altitude: 300, CountryOfOrigin: &country}
+	rec := newEntityRecord(msg)
+	if rec.EntityType != "AIRCRAFT" || rec.Source != "OPENSKY" || *rec.SourceEntityID != "ICAO-ABC" || rec.Position.Lat != 1 || *rec.Altitude != 300 || rec.CountryOfOrigin != &country {
+		t.Errorf("unexpected record %+v", rec)
+	}
+	if rec.Metadata == nil || rec.Affiliations == nil {
+		t.Error("metadata and affiliations must be non-nil")
 	}
 }

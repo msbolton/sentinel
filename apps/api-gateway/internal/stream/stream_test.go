@@ -215,6 +215,35 @@ func TestBridge_EntityEventsFromBothShapes(t *testing.T) {
 	if e2.Entity.Metadata == nil || e2.Entity.Affiliations == nil {
 		t.Error("metadata and affiliations must serialise as {} and [] not null")
 	}
+	// Without velocity fields the kinematics object is omitted; lastSeenAt
+	// falls back to the event timestamp.
+	if e1.Entity.Kinematics != nil || e1.Entity.LastSeenAt != "2026-10-14T00:00:00Z" {
+		t.Errorf("e1 kinematics/lastSeenAt = %v / %s", e1.Entity.Kinematics, e1.Entity.LastSeenAt)
+	}
+}
+
+func TestBridge_VelocityAndLastSeenPassThrough(t *testing.T) {
+	b, c := newTestBridge(t)
+	b.Handle(kafka.TopicEntityPosition, []byte(`{"entity_id":"e1","entity_type":"AIRCRAFT","latitude":1,"longitude":2,"altitude":9000,"velocity_north":100.5,"velocity_east":-20,"velocity_up":null,"timestamp":"2026-10-14T00:00:00Z","last_seen_at":"2026-10-14T00:00:05Z"}`))
+	b.batcher.Flush()
+
+	env := decodeFrame(t, c)
+	var events []EntityEvent
+	_ = json.Unmarshal(env.Data, &events)
+	if len(events) != 1 {
+		t.Fatalf("events = %+v", events)
+	}
+	e := events[0].Entity
+	if e.LastSeenAt != "2026-10-14T00:00:05Z" {
+		t.Errorf("lastSeenAt = %s", e.LastSeenAt)
+	}
+	velocity, _ := e.Kinematics["velocity"].(map[string]interface{})
+	if velocity == nil || velocity["north"] != 100.5 || velocity["east"] != -20.0 {
+		t.Errorf("kinematics = %v", e.Kinematics)
+	}
+	if _, present := velocity["up"]; present {
+		t.Error("a null velocity component must be omitted")
+	}
 }
 
 func TestBridge_DeletedAgeoutAndAlerts(t *testing.T) {
@@ -227,13 +256,24 @@ func TestBridge_DeletedAgeoutAndAlerts(t *testing.T) {
 		t.Errorf("deleted = %s %+v", env.Type, del)
 	}
 
-	raw := `{"entity_id":"e9","ageout_state":"STALE"}`
-	b.Handle(kafka.TopicEntityStale, []byte(raw))
-	env = decodeFrame(t, c)
-	if env.Type != MsgEntityStale || string(env.Data) != raw {
-		t.Errorf("stale passthrough = %s %s", env.Type, env.Data)
-	}
+	// Ageout events are coalesced into one array frame per type per flush:
+	// the ageout service emits up to a thousand per cycle.
+	b.Handle(kafka.TopicEntityStale, []byte(`{"entity_id":"e9","ageout_state":"STALE"}`))
+	b.Handle(kafka.TopicEntityStale, []byte(`{"entity_id":"e10","ageout_state":"STALE"}`))
+	b.Handle(kafka.TopicEntityAgedOut, []byte(`{"entity_id":"e11","ageout_state":"AGED_OUT"}`))
 	b.Handle(kafka.TopicEntityAgedOut, []byte(`not json`))
+	noFrame(t, c)
+	b.batcher.Flush()
+	env = decodeFrame(t, c)
+	if env.Type != MsgEntityStale || string(env.Data) != `[{"entity_id":"e9","ageout_state":"STALE"},{"entity_id":"e10","ageout_state":"STALE"}]` {
+		t.Errorf("stale batch = %s %s", env.Type, env.Data)
+	}
+	env = decodeFrame(t, c)
+	if env.Type != MsgEntityAgedOut || string(env.Data) != `[{"entity_id":"e11","ageout_state":"AGED_OUT"}]` {
+		t.Errorf("agedout batch = %s %s", env.Type, env.Data)
+	}
+	noFrame(t, c)
+	b.batcher.Flush() // nothing pending: no empty frames
 	noFrame(t, c)
 
 	b.Handle(kafka.TopicAlertGeofence, []byte(`{"alertId":"a1","alertType":"GEOFENCE_BREACH","severity":"HIGH","title":"Breach","description":"Entered zone","entityId":"e1","position":{"lat":1,"lon":2},"createdAt":"2026-10-14T00:00:00Z"}`))
