@@ -121,6 +121,21 @@ describe('WebSocketService', () => {
     expect(frames[frames.length - 1]).toEqual({ type: 'entity:unsubscribe', data: { entityId: 'e-9' } });
   });
 
+  it('derives the server clock skew from connection:ack', () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-14T00:00:00Z'));
+    service.connect();
+    const socket = latestSocket();
+    socket.simulateOpen();
+    expect(service.serverNow()).toBe(Date.parse('2026-10-14T00:00:00Z'));
+
+    socket.receive({ type: 'connection:ack', data: { clientId: 'x', serverTime: '2026-10-14T00:00:30Z' } });
+    expect(service.serverNow()).toBe(Date.parse('2026-10-14T00:00:30Z'));
+
+    // A malformed server time leaves the skew untouched.
+    socket.receive({ type: 'connection:ack', data: { clientId: 'x', serverTime: 'nope' } });
+    expect(service.serverNow()).toBe(Date.parse('2026-10-14T00:00:30Z'));
+  });
+
   it('fans out entity:batch frames as individual entity events', () => {
     const received: EntityEvent[] = [];
     service.entityUpdates$.subscribe((e) => received.push(e));

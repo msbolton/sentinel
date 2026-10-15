@@ -215,6 +215,35 @@ func TestBridge_EntityEventsFromBothShapes(t *testing.T) {
 	if e2.Entity.Metadata == nil || e2.Entity.Affiliations == nil {
 		t.Error("metadata and affiliations must serialise as {} and [] not null")
 	}
+	// Without velocity fields the kinematics object is omitted; lastSeenAt
+	// falls back to the event timestamp.
+	if e1.Entity.Kinematics != nil || e1.Entity.LastSeenAt != "2026-10-14T00:00:00Z" {
+		t.Errorf("e1 kinematics/lastSeenAt = %v / %s", e1.Entity.Kinematics, e1.Entity.LastSeenAt)
+	}
+}
+
+func TestBridge_VelocityAndLastSeenPassThrough(t *testing.T) {
+	b, c := newTestBridge(t)
+	b.Handle(kafka.TopicEntityPosition, []byte(`{"entity_id":"e1","entity_type":"AIRCRAFT","latitude":1,"longitude":2,"altitude":9000,"velocity_north":100.5,"velocity_east":-20,"velocity_up":null,"timestamp":"2026-10-14T00:00:00Z","last_seen_at":"2026-10-14T00:00:05Z"}`))
+	b.batcher.Flush()
+
+	env := decodeFrame(t, c)
+	var events []EntityEvent
+	_ = json.Unmarshal(env.Data, &events)
+	if len(events) != 1 {
+		t.Fatalf("events = %+v", events)
+	}
+	e := events[0].Entity
+	if e.LastSeenAt != "2026-10-14T00:00:05Z" {
+		t.Errorf("lastSeenAt = %s", e.LastSeenAt)
+	}
+	velocity, _ := e.Kinematics["velocity"].(map[string]interface{})
+	if velocity == nil || velocity["north"] != 100.5 || velocity["east"] != -20.0 {
+		t.Errorf("kinematics = %v", e.Kinematics)
+	}
+	if _, present := velocity["up"]; present {
+		t.Error("a null velocity component must be omitted")
+	}
 }
 
 func TestBridge_DeletedAgeoutAndAlerts(t *testing.T) {

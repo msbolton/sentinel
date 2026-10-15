@@ -19,18 +19,18 @@ const (
 // Outbound message types (server to client). Entity and ageout names match
 // the Socket.IO event names the Angular client already handled.
 const (
-	MsgConnectionAck     = "connection:ack"
-	MsgViewportUpdated   = "viewport:updated"
-	MsgEntitySubscribed  = "entity:subscribed"
+	MsgConnectionAck      = "connection:ack"
+	MsgViewportUpdated    = "viewport:updated"
+	MsgEntitySubscribed   = "entity:subscribed"
 	MsgEntityUnsubscribed = "entity:unsubscribed"
-	MsgEntityBatch       = "entity:batch"
-	MsgEntityDeleted     = "entity:deleted"
-	MsgEntityStale       = "events.entity.stale"
-	MsgEntityAgedOut     = "events.entity.agedout"
-	MsgEntityRestored    = "events.entity.restored"
-	MsgAlertNew          = "alert:new"
-	MsgError             = "error"
-	MsgPong              = "pong"
+	MsgEntityBatch        = "entity:batch"
+	MsgEntityDeleted      = "entity:deleted"
+	MsgEntityStale        = "events.entity.stale"
+	MsgEntityAgedOut      = "events.entity.agedout"
+	MsgEntityRestored     = "events.entity.restored"
+	MsgAlertNew           = "alert:new"
+	MsgError              = "error"
+	MsgPong               = "pong"
 )
 
 // Envelope is the wire frame in both directions.
@@ -84,6 +84,9 @@ type Entity struct {
 	PlatformData      map[string]interface{} `json:"platformData,omitempty"`
 	OperationalStatus string                 `json:"operationalStatus,omitempty"`
 	CircularError     *float64               `json:"circularError,omitempty"`
+	// Kinematics carries {"velocity": {north, east, up}} in m/s when known,
+	// matching the client's KinematicState shape.
+	Kinematics map[string]interface{} `json:"kinematics,omitempty"`
 }
 
 // EntityEvent is what the client receives for created, updated, and deleted entities.

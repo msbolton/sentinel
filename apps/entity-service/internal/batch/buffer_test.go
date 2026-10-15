@@ -1,8 +1,11 @@
 package batch
 
 import (
+	"encoding/json"
+	"github.com/sentinel/entity-service/internal/store"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func f(v float64) *float64 { return &v }
@@ -67,5 +70,46 @@ func TestBuildKinematics(t *testing.T) {
 func TestResolveSourceEntityID(t *testing.T) {
 	if resolveSourceEntityID(IngestMessage{EntityID: "abc"}) != "abc" {
 		t.Error("source entity id should be the feed's entity id")
+	}
+}
+
+func TestPositionEventPayloadCarriesVelocityAndLastSeen(t *testing.T) {
+	vn, ve, vu := 100.0, -20.0, 2.5
+	msg := IngestMessage{
+		Latitude: 41.9, Longitude: -87.9, Altitude: 10000, Heading: 270, SpeedKnots: 200, Course: 271,
+		VelocityNorth: &vn, VelocityEast: &ve, VelocityUp: &vu, Source: "opensky", Timestamp: "2026-10-14T00:00:00Z",
+	}
+	seen := time.Date(2026, 10, 14, 0, 0, 5, 0, time.UTC)
+	p := positionEventPayload("id-1", "AIRCRAFT", msg, seen)
+
+	if p["entity_id"] != "id-1" || p["entity_type"] != "AIRCRAFT" || p["latitude"] != 41.9 {
+		t.Errorf("identity/position fields wrong: %+v", p)
+	}
+	if p["velocity_north"] != &vn || p["velocity_east"] != &ve || p["velocity_up"] != &vu {
+		t.Errorf("velocity pointers not passed through: %+v", p)
+	}
+	if p["last_seen_at"] != "2026-10-14T00:00:05Z" {
+		t.Errorf("last_seen_at = %v", p["last_seen_at"])
+	}
+
+	// Missing velocities serialise as null, not as zero.
+	raw, _ := json.Marshal(positionEventPayload("id-2", "AIRCRAFT", IngestMessage{}, seen))
+	var decoded map[string]interface{}
+	_ = json.Unmarshal(raw, &decoded)
+	if v, ok := decoded["velocity_north"]; !ok || v != nil {
+		t.Errorf("absent velocity should be null, got %v", v)
+	}
+}
+
+func TestCreatedEventPayloadCarriesMotion(t *testing.T) {
+	vn := 50.0
+	entity := &store.EntityRecord{ID: "id-1", EntityType: "AIRCRAFT", Name: "UAL123", Source: "OPENSKY", Classification: "UNCLASSIFIED", CreatedAt: "2026-10-14T00:00:00Z", UpdatedAt: "2026-10-14T00:00:00Z"}
+	msg := IngestMessage{Latitude: 1, Longitude: 2, Altitude: 3000, Heading: 90, SpeedKnots: 150, Course: 90, VelocityNorth: &vn}
+	p := createdEventPayload(entity, msg)
+	if p["id"] != "id-1" || p["altitude"] != 3000.0 || p["heading"] != 90.0 || p["speed_knots"] != 150.0 || p["velocity_north"] != &vn {
+		t.Errorf("created payload missing motion fields: %+v", p)
+	}
+	if p["last_seen_at"] != "2026-10-14T00:00:00Z" {
+		t.Errorf("last_seen_at = %v", p["last_seen_at"])
 	}
 }

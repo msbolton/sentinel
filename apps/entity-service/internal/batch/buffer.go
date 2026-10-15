@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sentinel/go-common/kafka"
 	"github.com/sentinel/entity-service/internal/redis"
 	"github.com/sentinel/entity-service/internal/store"
+	"github.com/sentinel/go-common/kafka"
 	"go.uber.org/zap"
 )
 
@@ -233,23 +233,42 @@ func (b *Buffer) createEntity(ctx context.Context, msg IngestMessage) {
 }
 
 func (b *Buffer) emitPositionEvent(entityID, entityType string, msg IngestMessage) {
-	payload, _ := json.Marshal(map[string]interface{}{
-		"entity_id":   entityID,
-		"entity_type": entityType,
-		"latitude":    msg.Latitude,
-		"longitude":   msg.Longitude,
-		"altitude":    msg.Altitude,
-		"heading":     msg.Heading,
-		"speed_knots": msg.SpeedKnots,
-		"course":      msg.Course,
-		"source":      msg.Source,
-		"timestamp":   msg.Timestamp,
-	})
+	payload, _ := json.Marshal(positionEventPayload(entityID, entityType, msg, time.Now().UTC()))
 	b.producer.ProduceRaw(kafka.TopicEntityPosition, []byte(entityID), payload, nil)
 }
 
 func (b *Buffer) emitCreatedEvent(entity *store.EntityRecord, msg IngestMessage) {
-	payload, _ := json.Marshal(map[string]interface{}{
+	payload, _ := json.Marshal(createdEventPayload(entity, msg))
+	b.producer.ProduceRaw(kafka.TopicEntityCreated, []byte(entity.ID), payload, nil)
+}
+
+// positionEventPayload is the events.entity.position message. Velocity
+// components (m/s, nil when the feed did not report them) and the server-side
+// last-seen time let the client dead-reckon between fixes.
+func positionEventPayload(entityID, entityType string, msg IngestMessage, seenAt time.Time) map[string]interface{} {
+	return map[string]interface{}{
+		"entity_id":      entityID,
+		"entity_type":    entityType,
+		"latitude":       msg.Latitude,
+		"longitude":      msg.Longitude,
+		"altitude":       msg.Altitude,
+		"heading":        msg.Heading,
+		"speed_knots":    msg.SpeedKnots,
+		"course":         msg.Course,
+		"velocity_north": msg.VelocityNorth,
+		"velocity_east":  msg.VelocityEast,
+		"velocity_up":    msg.VelocityUp,
+		"source":         msg.Source,
+		"timestamp":      msg.Timestamp,
+		"last_seen_at":   seenAt.Format(time.RFC3339Nano),
+	}
+}
+
+// createdEventPayload is the events.entity.created message. It carries the
+// same motion fields as a position event so a brand-new aircraft can be
+// extrapolated before its first position update.
+func createdEventPayload(entity *store.EntityRecord, msg IngestMessage) map[string]interface{} {
+	return map[string]interface{}{
 		"id":             entity.ID,
 		"entity_type":    entity.EntityType,
 		"name":           entity.Name,
@@ -257,10 +276,17 @@ func (b *Buffer) emitCreatedEvent(entity *store.EntityRecord, msg IngestMessage)
 		"classification": entity.Classification,
 		"latitude":       msg.Latitude,
 		"longitude":      msg.Longitude,
+		"altitude":       msg.Altitude,
+		"heading":        msg.Heading,
+		"speed_knots":    msg.SpeedKnots,
+		"course":         msg.Course,
+		"velocity_north": msg.VelocityNorth,
+		"velocity_east":  msg.VelocityEast,
+		"velocity_up":    msg.VelocityUp,
 		"created_at":     entity.CreatedAt,
 		"updated_at":     entity.UpdatedAt,
-	})
-	b.producer.ProduceRaw(kafka.TopicEntityCreated, []byte(entity.ID), payload, nil)
+		"last_seen_at":   entity.UpdatedAt,
+	}
 }
 
 func (b *Buffer) emitRestoredEvent(entityID, entityType, previousState string, msg IngestMessage) {

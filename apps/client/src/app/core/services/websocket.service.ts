@@ -43,6 +43,8 @@ export class WebSocketService implements OnDestroy {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastViewport: ViewportBounds | null = null;
   private readonly subscribedEntities = new Set<string>();
+  /** Server clock minus local clock, from connection:ack; 0 until known. */
+  private clockSkewMs = 0;
 
   private readonly entityUpdatesSubject = new Subject<EntityEvent>();
   private readonly alertSubject = new Subject<Alert>();
@@ -60,6 +62,15 @@ export class WebSocketService implements OnDestroy {
     }
     this.intentionalClose = false;
     this.open();
+  }
+
+  /**
+   * Current time on the server's clock, in ms. Entity timestamps come from
+   * the server, so extrapolation must measure elapsed time against it rather
+   * than a possibly skewed local clock.
+   */
+  serverNow(): number {
+    return Date.now() + this.clockSkewMs;
   }
 
   sendViewportUpdate(bounds: ViewportBounds): void {
@@ -210,8 +221,15 @@ export class WebSocketService implements OnDestroy {
       case 'error':
         console.warn('[WS] Server error:', envelope.data);
         break;
+      case 'connection:ack': {
+        const serverTime = Date.parse((envelope.data as { serverTime?: string })?.serverTime ?? '');
+        if (Number.isFinite(serverTime)) {
+          this.clockSkewMs = serverTime - Date.now();
+        }
+        break;
+      }
       default:
-        // connection:ack, viewport:updated, entity:subscribed, pong: nothing to do
+        // viewport:updated, entity:subscribed, pong: nothing to do
         break;
     }
   }
