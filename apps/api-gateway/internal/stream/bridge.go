@@ -111,7 +111,8 @@ func (b *Bridge) Handle(topic string, value []byte) {
 			b.logger.Debug("bad ageout event", zap.String("topic", topic))
 			return
 		}
-		b.hub.BroadcastRaw(topic, value)
+		// Coalesced into one array frame per flush; see Batcher.AddRaw.
+		b.batcher.AddRaw(topic, append(json.RawMessage(nil), value...))
 	case kafka.TopicAlertGeofence, kafka.TopicAlertAnomaly:
 		var raw rawAlertEvent
 		if err := json.Unmarshal(value, &raw); err != nil || raw.ID == "" {

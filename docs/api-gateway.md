@@ -112,7 +112,7 @@ Every frame is a JSON envelope: `{ "type": string, "data": object, "ts": RFC3339
 | `viewport:updated`, `entity:subscribed`, `entity:unsubscribed` | | Acknowledgements |
 | `entity:batch` | `EntityEvent[]` | Created and updated entities coalesced over 200 ms, filtered per client |
 | `entity:deleted` | `EntityEvent` | Broadcast to all clients; `bulk` and `count` are set for a clear-all |
-| `events.entity.stale`, `events.entity.agedout`, `events.entity.restored` | raw Kafka payload | Broadcast to all clients |
+| `events.entity.stale`, `events.entity.agedout`, `events.entity.restored` | raw Kafka payload[] | Broadcast to all clients, coalesced into one array frame per type per 200 ms flush (the ageout service can emit a thousand per cycle) |
 | `alert:new` | `Alert` | New alert from `alerts.geofence` or `alerts.anomaly` |
 | `error` | `{ code, message }` | Rejected inbound frame |
 

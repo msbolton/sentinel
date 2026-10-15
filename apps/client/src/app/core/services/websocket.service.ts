@@ -181,6 +181,19 @@ export class WebSocketService implements OnDestroy {
     }
   }
 
+  /**
+   * Ageout frames carry one payload or, since the gateway coalesces them per
+   * flush, an array of payloads. Emit one event per payload either way.
+   */
+  private emitAgeout(eventType: 'stale' | 'agedout' | 'restored', data: unknown): void {
+    const payloads = Array.isArray(data) ? data : [data];
+    for (const payload of payloads) {
+      if (payload && typeof payload === 'object') {
+        this.ageoutSubject.next({ eventType, payload });
+      }
+    }
+  }
+
   private handleFrame(raw: string): void {
     let envelope: Envelope;
     try {
@@ -207,13 +220,13 @@ export class WebSocketService implements OnDestroy {
         });
         break;
       case 'events.entity.stale':
-        this.ageoutSubject.next({ eventType: 'stale', payload: envelope.data });
+        this.emitAgeout('stale', envelope.data);
         break;
       case 'events.entity.agedout':
-        this.ageoutSubject.next({ eventType: 'agedout', payload: envelope.data });
+        this.emitAgeout('agedout', envelope.data);
         break;
       case 'events.entity.restored':
-        this.ageoutSubject.next({ eventType: 'restored', payload: envelope.data });
+        this.emitAgeout('restored', envelope.data);
         break;
       case 'alert:new':
         this.alertSubject.next(envelope.data as Alert);

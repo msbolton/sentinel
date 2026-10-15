@@ -121,6 +121,25 @@ describe('WebSocketService', () => {
     expect(frames[frames.length - 1]).toEqual({ type: 'entity:unsubscribe', data: { entityId: 'e-9' } });
   });
 
+  it('fans out single and batched ageout frames as one event per payload', () => {
+    const received: Array<{ eventType: string; payload: any }> = [];
+    service.ageoutEvents$.subscribe((e) => received.push(e));
+    service.connect();
+    const socket = latestSocket();
+    socket.simulateOpen();
+
+    socket.receive({ type: 'events.entity.stale', data: { entity_id: 'a' } });
+    socket.receive({ type: 'events.entity.agedout', data: [{ entity_id: 'b' }, { entity_id: 'c' }] });
+    socket.receive({ type: 'events.entity.restored', data: [] });
+    socket.receive({ type: 'events.entity.restored', data: null });
+
+    expect(received).toEqual([
+      { eventType: 'stale', payload: { entity_id: 'a' } },
+      { eventType: 'agedout', payload: { entity_id: 'b' } },
+      { eventType: 'agedout', payload: { entity_id: 'c' } },
+    ]);
+  });
+
   it('derives the server clock skew from connection:ack', () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-10-14T00:00:00Z'));
     service.connect();
