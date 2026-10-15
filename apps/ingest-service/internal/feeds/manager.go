@@ -3,6 +3,7 @@ package feeds
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -17,16 +18,31 @@ import (
 	"github.com/sentinel/ingest-service/internal/store"
 )
 
+// Sentinel errors returned by viewport operations so handlers can map them
+// to HTTP statuses with errors.Is.
+var (
+	ErrUnknownFeed         = errors.New("unknown feed")
+	ErrViewportUnsupported = errors.New("feed does not support viewports")
+)
+
 // FeedStatus describes the current state of a registered data feed.
 type FeedStatus struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	SourceType    string `json:"sourceType"`
-	Description   string `json:"description"`
-	Enabled       bool   `json:"enabled"`
-	Custom        bool   `json:"custom"`
-	ConnectorType string `json:"connectorType,omitempty"`
-	Format        string `json:"format,omitempty"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	SourceType    string            `json:"sourceType"`
+	Description   string            `json:"description"`
+	Enabled       bool              `json:"enabled"`
+	Custom        bool              `json:"custom"`
+	ConnectorType string            `json:"connectorType,omitempty"`
+	Format        string            `json:"format,omitempty"`
+	Viewport      *sources.Viewport `json:"viewport,omitempty"` // last pushed viewport, for viewport-aware feeds
+}
+
+// ViewportState is the result of a viewport read or write on a feed.
+type ViewportState struct {
+	Feed    string
+	Enabled bool
+	Status  sources.ViewportStatus
 }
 
 // MQTTConfig holds connection parameters for a custom MQTT feed.
@@ -65,7 +81,8 @@ type FeedStatusWithHealth struct {
 type feed struct {
 	status      FeedStatus
 	factory     func() (sources.Listener, error)
-	listener    sources.Listener // nil when disabled
+	listener    sources.Listener  // nil when disabled
+	viewport    *sources.Viewport // last pushed viewport; reapplied on enable
 	health      FeedHealth
 	warnSec     int
 	criticalSec int
@@ -77,9 +94,9 @@ type Manager struct {
 	feeds         []*feed          // insertion-ordered
 	byID          map[string]*feed // quick lookup
 	logger        *zap.Logger
-	store         *store.Store                // nil for tests / when no DB
+	store         *store.Store                 // nil for tests / when no DB
 	pipelineInput chan<- *models.IngestMessage // nil until wired
-	metrics       *metrics.Metrics            // nil in tests
+	metrics       *metrics.Metrics             // nil in tests
 }
 
 // NewManager creates a new feed manager. Pass nil for store/pipelineInput/metrics
@@ -150,9 +167,20 @@ func (m *Manager) List() []FeedStatus {
 
 	out := make([]FeedStatus, len(m.feeds))
 	for i, f := range m.feeds {
-		out[i] = f.status
+		out[i] = f.statusSnapshot()
 	}
 	return out
+}
+
+// statusSnapshot copies the status and attaches the viewport, if any.
+func (f *feed) statusSnapshot() FeedStatus {
+	s := f.status
+	if f.viewport != nil {
+		v := *f.viewport
+		v.Boxes = append([]sources.BBox(nil), f.viewport.Boxes...)
+		s.Viewport = &v
+	}
+	return s
 }
 
 // SetEnabled starts or stops a feed by ID. A fresh listener is created via the
@@ -180,6 +208,11 @@ func (m *Manager) SetEnabled(id string, enabled bool) (FeedStatus, error) {
 		}
 		f.listener = l
 		f.status.Enabled = true
+		if f.viewport != nil {
+			if va, ok := l.(sources.ViewportAware); ok {
+				va.SetViewport(*f.viewport)
+			}
+		}
 		m.logger.Info("feed enabled", zap.String("id", id))
 	} else {
 		if f.listener != nil {
@@ -216,6 +249,64 @@ func (m *Manager) StopAll() {
 			f.status.Enabled = false
 		}
 	}
+}
+
+// SetViewport stores the area a feed should ingest and applies it to the
+// running listener. A disabled feed keeps the viewport and applies it when
+// enabled. Feeds whose listener is not ViewportAware return
+// ErrViewportUnsupported.
+func (m *Manager) SetViewport(id string, v sources.Viewport) (ViewportState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	f, ok := m.byID[id]
+	if !ok {
+		return ViewportState{}, fmt.Errorf("%w: %q", ErrUnknownFeed, id)
+	}
+
+	state := ViewportState{Feed: id, Enabled: f.status.Enabled}
+	if f.listener != nil {
+		va, aware := f.listener.(sources.ViewportAware)
+		if !aware {
+			return ViewportState{}, fmt.Errorf("%w: %q", ErrViewportUnsupported, id)
+		}
+		state.Status = va.SetViewport(v)
+	} else {
+		state.Status = sources.ViewportStatus{Active: v.Active, Clients: v.Clients, Boxes: v.Boxes, AreaSqDeg: v.Area(), Idle: true}
+	}
+
+	stored := v
+	stored.Boxes = append([]sources.BBox(nil), v.Boxes...)
+	f.viewport = &stored
+	return state, nil
+}
+
+// GetViewport reports the viewport state of a feed.
+func (m *Manager) GetViewport(id string) (ViewportState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	f, ok := m.byID[id]
+	if !ok {
+		return ViewportState{}, fmt.Errorf("%w: %q", ErrUnknownFeed, id)
+	}
+
+	state := ViewportState{Feed: id, Enabled: f.status.Enabled}
+	if f.listener != nil {
+		va, aware := f.listener.(sources.ViewportAware)
+		if !aware {
+			return ViewportState{}, fmt.Errorf("%w: %q", ErrViewportUnsupported, id)
+		}
+		state.Status = va.ViewportStatus()
+		return state, nil
+	}
+	if f.viewport == nil {
+		state.Status = sources.ViewportStatus{Idle: true}
+		return state, nil
+	}
+	v := *f.viewport
+	state.Status = sources.ViewportStatus{Active: v.Active, Clients: v.Clients, Boxes: v.Boxes, AreaSqDeg: v.Area(), Idle: true}
+	return state, nil
 }
 
 // SetStaleThresholds configures the warn and critical staleness thresholds
@@ -276,7 +367,7 @@ func (m *Manager) ListWithHealth() []FeedStatusWithHealth {
 		h := f.health
 		h.Status = m.computeStatus(f)
 		out[i] = FeedStatusWithHealth{
-			FeedStatus: f.status,
+			FeedStatus: f.statusSnapshot(),
 			Health:     &h,
 		}
 	}

@@ -86,6 +86,28 @@ sequenceDiagram
     GW->>WS: Broadcast entity:created
 ```
 
+### OpenSky viewport-driven polling
+
+The OpenSky feed in the ingest service does not poll the whole globe. The API gateway knows which area every connected map client is looking at (each client sends `viewport:update` over the WebSocket), and it pushes the combined, padded area to the ingest service:
+
+```
+PUT /feeds/opensky/viewport        (through the gateway: PUT /api/v1/feeds/opensky/viewport, operator or admin)
+{ "active": true, "clients": 2,
+  "boxes": [ { "north": 49.1, "south": 44.5, "east": 6.3, "west": -1.2 } ] }
+```
+
+Boxes never cross the antimeridian; a viewport that wraps around 180° arrives as two boxes (at most four are accepted). `active: false` means nobody is looking. The ingest service answers with the same shape plus `enabled`, `areaSqDeg`, `effectiveIntervalSec`, `idle`, `lastPollAt`, `nextPollInSec` and `expiresAt`; `GET /feeds/opensky/viewport` returns it too, and `GET /feeds` carries a `viewport` field on the feed.
+
+Rules the OpenSky listener applies:
+
+- The pushed viewport is a lease. With `OPENSKY_VIEWPORT_MODE=true` the listener idles unless the lease is active, has at least one box, and is younger than `OPENSKY_VIEWPORT_TTL_SEC` (90 s). The gateway re-pushes every 30 s as a heartbeat, so an ingest restart recovers within one heartbeat and a dead gateway stops polling within the TTL.
+- A changed viewport is polled right away, subject to `OPENSKY_MIN_POLL_SPACING_SEC` (3 s). Unchanged pushes only refresh the lease.
+- The base interval is `OPENSKY_INTERVAL_SEC` (10 s). Above `OPENSKY_MAX_AREA_SQDEG` (400 square degrees) the interval is stretched by `ceil(area / max)` and capped at `OPENSKY_MAX_INTERVAL_SEC` (60 s), so a whole-globe view polls once a minute. A box covering 90 % of the globe is polled without bounding-box parameters.
+- Each box is one OpenSky request; aircraft returned by more than one box are forwarded once.
+- With `OPENSKY_VIEWPORT_MODE=false` the listener behaves as before: it polls `OPENSKY_BBOX` (empty = global) continuously, with the same area-based stretching, and never expires.
+
+OpenSky credits: an authenticated account has 4,000 credits per day. A bounding box under 25 square degrees costs 1 credit per request, a global request costs 4. One viewport box polled every 10 s is 8,640 credits per day if a client stays connected around the clock, so continuous viewing is good for roughly 11 hours a day; polling stops as soon as the last client disconnects.
+
 ### Entity Query (REST)
 
 ```mermaid

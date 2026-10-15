@@ -323,3 +323,121 @@ func TestHandleFeedByID_MethodNotAllowed(t *testing.T) {
 		t.Fatalf("expected 405, got %d", w.Code)
 	}
 }
+
+func setupViewportHandler(t *testing.T) (*http.ServeMux, *mockViewportListener) {
+	t.Helper()
+	handler, mgr := setupTestHandler()
+	ml := &mockViewportListener{}
+	mgr.Register("opensky", "OpenSky", "opensky", "OpenSky feed",
+		func() (sources.Listener, error) { return ml, nil }, true)
+	mgr.Register("tcp", "TCP", "tcp", "TCP feed",
+		func() (sources.Listener, error) { return &mockListener{}, nil }, true)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+	return mux, ml
+}
+
+func doViewport(mux *http.ServeMux, method, path, body string) *httptest.ResponseRecorder {
+	var rd *strings.Reader
+	if body != "" {
+		rd = strings.NewReader(body)
+	} else {
+		rd = strings.NewReader("")
+	}
+	req := httptest.NewRequest(method, path, rd)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	return w
+}
+
+const viewportBody = `{"active":true,"clients":1,"boxes":[{"north":45,"south":40,"east":-80,"west":-90}]}`
+
+func TestHandleViewport_PUT_OK(t *testing.T) {
+	mux, ml := setupViewportHandler(t)
+
+	w := doViewport(mux, http.MethodPut, "/feeds/opensky/viewport", viewportBody)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp viewportResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Feed != "opensky" || !resp.Enabled || !resp.Active || resp.Clients != 1 || resp.AreaSqDeg != 50 || resp.EffectiveIntervalSec != 10 {
+		t.Errorf("unexpected response %+v", resp)
+	}
+	if ml.sets.Load() != 1 {
+		t.Errorf("listener not updated, sets=%d", ml.sets.Load())
+	}
+
+	// GET returns the same shape.
+	w = doViewport(mux, http.MethodGet, "/feeds/opensky/viewport", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET expected 200, got %d", w.Code)
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Boxes) != 1 || resp.Boxes[0].North != 45 {
+		t.Errorf("GET returned %+v", resp)
+	}
+
+	// The feed list carries the viewport.
+	w = doViewport(mux, http.MethodGet, "/feeds", "")
+	var feeds []FeedStatusWithHealth
+	if err := json.NewDecoder(w.Body).Decode(&feeds); err != nil {
+		t.Fatal(err)
+	}
+	if feeds[0].Viewport == nil || !feeds[0].Viewport.Active || len(feeds[0].Viewport.Boxes) != 1 {
+		t.Errorf("GET /feeds should include the viewport, got %+v", feeds[0].Viewport)
+	}
+	if feeds[1].Viewport != nil {
+		t.Errorf("tcp feed should have no viewport, got %+v", feeds[1].Viewport)
+	}
+}
+
+func TestHandleViewport_PUT_Inactive(t *testing.T) {
+	mux, _ := setupViewportHandler(t)
+	w := doViewport(mux, http.MethodPut, "/feeds/opensky/viewport", `{"active":false,"clients":0,"boxes":[]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp viewportResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Active || resp.Boxes == nil {
+		t.Errorf("unexpected response %+v", resp)
+	}
+}
+
+func TestHandleViewport_PUT_BadRequests(t *testing.T) {
+	mux, _ := setupViewportHandler(t)
+	cases := map[string]string{
+		"malformed json":  `{"active":`,
+		"inverted box":    `{"active":true,"boxes":[{"north":40,"south":45,"east":-80,"west":-90}]}`,
+		"antimeridian":    `{"active":true,"boxes":[{"north":45,"south":40,"east":-170,"west":170}]}`,
+		"out of range":    `{"active":true,"boxes":[{"north":95,"south":40,"east":-80,"west":-90}]}`,
+		"active no boxes": `{"active":true,"boxes":[]}`,
+		"too many boxes":  `{"active":true,"boxes":[{"north":1,"south":0,"east":1,"west":0},{"north":1,"south":0,"east":1,"west":0},{"north":1,"south":0,"east":1,"west":0},{"north":1,"south":0,"east":1,"west":0},{"north":1,"south":0,"east":1,"west":0}]}`,
+	}
+	for name, body := range cases {
+		if w := doViewport(mux, http.MethodPut, "/feeds/opensky/viewport", body); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: expected 400, got %d: %s", name, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestHandleViewport_Errors(t *testing.T) {
+	mux, _ := setupViewportHandler(t)
+	if w := doViewport(mux, http.MethodPut, "/feeds/nope/viewport", viewportBody); w.Code != http.StatusNotFound {
+		t.Errorf("unknown feed: expected 404, got %d", w.Code)
+	}
+	if w := doViewport(mux, http.MethodPut, "/feeds/tcp/viewport", viewportBody); w.Code != http.StatusConflict {
+		t.Errorf("unsupported feed: expected 409, got %d", w.Code)
+	}
+	if w := doViewport(mux, http.MethodDelete, "/feeds/opensky/viewport", ""); w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("DELETE: expected 405, got %d", w.Code)
+	}
+	if w := doViewport(mux, http.MethodGet, "/feeds/opensky/other", ""); w.Code != http.StatusNotFound {
+		t.Errorf("unknown sub-resource: expected 404, got %d", w.Code)
+	}
+}

@@ -779,6 +779,18 @@ services:
       S3_USE_PATH_STYLE: "true"
       # Custom feeds Postgres store
       DATABASE_URL: postgres://sentinel:sentinel_dev@postgres:5432/sentinel?sslmode=disable
+      # OpenSky Network (credentials come from the host environment / .env)
+      OPENSKY_ENABLED: ${OPENSKY_ENABLED:-false}
+      OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
+      OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
+      OPENSKY_INTERVAL_SEC: "10"
+      # Viewport-driven polling: poll only the area connected map clients see,
+      # as pushed by the api-gateway. false = continuous polling of OPENSKY_BBOX.
+      OPENSKY_VIEWPORT_MODE: "false"
+      OPENSKY_VIEWPORT_TTL_SEC: "90"
+      OPENSKY_MIN_POLL_SPACING_SEC: "3"
+      OPENSKY_MAX_AREA_SQDEG: "400"
+      OPENSKY_MAX_INTERVAL_SEC: "60"
     ports:
       - "4000:4000"
     depends_on:

@@ -1,10 +1,14 @@
 package sources
 
 import (
+	"encoding/json"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -210,30 +214,237 @@ func TestStateVectorNullFields(t *testing.T) {
 func TestBuildURL(t *testing.T) {
 	logger := zap.NewNop()
 	m := newTestMetrics()
+	l := NewOpenSkyListener(&config.Config{}, nil, logger, m, nil, nil)
 
-	// No bbox.
-	cfg := &config.Config{OpenSkyBBox: ""}
-	l := NewOpenSkyListener(cfg, nil, logger, m, nil, nil)
-	got := l.buildURL()
-	if got != openSkyBaseURL {
-		t.Errorf("buildURL() = %q, want %q", got, openSkyBaseURL)
+	if got := l.buildURL(nil); got != openSkyBaseURL {
+		t.Errorf("buildURL(nil) = %q, want %q", got, openSkyBaseURL)
 	}
 
-	// With bbox.
-	cfg = &config.Config{OpenSkyBBox: "45.8389, 5.9962, 47.8084, 10.5226"}
-	l = NewOpenSkyListener(cfg, nil, logger, m, nil, nil)
-	got = l.buildURL()
+	box := BBox{South: 45.8389, West: 5.9962, North: 47.8084, East: 10.5226}
 	want := openSkyBaseURL + "?lamin=45.8389&lomin=5.9962&lamax=47.8084&lomax=10.5226"
-	if got != want {
-		t.Errorf("buildURL() = %q, want %q", got, want)
+	if got := l.buildURL(&box); got != want {
+		t.Errorf("buildURL(box) = %q, want %q", got, want)
 	}
 
-	// Invalid bbox (wrong number of parts) falls back to global.
-	cfg = &config.Config{OpenSkyBBox: "45.8389,5.9962"}
-	l = NewOpenSkyListener(cfg, nil, logger, m, nil, nil)
-	got = l.buildURL()
-	if got != openSkyBaseURL {
-		t.Errorf("buildURL() with bad bbox = %q, want %q", got, openSkyBaseURL)
+	global := BBox{South: -90, West: -180, North: 90, East: 180}
+	if got := l.buildURL(&global); got != openSkyBaseURL {
+		t.Errorf("buildURL(global) = %q, want %q", got, openSkyBaseURL)
+	}
+}
+
+func TestLegacyBBoxFromConfig(t *testing.T) {
+	logger := zap.NewNop()
+	m := newTestMetrics()
+
+	l := NewOpenSkyListener(&config.Config{OpenSkyBBox: "45.8389, 5.9962, 47.8084, 10.5226"}, nil, logger, m, nil, nil)
+	st := l.ViewportStatus()
+	if !st.Active || len(st.Boxes) != 1 {
+		t.Fatalf("legacy bbox not applied: %+v", st)
+	}
+	if st.Boxes[0] != (BBox{South: 45.8389, West: 5.9962, North: 47.8084, East: 10.5226}) {
+		t.Errorf("unexpected box %+v", st.Boxes[0])
+	}
+	if st.Idle {
+		t.Error("legacy mode must never be idle")
+	}
+
+	// Malformed value falls back to global (no boxes).
+	l = NewOpenSkyListener(&config.Config{OpenSkyBBox: "45.8389,5.9962"}, nil, logger, m, nil, nil)
+	if st := l.ViewportStatus(); len(st.Boxes) != 0 || !st.Active {
+		t.Errorf("bad bbox should fall back to global, got %+v", st)
+	}
+}
+
+func TestEffectiveInterval(t *testing.T) {
+	base, maxInt := 10*time.Second, 60*time.Second
+	cases := []struct {
+		area float64
+		want time.Duration
+	}{
+		{10, base},
+		{400, base},
+		{500, 20 * time.Second},
+		{1500, 40 * time.Second},
+		{GlobalArea, maxInt},
+	}
+	for _, c := range cases {
+		if got := effectiveInterval(base, maxInt, c.area, 400); got != c.want {
+			t.Errorf("effectiveInterval(area=%v) = %v, want %v", c.area, got, c.want)
+		}
+	}
+	if got := effectiveInterval(base, maxInt, 5000, 0); got != base {
+		t.Errorf("maxArea 0 must disable stretching, got %v", got)
+	}
+}
+
+// newFixtureServer serves the 3-aircraft fixture and counts requests.
+func newFixtureServer(t *testing.T) (*httptest.Server, *atomic.Int32, func() []string) {
+	t.Helper()
+	var hits atomic.Int32
+	var mu sync.Mutex
+	urls := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		urls = append(urls, r.URL.String())
+		mu.Unlock()
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(openSkyFixture))
+	}))
+	t.Cleanup(server.Close)
+	snapshot := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), urls...)
+	}
+	return server, &hits, snapshot
+}
+
+func newViewportListener(t *testing.T, server *httptest.Server, input chan *models.IngestMessage) *OpenSkyListener {
+	t.Helper()
+	cfg := &config.Config{OpenSkyViewportMode: true, OpenSkyIntervalSec: 3600}
+	l := NewOpenSkyListener(cfg, input, zap.NewNop(), newTestMetrics(), nil, nil)
+	l.baseURL = server.URL
+	l.client = server.Client()
+	l.minSpacing = 0
+	return l
+}
+
+func waitFor(t *testing.T, cond func() bool, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return cond()
+}
+
+func TestPollLoop_IdleInViewportMode(t *testing.T) {
+	server, hits, _ := newFixtureServer(t)
+	l := newViewportListener(t, server, make(chan *models.IngestMessage, 100))
+	l.interval = 10 * time.Millisecond
+
+	if err := l.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer l.Stop()
+
+	time.Sleep(150 * time.Millisecond)
+	if hits.Load() != 0 {
+		t.Fatalf("expected no polls without a viewport, got %d", hits.Load())
+	}
+	if st := l.ViewportStatus(); !st.Idle {
+		t.Errorf("status should report idle, got %+v", st)
+	}
+}
+
+func TestSetViewport_WakesAndPolls(t *testing.T) {
+	server, hits, urls := newFixtureServer(t)
+	input := make(chan *models.IngestMessage, 100)
+	l := newViewportListener(t, server, input)
+
+	if err := l.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer l.Stop()
+
+	box := BBox{South: 40, West: -90, North: 45, East: -80}
+	st := l.SetViewport(Viewport{Active: true, Clients: 1, Boxes: []BBox{box}})
+	if st.Idle || st.Active != true || st.AreaSqDeg != 50 {
+		t.Errorf("unexpected status after SetViewport: %+v", st)
+	}
+
+	if !waitFor(t, func() bool { return hits.Load() == 1 }, time.Second) {
+		t.Fatalf("expected exactly one poll after the viewport change, got %d", hits.Load())
+	}
+	if !waitFor(t, func() bool { return len(input) == 3 }, time.Second) {
+		t.Fatalf("expected 3 messages, got %d", len(input))
+	}
+	if got := urls()[0]; got != "/?lamin=40.0000&lomin=-90.0000&lamax=45.0000&lomax=-80.0000" {
+		t.Errorf("unexpected poll URL %q", got)
+	}
+
+	// With a one-hour interval nothing else should happen.
+	time.Sleep(100 * time.Millisecond)
+	if hits.Load() != 1 {
+		t.Errorf("expected no further polls, got %d", hits.Load())
+	}
+
+	// An unchanged push is a heartbeat: refreshes the lease, no poll.
+	l.SetViewport(Viewport{Active: true, Clients: 2, Boxes: []BBox{box}})
+	time.Sleep(50 * time.Millisecond)
+	if hits.Load() != 1 {
+		t.Errorf("heartbeat must not trigger a poll, got %d", hits.Load())
+	}
+
+	// Deactivating idles the loop.
+	st = l.SetViewport(Viewport{Active: false})
+	if !st.Idle {
+		t.Errorf("inactive viewport should be idle, got %+v", st)
+	}
+}
+
+func TestViewport_TTLExpiryStopsPolling(t *testing.T) {
+	server, hits, _ := newFixtureServer(t)
+	l := newViewportListener(t, server, make(chan *models.IngestMessage, 1000))
+	l.interval = 10 * time.Millisecond
+	l.ttl = 60 * time.Millisecond
+
+	if err := l.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer l.Stop()
+
+	l.SetViewport(Viewport{Active: true, Clients: 1, Boxes: []BBox{{South: 40, West: -90, North: 45, East: -80}}})
+	if !waitFor(t, func() bool { return hits.Load() >= 2 }, time.Second) {
+		t.Fatalf("expected repeated polls while the lease is fresh, got %d", hits.Load())
+	}
+
+	time.Sleep(150 * time.Millisecond) // lease expired by now
+	settled := hits.Load()
+	time.Sleep(100 * time.Millisecond)
+	if hits.Load() != settled {
+		t.Errorf("polling continued after the lease expired: %d -> %d", settled, hits.Load())
+	}
+	if st := l.ViewportStatus(); !st.Idle {
+		t.Errorf("expired lease should report idle, got %+v", st)
+	}
+}
+
+func TestPoll_MultipleBoxesDedupe(t *testing.T) {
+	server, hits, urls := newFixtureServer(t)
+	input := make(chan *models.IngestMessage, 100)
+	l := newViewportListener(t, server, input)
+	l.SetViewport(Viewport{Active: true, Boxes: []BBox{
+		{South: 10, West: 170, North: 20, East: 180},
+		{South: 10, West: -180, North: 20, East: -170},
+	}})
+
+	if err := l.poll(); err != nil {
+		t.Fatal(err)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("expected one request per box, got %d", hits.Load())
+	}
+	want := []string{
+		"/?lamin=10.0000&lomin=170.0000&lamax=20.0000&lomax=180.0000",
+		"/?lamin=10.0000&lomin=-180.0000&lamax=20.0000&lomax=-170.0000",
+	}
+	got := urls()
+	for i, u := range want {
+		if got[i] != u {
+			t.Errorf("request %d = %q, want %q", i, got[i], u)
+		}
+	}
+	// Both boxes returned the same 3 aircraft; they must be forwarded once.
+	if len(input) != 3 {
+		t.Errorf("expected 3 deduplicated messages, got %d", len(input))
+	}
+	if st := l.ViewportStatus(); st.LastPollAt.IsZero() {
+		t.Error("LastPollAt should be set after a successful poll")
 	}
 }
 
@@ -307,39 +518,30 @@ func TestHTTPErrorHandling(t *testing.T) {
 }
 
 func TestPollWithTestServer(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(openSkyFixture))
-	}))
-	defer server.Close()
-
-	logger := zap.NewNop()
-	m := newTestMetrics()
+	server, hits, _ := newFixtureServer(t)
 	input := make(chan *models.IngestMessage, 100)
 
-	cfg := &config.Config{
-		OpenSkyEnabled:     true,
-		OpenSkyIntervalSec: 15,
-	}
-	l := NewOpenSkyListener(cfg, input, logger, m, nil, nil)
+	cfg := &config.Config{OpenSkyEnabled: true, OpenSkyIntervalSec: 15}
+	l := NewOpenSkyListener(cfg, input, zap.NewNop(), newTestMetrics(), nil, nil)
+	l.baseURL = server.URL
 	l.client = server.Client()
 
-	// Override buildURL to point at the test server by temporarily
-	// changing the config — but since buildURL reads cfg.OpenSkyBBox
-	// and returns the const URL, we need a different approach.
-	// Instead, call the HTTP endpoint directly.
-	req, err := http.NewRequest(http.MethodGet, server.URL, nil)
-	if err != nil {
+	if err := l.poll(); err != nil {
 		t.Fatal(err)
 	}
-	resp, err := l.client.Do(req)
-	if err != nil {
+	if hits.Load() != 1 {
+		t.Fatalf("expected one global request, got %d", hits.Load())
+	}
+	if len(input) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(input))
+	}
+	msg := <-input
+	var ep models.EntityPosition
+	if err := json.Unmarshal(msg.Payload, &ep); err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	if ep.EntityID != "ICAO-AB1234" || ep.CountryOfOrigin != "United States" {
+		t.Errorf("unexpected first entity: %+v", ep)
 	}
 }
 
