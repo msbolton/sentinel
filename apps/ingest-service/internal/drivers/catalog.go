@@ -1,7 +1,7 @@
-// Package drivers describes the feed drivers the ingest service can run:
-// their identity, capabilities, and the JSON Schema their configuration must
-// satisfy. The management API serves this catalog so clients can build
-// forms, and the registry validates feed configuration against it.
+// Package drivers is the catalog the management API serves and the
+// registry validates against: every registered driver's identity,
+// capabilities and the JSON Schema its configuration must satisfy, plus
+// the common options every driver accepts.
 package drivers
 
 import (
@@ -16,21 +16,18 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
+
+	"github.com/sentinel/ingest-service/internal/source/driver"
 )
 
 //go:embed schemas/*.json
 var schemaFS embed.FS
 
-// Capability names a runtime feature a driver supports.
+// Capability names, re-exported from the driver package.
 const (
-	// CapabilityArea means the driver polls an area of interest pushed by
-	// the API gateway (PUT /feeds/{id}/area).
-	CapabilityArea = "area"
-	// CapabilityPoll means the driver polls a remote API on an interval.
-	CapabilityPoll = "poll"
-	// CapabilityListen means the driver binds a port and must be pinned to
-	// one replica.
-	CapabilityListen = "listen"
+	CapabilityArea   = driver.CapabilityArea
+	CapabilityPoll   = driver.CapabilityPoll
+	CapabilityListen = driver.CapabilityListen
 )
 
 // Info describes one driver.
@@ -38,7 +35,7 @@ type Info struct {
 	ID           string          `json:"id"`
 	Name         string          `json:"name"`
 	Description  string          `json:"description"`
-	Source       string          `json:"source"` // EntitySource label written on observations
+	Source       string          `json:"source"` // EntitySource label written on observations ("" when the decoder decides)
 	Capabilities []string        `json:"capabilities"`
 	ConfigSchema json.RawMessage `json:"configSchema"`
 	// SecretFields are secret_refs keys the driver expects; they must never
@@ -74,58 +71,33 @@ type Catalog struct {
 
 var printer = message.NewPrinter(language.English)
 
-// Default builds the catalog of built-in drivers. It panics if an embedded
+// Default builds the catalog from every registered driver. It panics if a
 // schema does not compile, which is a programming error caught by tests.
 func Default() *Catalog {
-	c, err := build([]Info{
-		{
-			ID: "opensky", Name: "OpenSky Network", Source: "OPENSKY",
-			Description:  "Live ADS-B state vectors from the OpenSky Network, polled for the connected clients' viewports.",
-			Capabilities: []string{CapabilityPoll, CapabilityArea},
-			SecretFields: []string{"clientId", "clientSecret"},
-			AreaTTL:      90 * time.Second,
-		},
-		{
-			ID: "adsblol", Name: "adsb.lol military", Source: "ADSB_LOL",
-			Description:  "Military aircraft from the adsb.lol community ADS-B network.",
-			Capabilities: []string{CapabilityPoll},
-		},
-		{
-			ID: "celestrak", Name: "CelesTrak satellites", Source: "CELESTRAK",
-			Description:  "Satellite positions propagated with SGP4 from CelesTrak two-line elements.",
-			Capabilities: []string{CapabilityPoll},
-		},
-		{
-			ID: "stream", Name: "Message stream", Source: "STREAM",
-			Description:  "Reports delivered over MQTT, STOMP or a TCP listener in a supported wire format.",
-			Capabilities: []string{},
-		},
-	})
+	c, err := Build(driver.All())
 	if err != nil {
 		panic(err)
 	}
 	return c
 }
 
-func build(infos []Info) (*Catalog, error) {
+// Build compiles a catalog from definitions.
+func Build(defs []driver.Definition) (*Catalog, error) {
 	compiler := jsonschema.NewCompiler()
-	load := func(name string) (json.RawMessage, error) {
-		raw, err := schemaFS.ReadFile("schemas/" + name + ".json")
-		if err != nil {
-			return nil, err
-		}
+	add := func(name string, raw []byte) error {
 		doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 		if err != nil {
-			return nil, fmt.Errorf("schema %s: %w", name, err)
+			return fmt.Errorf("schema %s: %w", name, err)
 		}
-		if err := compiler.AddResource(schemaURL(name), doc); err != nil {
-			return nil, fmt.Errorf("schema %s: %w", name, err)
-		}
-		return raw, nil
+		return compiler.AddResource(schemaURL(name), doc)
 	}
 
 	c := &Catalog{byID: map[string]Info{}, schemas: map[string]*jsonschema.Schema{}}
-	if _, err := load("common"); err != nil {
+	commonRaw, err := schemaFS.ReadFile("schemas/common.json")
+	if err != nil {
+		return nil, err
+	}
+	if err := add("common", commonRaw); err != nil {
 		return nil, err
 	}
 	common, err := compiler.Compile(schemaURL("common"))
@@ -134,16 +106,19 @@ func build(infos []Info) (*Catalog, error) {
 	}
 	c.common = common
 
-	for _, info := range infos {
-		raw, err := load(info.ID)
-		if err != nil {
+	for _, d := range defs {
+		raw := d.ConfigSchema
+		if len(raw) == 0 {
+			raw = json.RawMessage(`{"type":"object"}`)
+		}
+		if err := add(d.ID, raw); err != nil {
 			return nil, err
 		}
-		sch, err := compiler.Compile(schemaURL(info.ID))
+		sch, err := compiler.Compile(schemaURL(d.ID))
 		if err != nil {
-			return nil, fmt.Errorf("compiling %s schema: %w", info.ID, err)
+			return nil, fmt.Errorf("compiling %s schema: %w", d.ID, err)
 		}
-		info.ConfigSchema = raw
+		info := Info{ID: d.ID, Name: d.Name, Description: d.Description, Source: d.Source, Capabilities: d.Capabilities, ConfigSchema: raw, SecretFields: d.SecretFields, AreaTTL: d.AreaTTL}
 		if info.Capabilities == nil {
 			info.Capabilities = []string{}
 		}
@@ -170,10 +145,10 @@ func (c *Catalog) Get(id string) (Info, bool) {
 
 // Validate checks config against the driver's schema and the common
 // options. An unknown driver is reported as a problem at the root.
-func (c *Catalog) Validate(driver string, config json.RawMessage) []Problem {
-	sch, ok := c.schemas[driver]
+func (c *Catalog) Validate(driverID string, config json.RawMessage) []Problem {
+	sch, ok := c.schemas[driverID]
 	if !ok {
-		return []Problem{{Path: "/driver", Message: fmt.Sprintf("unknown driver %q", driver)}}
+		return []Problem{{Path: "/driver", Message: fmt.Sprintf("unknown driver %q", driverID)}}
 	}
 	if len(bytes.TrimSpace(config)) == 0 {
 		config = json.RawMessage("{}")

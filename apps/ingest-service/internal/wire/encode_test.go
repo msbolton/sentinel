@@ -9,20 +9,19 @@ import (
 	commonkafka "github.com/sentinel/go-common/kafka"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
-	"github.com/sentinel/ingest-service/internal/models"
 	"github.com/sentinel/ingest-service/internal/obs"
 )
 
 func sample() *obs.Observation {
 	alt, hdg := 10668.0, 270.5
 	return &obs.Observation{
-		ID: "obs-1", FeedID: "opensky", Driver: "opensky", Decoder: obs.DecoderOpenSky, SourceEntityID: "ICAO-A1B2C3", Source: "OPENSKY",
+		ID: "obs-1", FeedID: "opensky", Driver: "opensky", Decoder: "opensky-states", SourceEntityID: "ICAO-A1B2C3", Source: "OPENSKY",
 		SourceTimestamp: time.Date(2026, 10, 15, 12, 0, 0, 500_000_000, time.UTC), ReceivedAt: time.Date(2026, 10, 15, 12, 0, 2, 0, time.UTC),
 		EntityType: "AIRCRAFT", TrackEnvironment: "AIR", DisplayName: "UAL123",
 		Identities:  []obs.Identity{{Type: obs.IdentityICAO24, Value: "A1B2C3"}, {Type: obs.IdentityCallsign, Value: "UAL123"}},
 		HasPosition: true, Latitude: 41.9742, Longitude: -87.9073, Altitude: &alt, Heading: &hdg,
 		Velocity: &[3]float64{1.5, -231.4, 0},
-		ADSB:     &models.ADSBData{ICAOHex: "A1B2C3", Squawk: "1200", NacP: 9},
+		ADSB:     &obs.ADSBData{ICAOHex: "A1B2C3", Squawk: "1200", NacP: 9},
 		Raw:      []byte(`["a1b2c3"]`), RawContentType: "application/json",
 		ReplicaID: "r1", FencingToken: 3,
 	}

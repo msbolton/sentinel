@@ -5,9 +5,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/sentinel/ingest-service/internal/aoi"
 	"github.com/sentinel/ingest-service/internal/drivers"
 	"github.com/sentinel/ingest-service/internal/registry"
-	"github.com/sentinel/ingest-service/internal/sources"
+	"github.com/sentinel/ingest-service/internal/source/decoder"
 )
 
 // feedDTO is the management API's feed resource.
@@ -46,6 +47,9 @@ func toFeedDTO(f registry.Feed, catalog *drivers.Catalog) feedDTO {
 		dto.Source = info.Source
 		dto.Capabilities = info.Capabilities
 	}
+	if dto.Source == "" {
+		dto.Source = decoderSource(f.Config)
+	}
 	if f.Status != nil {
 		dto.Status = *f.Status
 	} else {
@@ -55,6 +59,22 @@ func toFeedDTO(f registry.Feed, catalog *drivers.Catalog) feedDTO {
 		dto.Status.Detail = json.RawMessage("{}")
 	}
 	return dto
+}
+
+// decoderSource reports the EntitySource a stream feed's decoder writes.
+func decoderSource(config json.RawMessage) string {
+	var c struct {
+		Decoder struct {
+			Name string `json:"name"`
+		} `json:"decoder"`
+	}
+	if json.Unmarshal(config, &c) != nil || c.Decoder.Name == "" {
+		return ""
+	}
+	if def, ok := decoder.Lookup(c.Decoder.Name); ok {
+		return def.Source
+	}
+	return ""
 }
 
 // createRequest is the body of POST /feeds.
@@ -78,7 +98,7 @@ type replaceRequest struct {
 	Enabled     *bool             `json:"enabled"`
 }
 
-// areaRequest is the body of PUT /feeds/{id}/area (and the /viewport alias).
+// areaRequest is the body of PUT /feeds/{id}/area.
 type areaRequest struct {
 	Active  bool           `json:"active"`
 	Clients int            `json:"clients"`
@@ -123,7 +143,7 @@ func areaFromRow(f registry.Feed, a registry.Area) areaResponse {
 	return resp
 }
 
-func areaFromLive(f registry.Feed, a registry.Area, st sources.ViewportStatus) areaResponse {
+func areaFromLive(f registry.Feed, a registry.Area, st aoi.Status) areaResponse {
 	resp := areaFromRow(f, a)
 	resp.Live = true
 	resp.Active = st.Active
@@ -164,7 +184,7 @@ func areaOf(boxes []registry.Box) float64 {
 }
 
 type errorResponse struct {
-	Error   string             `json:"error"`
+	Error   string            `json:"error"`
 	Details []drivers.Problem `json:"details,omitempty"`
 }
 

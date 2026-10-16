@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sentinel.local/schemas/celestrak.json",
+  "title": "CelesTrak satellites",
+  "type": "object",
+  "properties": {
+    "groups": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "default": ["active"], "title": "CelesTrak groups" },
+    "tleRefreshHours": { "type": "integer", "minimum": 1, "default": 6, "title": "TLE refresh (h)" },
+    "propagationIntervalSec": { "type": "integer", "minimum": 1, "default": 60, "title": "Propagation interval (s)" },
+    "baseUrl": { "type": "string", "format": "uri", "title": "API URL", "description": "Override for testing; default https://celestrak.org/NORAD/elements/gp.php" }
+  }
+}
