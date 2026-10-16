@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package sentinel.v1;
+
+import "google/protobuf/timestamp.proto";
+import "sentinel/v1/common.proto";
+import "sentinel/v1/entity.proto";
+import "sentinel/v1/platform.proto";
+
+option go_package = "github.com/sentinel/proto-gen/sentinel/v1;sentinelv1";
+
+// RawPayload is the bytes a decoder consumed to produce an observation,
+// kept for provenance and replay. Producers cap data at 4096 bytes and set
+// truncated when they cut it.
+message RawPayload {
+  string content_type = 1;
+  bytes data = 2;
+  bool truncated = 3;
+}
+
+// Observation is one report about one object from one feed, exactly as the
+// ingest service decoded it. It is the only message produced to the
+// observations.raw topic. Entity identity is not known at this layer; the
+// entity service resolves it from identities.
+//
+// Vocabulary (kept stable so consumers can switch on them):
+//   driver:  stream | opensky | adsblol | celestrak
+//   decoder: json | nmea-gps | nmea-ais | cot | sbs | beast | link16 |
+//            opensky-states | adsblol | tle-sgp4
+message Observation {
+  // Deterministic id: uuid5(feed_id|source_entity_id|source_timestamp|decoder).
+  // Redelivered or duplicated observations therefore share an id.
+  string observation_id = 1;
+
+  // Provenance.
+  string feed_id = 2;
+  string driver = 3;
+  string decoder = 4;
+  string source_entity_id = 5;
+  EntitySource source = 6;
+  string sensor_id = 7;
+
+  // When the source says the measurement was made, and when the ingest
+  // service received it. received_at is always set; source_timestamp is
+  // unset only when the source carries no time.
+  google.protobuf.Timestamp source_timestamp = 8;
+  google.protobuf.Timestamp received_at = 9;
+
+  // What the decoder believes the object is.
+  EntityType entity_type = 10;
+  TrackEnvironment track_environment = 11;
+  string display_name = 12;
+
+  // Natural identifiers; identities[0] is the canonical key used for the
+  // Kafka partition and for entity resolution.
+  repeated Identity identities = 13;
+
+  // Position fix. Unset when the report carries no position (an AIS static
+  // report, an SBS identification message).
+  Coordinate position = 14;
+  optional double heading = 15;
+  optional double speed_knots = 16;
+  optional double course = 17;
+  GeodeticVelocity velocity = 18;
+  GeodeticAcceleration acceleration = 19;
+  Orientation orientation = 20;
+
+  // Uncertainty.
+  MeasurementUncertainty uncertainty = 21;
+  PositionCovariance position_covariance = 22;
+  PositionVelocityCovariance position_velocity_covariance = 23;
+  VelocityCovariance velocity_covariance = 24;
+  TrackProcessingState processing_state = 25;
+
+  // Attributes.
+  string country_of_origin = 26;
+  Affiliation affiliation = 27;
+  OperationalStatus operational_status = 28;
+  Dimensions dimensions = 29;
+
+  // Protocol-specific detail and the bytes it was decoded from.
+  PlatformDetail platform = 30;
+  RawPayload raw = 31;
+
+  // Ingest replica that produced the observation and its feed-lease fencing
+  // token, for diagnosing duplicate delivery during lease handover.
+  string replica_id = 32;
+  int64 fencing_token = 33;
+}

@@ -79,3 +79,37 @@ FROM (VALUES
   ('Pearl Harbor',          'Joint Base Pearl Harbor-Hickam, headquarters of US Pacific Fleet',      21.3500, -157.9500,  800, 0, -35, 2000, FALSE, 'MILITARY_BASE')
 ) AS v(name, description, lat, lng, altitude, heading, pitch, range, has3d, category)
 WHERE NOT EXISTS (SELECT 1 FROM sentinel.locations l WHERE l.name = v.name);
+
+-- Built-in data feeds. The ingest service also inserts these at startup
+-- (ON CONFLICT DO NOTHING) so a database that skipped the seed still has them.
+-- Credentials are env references resolved by the ingest replicas.
+INSERT INTO sentinel.feeds (id, name, description, driver, config, secret_refs, enabled, builtin)
+VALUES
+  ('opensky', 'OpenSky Network', 'Live ADS-B state vectors from the OpenSky Network, polled for the connected clients'' viewports.',
+   'opensky',
+   '{"intervalSec": 10, "viewportTtlSec": 90, "minPollSpacingSec": 3, "maxAreaSqDeg": 400, "maxIntervalSec": 60, "creditFloor": 200, "staleWarnSec": 120, "staleCriticalSec": 300}'::jsonb,
+   '{"clientId": "env:OPENSKY_CLIENT_ID", "clientSecret": "env:OPENSKY_CLIENT_SECRET"}'::jsonb,
+   FALSE, TRUE),
+  ('adsb-lol', 'adsb.lol military', 'Military aircraft from the adsb.lol community ADS-B network.',
+   'adsblol',
+   '{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}'::jsonb,
+   '{}'::jsonb,
+   FALSE, TRUE),
+  ('celestrak', 'CelesTrak satellites', 'Satellite positions propagated with SGP4 from CelesTrak two-line elements.',
+   'celestrak',
+   '{"groups": ["active"], "tleRefreshHours": 6, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}'::jsonb,
+   '{}'::jsonb,
+   FALSE, TRUE)
+ON CONFLICT (id) DO NOTHING;
+
+-- Per-feed age-out thresholds keyed by the feed slug.
+INSERT INTO sentinel.feed_ageout_config ("feedId", "sourceType", "staleThresholdMs", "ageoutThresholdMs")
+SELECT v.feed, v.src, v.stale, v.ageout
+FROM (VALUES
+  ('opensky',   'OPENSKY',   60000,  300000),
+  ('adsb-lol',  'ADSB_LOL',  60000,  300000),
+  ('celestrak', 'CELESTRAK', 900000, 3600000)
+) AS v(feed, src, stale, ageout)
+WHERE NOT EXISTS (
+  SELECT 1 FROM sentinel.feed_ageout_config c WHERE c."feedId" = v.feed AND c."sourceType" = v.src
+);

@@ -1,0 +1,24 @@
+{
+  "actualValue": 450,
+  "alert": {
+    "alertId": "a1b2c3d4-e5f6-5a7b-8c9d-0e1f2a3b4c5d",
+    "alertType": "SPEED_ANOMALY",
+    "createdAt": "2026-10-15T12:00:00.500Z",
+    "entityId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+    "metadata": {
+      "score": "0.93"
+    },
+    "position": {
+      "latitude": 41.9742,
+      "longitude": -87.9073
+    },
+    "severity": "MEDIUM",
+    "title": "Speed anomaly"
+  },
+  "anomalyType": "SPEED",
+  "eventTime": "2026-10-15T12:00:00.500Z",
+  "eventType": "TRIGGERED",
+  "expectedValue": 420,
+  "producer": "analytics-service",
+  "score": 0.93
+}
