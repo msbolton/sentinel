@@ -1,0 +1,47 @@
+{
+  "decoder": "opensky-states",
+  "displayName": "UAL123",
+  "driver": "opensky",
+  "entityType": "AIRCRAFT",
+  "feedId": "opensky",
+  "fencingToken": "7",
+  "heading": 270.5,
+  "identities": [
+    {
+      "type": "ICAO24",
+      "value": "A1B2C3"
+    },
+    {
+      "type": "CALLSIGN",
+      "value": "UAL123"
+    }
+  ],
+  "observationId": "3b2a7c1e-4f55-5a6b-8c9d-0e1f2a3b4c5d",
+  "platform": {
+    "adsb": {
+      "category": "A3",
+      "icaoHex": "A1B2C3",
+      "squawk": "1200"
+    }
+  },
+  "position": {
+    "altitudeMeters": 10668,
+    "latitude": 41.9742,
+    "longitude": -87.9073
+  },
+  "raw": {
+    "contentType": "application/json",
+    "data": "WyJhMWIyYzMiLCJVQUwxMjMgIl0="
+  },
+  "receivedAt": "2026-10-15T12:00:02.500Z",
+  "replicaId": "ingest-1",
+  "source": "OPENSKY",
+  "sourceEntityId": "ICAO-A1B2C3",
+  "sourceTimestamp": "2026-10-15T12:00:00.500Z",
+  "speedKnots": 450,
+  "trackEnvironment": "AIR",
+  "velocity": {
+    "east": -231.4,
+    "north": 1.5
+  }
+}

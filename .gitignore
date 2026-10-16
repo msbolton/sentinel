@@ -49,9 +49,6 @@ __pycache__/
 venv/
 
 # Generated protobuf code (regenerate with `make proto`)
-libs/proto-gen/src/ts/
-libs/proto-gen/src/go/
-libs/proto-gen/src/python/
 
 # Worktrees
 .worktrees/

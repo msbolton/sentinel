@@ -1,0 +1,59 @@
+{
+  "entityId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+  "eventId": "6f1d2c3b-4a5e-5f60-9718-293a4b5c6d7e",
+  "eventTime": "2026-10-15T12:00:02.500Z",
+  "position": {
+    "entity": {
+      "ageoutState": "LIVE",
+      "classification": "UNCLASSIFIED",
+      "entityType": "AIRCRAFT",
+      "feedId": "opensky",
+      "heading": 270.5,
+      "id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "identities": [
+        {
+          "type": "ICAO24",
+          "value": "A1B2C3"
+        }
+      ],
+      "lastFeedId": "opensky",
+      "lastObservedAt": "2026-10-15T12:00:00.500Z",
+      "lastSeenAt": "2026-10-15T12:00:02.500Z",
+      "name": "UAL123",
+      "platforms": {
+        "adsb": {
+          "adsb": {
+            "category": "A3",
+            "icaoHex": "A1B2C3",
+            "squawk": "1200"
+          }
+        }
+      },
+      "position": {
+        "altitudeMeters": 10668,
+        "latitude": 41.9742,
+        "longitude": -87.9073
+      },
+      "source": "OPENSKY",
+      "sources": [
+        {
+          "feedId": "opensky",
+          "lastObservedAt": "2026-10-15T12:00:00.500Z",
+          "lastReceivedAt": "2026-10-15T12:00:02.500Z",
+          "observationCount": "42",
+          "source": "OPENSKY",
+          "sourceEntityId": "ICAO-A1B2C3"
+        }
+      ],
+      "speedKnots": 450
+    },
+    "observation": {
+      "feedId": "opensky",
+      "observationId": "3b2a7c1e-4f55-5a6b-8c9d-0e1f2a3b4c5d",
+      "source": "OPENSKY",
+      "sourceEntityId": "ICAO-A1B2C3",
+      "sourceTimestamp": "2026-10-15T12:00:00.500Z"
+    }
+  },
+  "producer": "entity-service"
+}

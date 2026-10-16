@@ -5,6 +5,11 @@ modules:
 lint:
   use:
     - STANDARD
+  ignore_only:
+    # EntityType's zero value is UNKNOWN on purpose: the stored and client
+    # enum strings depend on it and renaming would be a breaking change.
+    ENUM_ZERO_VALUE_SUFFIX:
+      - sentinel/v1/entity.proto
 breaking:
   use:
     - FILE

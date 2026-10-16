@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package sentinel.v1;
+
+import "google/protobuf/timestamp.proto";
+import "sentinel/v1/common.proto";
+import "sentinel/v1/entity.proto";
+
+option go_package = "github.com/sentinel/proto-gen/sentinel/v1;sentinelv1";
+
+// ObservationRef points at the observation that caused an entity event.
+message ObservationRef {
+  string observation_id = 1;
+  string feed_id = 2;
+  EntitySource source = 3;
+  string source_entity_id = 4;
+  google.protobuf.Timestamp source_timestamp = 5;
+}
+
+// EntityCreated: a new entity row exists.
+message EntityCreated {
+  Entity entity = 1;
+  ObservationRef observation = 2;  // unset for entities created over REST
+}
+
+// EntityUpdated: operator-driven metadata change over REST.
+message EntityUpdated {
+  Entity entity = 1;
+  repeated string changed_fields = 2;
+}
+
+// EntityPosition: an observation was accepted and the fused state moved.
+message EntityPosition {
+  Entity entity = 1;
+  ObservationRef observation = 2;
+}
+
+// EntityDeleted: the entity named by EntityEvent.entity_id was deleted, or,
+// when bulk is set, every entity was deleted and entity_id is empty.
+message EntityDeleted {
+  bool bulk = 1;
+  int32 count = 2;
+}
+
+// EntityAgeout is used for both the stale and the aged_out transitions.
+message EntityAgeout {
+  EntityType entity_type = 1;
+  EntitySource source = 2;
+  string feed_id = 3;
+  AgeoutState previous_state = 4;
+  google.protobuf.Timestamp last_seen_at = 5;
+  int64 threshold_ms = 6;
+}
+
+// EntityRestored: a stale or aged-out entity received a new observation.
+// It is published immediately before the EntityPosition that restored it.
+message EntityRestored {
+  Entity entity = 1;
+  AgeoutState previous_state = 2;
+}
+
+// EntityEvent is the envelope produced to the entities.events topic, keyed
+// by entity_id so every consumer sees one entity's events in order. The
+// event-type Kafka header repeats the oneof case name so consumers can
+// filter without decoding.
+message EntityEvent {
+  string event_id = 1;
+  google.protobuf.Timestamp event_time = 2;
+  string entity_id = 3;
+  string producer = 4;  // service name, e.g. "entity-service"
+
+  oneof event {
+    EntityCreated created = 10;
+    EntityUpdated updated = 11;
+    EntityPosition position = 12;
+    EntityDeleted deleted = 13;
+    EntityAgeout stale = 14;
+    EntityAgeout aged_out = 15;
+    EntityRestored restored = 16;
+  }
+}

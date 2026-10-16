@@ -1,0 +1,166 @@
+syntax = "proto3";
+
+package sentinel.v1;
+
+import "sentinel/v1/common.proto";
+
+option go_package = "github.com/sentinel/proto-gen/sentinel/v1;sentinelv1";
+
+// AisDetail carries AIS maritime identification and voyage data.
+message AisDetail {
+  string mmsi = 1;
+  string imo = 2;
+  string callsign = 3;
+  string vessel_name = 4;
+
+  int32 ship_type = 5;
+  string ship_type_name = 6;
+  string flag = 7;
+
+  string destination = 8;
+  string eta = 9;
+  double draught = 10;
+
+  // Reference-point offsets in meters (A bow, B stern, C port, D starboard).
+  double dimension_a = 11;
+  double dimension_b = 12;
+  double dimension_c = 13;
+  double dimension_d = 14;
+  double length_overall = 15;
+  double beam = 16;
+
+  NavigationalStatus nav_status = 17;
+  double rate_of_turn = 18;
+  double speed_over_ground = 19;
+  double course_over_ground = 20;
+  double true_heading = 21;
+  bool position_accuracy_high = 22;
+  bool special_manoeuvre = 23;
+
+  int32 message_type = 24;
+  int32 repeat_indicator = 25;
+}
+
+// AdsbDetail carries ADS-B / Mode S / IFF transponder data.
+message AdsbDetail {
+  string icao_hex = 1;
+  string registration = 2;
+  string aircraft_type = 3;
+  string aircraft_type_name = 4;
+  string operator_icao = 5;
+  string operator_name = 6;
+
+  string squawk = 7;
+  string emergency = 8;
+  string mode1 = 9;
+  string mode2 = 10;
+
+  string aircraft_id = 11;
+  bool flight_airborne = 12;
+  double indicated_air_speed = 13;
+  double true_air_speed = 14;
+  double ground_speed = 15;
+  double magnetic_heading = 16;
+
+  int32 mode5_figure_of_merit = 17;
+  int32 national_origin_code = 18;
+  int32 mission_code = 19;
+
+  double altitude_baro = 20;
+  double altitude_geom = 21;
+  double vertical_rate = 22;
+  bool on_ground = 23;
+
+  string category = 24;
+  int32 nac_p = 25;
+  int32 nac_v = 26;
+  int32 sil = 27;
+  string sil_type = 28;
+  int32 nic = 29;
+  double rc = 30;
+  int32 gva = 31;
+  int32 sda = 32;
+}
+
+// TleDetail carries satellite two-line-element data and derived elements.
+message TleDetail {
+  int32 norad_id = 1;
+  string intl_designator = 2;
+  string sat_name = 3;
+
+  string line1 = 4;
+  string line2 = 5;
+  string epoch = 6;
+
+  double inclination = 7;
+  double eccentricity = 8;
+  double raan = 9;
+  double arg_of_perigee = 10;
+  double mean_anomaly = 11;
+  double mean_motion = 12;
+  double period = 13;
+  double apogee = 14;
+  double perigee = 15;
+
+  string object_type = 16;
+  string rcs_size = 17;
+  string launch_date = 18;
+  string decay_date = 19;
+  string country = 20;
+}
+
+// Link16Detail carries Link 16 / JREAP-C tactical data link metadata.
+message Link16Detail {
+  int32 track_number = 1;
+  string j_series_label = 2;
+  string originating_unit = 3;
+  int32 quality = 4;
+  bool exercise_indicator = 5;
+  bool simulation_indicator = 6;
+  string force_identity = 7;
+}
+
+// CotDetail carries Cursor on Target event metadata.
+message CotDetail {
+  string uid = 1;
+  string cot_type = 2;
+  string how = 3;
+  double ce = 4;
+  double le = 5;
+  string stale_time = 6;
+  string access_control = 7;
+  string opex = 8;
+  string qos = 9;
+}
+
+// UavDetail carries UAV remote-identification telemetry.
+message UavDetail {
+  string make = 1;
+  string model = 2;
+  string serial_number = 3;
+  string mac_address = 4;
+  double operating_frequency = 5;
+  double frequency_range = 6;
+}
+
+// PlatformDetail is the protocol-specific block attached to one observation.
+// An entity fused from several feeds keeps one PlatformDetail per kind, keyed
+// by the oneof field name ("ais", "adsb", "tle", "link16", "cot", "uav",
+// "generic").
+message PlatformDetail {
+  oneof detail {
+    AisDetail ais = 1;
+    AdsbDetail adsb = 2;
+    TleDetail tle = 3;
+    Link16Detail link16 = 4;
+    CotDetail cot = 5;
+    UavDetail uav = 6;
+    GenericDetail generic = 7;
+  }
+}
+
+// GenericDetail holds decoder output that has no typed block, as flat
+// string key/values so it can still be indexed and displayed.
+message GenericDetail {
+  map<string, string> fields = 1;
+}

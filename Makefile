@@ -1,4 +1,4 @@
-.PHONY: help proto build test lint docker-up docker-down docker-infra clean db-migrate db-migrate-down db-migrate-version db-seed
+.PHONY: help proto proto-check proto-test build test lint docker-up docker-down docker-infra clean db-migrate db-migrate-down db-migrate-version db-seed
 
 SHELL := /bin/bash
 
@@ -19,30 +19,33 @@ help: ## Show this help
 
 proto: proto-ts proto-go proto-python ## Generate all protobuf code
 
-proto-ts: ## Generate TypeScript protobuf types
+proto-ts: ## Generate TypeScript protobuf types (libs/proto-gen/src/ts)
 	@echo "Generating TypeScript protobuf types..."
-	@mkdir -p libs/proto-gen/src/ts
-	@cd proto && PATH="../node_modules/.bin:$$PATH" buf generate --template buf.gen.ts.yaml 2>/dev/null || \
-		echo "Install buf CLI: https://buf.build/docs/installation"
-	@echo "Stripping proto enum prefixes from generated TS..."
-	@for f in libs/proto-gen/src/ts/*.ts; do \
-		sed -i -E 's/^(  )([A-Z][A-Z_0-9]*) = "[A-Z_0-9]+",$$/\1\2 = "\2",/' "$$f"; \
-	done
+	@cd proto && PATH="../node_modules/.bin:$$PATH" buf generate --template buf.gen.ts.yaml
+	@echo "Stripping proto enum prefixes from generated TS enum values..."
+	@perl -pi -e 's/^(  )([A-Z][A-Z_0-9]*) = "[A-Z_0-9]+",$$/$$1$$2 = "$$2",/' libs/proto-gen/src/ts/sentinel/v1/*.ts
 
-proto-go: ## Generate Go protobuf types
+proto-go: ## Generate Go protobuf types (libs/proto-gen/src/go, module github.com/sentinel/proto-gen)
 	@echo "Generating Go protobuf types..."
-	@mkdir -p libs/proto-gen/src/go
-	@cd proto && buf generate --template buf.gen.go.yaml 2>/dev/null || \
-		echo "Install buf CLI: https://buf.build/docs/installation"
+	@cd proto && buf generate --template buf.gen.go.yaml
 
-proto-python: ## Generate Python protobuf types
+proto-python: ## Generate Python protobuf types (libs/proto-gen/src/python, package sentinel-proto)
 	@echo "Generating Python protobuf types..."
-	@mkdir -p libs/proto-gen/src/python
-	@cd proto && buf generate --template buf.gen.python.yaml 2>/dev/null || \
-		echo "Install buf CLI and betterproto: pip install betterproto[compiler]"
+	@cd proto && buf generate --template buf.gen.python.yaml
 
 proto-lint: ## Lint protobuf definitions
 	@cd proto && buf lint
+
+proto-check: proto-lint ## Lint and check wire compatibility against main
+	@cd proto && buf breaking --against '../.git#branch=main,subdir=proto'
+
+proto-fixtures: ## Rewrite the cross-language golden fixtures in libs/proto-gen/testdata
+	@cd libs/proto-gen/src/go && go test ./sentinel/v1/ -run TestGoldenFixtures -update
+
+proto-test: ## Run the Go, TypeScript and Python contract tests
+	@cd libs/proto-gen/src/go && go test -race ./...
+	@npx nx test proto-gen
+	@cd libs/proto-gen/src/python && PYTHONPATH=. python3 -m pytest -q tests
 
 # ----------------------------------------------------------------------------
 # Build
