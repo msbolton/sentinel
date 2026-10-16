@@ -10,6 +10,8 @@
 -- =============================================================================
 
 -- The schema used to be applied with golang-migrate, which recorded the
--- applied version here. The schema directory is applied in full every time,
--- so the bookkeeping table is removed.
+-- applied version in schema_migrations (in "sentinel" when the connection set
+-- search_path, otherwise in "public"). The schema directory is applied in
+-- full every time, so the bookkeeping table is removed wherever it is.
+DROP TABLE IF EXISTS sentinel.schema_migrations;
 DROP TABLE IF EXISTS public.schema_migrations;
