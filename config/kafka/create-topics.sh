@@ -7,9 +7,8 @@
 #
 # Partition strategy:
 #   24 partitions - observations.raw (every report from every feed, keyed by identity)
-#   12 partitions - entity events and high-throughput legacy streams
-#    6 partitions - Moderate-throughput legacy entity lifecycle events
-#    3 partitions - Low-throughput alert, dead-letter and analytics topics
+#   12 partitions - entities.events (one entity's events stay in order on one partition)
+#    3 partitions - alerts.events and the dead-letter topic
 # =============================================================================
 
 set -euo pipefail
@@ -39,19 +38,6 @@ TOPICS=(
   "observations.dlq|3|2592000000"
   "entities.events|12|604800000"
   "alerts.events|3|2592000000"
-  # Legacy JSON topics, removed once every consumer reads the typed topics above.
-  "events.entity.position|12|604800000"
-  "events.entity.created|6|2592000000"
-  "events.entity.updated|6|2592000000"
-  "events.entity.deleted|6|2592000000"
-  "events.entity.stale|6|2592000000"
-  "events.entity.agedout|6|2592000000"
-  "events.entity.restored|6|2592000000"
-  "events.track.point|12|604800000"
-  "alerts.geofence|3|2592000000"
-  "alerts.anomaly|3|2592000000"
-  "analytics.pattern|3|2592000000"
-  "ingest.raw|12|604800000"
 )
 
 create_topic() {

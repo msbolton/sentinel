@@ -1,14 +1,13 @@
-"""Kafka consumer that processes entity position events in the background.
+"""Kafka consumer that processes entity events in the background.
 
-Runs anomaly detection on every incoming position update and publishes
-alerts to the anomaly topic when thresholds are exceeded.  Periodically
-triggers pattern-of-life recomputation for active entities.
+Reads sentinel.v1.EntityEvent messages from entities.events, runs anomaly
+detection on every position, and publishes sentinel.v1.AlertEvent messages
+to alerts.events when thresholds are exceeded.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from datetime import datetime
 from typing import Any
@@ -18,6 +17,7 @@ from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
 from sentinel_analytics.config import settings
 from sentinel_analytics.models.entity import AnomalyResult, EntityType
+from sentinel_analytics.services import events
 from sentinel_analytics.services.anomaly_detection import AnomalyDetector
 
 logger = structlog.get_logger(__name__)
@@ -92,11 +92,11 @@ async def _consume_loop() -> None:
 
     try:
         consumer = _make_consumer()
-        consumer.subscribe([settings.kafka_position_topic])
+        consumer.subscribe([settings.kafka_entity_events_topic])
         producer = _make_producer()
         logger.info(
             "kafka_consumer.started",
-            topic=settings.kafka_position_topic,
+            topic=settings.kafka_entity_events_topic,
             group=settings.kafka_group_id,
         )
 
@@ -111,10 +111,9 @@ async def _consume_loop() -> None:
                 continue
 
             try:
-                payload = json.loads(msg.value().decode("utf-8"))
-                await _handle_position_event(payload, detector, producer)
-            except json.JSONDecodeError:
-                logger.warning("kafka_consumer.invalid_json", offset=msg.offset())
+                payload = events.position_from_event(msg.value())
+                if payload is not None:
+                    await _handle_position_event(payload, detector, producer)
             except Exception:
                 logger.exception("kafka_consumer.processing_error", offset=msg.offset())
 
@@ -170,13 +169,24 @@ async def _handle_position_event(
 
 
 def _publish_anomaly(producer: Producer, anomaly: AnomalyResult) -> None:
-    """Produce an anomaly alert to Kafka."""
+    """Produce an anomaly as a typed AlertEvent to alerts.events."""
     try:
-        value = anomaly.model_dump_json().encode("utf-8")
+        ev = events.anomaly_alert_event(
+            entity_id=anomaly.entity_id,
+            anomaly_type=anomaly.anomaly_type,
+            severity=str(anomaly.severity.value if hasattr(anomaly.severity, "value") else anomaly.severity),
+            score=anomaly.score,
+            description=anomaly.description,
+            expected_value=anomaly.expected_value,
+            actual_value=anomaly.actual_value,
+            position=anomaly.position,
+            detected_at=anomaly.detected_at,
+        )
         producer.produce(
-            topic=settings.kafka_anomaly_topic,
+            topic=settings.kafka_alert_events_topic,
             key=anomaly.entity_id.encode("utf-8"),
-            value=value,
+            value=ev.SerializeToString(),
+            headers=events.proto_headers(ev),
             callback=_delivery_callback,
         )
         producer.poll(0)  # trigger delivery callbacks

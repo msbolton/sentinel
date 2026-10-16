@@ -22,6 +22,9 @@ type EntityDocument struct {
 	CountryOfOrigin     *string                `json:"countryOfOrigin,omitempty"`
 	SourceEntityID      *string                `json:"sourceEntityId,omitempty"`
 	PlatformIdentifiers *PlatformIdentifiers   `json:"platformIdentifiers,omitempty"`
+	FeedID              *string                `json:"feedId,omitempty"`
+	AgeoutState         *string                `json:"ageoutState,omitempty"`
+	Identities          []string               `json:"identities,omitempty"` // "ICAO24:A1B2C3"
 }
 
 // GeoPoint represents a geographic point for OpenSearch.

@@ -15,11 +15,6 @@ import (
 	"github.com/sentinel/ingest-service/internal/obs"
 )
 
-// LegacyProducer sends the JSON entity positions older consumers still read.
-type LegacyProducer interface {
-	ProduceBatch(topic string, messages []*models.EntityPosition) error
-}
-
 // ObservationPublisher receives every decoded report and the payloads that
 // could not be decoded.
 type ObservationPublisher interface {
@@ -29,50 +24,38 @@ type ObservationPublisher interface {
 
 // Pipeline receives raw messages from the source listeners, parses and
 // normalises them, correlates tracks, and publishes each report as an
-// observation. While a legacy topic is configured it also batches the JSON
-// entity positions to it.
+// observation.
 type Pipeline struct {
-	input         chan *models.IngestMessage
-	output        chan *models.EntityPosition
-	legacy        LegacyProducer
-	publisher     ObservationPublisher
-	logger        *zap.Logger
-	metrics       *metrics.Metrics
-	parser        *Parser
-	correlator    *TrackCorrelator
-	batchSize     int
-	flushInterval time.Duration
-	legacyTopic   string
-	rawMax        int
-	workerCount   int
-	workerWg      sync.WaitGroup
-	wg            sync.WaitGroup
-	stop          chan struct{}
-	ctx           context.Context
-	cancel        context.CancelFunc
+	input       chan *models.IngestMessage
+	publisher   ObservationPublisher
+	logger      *zap.Logger
+	metrics     *metrics.Metrics
+	parser      *Parser
+	correlator  *TrackCorrelator
+	rawMax      int
+	workerCount int
+	workerWg    sync.WaitGroup
+	wg          sync.WaitGroup
+	stop        chan struct{}
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
-// NewPipeline creates a pipeline. legacy may be nil when cfg.KafkaLegacyTopic
-// is empty.
-func NewPipeline(cfg *config.Config, legacy LegacyProducer, publisher ObservationPublisher, logger *zap.Logger, m *metrics.Metrics) *Pipeline {
+// NewPipeline creates a pipeline.
+func NewPipeline(cfg *config.Config, publisher ObservationPublisher, logger *zap.Logger, m *metrics.Metrics) *Pipeline {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Pipeline{
-		input:         make(chan *models.IngestMessage, cfg.WorkerPoolSize*cfg.BatchSize),
-		output:        make(chan *models.EntityPosition, cfg.WorkerPoolSize*cfg.BatchSize),
-		legacy:        legacy,
-		publisher:     publisher,
-		logger:        logger,
-		metrics:       m,
-		parser:        NewParser(),
-		correlator:    NewTrackCorrelator(),
-		batchSize:     cfg.BatchSize,
-		flushInterval: time.Duration(cfg.FlushIntervalMs) * time.Millisecond,
-		legacyTopic:   cfg.KafkaLegacyTopic,
-		rawMax:        cfg.RawPayloadMaxBytes,
-		workerCount:   cfg.WorkerPoolSize,
-		stop:          make(chan struct{}),
-		ctx:           ctx,
-		cancel:        cancel,
+		input:       make(chan *models.IngestMessage, cfg.WorkerPoolSize*cfg.BatchSize),
+		publisher:   publisher,
+		logger:      logger,
+		metrics:     m,
+		parser:      NewParser(),
+		correlator:  NewTrackCorrelator(),
+		rawMax:      cfg.RawPayloadMaxBytes,
+		workerCount: cfg.WorkerPoolSize,
+		stop:        make(chan struct{}),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 }
 
@@ -81,15 +64,9 @@ func (p *Pipeline) Input() chan<- *models.IngestMessage {
 	return p.input
 }
 
-// Start launches the worker pool and, when a legacy topic is configured,
-// the JSON batcher.
+// Start launches the worker pool.
 func (p *Pipeline) Start() {
-	p.logger.Info("starting ingestion pipeline",
-		zap.Int("workers", p.workerCount),
-		zap.Int("batch_size", p.batchSize),
-		zap.Duration("flush_interval", p.flushInterval),
-		zap.String("legacy_topic", p.legacyTopic),
-	)
+	p.logger.Info("starting ingestion pipeline", zap.Int("workers", p.workerCount))
 
 	for i := 0; i < p.workerCount; i++ {
 		p.workerWg.Add(1)
@@ -97,15 +74,12 @@ func (p *Pipeline) Start() {
 	}
 
 	p.wg.Add(1)
-	go p.batcher()
-
-	p.wg.Add(1)
 	go p.reportQueueDepth()
 }
 
-// Stop closes the input, waits for the workers to drain it, then flushes
-// the legacy batcher. The observation publisher is closed by the caller
-// afterwards, so every observation the workers emitted is already queued.
+// Stop closes the input and waits for the workers to drain it. The
+// observation publisher is closed by the caller afterwards, so every
+// observation the workers emitted is already queued.
 func (p *Pipeline) Stop() {
 	p.logger.Info("stopping ingestion pipeline")
 	close(p.stop)
@@ -113,7 +87,6 @@ func (p *Pipeline) Stop() {
 
 	p.workerWg.Wait()
 	p.cancel()
-	close(p.output)
 
 	p.wg.Wait()
 	p.logger.Info("ingestion pipeline stopped")
@@ -184,20 +157,6 @@ func (p *Pipeline) processMessage(msg *models.IngestMessage) {
 
 	p.emit(correlated, msg)
 	p.metrics.MessagesProcessed.WithLabelValues(correlated.EntityType).Inc()
-
-	if p.legacyTopic != "" {
-		select {
-		case p.output <- correlated:
-		case <-p.stop:
-			return
-		default:
-			p.metrics.MessagesFailed.WithLabelValues(msg.SourceType, "backpressure").Inc()
-			p.logger.Warn("legacy output channel full, dropping message",
-				zap.String("entity_id", correlated.EntityID),
-			)
-		}
-	}
-
 	p.metrics.ProcessingDuration.Observe(time.Since(start).Seconds())
 }
 
@@ -229,59 +188,6 @@ func (p *Pipeline) parse(msg *models.IngestMessage) (entity *models.EntityPositi
 		return p.parser.ParseFormat(msg.Format, msg.SourceType, msg.Payload)
 	}
 	return p.parser.ParseGeneric(msg.SourceType, msg.Payload)
-}
-
-// batcher accumulates legacy entity positions and produces them in batches.
-func (p *Pipeline) batcher() {
-	defer p.wg.Done()
-
-	batch := make([]*models.EntityPosition, 0, p.batchSize)
-	ticker := time.NewTicker(p.flushInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case entity, ok := <-p.output:
-			if !ok {
-				p.flush(batch)
-				return
-			}
-			batch = append(batch, entity)
-			if len(batch) >= p.batchSize {
-				p.flush(batch)
-				batch = make([]*models.EntityPosition, 0, p.batchSize)
-			}
-
-		case <-ticker.C:
-			if len(batch) > 0 {
-				p.flush(batch)
-				batch = make([]*models.EntityPosition, 0, p.batchSize)
-			}
-
-		case <-p.stop:
-			for entity := range p.output {
-				batch = append(batch, entity)
-				if len(batch) >= p.batchSize {
-					p.flush(batch)
-					batch = make([]*models.EntityPosition, 0, p.batchSize)
-				}
-			}
-			p.flush(batch)
-			return
-		}
-	}
-}
-
-func (p *Pipeline) flush(batch []*models.EntityPosition) {
-	if len(batch) == 0 || p.legacy == nil || p.legacyTopic == "" {
-		return
-	}
-	if err := p.legacy.ProduceBatch(p.legacyTopic, batch); err != nil {
-		p.logger.Error("failed to produce legacy batch to kafka",
-			zap.Int("batch_size", len(batch)),
-			zap.Error(err),
-		)
-	}
 }
 
 func (p *Pipeline) reportQueueDepth() {

@@ -221,24 +221,6 @@ kafka:
       - name: alerts.events
         partitions: 3
         replicationFactor: 3
-      - name: events.entity.position
-        partitions: 12
-        replicationFactor: 3
-      - name: events.entity.created
-        partitions: 6
-        replicationFactor: 3
-      - name: events.entity.updated
-        partitions: 6
-        replicationFactor: 3
-      - name: events.track.point
-        partitions: 12
-        replicationFactor: 3
-      - name: alerts.geofence
-        partitions: 3
-        replicationFactor: 3
-      - name: alerts.anomaly
-        partitions: 3
-        replicationFactor: 3
 
 opensearch:
   enabled: true

@@ -2,14 +2,22 @@ package evaluator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/sentinel/alert-service/internal/store"
-	"github.com/sentinel/go-common/kafka"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/sentinel/go-common/kafka"
+	"github.com/sentinel/proto-gen/pbjson"
+	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
+
+	"github.com/sentinel/alert-service/internal/store"
 )
+
+// ProducerName is the producer header on alert events this service emits.
+const ProducerName = "alert-service"
 
 // Evaluator evaluates alert rules against entity positions.
 type Evaluator struct {
@@ -89,7 +97,7 @@ func (e *Evaluator) evaluateGeofence(ctx context.Context, entityID string, lat, 
 			continue
 		}
 
-		e.publishAlert(kafka.TopicAlertGeofence, entityID, alert)
+		e.publishAlert(entityID, alert)
 		e.logger.Info("geofence alert created",
 			zap.String("alertId", alert.ID),
 			zap.String("alertType", alertType),
@@ -131,7 +139,7 @@ func (e *Evaluator) evaluateSpeed(ctx context.Context, entityID string, speedKno
 			continue
 		}
 
-		e.publishAlert(kafka.TopicAlertAnomaly, entityID, alert)
+		e.publishAlert(entityID, alert)
 		e.logger.Info("speed alert created",
 			zap.String("alertId", alert.ID),
 			zap.String("entityId", entityID),
@@ -139,32 +147,116 @@ func (e *Evaluator) evaluateSpeed(ctx context.Context, entityID string, speedKno
 	}
 }
 
-func (e *Evaluator) publishAlert(topic, entityID string, alert *store.AlertRecord) {
-	payload := map[string]interface{}{
-		"alertId":   alert.ID,
-		"alertType": alert.AlertType,
-		"severity":  alert.Severity,
-		"title":     alert.Title,
-		"entityId":  alert.EntityID,
-		"createdAt": alert.CreatedAt,
+// publishAlert emits a typed AlertEvent to alerts.events.
+func (e *Evaluator) publishAlert(entityID string, alert *store.AlertRecord) {
+	ev := &sentinelv1.AlertEvent{
+		Alert:     AlertProto(alert),
+		EventType: sentinelv1.AlertEventType_ALERT_EVENT_TYPE_TRIGGERED,
+		Producer:  ProducerName,
+		EventTime: timestamppb.Now(),
 	}
-	if alert.Description != nil {
-		payload["description"] = *alert.Description
+	if err := e.producer.ProduceProto(kafka.TopicAlertEvents, entityID, ev, ProducerName, nil); err != nil {
+		e.logger.Error("failed to publish alert", zap.Error(err))
 	}
-	if alert.Position != nil {
-		payload["position"] = alert.Position
-	}
-	if alert.RuleID != nil {
-		payload["ruleId"] = *alert.RuleID
-	}
+}
 
-	data, err := json.Marshal(payload)
+// StoreExternalAlert persists an alert another service raised (analytics
+// anomalies) under its own id, so it shows up in the alerts API. A repeat
+// delivery is a no-op.
+func (e *Evaluator) StoreExternalAlert(ctx context.Context, ev *sentinelv1.AlertEvent) error {
+	a := ev.Alert
+	if a == nil || a.AlertId == "" || a.EntityId == "" {
+		return fmt.Errorf("alert event without alert id or entity id")
+	}
+	p := store.CreateAlertParams{
+		ID:          a.AlertId,
+		AlertType:   pbjson.EnumName(a.AlertType),
+		Severity:    pbjson.EnumName(a.Severity),
+		Title:       a.Title,
+		Description: a.Description,
+		EntityID:    a.EntityId,
+		Metadata:    a.Metadata,
+	}
+	if p.Metadata == nil {
+		p.Metadata = map[string]string{}
+	}
+	if ev.AnomalyType != "" {
+		p.Metadata["anomalyType"] = ev.AnomalyType
+		p.Metadata["score"] = fmt.Sprintf("%.3f", ev.Score)
+	}
+	if a.RuleId != "" {
+		rule := a.RuleId
+		p.RuleID = &rule
+	}
+	if a.Position != nil {
+		lat, lng := a.Position.Latitude, a.Position.Longitude
+		p.Lat, p.Lng = &lat, &lng
+	}
+	rec, err := e.store.CreateAlert(ctx, p)
 	if err != nil {
-		e.logger.Error("failed to marshal alert payload", zap.Error(err))
-		return
+		return err
 	}
+	if rec == nil {
+		return nil // already stored
+	}
+	e.logger.Info("external alert stored", zap.String("alertId", rec.ID), zap.String("producer", ev.Producer))
+	return nil
+}
 
-	if err := e.producer.ProduceRaw(topic, []byte(entityID), data, nil); err != nil {
-		e.logger.Error("failed to publish alert", zap.String("topic", topic), zap.Error(err))
+// AlertProto converts a stored alert to the wire message.
+func AlertProto(a *store.AlertRecord) *sentinelv1.Alert {
+	out := &sentinelv1.Alert{
+		AlertId:          a.ID,
+		AlertType:        parseEnum[sentinelv1.AlertType](a.AlertType),
+		Severity:         parseEnum[sentinelv1.AlertSeverity](a.Severity),
+		Title:            a.Title,
+		EntityId:         a.EntityID,
+		RelatedEntityIds: a.RelatedEntityIDs,
+		Metadata:         a.Metadata,
+		AcknowledgedBy:   deref(a.AcknowledgedBy),
 	}
+	if a.Description != nil {
+		out.Description = *a.Description
+	}
+	if a.RuleID != nil {
+		out.RuleId = *a.RuleID
+	}
+	if a.Position != nil {
+		out.Position = &sentinelv1.Coordinate{Latitude: a.Position.Lat, Longitude: a.Position.Lon}
+	}
+	if t, ok := parseTime(a.CreatedAt); ok {
+		out.CreatedAt = timestamppb.New(t)
+	}
+	if a.AcknowledgedAt != nil {
+		if t, ok := parseTime(*a.AcknowledgedAt); ok {
+			out.AcknowledgedAt = timestamppb.New(t)
+		}
+	}
+	return out
+}
+
+func parseEnum[E interface {
+	~int32
+	Descriptor() protoreflect.EnumDescriptor
+}](name string) E {
+	v, _ := pbjson.ParseEnum[E](name)
+	return v
+}
+
+var timeLayouts = []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999-07", "2006-01-02 15:04:05.999999999-07:00", "2006-01-02 15:04:05-07"}
+
+func parseTime(s string) (time.Time, bool) {
+	for _, l := range timeLayouts {
+		if t, err := time.Parse(l, s); err == nil {
+			return t.UTC(), true
+		}
+	}
+	return time.Time{}, false
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

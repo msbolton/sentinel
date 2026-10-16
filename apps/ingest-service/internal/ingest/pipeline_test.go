@@ -45,30 +45,17 @@ func (f *fakePublisher) DeadLetter(_, _, _ string, raw []byte, reason string, _ 
 	f.mu.Unlock()
 }
 
-type fakeLegacy struct {
-	mu    sync.Mutex
-	count int
-}
-
-func (f *fakeLegacy) ProduceBatch(_ string, msgs []*models.EntityPosition) error {
-	f.mu.Lock()
-	f.count += len(msgs)
-	f.mu.Unlock()
-	return nil
-}
-
-func newTestPipeline(t *testing.T, legacyTopic string) (*Pipeline, *fakePublisher, *fakeLegacy) {
+func newTestPipeline(t *testing.T) (*Pipeline, *fakePublisher) {
 	t.Helper()
-	cfg := &config.Config{WorkerPoolSize: 2, BatchSize: 10, FlushIntervalMs: 10, KafkaLegacyTopic: legacyTopic, RawPayloadMaxBytes: 64}
+	cfg := &config.Config{WorkerPoolSize: 2, BatchSize: 10, FlushIntervalMs: 10, RawPayloadMaxBytes: 64}
 	pub := &fakePublisher{}
-	leg := &fakeLegacy{}
-	p := NewPipeline(cfg, leg, pub, zap.NewNop(), sharedMetrics())
+	p := NewPipeline(cfg, pub, zap.NewNop(), sharedMetrics())
 	p.Start()
-	return p, pub, leg
+	return p, pub
 }
 
-func TestPipelinePublishesObservationsAndLegacy(t *testing.T) {
-	p, pub, leg := newTestPipeline(t, "ingest.raw")
+func TestPipelinePublishesObservations(t *testing.T) {
+	p, pub := newTestPipeline(t)
 	sbs := "MSG,3,1,1,ABC123,1,2024/01/01,00:00:00.000,2024/01/01,00:00:00.000,,35000,,,41.9,-87.9,,,,,,0"
 	p.Input() <- &models.IngestMessage{SourceType: models.SourceTCP, FeedID: "site-tcp", Payload: []byte(sbs), ReceivedAt: time.Now()}
 	p.Input() <- &models.IngestMessage{SourceType: models.SourceMQTT, FeedID: "site-mqtt", Payload: []byte(`{"entity_id":"trk-1","entity_type":"vehicle","latitude":10,"longitude":20,"timestamp":"2026-10-15T12:00:00Z"}`), ReceivedAt: time.Now()}
@@ -89,18 +76,15 @@ func TestPipelinePublishesObservationsAndLegacy(t *testing.T) {
 	if b == nil || b.Decoder != obs.DecoderJSON || b.EntityType != "VEHICLE" || b.Identities[0].Type != obs.IdentityFeedLocal || b.SourceTimestamp.Year() != 2026 {
 		t.Errorf("json observation = %+v", b)
 	}
-	if leg.count != 2 {
-		t.Errorf("legacy batch count = %d", leg.count)
-	}
 }
 
 func TestPipelineDeadLettersUndecodableAndBlankPayloads(t *testing.T) {
-	p, pub, leg := newTestPipeline(t, "")
+	p, pub := newTestPipeline(t)
 	p.Input() <- &models.IngestMessage{SourceType: models.SourceTCP, FeedID: "f", Payload: []byte("   \n")}
 	p.Input() <- &models.IngestMessage{SourceType: models.SourceTCP, FeedID: "f", Payload: []byte("not a known format")}
 	p.Stop()
-	if len(pub.obs) != 0 || len(pub.dead) != 2 || leg.count != 0 {
-		t.Fatalf("obs=%d dead=%v legacy=%d", len(pub.obs), pub.dead, leg.count)
+	if len(pub.obs) != 0 || len(pub.dead) != 2 {
+		t.Fatalf("obs=%d dead=%v", len(pub.obs), pub.dead)
 	}
 	for _, r := range pub.reason {
 		if r != "parse_error" {
@@ -109,8 +93,8 @@ func TestPipelineDeadLettersUndecodableAndBlankPayloads(t *testing.T) {
 	}
 }
 
-func TestPipelineStaticReportHasNoPositionAndSkipsLegacy(t *testing.T) {
-	p, pub, leg := newTestPipeline(t, "ingest.raw")
+func TestPipelineStaticReportHasNoPosition(t *testing.T) {
+	p, pub := newTestPipeline(t)
 	// AIS type 5 static report split over two fragments (from the parser tests).
 	p.Input() <- &models.IngestMessage{SourceType: models.SourceTCP, FeedID: "ais", Payload: []byte("!AIVDM,2,1,3,B,55P5TL01VIaAL@7WKO@mBplU@<PDhh000000001S;AJ::4A80?4i@E53,0*3E")}
 	p.Input() <- &models.IngestMessage{SourceType: models.SourceTCP, FeedID: "ais", Payload: []byte("!AIVDM,2,2,3,B,1@0000000000000,2*55")}
@@ -121,8 +105,5 @@ func TestPipelineStaticReportHasNoPositionAndSkipsLegacy(t *testing.T) {
 	o := pub.obs[0]
 	if o.HasPosition || o.Identities[0].Type != obs.IdentityMMSI || o.AIS == nil {
 		t.Errorf("static observation = %+v", o)
-	}
-	if leg.count != 0 {
-		t.Errorf("a positionless report must not reach the legacy topic, got %d", leg.count)
 	}
 }

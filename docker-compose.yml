@@ -525,8 +525,6 @@ services:
       DB_USERNAME: sentinel
       DB_PASSWORD: sentinel_dev
       KAFKA_BROKERS: kafka:9093
-      # Keep the legacy JSON entity topics fed until every consumer reads entities.events
-      KAFKA_LEGACY_EVENTS: "true"
     ports:
       - "3001:3001"
     depends_on:
@@ -804,8 +802,8 @@ services:
   # ===========================================================================
   analytics-service:
     build:
-      context: ./apps/analytics-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./apps/analytics-service/Dockerfile
     image: sentinel/analytics-service:dev
     container_name: sentinel-analytics-service
     hostname: analytics-service

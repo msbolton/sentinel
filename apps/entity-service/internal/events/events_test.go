@@ -1,7 +1,6 @@
 package events
 
 import (
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -58,7 +57,6 @@ func TestEntityProtoMapsRow(t *testing.T) {
 
 type fakeProducer struct {
 	protos []protoCall
-	raws   []rawCall
 }
 
 type protoCall struct {
@@ -67,29 +65,17 @@ type protoCall struct {
 	headers    map[string]string
 }
 
-type rawCall struct {
-	topic, key string
-	payload    map[string]interface{}
-}
-
 func (f *fakeProducer) ProduceProto(topic, key string, msg proto.Message, _ string, extra map[string]string) error {
 	f.protos = append(f.protos, protoCall{topic: topic, key: key, ev: msg.(*sentinelv1.EntityEvent), headers: extra})
 	return nil
 }
 
-func (f *fakeProducer) ProduceRaw(topic string, key, value []byte, _ map[string]string) error {
-	var m map[string]interface{}
-	_ = json.Unmarshal(value, &m)
-	f.raws = append(f.raws, rawCall{topic: topic, key: string(key), payload: m})
-	return nil
-}
-
-func TestPublisherEmitsTypedAndLegacy(t *testing.T) {
+func TestPublisherEmitsTypedEvents(t *testing.T) {
 	fp := &fakeProducer{}
-	pub := NewPublisher(fp, true, nil)
+	pub := NewPublisher(fp, nil)
 	alt := 100.0
 	e := &sentinelv1.Entity{Id: "e1", EntityType: sentinelv1.EntityType_ENTITY_TYPE_VESSEL, Source: sentinelv1.EntitySource_ENTITY_SOURCE_AIS, Name: "Boat",
-		Position: &sentinelv1.Coordinate{Latitude: 1, Longitude: 2, AltitudeMeters: &alt}, Kinematics: &sentinelv1.KinematicState{Velocity: &sentinelv1.GeodeticVelocity{North: 1}}}
+		Position: &sentinelv1.Coordinate{Latitude: 1, Longitude: 2, AltitudeMeters: &alt}}
 	ref := &sentinelv1.ObservationRef{ObservationId: "o1", FeedId: "ais"}
 
 	pub.Restored(e, "STALE")
@@ -116,28 +102,7 @@ func TestPublisherEmitsTypedAndLegacy(t *testing.T) {
 	if fp.protos[0].ev.GetRestored().PreviousState != sentinelv1.AgeoutState_AGEOUT_STATE_STALE {
 		t.Errorf("restored previous = %v", fp.protos[0].ev.GetRestored())
 	}
-
-	wantLegacy := []string{kafka.TopicEntityRestored, kafka.TopicEntityPosition, kafka.TopicEntityCreated, kafka.TopicEntityUpdated, kafka.TopicEntityDeleted, kafka.TopicEntityStale, kafka.TopicEntityAgedOut}
-	if len(fp.raws) != len(wantLegacy) {
-		t.Fatalf("legacy events = %d (bulk delete has no legacy form)", len(fp.raws))
+	if st := fp.protos[6].ev.GetStale(); st == nil || st.FeedId != "ais" || st.ThresholdMs != 60000 || st.LastSeenAt == nil {
+		t.Errorf("stale = %+v", fp.protos[6].ev.GetStale())
 	}
-	for i, c := range fp.raws {
-		if c.topic != wantLegacy[i] {
-			t.Errorf("legacy %d topic = %s", i, c.topic)
-		}
-	}
-	pos := fp.raws[1].payload
-	if pos["entity_id"] != "e1" || pos["entity_type"] != "VESSEL" || pos["source"] != "AIS" || pos["latitude"] != 1.0 || pos["altitude"] != 100.0 || pos["velocity_north"] != 1.0 {
-		t.Errorf("legacy position = %v", pos)
-	}
-	created := fp.raws[2].payload
-	if created["id"] != "e1" || created["name"] != "Boat" || created["classification"] != "UNSPECIFIED" {
-		t.Errorf("legacy created = %v", created)
-	}
-	if fp.raws[4].payload["id"] != "e1" {
-		t.Errorf("legacy deleted = %v", fp.raws[4].payload)
-	}
-
-	quiet := NewPublisher(&fakeProducer{}, false, nil)
-	quiet.Position(e, ref)
 }

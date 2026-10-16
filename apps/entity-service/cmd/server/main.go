@@ -40,7 +40,6 @@ func main() {
 	logger.Info("configuration loaded",
 		zap.String("port", cfg.Port),
 		zap.String("kafka_brokers", cfg.KafkaBrokers),
-		zap.Bool("legacy_events", cfg.KafkaLegacyEvents),
 	)
 
 	// Connect to PostgreSQL.
@@ -61,7 +60,7 @@ func main() {
 		logger.Fatal("failed to create kafka producer", zap.Error(err))
 	}
 	defer producer.Close()
-	publisher := events.NewPublisher(producer, cfg.KafkaLegacyEvents, logger)
+	publisher := events.NewPublisher(producer, logger)
 
 	// Stores.
 	entityStore := store.NewEntityStore(pool, logger)

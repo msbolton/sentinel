@@ -1,94 +1,107 @@
+// Package consumer feeds the alert evaluator from entities.events and
+// persists alerts other producers publish on alerts.events.
 package consumer
 
 import (
 	"context"
-	"encoding/json"
+	"time"
+
+	ckafka "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/sentinel/go-common/kafka"
+	"github.com/sentinel/proto-gen/pbjson"
+	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
+
 	"github.com/sentinel/alert-service/internal/evaluator"
-	"go.uber.org/zap"
 )
 
-// PositionConsumer consumes entity position events for alert evaluation.
+// PositionConsumer evaluates rules on position events and stores external alerts.
 type PositionConsumer struct {
 	evaluator *evaluator.Evaluator
-	consumer  *kafka.Consumer
+	bc        *kafka.BatchConsumer
 	logger    *zap.Logger
+	cancel    context.CancelFunc
 	done      chan struct{}
 }
 
-// NewPositionConsumer creates a new position consumer for alert evaluation.
+// NewPositionConsumer creates and subscribes the consumer.
 func NewPositionConsumer(brokers string, eval *evaluator.Evaluator, logger *zap.Logger) (*PositionConsumer, error) {
-	consumer, err := kafka.NewConsumer(brokers, kafka.GroupAlertService, "alert-service", logger)
+	bc, err := kafka.NewBatchConsumer(brokers, kafka.GroupAlertService, "alert-service", "latest",
+		kafka.BatchOptions{MaxMessages: 200, MaxWait: 200 * time.Millisecond}, logger)
 	if err != nil {
 		return nil, err
 	}
-
-	if err := consumer.Subscribe([]string{kafka.TopicEntityPosition}); err != nil {
+	if err := bc.Subscribe([]string{kafka.TopicEntityEvents, kafka.TopicAlertEvents}); err != nil {
+		_ = bc.Close()
 		return nil, err
 	}
-
-	return &PositionConsumer{
-		evaluator: eval,
-		consumer:  consumer,
-		logger:    logger,
-		done:      make(chan struct{}),
-	}, nil
+	return &PositionConsumer{evaluator: eval, bc: bc, logger: logger, done: make(chan struct{})}, nil
 }
 
-// Start begins consuming position events in a goroutine.
+// Start begins consuming in the background.
 func (c *PositionConsumer) Start() {
-	go c.run()
+	ctx, cancel := context.WithCancel(context.Background())
+	c.cancel = cancel
+	go func() {
+		defer close(c.done)
+		c.logger.Info("alert consumer started", zap.Strings("topics", []string{kafka.TopicEntityEvents, kafka.TopicAlertEvents}))
+		if err := c.bc.Run(ctx, c.handle); err != nil {
+			c.logger.Error("alert consumer stopped", zap.Error(err))
+		}
+	}()
 }
 
-func (c *PositionConsumer) run() {
-	c.logger.Info("alert position consumer started")
-	for {
-		msg, err := c.consumer.Poll(100)
-		if err != nil {
-			select {
-			case <-c.done:
-				return
-			default:
-				continue
-			}
-		}
-		if msg == nil {
-			select {
-			case <-c.done:
-				return
-			default:
-				continue
-			}
-		}
-
-		var payload positionEventPayload
-		if err := json.Unmarshal(msg.Value, &payload); err != nil {
-			c.logger.Error("failed to unmarshal position event", zap.Error(err))
-			continue
-		}
-
-		c.evaluator.EvaluatePosition(
-			context.Background(),
-			payload.EntityID,
-			payload.Latitude,
-			payload.Longitude,
-			payload.EntityType,
-			payload.SpeedKnots,
-		)
-	}
-}
-
-// Stop signals the consumer to stop.
+// Stop ends consumption.
 func (c *PositionConsumer) Stop() {
-	close(c.done)
-	c.consumer.Close()
+	if c.cancel != nil {
+		c.cancel()
+		<-c.done
+	}
+	_ = c.bc.Close()
 }
 
-type positionEventPayload struct {
-	EntityID   string   `json:"entity_id"`
-	EntityType string   `json:"entity_type"`
-	Latitude   float64  `json:"latitude"`
-	Longitude  float64  `json:"longitude"`
-	SpeedKnots *float64 `json:"speed_knots"`
+func (c *PositionConsumer) handle(ctx context.Context, msgs []*ckafka.Message) error {
+	for _, m := range msgs {
+		switch *m.TopicPartition.Topic {
+		case kafka.TopicEntityEvents:
+			if header(m, kafka.HeaderEventType) != "position" {
+				continue
+			}
+			var ev sentinelv1.EntityEvent
+			if err := proto.Unmarshal(m.Value, &ev); err != nil {
+				c.logger.Warn("undecodable entity event skipped", zap.Error(err))
+				continue
+			}
+			pos := ev.GetPosition()
+			if pos == nil || pos.Entity == nil || pos.Entity.Position == nil {
+				continue
+			}
+			e := pos.Entity
+			c.evaluator.EvaluatePosition(ctx, e.Id, e.Position.Latitude, e.Position.Longitude, pbjson.EnumName(e.EntityType), e.SpeedKnots)
+		case kafka.TopicAlertEvents:
+			if header(m, kafka.HeaderProducer) == evaluator.ProducerName {
+				continue
+			}
+			var ev sentinelv1.AlertEvent
+			if err := proto.Unmarshal(m.Value, &ev); err != nil {
+				c.logger.Warn("undecodable alert event skipped", zap.Error(err))
+				continue
+			}
+			if err := c.evaluator.StoreExternalAlert(ctx, &ev); err != nil {
+				c.logger.Error("external alert not stored", zap.String("producer", ev.Producer), zap.Error(err))
+			}
+		}
+	}
+	return nil
+}
+
+func header(m *ckafka.Message, key string) string {
+	for _, h := range m.Headers {
+		if h.Key == key {
+			return string(h.Value)
+		}
+	}
+	return ""
 }

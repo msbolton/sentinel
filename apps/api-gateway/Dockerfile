@@ -4,6 +4,7 @@ FROM golang:1.25-alpine AS builder
 RUN apk add --no-cache gcc musl-dev librdkafka-dev
 WORKDIR /build
 COPY libs/common-go/ ./libs/common-go/
+COPY libs/proto-gen/src/go/ ./libs/proto-gen/src/go/
 COPY apps/api-gateway/ ./apps/api-gateway/
 WORKDIR /build/apps/api-gateway
 RUN CGO_ENABLED=1 go build -tags dynamic -o /server ./cmd/server
