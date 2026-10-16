@@ -53,21 +53,27 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Schema migrations (runs once then exits)
+  # Schema (runs once then exits)
   # ===========================================================================
-  # Applies db/migrations with golang-migrate. Application services wait for
-  # this container to complete successfully before starting.
+  # Applies every file in db/schema in name order with psql. The files are
+  # idempotent, so re-running after an edit is how the schema changes before
+  # the first release. Application services wait for this container to
+  # complete successfully before starting.
   # ===========================================================================
-  db-migrate:
-    image: migrate/migrate:v4.18.1
-    platform: linux/amd64
-    container_name: sentinel-db-migrate
+  db-schema:
+    image: postgis/postgis:16-3.4
+    container_name: sentinel-db-schema
     depends_on:
       postgres:
         condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: sentinel
+      PGPASSWORD: sentinel_dev
+      PGDATABASE: sentinel
     volumes:
-      - ./db/migrations:/migrations:ro
-    command: ["-path=/migrations", "-database", "postgres://sentinel:sentinel_dev@postgres:5432/sentinel?sslmode=disable", "up"]
+      - ./db/schema:/schema:ro
+    entrypoint: ["sh", "-c", "for f in /schema/*.sql; do echo \"== $$f\"; psql -v ON_ERROR_STOP=1 -q -f \"$$f\" || exit 1; done"]
     restart: "no"
     networks:
       - sentinel-network

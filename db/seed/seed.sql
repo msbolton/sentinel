@@ -1,7 +1,7 @@
 -- =============================================================================
 -- SENTINEL development seed data
 -- =============================================================================
--- Inserts only. Run after migrations:  make db-seed
+-- Inserts only. Run after the schema:  make db-schema && make db-seed
 -- Idempotent: rows are keyed by name and skipped when they already exist.
 -- =============================================================================
 

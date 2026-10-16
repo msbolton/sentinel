@@ -4,11 +4,11 @@
 
 ### Schema management
 
-The schema is defined by versioned SQL migrations in `db/migrations/`, applied with [golang-migrate](https://github.com/golang-migrate/migrate). The `db-migrate` compose service runs them before any application service starts, `make db-migrate` runs them against a running infra stack, and the Helm chart runs the same image as a pre-install hook. Extensions (`postgis`, `timescaledb`, `age`) and the `sentinel` schema are created once by `config/postgres/init-extensions.sql` at database initialisation.
+The schema is a directory of idempotent SQL files, `db/schema/`, one per area (`10_entities.sql`, `20_track_points.sql`, `70_feeds.sql`, `80_observations.sql`, …), applied in file-name order with psql. The `db-schema` compose service applies them before any application service starts and `make db-schema` applies them to the running `sentinel-postgres` container. Re-applying after an edit is how the schema changes before the first release: every file is written so that running it again on a database that already has the objects is a no-op (`CREATE … IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, guarded `DO` blocks), and the files also carry the repairs that bring a database created by the former TypeORM schema in line. Versioned migrations start at the first release. Extensions (`postgis`, `timescaledb`, `age`) are created once by `config/postgres/init-extensions.sql` at database initialisation.
 
 Column names are camelCase and must be quoted in SQL (for example `"entityType"`, `"lastSeenAt"`). Enum-like columns are `VARCHAR`; the Go stores bind plain strings. Tables with an `"updatedAt"` column keep it current through the `sentinel.set_updated_at()` trigger.
 
-To add a migration, create `db/migrations/NNNNNN_<name>.up.sql` and `.down.sql` with the next sequence number.
+To change the schema, edit the area's file (or add a new `NN_<area>.sql`; a table that references another must sort after it) and run `make db-schema`.
 
 
 All tables live under the `sentinel` schema. PostGIS provides the `geometry` type for spatial columns.
