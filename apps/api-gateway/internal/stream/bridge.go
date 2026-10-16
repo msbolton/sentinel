@@ -260,7 +260,8 @@ func alertFromProto(ev *sentinelv1.AlertEvent) ClientAlert {
 	a := ClientAlert{
 		ID: al.AlertId, Title: al.Title, Message: al.Description, Severity: pbjson.EnumName(al.Severity), AlertType: pbjson.EnumName(al.AlertType),
 		EntityID: al.EntityId, RuleID: al.RuleId, Metadata: al.Metadata, CreatedAt: orNow(tsString(al.CreatedAt)),
-		Acknowledged: al.AcknowledgedAt != nil,
+		Acknowledged:   al.AcknowledgedAt != nil,
+		Classification: enumOrEmpty(al.Classification),
 	}
 	a.UpdatedAt = a.CreatedAt
 	if a.Metadata == nil {
@@ -289,6 +290,9 @@ type ClientAlert struct {
 	Metadata     map[string]string `json:"metadata"`
 	CreatedAt    string            `json:"createdAt"`
 	UpdatedAt    string            `json:"updatedAt"`
+	// Classification inherited from the entity when the alert fired; empty
+	// when the producer did not set it.
+	Classification string `json:"classification,omitempty"`
 }
 
 func enumOrEmpty(e protoreflect.Enum) string {

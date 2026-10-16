@@ -18,10 +18,27 @@ type memEntities struct {
 	state        map[string]string
 	fused        [][]store.FusedUpdate
 	static       [][]store.StaticUpdate
+	class        map[string]string
 }
 
 func newMemEntities() *memEntities {
-	return &memEntities{lastObserved: map[string]time.Time{}, state: map[string]string{}}
+	return &memEntities{lastObserved: map[string]time.Time{}, state: map[string]string{}, class: map[string]string{}}
+}
+
+// raise mirrors sentinel.classification_max: the entity keeps the higher of
+// its current level and the report's, and the previous level is reported.
+func (m *memEntities) raise(id, level string) (prev, now string) {
+	rank := map[string]int{"": 0, "UNCLASSIFIED": 0, "CONFIDENTIAL": 1, "SECRET": 2, "TOP_SECRET": 3}
+	prev = m.class[id]
+	if prev == "" {
+		prev = "UNCLASSIFIED"
+	}
+	now = prev
+	if rank[level] > rank[prev] {
+		now = level
+	}
+	m.class[id] = now
+	return prev, now
 }
 
 func (m *memEntities) ApplyFused(_ context.Context, updates []store.FusedUpdate) ([]store.FusedResult, error) {
@@ -35,7 +52,8 @@ func (m *memEntities) ApplyFused(_ context.Context, updates []store.FusedUpdate)
 		m.lastObserved[u.EntityID] = u.ObservedAt
 		m.state[u.EntityID] = "LIVE"
 		feed := u.FeedID
-		out = append(out, store.FusedResult{EntityID: u.EntityID, PreviousState: prev, Record: &store.EntityRecord{ID: u.EntityID, EntityType: "AIRCRAFT", Name: u.Name, Source: u.Source, FeedID: &feed, Position: &store.GeoPoint{Lat: u.Lat, Lon: u.Lon}, AgeoutState: "LIVE", CreatedAt: "2026-10-15 12:00:00+00", UpdatedAt: "2026-10-15 12:00:00+00"}})
+		prevClass, class := m.raise(u.EntityID, u.Classification)
+		out = append(out, store.FusedResult{EntityID: u.EntityID, PreviousState: prev, PreviousClassification: prevClass, Record: &store.EntityRecord{ID: u.EntityID, EntityType: "AIRCRAFT", Name: u.Name, Source: u.Source, FeedID: &feed, Classification: class, Position: &store.GeoPoint{Lat: u.Lat, Lon: u.Lon}, AgeoutState: "LIVE", CreatedAt: "2026-10-15 12:00:00+00", UpdatedAt: "2026-10-15 12:00:00+00"}})
 	}
 	return out, nil
 }
@@ -44,7 +62,8 @@ func (m *memEntities) ApplyStatic(_ context.Context, updates []store.StaticUpdat
 	m.static = append(m.static, updates)
 	var out []store.FusedResult
 	for _, u := range updates {
-		out = append(out, store.FusedResult{EntityID: u.EntityID, PreviousState: m.state[u.EntityID], Record: &store.EntityRecord{ID: u.EntityID, Name: u.Name, AgeoutState: "LIVE", CreatedAt: "2026-10-15 12:00:00+00", UpdatedAt: "2026-10-15 12:00:00+00"}})
+		prevClass, class := m.raise(u.EntityID, u.Classification)
+		out = append(out, store.FusedResult{EntityID: u.EntityID, PreviousState: m.state[u.EntityID], PreviousClassification: prevClass, Record: &store.EntityRecord{ID: u.EntityID, Name: u.Name, Classification: class, AgeoutState: "LIVE", CreatedAt: "2026-10-15 12:00:00+00", UpdatedAt: "2026-10-15 12:00:00+00"}})
 	}
 	return out, nil
 }
@@ -198,3 +217,40 @@ func TestProcessBatchEmptyAndNil(t *testing.T) {
 }
 
 var _ = timestamppb.Now
+
+func TestClassificationRaiseIsAnnounced(t *testing.T) {
+	p, _, ents, _, _, sink := newTestProcessor()
+	t0 := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	first := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t0, 40, -80), "o1")
+	first.Classification = sentinelv1.Classification_CLASSIFICATION_CONFIDENTIAL
+	if _, err := p.ProcessBatch(context.Background(), []*sentinelv1.Observation{first}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.events) != 1 || sink.events[0].kind != "created" || sink.events[0].entity.Classification != sentinelv1.Classification_CLASSIFICATION_CONFIDENTIAL {
+		t.Fatalf("first batch events = %+v", sink.events)
+	}
+	id := sink.events[0].entity.Id
+
+	// A lower-level report does not lower the entity and announces nothing extra.
+	second := withID(obs("adsb-lol", sentinelv1.EntitySource_ENTITY_SOURCE_ADSB_LOL, "A1B2C3", t0.Add(time.Second), 40.1, -80), "o2")
+	second.Classification = sentinelv1.Classification_CLASSIFICATION_UNCLASSIFIED
+	if _, err := p.ProcessBatch(context.Background(), []*sentinelv1.Observation{second}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.events) != 2 || sink.events[1].kind != "position" || ents.class[id] != "CONFIDENTIAL" {
+		t.Fatalf("after lower report: events=%+v class=%q", sink.events, ents.class[id])
+	}
+
+	// A higher-level report raises the entity and says so before the fix.
+	third := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t0.Add(2*time.Second), 40.2, -80), "o3")
+	third.Classification = sentinelv1.Classification_CLASSIFICATION_SECRET
+	if _, err := p.ProcessBatch(context.Background(), []*sentinelv1.Observation{third}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.events) != 4 || sink.events[2].kind != "updated" || sink.events[2].extra != "classification" || sink.events[3].kind != "position" {
+		t.Fatalf("after raise: events=%+v", sink.events)
+	}
+	if sink.events[3].entity.Classification != sentinelv1.Classification_CLASSIFICATION_SECRET {
+		t.Errorf("position snapshot classification = %v", sink.events[3].entity.Classification)
+	}
+}

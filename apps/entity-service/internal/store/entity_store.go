@@ -437,6 +437,57 @@ func (s *EntityStore) UpdatePosition(ctx context.Context, id string, lat, lng fl
 	return scanEntity(row)
 }
 
+// OperatorUpdate carries the operator-owned fields PATCH may change. Nil
+// means "leave as is"; feeds never write these fields.
+type OperatorUpdate struct {
+	Name              *string
+	Description       *string
+	Classification    *string
+	Affiliations      []string
+	MilStd2525dSymbol *string
+}
+
+// UpdateOperatorFields applies an operator's edits and returns the entity,
+// or pgx.ErrNoRows when it does not exist or is deleted.
+func (s *EntityStore) UpdateOperatorFields(ctx context.Context, id string, u OperatorUpdate) (*EntityRecord, error) {
+	row := s.pool.QueryRow(ctx, fmt.Sprintf(`
+		UPDATE sentinel.entities
+		SET name = COALESCE($2, name),
+			description = COALESCE($3, description),
+			classification = COALESCE($4, classification),
+			affiliations = COALESCE($5, affiliations),
+			"milStd2525dSymbol" = COALESCE($6, "milStd2525dSymbol"),
+			"updatedAt" = NOW()
+		WHERE id = $1 AND deleted = false
+		RETURNING %s
+	`, entitySelectColumns), id, u.Name, u.Description, u.Classification, u.Affiliations, u.MilStd2525dSymbol)
+	return scanEntity(row)
+}
+
+// classificationLevels lists the stored Classification names, lowest first.
+var classificationLevels = []string{"UNCLASSIFIED", "CONFIDENTIAL", "SECRET", "TOP_SECRET"}
+
+// ClassificationRank orders classification levels the way
+// sentinel.classification_rank does: unknown or empty ranks lowest.
+func ClassificationRank(level string) int {
+	for i, l := range classificationLevels {
+		if l == strings.ToUpper(level) {
+			return i
+		}
+	}
+	return 0
+}
+
+// ValidClassification reports whether level is a stored Classification name.
+func ValidClassification(level string) bool {
+	for _, l := range classificationLevels {
+		if l == level {
+			return true
+		}
+	}
+	return false
+}
+
 // Ping checks database connectivity.
 func (s *EntityStore) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)

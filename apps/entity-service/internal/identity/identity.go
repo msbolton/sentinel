@@ -31,6 +31,7 @@ type NewEntity struct {
 	SourceEntityID   string
 	TrackEnvironment string
 	CountryOfOrigin  string
+	Classification   string // bare Classification name; "" = UNCLASSIFIED
 	SeenAt           time.Time
 }
 

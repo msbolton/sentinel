@@ -509,6 +509,7 @@ export class SettingsComponent {
 
   readonly classificationOptions = [
     { value: 'classification-u', label: 'UNCLASSIFIED' },
+    { value: 'classification-c', label: 'CONFIDENTIAL' },
     { value: 'classification-s', label: 'SECRET' },
     { value: 'classification-ts', label: 'TOP SECRET' },
   ] as const;

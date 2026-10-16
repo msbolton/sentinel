@@ -20,6 +20,8 @@ export interface Alert {
   metadata: Record<string, string>;
   createdAt: string;
   updatedAt: string;
+  /** Inherited from the entity when the alert fired; absent on older alerts. */
+  classification?: string;
 }
 
 export interface AlertRule {
