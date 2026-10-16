@@ -190,7 +190,7 @@ func TestPlaceholdersForBox(t *testing.T) {
 	if o.SourceEntityID != "ab1234" || o.Source != "UNSPECIFIED" || o.Decoder != "json" || !o.HasPosition || o.Latitude != 41.9742 {
 		t.Errorf("observation = %+v", o)
 	}
-	if len(o.Identities) != 2 || o.Identities[0] != (obs.Identity{Type: obs.IdentityICAO24, Value: "ab1234"}) || o.Identities[1] != (obs.Identity{Type: obs.IdentityCallsign, Value: "UAL123"}) {
+	if len(o.Identities) != 2 || o.Identities[0] != (obs.Identity{Type: obs.IdentityICAO24, Value: "AB1234"}) || o.Identities[1] != (obs.Identity{Type: obs.IdentityCallsign, Value: "UAL123"}) {
 		t.Errorf("identities = %+v", o.Identities)
 	}
 	if len(sink.success) != 1 || sink.success[0] != 3 {

@@ -63,8 +63,11 @@ func TestCustomMapWithRecordsAndUnits(t *testing.T) {
 	if o.SourceTimestamp.Unix() != 1700000000 {
 		t.Errorf("timestamp = %v", o.SourceTimestamp)
 	}
-	if id, ok := o.CanonicalIdentity(); !ok || id != (obs.Identity{Type: "ICAO24", Value: "abc123"}) {
-		t.Errorf("identities = %v", o.Identities)
+	if id, ok := o.CanonicalIdentity(); !ok || id != (obs.Identity{Type: "ICAO24", Value: "ABC123"}) {
+		t.Errorf("identities = %v (ICAO24 must be upper-case so it fuses with other feeds)", o.Identities)
+	}
+	if o.SourceEntityID != "abc123" {
+		t.Errorf("source entity id keeps the API's spelling: %q", o.SourceEntityID)
 	}
 	if out[1].HasPosition {
 		t.Error("record without lat/lon must have no position")
@@ -80,5 +83,19 @@ func TestErrors(t *testing.T) {
 	}
 	if _, err := New(json.RawMessage(`{"fields":{"latitude":"a"}}`)); err == nil {
 		t.Error("missing longitude path must be rejected")
+	}
+}
+
+func TestCanonicalIdentitiesAreNormalised(t *testing.T) {
+	d, err := New(json.RawMessage(`{"identityType":"mmsi","fields":{"id":"mmsi","latitude":"lat","longitude":"lon"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := d.Decode(transport.Frame{Payload: []byte(`{"mmsi":"MMSI 367 123 450","lat":1,"lon":2}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, ok := out[0].CanonicalIdentity(); !ok || id != (obs.Identity{Type: obs.IdentityMMSI, Value: "367123450"}) {
+		t.Errorf("identities = %v", out[0].Identities)
 	}
 }
