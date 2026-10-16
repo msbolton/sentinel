@@ -16,12 +16,13 @@ import (
 	"github.com/sentinel/go-common/health"
 	"github.com/sentinel/go-common/kafka"
 	"github.com/sentinel/go-common/middleware"
+
 	"github.com/sentinel/entity-service/internal/ageout"
-	"github.com/sentinel/entity-service/internal/batch"
 	"github.com/sentinel/entity-service/internal/config"
 	"github.com/sentinel/entity-service/internal/consumer"
+	"github.com/sentinel/entity-service/internal/events"
+	"github.com/sentinel/entity-service/internal/fusion"
 	"github.com/sentinel/entity-service/internal/handler"
-	"github.com/sentinel/entity-service/internal/redis"
 	"github.com/sentinel/entity-service/internal/store"
 )
 
@@ -39,6 +40,7 @@ func main() {
 	logger.Info("configuration loaded",
 		zap.String("port", cfg.Port),
 		zap.String("kafka_brokers", cfg.KafkaBrokers),
+		zap.Bool("legacy_events", cfg.KafkaLegacyEvents),
 	)
 
 	// Connect to PostgreSQL.
@@ -53,37 +55,47 @@ func main() {
 	}
 	logger.Info("connected to database")
 
-	// Initialize Redis geo cache (optional).
-	geoCache := redis.NewGeoCache(cfg.RedisHost, cfg.RedisPort, cfg.RedisPassword, logger)
-	defer geoCache.Close()
-
-	// Initialize Kafka producer.
+	// Kafka producer: typed entity events plus, while enabled, the legacy JSON topics.
 	producer, err := kafka.NewProducer(cfg.KafkaBrokers, logger)
 	if err != nil {
 		logger.Fatal("failed to create kafka producer", zap.Error(err))
 	}
 	defer producer.Close()
+	publisher := events.NewPublisher(producer, cfg.KafkaLegacyEvents, logger)
 
-	// Initialize stores.
+	// Stores.
 	entityStore := store.NewEntityStore(pool, logger)
+	identityStore := store.NewIdentityStore(pool, logger)
+	observationStore := store.NewObservationStore(pool, logger)
+	sourceStore := store.NewSourceStore(pool, logger)
 	ageoutConfigStore := store.NewAgeoutConfigStore(pool, logger)
 
-	// Seed default ageout configs.
 	if err := ageoutConfigStore.SeedDefaults(context.Background()); err != nil {
 		logger.Warn("failed to seed ageout defaults", zap.Error(err))
 	}
 
-	// Start ageout service.
-	ageoutService := ageout.NewService(pool, producer, logger)
+	ageoutService := ageout.NewService(pool, publisher, logger)
 	ageoutService.Start()
 
-	// Start ingest consumer with batch buffer.
-	buffer := batch.NewBuffer(entityStore, producer, geoCache, logger)
-	ingestConsumer, err := consumer.NewIngestConsumer(cfg.KafkaBrokers, buffer, logger)
-	if err != nil {
-		logger.Fatal("failed to create ingest consumer", zap.Error(err))
+	// Fusion: observations.raw -> resolve identities -> newest fix wins -> events.
+	var priority fusion.Priority
+	if len(cfg.FusionSourcePriority) > 0 {
+		priority = fusion.Priority(cfg.FusionSourcePriority)
 	}
-	ingestConsumer.Start()
+	resolver := fusion.NewResolver(identityStore, cfg.IdentityCacheSize, time.Hour)
+	processor := fusion.NewProcessor(resolver, entityStore, observationStore, sourceStore, publisher, priority, logger)
+	obsConsumer, err := consumer.New(consumer.Options{Brokers: cfg.KafkaBrokers, MaxMessages: cfg.ConsumerBatchSize, MaxWait: cfg.ConsumerMaxWait}, processor, producer, logger)
+	if err != nil {
+		logger.Fatal("failed to create observation consumer", zap.Error(err))
+	}
+	consumerCtx, stopConsumer := context.WithCancel(context.Background())
+	consumerDone := make(chan struct{})
+	go func() {
+		defer close(consumerDone)
+		if err := obsConsumer.Run(consumerCtx); err != nil {
+			logger.Error("observation consumer stopped", zap.Error(err))
+		}
+	}()
 
 	// Set up HTTP server.
 	mux := http.NewServeMux()
@@ -93,7 +105,7 @@ func main() {
 	})
 	healthHandler.RegisterRoutes(mux)
 
-	entityHandler := handler.NewEntityHandler(entityStore, producer, geoCache, logger)
+	entityHandler := handler.NewEntityHandler(entityStore, observationStore, publisher, logger)
 	entityHandler.RegisterRoutes(mux)
 
 	ageoutConfigHandler := handler.NewAgeoutConfigHandler(ageoutConfigStore, logger)
@@ -126,9 +138,15 @@ func main() {
 
 	logger.Info("shutdown signal received", zap.String("signal", sig.String()))
 
-	// Graceful shutdown.
-	ingestConsumer.Stop()
-	buffer.Stop()
+	// Graceful shutdown: stop consuming (offsets of the in-flight batch are
+	// committed only after it is stored), then the ageout loop, then flush.
+	stopConsumer()
+	select {
+	case <-consumerDone:
+	case <-time.After(15 * time.Second):
+		logger.Warn("observation consumer did not stop in time")
+	}
+	_ = obsConsumer.Close()
 	ageoutService.Stop()
 	producer.Flush(5000)
 

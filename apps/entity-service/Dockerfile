@@ -4,6 +4,7 @@ FROM golang:1.24-alpine AS builder
 RUN apk add --no-cache gcc musl-dev librdkafka-dev
 WORKDIR /build
 COPY libs/common-go/ ./libs/common-go/
+COPY libs/proto-gen/src/go/ ./libs/proto-gen/src/go/
 COPY apps/entity-service/ ./apps/entity-service/
 WORKDIR /build/apps/entity-service
 RUN CGO_ENABLED=1 go build -tags dynamic -o /server ./cmd/server
