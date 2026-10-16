@@ -52,15 +52,33 @@ type event struct {
 		Contact struct {
 			Callsign string `xml:"callsign,attr"`
 		} `xml:"contact"`
+		// Sentinel is the provenance marker our own encoder writes; events
+		// carrying the connection's site id are echoes and are skipped.
+		Sentinel struct {
+			Site string `xml:"site,attr"`
+		} `xml:"_sentinel"`
 	} `xml:"detail"`
 }
 
-// New builds the decoder; it takes no options.
-func New(json.RawMessage) (decoder.Decoder, error) {
-	return decoder.Stateless(decode), nil
+// Options are the decoder options.
+type Options struct {
+	// SkipSite drops events whose <_sentinel site> matches: our own
+	// exports coming back over a bidirectional TAK connection.
+	SkipSite string `json:"skipSite"`
 }
 
-func decode(f transport.Frame) ([]*obs.Observation, error) {
+// New builds the decoder.
+func New(raw json.RawMessage) (decoder.Decoder, error) {
+	var opts Options
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &opts); err != nil {
+			return nil, fmt.Errorf("cot options: %w", err)
+		}
+	}
+	return decoder.Stateless(func(f transport.Frame) ([]*obs.Observation, error) { return decode(f, opts) }), nil
+}
+
+func decode(f transport.Frame, opts Options) ([]*obs.Observation, error) {
 	data := strings.TrimSpace(string(f.Payload))
 	if data == "" {
 		return nil, errors.New("blank payload")
@@ -72,8 +90,15 @@ func decode(f transport.Frame) ([]*obs.Observation, error) {
 	if ev.UID == "" {
 		return nil, errors.New("CoT event has no uid")
 	}
+	if opts.SkipSite != "" && ev.Detail.Sentinel.Site == opts.SkipSite {
+		return nil, decoder.Skip("sentinel_echo")
+	}
 	if strings.HasPrefix(ev.Type, "t-") {
 		return nil, decoder.Skip("tasking_event")
+	}
+	// Drawing shapes and markers Sentinel itself exports are not tracks.
+	if strings.HasPrefix(ev.Type, "u-d-") {
+		return nil, decoder.Skip("drawing_shape")
 	}
 	o := &obs.Observation{
 		Decoder: Name, Source: "COT", SourceEntityID: ev.UID,
