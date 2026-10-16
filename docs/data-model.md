@@ -15,7 +15,7 @@ All tables live under the `sentinel` schema. PostGIS provides the `geometry` typ
 
 ### sentinel.entities
 
-The fused track: one row per object the platform knows about. Feeds update it through observations; operators own `name` (once set through the REST API), `classification`, `affiliations`, `description` and the symbol, which feeds never overwrite.
+The fused track: one row per object the platform knows about. Feeds update it through observations; operators own `name` (once set through the REST API), `affiliations`, `description` and the symbol, which feeds never overwrite. `classification` is a high-water mark: a new entity takes the level of the observation that created it (each feed stamps its configured `classification` on every observation), a later report can only raise it (`sentinel.classification_max`), and an operator may raise or lower it through `PATCH /api/v1/entities/{id}` until a higher-configured feed reports again. Alerts copy the entity's level when they fire. `db/schema/05_classification.sql` defines the ordering (`UNCLASSIFIED < CONFIDENTIAL < SECRET < TOP_SECRET`) every read path uses as the caller's ceiling.
 
 | Column | Type | Default | Description |
 |--------|------|---------|-------------|
