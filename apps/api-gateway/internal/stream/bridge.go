@@ -227,6 +227,12 @@ func EntityFromProto(en *sentinelv1.Entity) Entity {
 		v := en.Kinematics.Velocity
 		e.Kinematics = map[string]interface{}{"velocity": map[string]interface{}{"north": v.North, "east": v.East, "up": v.Up}}
 	}
+	for _, s := range en.Sources {
+		if s == nil || s.FeedId == "" {
+			continue
+		}
+		e.Sources = append(e.Sources, EntitySourceRef{FeedID: s.FeedId, Source: enumOrEmpty(s.Source), LastObservedAt: tsString(s.LastObservedAt)})
+	}
 	if len(en.Platforms) > 0 {
 		e.PlatformData = map[string]interface{}{}
 		for kind, d := range en.Platforms {
