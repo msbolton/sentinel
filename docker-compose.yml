@@ -759,13 +759,17 @@ services:
       context: .
       dockerfile: ./apps/ingest-service/Dockerfile
     image: sentinel/ingest-service:dev
-    hostname: ingest-service
+    # No hostname or container_name: `docker compose up --scale ingest-service=3`
+    # runs three replicas, each identified by its container id (REPLICA_ID).
     restart: unless-stopped
     environment:
       APP_ENV: development
       KAFKA_BROKERS: kafka:9093
-      # Feed registry (feeds, feed_status, feed_areas, feed_leases)
+      # Feed registry (feeds, feed_status, feed_areas) and leases (feed_leases, ingest_replicas):
+      # every enabled feed runs on exactly one replica.
       DATABASE_URL: postgres://sentinel:sentinel_dev@postgres:5432/sentinel?sslmode=disable
+      LEASE_TTL_SEC: "15"
+      LEASE_TICK_SEC: "2"
       # Presented by the api-gateway; the management API is not reachable from the host.
       INGEST_SERVICE_TOKEN: ${INGEST_SERVICE_TOKEN:-dev-ingest-token}
       # Built-in feeds to insert enabled when the feeds table is empty (comma-separated ids).

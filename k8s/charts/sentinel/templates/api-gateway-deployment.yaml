@@ -57,6 +57,13 @@ spec:
               value: sentinel
             - name: APP_ENV
               value: production
+            - name: INGEST_SERVICE_URL
+              value: http://{{ include "sentinel.fullname" . }}-ingest-service:{{ .Values.ingestService.service.port }}
+            - name: INGEST_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (printf "%s-ingest" (include "sentinel.fullname" .)) .Values.ingestService.existingSecret }}
+                  key: service-token
           livenessProbe:
             httpGet:
               path: /health

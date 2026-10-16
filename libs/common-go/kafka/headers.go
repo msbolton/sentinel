@@ -13,6 +13,7 @@ const (
 	HeaderFeedID        = "feed-id"        // observations only
 	HeaderEventType     = "event-type"     // entity events only: the EntityEvent oneof case name
 	HeaderError         = "error"          // dead-letter topic only
+	HeaderFence         = "x-fence"        // observations only: the producing replica's lease fencing token
 
 	ContentTypeProtobuf = "application/x-protobuf"
 	SchemaVersion       = "1"

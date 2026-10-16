@@ -37,6 +37,9 @@ type RunnerOptions struct {
 	RawPolicy string // none|bounded|full (bounded)
 	RawMax    int    // bytes kept under bounded (4096)
 	Dedupe    *dedupe.Options
+	// FencingToken is the lease token stamped on every observation; 0
+	// when the feed runs without a lease.
+	FencingToken int64
 }
 
 // Stats is what a runner has counted so far.
@@ -114,6 +117,7 @@ func (r *Runner) Emit(ctx context.Context, o *obs.Observation) error {
 	}
 	o.FeedID = r.feedID
 	o.Driver = r.driverID
+	o.FencingToken = r.opts.FencingToken
 	if o.ReceivedAt.IsZero() {
 		o.ReceivedAt = time.Now().UTC()
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/feed"
 	"github.com/sentinel/ingest-service/internal/health"
 	kafkaproducer "github.com/sentinel/ingest-service/internal/kafka"
+	"github.com/sentinel/ingest-service/internal/lease"
 	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/mgmt"
 	"github.com/sentinel/ingest-service/internal/publish"
@@ -90,15 +91,25 @@ func main() {
 
 	catalog := drivers.Default()
 
-	// Supervisor: runs the enabled feeds on this replica and reports status.
-	sup := feed.New(reg, publisher, logger, m, feed.Options{
-		ReplicaID:     cfg.ReplicaID,
-		RetryMin:      cfg.FeedRetryMin,
-		RetryMax:      cfg.FeedRetryMax,
-		StaleWarn:     cfg.FeedStaleWarn,
-		StaleCritical: cfg.FeedStaleCritical,
-		RawMax:        cfg.RawPayloadMaxBytes,
-	})
+	// Supervisor: runs the feeds this replica owns and reports status.
+	supOpts := feed.Options{
+		ReplicaID:      cfg.ReplicaID,
+		RetryMin:       cfg.FeedRetryMin,
+		RetryMax:       cfg.FeedRetryMax,
+		StaleWarn:      cfg.FeedStaleWarn,
+		StaleCritical:  cfg.FeedStaleCritical,
+		RawMax:         cfg.RawPayloadMaxBytes,
+		LeaseTick:      cfg.LeaseTick,
+		RebalanceAfter: cfg.LeaseRebalance,
+	}
+	if cfg.LeaseEnabled {
+		supOpts.Leaser = lease.New(reg.Pool(), cfg.ReplicaID, lease.Options{TTL: cfg.LeaseTTL})
+		supOpts.Preferred = lease.Preferred
+		logger.Info("feed leases enabled", zap.Duration("ttl", cfg.LeaseTTL), zap.Duration("tick", cfg.LeaseTick), zap.Duration("rebalance_after", cfg.LeaseRebalance))
+	} else {
+		logger.Warn("LEASE_ENABLED=false: this replica runs every enabled feed")
+	}
+	sup := feed.New(reg, publisher, logger, m, supOpts)
 	supervisorDone := make(chan struct{})
 	go func() {
 		defer close(supervisorDone)
@@ -109,7 +120,12 @@ func main() {
 	mux := http.NewServeMux()
 	healthHandler := health.NewHandler(producer, promReg, logger)
 	healthHandler.RegisterRoutes(mux)
-	mgmt.NewHandler(reg, catalog, sup, logger).RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
+	mgmtHandler := mgmt.NewHandler(reg, catalog, sup, logger)
+	mgmtHandler.StaleAfter = 3 * cfg.LeaseTick * 2
+	if cfg.LeaseEnabled {
+		mgmtHandler.StaleAfter = cfg.LeaseTTL
+	}
+	mgmtHandler.RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
 
 	httpServer := &http.Server{
 		Addr:         cfg.HTTPAddr,

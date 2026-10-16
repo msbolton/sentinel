@@ -4,6 +4,8 @@
 package wire
 
 import (
+	"strconv"
+
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -96,9 +98,14 @@ func Key(o *obs.Observation) string {
 	return commonkafka.ObservationKey("", "", o.FeedID, o.SourceEntityID)
 }
 
-// Headers are the standard protobuf headers plus the feed id.
+// Headers are the standard protobuf headers plus the feed id and, when
+// the feed runs under a lease, the fencing token.
 func Headers(o *obs.Observation) map[string]string {
-	return commonkafka.ProtoHeaders(&sentinelv1.Observation{}, Producer, map[string]string{commonkafka.HeaderFeedID: o.FeedID})
+	extra := map[string]string{commonkafka.HeaderFeedID: o.FeedID}
+	if o.FencingToken > 0 {
+		extra[commonkafka.HeaderFence] = strconv.FormatInt(o.FencingToken, 10)
+	}
+	return commonkafka.ProtoHeaders(&sentinelv1.Observation{}, Producer, extra)
 }
 
 func platform(o *obs.Observation) *sentinelv1.PlatformDetail {

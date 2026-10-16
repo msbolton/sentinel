@@ -17,6 +17,7 @@ func TestValidateRejects(t *testing.T) {
 		"warn above crit":    func(c *Config) { c.FeedStaleWarn = c.FeedStaleCritical },
 		"retry inverted":     func(c *Config) { c.FeedRetryMin = c.FeedRetryMax * 2 },
 		"zero shutdown":      func(c *Config) { c.ShutdownTimeout = 0 },
+		"tick above ttl/2":   func(c *Config) { c.LeaseTick = c.LeaseTTL },
 	}
 	for name, mutate := range cases {
 		c := *base

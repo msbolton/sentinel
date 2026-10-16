@@ -38,10 +38,12 @@ type FeedStore interface {
 	SetArea(ctx context.Context, a registry.Area) error
 }
 
-// Runtime is the local-replica fast path for area pushes.
+// Runtime is the local-replica fast path: live status for feeds running
+// here and direct area pushes.
 type Runtime interface {
 	SetArea(id string, a registry.Area) (aoi.Status, bool)
 	AreaStatus(id string) (aoi.Status, bool)
+	Snapshot(id string) (registry.Status, bool)
 }
 
 // Handler serves the management routes.
@@ -51,6 +53,9 @@ type Handler struct {
 	validator *registry.Validator
 	runtime   Runtime
 	logger    *zap.Logger
+	// StaleAfter is how old a status row written by another replica may be
+	// before the feed renders as unassigned (three heartbeats, 15 s).
+	StaleAfter time.Duration
 }
 
 // NewHandler wires the handler. runtime may be nil (status-only replicas).
@@ -58,7 +63,30 @@ func NewHandler(store FeedStore, catalog *drivers.Catalog, rt Runtime, logger *z
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Handler{store: store, catalog: catalog, validator: &registry.Validator{Catalog: catalog}, runtime: rt, logger: logger}
+	return &Handler{store: store, catalog: catalog, validator: &registry.Validator{Catalog: catalog}, runtime: rt, logger: logger, StaleAfter: 15 * time.Second}
+}
+
+// present overlays the live status when the feed runs on this replica and
+// renders a stale row from a silent replica as unassigned.
+func (h *Handler) present(f registry.Feed) registry.Feed {
+	if h.runtime != nil {
+		if st, live := h.runtime.Snapshot(f.ID); live {
+			st.FeedID = f.ID
+			if st.UpdatedAt == nil {
+				now := time.Now().UTC()
+				st.UpdatedAt = &now
+			}
+			f.Status = &st
+			return f
+		}
+	}
+	if f.Status != nil && f.Status.Owner != "" && f.Status.UpdatedAt != nil && h.StaleAfter > 0 && time.Since(*f.Status.UpdatedAt) > h.StaleAfter {
+		st := *f.Status
+		st.State = registry.StateUnassigned
+		st.Health = registry.HealthUnknown
+		f.Status = &st
+	}
+	return f
 }
 
 // RegisterRoutes mounts the routes on mux, each wrapped by guard.
@@ -109,7 +137,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		out = append(out, toFeedDTO(f, h.catalog))
+		out = append(out, toFeedDTO(h.present(f), h.catalog))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -120,7 +148,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toFeedDTO(f, h.catalog))
+	writeJSON(w, http.StatusOK, toFeedDTO(h.present(f), h.catalog))
 }
 
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +157,7 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toFeedDTO(f, h.catalog).Status)
+	writeJSON(w, http.StatusOK, toFeedDTO(h.present(f), h.catalog).Status)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {

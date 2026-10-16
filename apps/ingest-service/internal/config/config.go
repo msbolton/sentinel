@@ -38,6 +38,12 @@ type Config struct {
 	FeedRetryMin      time.Duration // FEED_RETRY_MIN_SEC (default: 5) first restart delay after a feed failure
 	FeedRetryMax      time.Duration // FEED_RETRY_MAX_SEC (default: 60)
 	ShutdownTimeout   time.Duration // SHUTDOWN_TIMEOUT_SEC (default: 25)
+
+	// Feed leases: each feed runs on exactly one replica.
+	LeaseEnabled   bool          // LEASE_ENABLED (default: true); false runs every feed on this replica
+	LeaseTTL       time.Duration // LEASE_TTL_SEC (default: 15) lease and replica expiry
+	LeaseTick      time.Duration // LEASE_TICK_SEC (default: 2) renew and re-evaluate ownership
+	LeaseRebalance time.Duration // LEASE_REBALANCE_SEC (default: 30) hand a feed to its preferred replica after this long
 }
 
 // Load reads configuration from environment variables, applying defaults
@@ -70,6 +76,11 @@ func Load() *Config {
 		FeedRetryMin:      envOrSeconds("FEED_RETRY_MIN_SEC", 5),
 		FeedRetryMax:      envOrSeconds("FEED_RETRY_MAX_SEC", 60),
 		ShutdownTimeout:   envOrSeconds("SHUTDOWN_TIMEOUT_SEC", 25),
+
+		LeaseEnabled:   envOr("LEASE_ENABLED", "true") != "false",
+		LeaseTTL:       envOrSeconds("LEASE_TTL_SEC", 15),
+		LeaseTick:      envOrSeconds("LEASE_TICK_SEC", 2),
+		LeaseRebalance: envOrSeconds("LEASE_REBALANCE_SEC", 30),
 	}
 }
 
@@ -103,6 +114,12 @@ func (c *Config) Validate() error {
 	}
 	if c.FeedRetryMin > c.FeedRetryMax {
 		return errors.New("FEED_RETRY_MIN_SEC must not exceed FEED_RETRY_MAX_SEC")
+	}
+	if c.LeaseTTL <= 0 || c.LeaseTick <= 0 || c.LeaseRebalance <= 0 {
+		return errors.New("LEASE_TTL_SEC, LEASE_TICK_SEC and LEASE_REBALANCE_SEC must be positive")
+	}
+	if c.LeaseTick*2 > c.LeaseTTL {
+		return errors.New("LEASE_TICK_SEC must be at most half of LEASE_TTL_SEC")
 	}
 	return nil
 }
