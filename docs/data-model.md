@@ -15,155 +15,115 @@ All tables live under the `sentinel` schema. PostGIS provides the `geometry` typ
 
 ### sentinel.entities
 
-The core entity table stores all tracked objects.
+The fused track: one row per object the platform knows about. Feeds update it through observations; operators own `name` (once set through the REST API), `classification`, `affiliations`, `description` and the symbol, which feeds never overwrite.
 
 | Column | Type | Default | Description |
 |--------|------|---------|-------------|
 | `id` | `UUID` | `gen_random_uuid()` | Primary key |
-| `entity_type` | `VARCHAR(50)` | — | Entity category (see enum below) |
+| `"entityType"` | `VARCHAR(50)` | — | AIRCRAFT, VESSEL, VEHICLE, PERSON, FACILITY, SATELLITE, … |
 | `name` | `VARCHAR(255)` | — | Display name |
-| `description` | `TEXT` | `NULL` | Optional description |
-| `source` | `VARCHAR(50)` | — | Intelligence source (see enum below) |
+| `source` | `VARCHAR(50)` | — | EntitySource of the last accepted observation (OPENSKY, ADS_B, AIS, MANUAL, …) |
+| `"feedId"` / `"lastFeedId"` | `VARCHAR` | `NULL` | Feed of the last accepted observation |
+| `"sourceEntityId"` | `VARCHAR(255)` | `NULL` | The source's own id for the object |
+| `"primaryIdentityType"` / `"primaryIdentityValue"` | `VARCHAR` | `NULL` | The canonical identity the entity was created from (ICAO24, MMSI, NORAD_ID, COT_UID, FEED_LOCAL) |
 | `classification` | `VARCHAR(50)` | `'UNCLASSIFIED'` | Security classification |
-| `position` | `geometry(Point, 4326)` | `NULL` | WGS84 lat/lng point |
-| `heading` | `FLOAT` | `NULL` | Heading in degrees (0–360) |
-| `speed_knots` | `FLOAT` | `NULL` | Speed in knots |
-| `course` | `FLOAT` | `NULL` | Course over ground (degrees) |
-| `mil_std_2525d_symbol` | `VARCHAR(50)` | `NULL` | MIL-STD-2525D symbol code |
-| `metadata` | `JSONB` | `'{}'` | Arbitrary key-value metadata |
-| `affiliations` | `TEXT[]` | `'{}'` | Affiliation tags |
-| `created_at` | `TIMESTAMPTZ` | `NOW()` | Creation timestamp |
-| `updated_at` | `TIMESTAMPTZ` | `NOW()` | Last update timestamp |
-| `last_seen_at` | `TIMESTAMPTZ` | `NOW()` | Last observed timestamp |
+| `position` | `geometry(Point, 4326)` | `NULL` | WGS84 point |
+| `altitude`, `heading`, `"speedKnots"`, `course`, `pitch`, `roll` | `DOUBLE PRECISION` | `NULL` | Last accepted kinematics |
+| `kinematics` | `JSONB` | `{}` | Velocity, acceleration and covariance of the last fix |
+| `"platformData"` | `JSONB` | `{}` | Platform detail (ADS-B, AIS, TLE, CoT, Link 16) |
+| `"trackEnvironment"`, `affiliation`, `"operationalStatus"`, `"countryOfOrigin"` | `VARCHAR` | | Classification attributes |
+| `"ageoutState"` | `VARCHAR(20)` | `'LIVE'` | LIVE, STALE or AGED_OUT |
+| `"lastObservedAt"` | `TIMESTAMPTZ` | `NULL` | Source timestamp of the last accepted observation; a fix older than it is rejected as `STALE_FIX` |
+| `"lastSeenAt"` | `TIMESTAMPTZ` | `NULL` | When the last report arrived |
+| `"createdAt"`, `"updatedAt"` | `TIMESTAMPTZ` | `NOW()` | Row timestamps |
+| `deleted`, `"deletedAt"` | | | Soft delete |
 
-**Indexes**:
-- `idx_entities_position` — GIST spatial index on `position`
-- `idx_entities_entity_type` — B-tree on `entity_type`
-- `idx_entities_source` — B-tree on `source`
-- `idx_entities_classification` — B-tree on `classification`
-- `idx_entities_last_seen_at` — B-tree on `last_seen_at`
+Indexes: GiST on `position`; B-tree on `"entityType"`, `source`, `classification`, `"lastSeenAt"`, `"feedId"`, `("ageoutState", "lastSeenAt")`; partial on `"sourceEntityId"` for live rows.
+
+### sentinel.entity_identities / sentinel.entity_sources
+
+`entity_identities` maps a natural identifier (`"identityType"`, `"identityValue"`, primary key) to an entity, with first and last seen times. An observation whose canonical identity matches joins that entity regardless of the feed it came from; a secondary identity (callsign, registration, IMO) that would merge two entities is counted, not applied. `entity_sources` keeps one row per entity and feed with the source's own id, the last observed and received times and an observation count; the ageout threshold of an entity is the largest threshold over its sources.
+
+### sentinel.observations
+
+One row per report from any feed, accepted or not; a TimescaleDB hypertable on `"observedAt"` (6-hour chunks, compressed after a day, dropped after seven) when the extension is present.
+
+| Column | Description |
+|--------|-------------|
+| `"observationId"`, `"observedAt"` | Primary key. The id is a UUIDv5 over feed id, source entity id, source timestamp and decoder, so a redelivered report is a no-op |
+| `"receivedAt"`, `"ingestedAt"` | When the ingest replica received it and when the entity-service stored it |
+| `"entityId"`, `"feedId"`, `driver`, `decoder`, `"sourceEntityId"`, `source`, `"sensorId"` | Provenance |
+| `accepted`, `"rejectReason"` | `DUPLICATE`, `STALE_FIX` or `INVALID_POSITION` when not accepted |
+| `position`, `altitude`, `heading`, `"speedKnots"`, `course`, velocities, accelerations, errors, covariances | The fix as reported |
+| `identities` | JSON array of `{type, value}` |
+| `platform` | Platform detail as JSON |
+| `"rawContentType"`, `raw`, `"rawTruncated"` | The original payload, bounded by the feed's `rawPayload` policy |
+
+Indexes on `("entityId", "observedAt" DESC)` and `("feedId", "sourceEntityId", "observedAt" DESC)`.
 
 ### sentinel.track_points
 
-Time-series track data. Configured as a TimescaleDB hypertable (partitioned on `timestamp`) when TimescaleDB is available.
+Accepted fixes as a time series, written by the track service from `entities.events`; a TimescaleDB hypertable on `"timestamp"` when available, with no primary key (the service never looks points up by id).
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | `UUID` | Default `gen_random_uuid()` |
-| `entity_id` | `UUID` | FK to entities |
-| `position` | `geometry(Point, 4326)` | Track position |
-| `heading` | `FLOAT` | Heading |
-| `speed_knots` | `FLOAT` | Speed |
-| `course` | `FLOAT` | Course |
-| `source` | `VARCHAR(50)` | Data source |
-| `timestamp` | `TIMESTAMPTZ` | Observation time (hypertable partition key) |
+| Column | Description |
+|--------|-------------|
+| `id`, `"entityId"`, `"entityType"` | Entity the point belongs to |
+| `position`, `altitude`, `heading`, `"speedKnots"`, `course`, `"velocityNorth"/East/Up`, `"accelNorth"/East/Up`, covariances, `"circularError"`, `"altitudeError"` | The fix |
+| `source`, `"feedId"`, `"sourceEntityId"`, `"sensorId"`, `"observationId"` | Provenance back to the observation row |
+| `"timestamp"` | Source timestamp (partition key) |
 
-### sentinel.alerts
+### sentinel.feeds, feed_status, feed_areas, feed_leases, ingest_replicas
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | `UUID` | Primary key |
-| `alert_type` | `VARCHAR(50)` | Alert category (GEOFENCE_BREACH, ANOMALY, etc.) |
-| `severity` | `VARCHAR(20)` | LOW, MEDIUM, HIGH, CRITICAL |
-| `title` | `VARCHAR(500)` | Alert title |
-| `description` | `TEXT` | Detailed description |
-| `entity_id` | `UUID` | Related entity |
-| `related_entity_ids` | `UUID[]` | Additional related entities |
-| `position` | `geometry(Point, 4326)` | Alert location |
-| `rule_id` | `UUID` | FK to alert_rules |
-| `metadata` | `JSONB` | Additional data |
-| `created_at` | `TIMESTAMPTZ` | When alert was raised |
-| `acknowledged_at` | `TIMESTAMPTZ` | When acknowledged |
-| `acknowledged_by` | `VARCHAR(255)` | Who acknowledged |
-| `resolved_at` | `TIMESTAMPTZ` | When resolved |
+The feed registry (see `docs/feeds.md`).
 
-### sentinel.alert_rules
+| Table | Content |
+|-------|---------|
+| `feeds` | Desired state: `id` (slug, primary key), `name`, `description`, `driver`, `config` (JSONB, validated against the driver's schema), `secret_refs` (JSONB of `env:` references), `enabled`, `builtin`, `version`, `created_by`, timestamps |
+| `feed_status` | Observed state written by the owning replica: `owner`, `state`, `health`, `last_error`, `last_message_at`, `last_success_at`, `messages_total`, `entities_last`, `errors_total`, `applied_version`, `detail` (JSONB), `updated_at` |
+| `feed_areas` | The area of interest pushed by the gateway: `active`, `clients`, `boxes` (JSONB), `expires_at` |
+| `feed_leases` | Which replica owns the feed: `owner_id`, `fencing_token`, `acquired_at`, `heartbeat_at`, `expires_at` |
+| `ingest_replicas` | Live replicas by heartbeat: `replica_id`, `started_at`, `heartbeat_at`, `expires_at` |
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | `UUID` | Primary key |
-| `name` | `VARCHAR(255)` | Rule name |
-| `rule_type` | `VARCHAR(50)` | GEOFENCE_BREACH, SPEED_ANOMALY, etc. |
-| `config` | `JSONB` | Rule configuration (polygon coords, thresholds) |
-| `monitored_entity_types` | `TEXT[]` | Entity types this rule applies to |
-| `severity` | `VARCHAR(20)` | Default severity for triggered alerts |
-| `enabled` | `BOOLEAN` | Whether rule is active |
-| `created_at` | `TIMESTAMPTZ` | — |
-| `updated_at` | `TIMESTAMPTZ` | — |
+### sentinel.feed_ageout_config
+
+Stale and age-out thresholds in milliseconds, per feed (`"feedId"`), per source type (`"sourceType"`) or global, with partial unique indexes for each level. The entity-service seeds the defaults.
+
+### sentinel.alerts and sentinel.alert_rules
+
+| Column | Description |
+|--------|-------------|
+| `alerts.id`, `"alertType"`, `severity`, `title`, `description`, `"entityId"`, `"relatedEntityIds"`, `position`, `"ruleId"`, `metadata`, `"createdAt"`, `"acknowledgedAt"`, `"acknowledgedBy"`, `"resolvedAt"` | An alert from any producer; analytics alerts carry `anomalyType` and `score` in `metadata` and keep the producer's id |
+| `alert_rules.id`, `name`, `"ruleType"`, `config`, `"monitoredEntityTypes"`, `severity`, `enabled`, timestamps | Rule definitions (geofence polygons, thresholds) |
 
 ### sentinel.links
 
-Entity relationship links for graph analysis.
+Entity relationships for graph analysis: `"sourceEntityId"`, `"targetEntityId"`, `"linkType"`, `confidence`, `description`, `evidence`, `"firstObserved"`, `"lastObserved"`, `metadata`, `"createdAt"`.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | `UUID` | Primary key |
-| `source_entity_id` | `UUID` | Source entity |
-| `target_entity_id` | `UUID` | Target entity |
-| `link_type` | `VARCHAR(50)` | Relationship type |
-| `confidence` | `FLOAT` | Confidence score (0–1) |
-| `description` | `TEXT` | Relationship description |
-| `evidence` | `TEXT[]` | Supporting evidence references |
-| `first_observed` | `TIMESTAMPTZ` | When first observed |
-| `last_observed` | `TIMESTAMPTZ` | When last observed |
-| `metadata` | `JSONB` | Additional data |
-| `created_at` | `TIMESTAMPTZ` | — |
+### sentinel.locations and sentinel.anomalies
 
-## Enums
+`locations` holds the saved camera positions the gateway serves (`name`, `latitude`, `longitude`, `altitude`, `heading`, `pitch`, `"range"`, `"has3dTiles"`, `category`). `anomalies` is the analytics service's log of detections (`entity_id`, `anomaly_type`, `severity`, `score`, expected and actual values, `position`, `detected_at`).
 
-### EntityType
+## Enums and the string convention
 
-```
-UNKNOWN | PERSON | VEHICLE | VESSEL | AIRCRAFT | FACILITY | EQUIPMENT | UNIT | SIGNAL | CYBER
-```
+Enum-like columns are `VARCHAR` holding the bare protobuf enum name without its type prefix: the database, the Kafka JSON produced by `pbjson`, the REST API and the client all spell `AIRCRAFT`, `OPENSKY`, `ICAO24`, `STALE`. The protobuf definitions in `proto/sentinel/v1` are the source of truth:
 
-### EntitySource
-
-```
-HUMINT | SIGINT | GEOINT | OSINT | MASINT | CYBER | MANUAL
-```
-
-### Classification
-
-Hierarchical from lowest to highest:
-
-```
-UNCLASSIFIED (0) < CONFIDENTIAL (1) < SECRET (2) < TOP_SECRET (3)
-```
-
-### Affiliation (seed data examples)
-
-```
-FRIENDLY | HOSTILE | NEUTRAL | UNKNOWN | ASSUMED_FRIENDLY | SUSPECT | PENDING
-```
-
-Custom tags are also used: `USN`, `FIFTH_FLEET`, `COALITION`, `HIGH_VALUE_TARGET`, `LOGISTICS`, etc.
+- **EntityType**: `UNKNOWN | PERSON | VEHICLE | VESSEL | AIRCRAFT | FACILITY | EQUIPMENT | UNIT | SIGNAL | CYBER | SENSOR | SATELLITE | DRONE`
+- **EntitySource**: `HUMINT | SIGINT | GEOINT | OSINT | MASINT | CYBER | MANUAL | AIS | ADS_B | LINK16 | GPS | RADAR | CELESTRAK | OPENSKY | ADSB_LOL` (`UNSPECIFIED` for a JSON feed without a configured source)
+- **IdentityType**: `ICAO24 | MMSI | IMO | NORAD_ID | COT_UID | LINK16_TN | FEED_LOCAL | CALLSIGN | REGISTRATION`; the first four are canonical and drive fusion
+- **AgeoutState**: `LIVE | STALE | AGED_OUT`
+- **Classification**, hierarchical: `UNCLASSIFIED (0) < CONFIDENTIAL (1) < SECRET (2) < TOP_SECRET (3)`
+- **Affiliation** (seed examples): `FRIENDLY | HOSTILE | NEUTRAL | UNKNOWN | ASSUMED_FRIENDLY | SUSPECT | PENDING`, plus free-form tags such as `USN`, `FIFTH_FLEET`
 
 ## Kafka Topics
 
-Events flow through typed Kafka topics. Each service consumes the topics relevant to its domain.
+| Topic | Partitions | Retention | Key | Message | Producers | Consumers |
+|-------|-----------|-----------|-----|---------|-----------|-----------|
+| `observations.raw` | 24 | 3 days | identity (`ICAO24:ABC123`, else `feed:<id>:<sourceEntityId>`) | `sentinel.v1.Observation` | ingest replicas | entity-service |
+| `observations.dlq` | 3 | 30 days | feed id | raw payload; headers `driver`, `decoder`, `reason`, `error`, `received-at` | ingest replicas | operators |
+| `entities.events` | 12 | 7 days | entity id | `sentinel.v1.EntityEvent`: full `Entity` snapshot plus one of created, updated, position (with an `ObservationRef`), deleted, stale, aged_out, restored; the `event-type` header names the case | entity-service | track, alert, search, analytics, gateway |
+| `alerts.events` | 3 | 30 days | entity id | `sentinel.v1.AlertEvent` with `producer` | alert-service, analytics | alert-service, gateway |
 
-| Topic | Key | Value | Producers | Consumers |
-|-------|-----|-------|-----------|-----------|
-| `events.entity.position` | entity_id | Position update | API Gateway, Ingest | Track, Gateway (WS) |
-| `events.entity.created` | entity_id | Full entity | API Gateway | Entity, Search, Alert |
-| `events.entity.updated` | entity_id | Updated fields | API Gateway | Entity, Search, Alert |
-| `events.track.point` | entity_id | Track point | Track Service | Analytics |
-| `alerts.geofence` | alert_id | Geofence alert | Alert Service | Gateway (WS) |
-| `alerts.anomaly` | alert_id | Anomaly alert | Alert Service | Gateway (WS) |
-| `analytics.pattern` | pattern_id | Pattern result | Analytics | Alert Service |
-| `ingest.raw` | source_id | Raw data | Ingest Service | Entity Service |
-
-## Redis Data Structures
-
-| Key | Type | TTL | Purpose |
-|-----|------|-----|---------|
-| `sentinel:entities:geo` | Sorted Set (GEOADD) | None | Geospatial index for bounding-box queries |
-| `sentinel:entities:cache:{id}` | String (JSON) | 300s | Full entity data cache |
-| `sentinel:positions` | Hash | None | Latest position snapshot per entity |
-| `sentinel:viewports` | Hash | None | Per-user viewport state |
-| `sentinel:sessions` | Hash | None | User session data |
-| `sentinel:ws-registry` | Set | None | Active WebSocket connections |
+Every message carries `content-type: application/x-protobuf`, `schema` (the fully qualified message name), `schema-version`, `producer`, and on observations `feed-id` and `x-fence` (the owning replica's lease token). Topics are created by `config/kafka/create-topics.sh` in compose and by the Helm chart's Kafka provisioning.
 
 ## Seed Data
 

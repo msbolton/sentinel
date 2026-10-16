@@ -5,7 +5,7 @@
 #
 # Usage:
 #   docker compose up -d                    # start everything
-#   docker compose up -d postgres redis     # start specific services
+#   docker compose up -d postgres kafka     # start specific services
 #   docker compose down -v                  # tear down with volume removal
 #   docker compose logs -f api-gateway      # follow logs for a service
 #
@@ -110,46 +110,6 @@ services:
         limits:
           memory: 512m
           cpus: "0.5"
-        reservations:
-          memory: 128m
-          cpus: "0.1"
-    networks:
-      - sentinel-network
-
-  # ===========================================================================
-  # Redis 7 (with AOF + RDB persistence)
-  # ===========================================================================
-  redis:
-    image: redis:7-alpine
-    container_name: sentinel-redis
-    hostname: redis
-    restart: unless-stopped
-    command: >
-      redis-server
-      --appendonly yes
-      --appendfsync everysec
-      --save 900 1
-      --save 300 10
-      --save 60 10000
-      --maxmemory 512mb
-      --maxmemory-policy allkeys-lru
-      --tcp-keepalive 60
-      --timeout 300
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          memory: 768m
-          cpus: "1.0"
         reservations:
           memory: 128m
           cpus: "0.1"
@@ -448,9 +408,6 @@ services:
       DB_DATABASE: sentinel
       DB_USERNAME: sentinel
       DB_PASSWORD: sentinel_dev
-      # Redis
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
       # Kafka
       KAFKA_BROKERS: kafka:9093
       # OpenSearch
@@ -477,11 +434,6 @@ services:
       VIEWPORT_SYNC_ENABLED: "true"
       VIEWPORT_SYNC_HEARTBEAT_SEC: "30"
       VIEWPORT_SYNC_DEBOUNCE_MS: "1000"
-      # MinIO / S3
-      S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: sentinel_minio
-      S3_SECRET_KEY: minio_dev_secret
-      S3_REGION: us-east-1
     ports:
       - "3000:3000"
     depends_on:
@@ -489,8 +441,6 @@ services:
         condition: service_healthy
       db-schema:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
       kafka:
         condition: service_healthy
       keycloak:
@@ -538,8 +488,6 @@ services:
         condition: service_healthy
       db-schema:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
       kafka:
         condition: service_healthy
     healthcheck:
@@ -577,8 +525,6 @@ services:
       DB_DATABASE: sentinel
       DB_USERNAME: sentinel
       DB_PASSWORD: sentinel_dev
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
     ports:
       - "3002:3002"
@@ -587,8 +533,6 @@ services:
         condition: service_healthy
       db-schema:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
       kafka:
         condition: service_healthy
     healthcheck:
@@ -626,8 +570,6 @@ services:
       DB_DATABASE: sentinel
       DB_USERNAME: sentinel
       DB_PASSWORD: sentinel_dev
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
       OPENSEARCH_HOST: opensearch
       OPENSEARCH_PORT: "9200"
@@ -638,8 +580,6 @@ services:
         condition: service_healthy
       db-schema:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
       opensearch:
         condition: service_healthy
     healthcheck:
@@ -677,8 +617,6 @@ services:
       DB_DATABASE: sentinel
       DB_USERNAME: sentinel
       DB_PASSWORD: sentinel_dev
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
     ports:
       - "3004:3004"
@@ -687,8 +625,6 @@ services:
         condition: service_healthy
       db-schema:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
       kafka:
         condition: service_healthy
     healthcheck:
@@ -726,8 +662,6 @@ services:
       DB_DATABASE: sentinel
       DB_USERNAME: sentinel
       DB_PASSWORD: sentinel_dev
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
     ports:
       - "3005:3005"
@@ -736,8 +670,6 @@ services:
         condition: service_healthy
       db-schema:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
       kafka:
         condition: service_healthy
     healthcheck:
@@ -826,15 +758,8 @@ services:
       DB_DATABASE: sentinel
       DB_USERNAME: sentinel
       DB_PASSWORD: sentinel_dev
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
       OPENSEARCH_URL: http://opensearch:9200
-      S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: sentinel_minio
-      S3_SECRET_KEY: minio_dev_secret
-      S3_REGION: us-east-1
-      S3_USE_PATH_STYLE: "true"
     ports:
       - "5000:5000"
     depends_on:
@@ -842,8 +767,6 @@ services:
         condition: service_healthy
       db-schema:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
       kafka:
         condition: service_healthy
       opensearch:
@@ -914,9 +837,6 @@ volumes:
   keycloak-db-data:
     driver: local
     name: sentinel-keycloak-db-data
-  redis-data:
-    driver: local
-    name: sentinel-redis-data
   kafka-data:
     driver: local
     name: sentinel-kafka-data
