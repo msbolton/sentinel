@@ -106,7 +106,7 @@ alertService:
       memory: 1Gi
 
 ingestService:
-  replicaCount: 3
+  replicaCount: 1  # feeds are not sharded across replicas yet; each replica would run every feed
   image:
     repository: sentinel/ingest-service
     tag: latest

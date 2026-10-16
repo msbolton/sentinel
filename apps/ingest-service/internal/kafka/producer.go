@@ -25,15 +25,15 @@ type Producer struct {
 // It starts a background goroutine to handle delivery reports.
 func NewProducer(brokers string, logger *zap.Logger, m *metrics.Metrics) (*Producer, error) {
 	p, err := kafka.NewProducer(&kafka.ConfigMap{
-		"bootstrap.servers":        brokers,
-		"acks":                     "all",
-		"retries":                  5,
-		"retry.backoff.ms":         100,
-		"linger.ms":               10,
-		"batch.num.messages":       500,
+		"bootstrap.servers":            brokers,
+		"acks":                         "all",
+		"retries":                      5,
+		"retry.backoff.ms":             100,
+		"linger.ms":                    10,
+		"batch.num.messages":           500,
 		"queue.buffering.max.messages": 100000,
-		"compression.type":        "gzip",
-		"enable.idempotence":      true,
+		"compression.type":             "gzip",
+		"enable.idempotence":           true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating kafka producer: %w", err)

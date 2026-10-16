@@ -11,9 +11,10 @@ import (
 
 	"github.com/sentinel/go-common/middleware"
 
+	"github.com/sentinel/ingest-service/internal/aoi"
 	"github.com/sentinel/ingest-service/internal/drivers"
 	"github.com/sentinel/ingest-service/internal/registry"
-	"github.com/sentinel/ingest-service/internal/sources"
+	_ "github.com/sentinel/ingest-service/internal/source/all"
 )
 
 type memStore struct {
@@ -98,18 +99,18 @@ type fakeRuntime struct {
 	last registry.Area
 }
 
-func (r *fakeRuntime) SetArea(id string, a registry.Area) (sources.ViewportStatus, bool) {
+func (r *fakeRuntime) SetArea(id string, a registry.Area) (aoi.Status, bool) {
 	if !r.live[id] {
-		return sources.ViewportStatus{}, false
+		return aoi.Status{}, false
 	}
 	r.last = a
-	return sources.ViewportStatus{Active: a.Active, Clients: a.Clients, AreaSqDeg: 42, EffectiveInterval: 10 * time.Second, CreditsRemaining: 3999}, true
+	return aoi.Status{Active: a.Active, Clients: a.Clients, AreaSqDeg: 42, EffectiveInterval: 10 * time.Second, CreditsRemaining: 3999}, true
 }
-func (r *fakeRuntime) AreaStatus(id string) (sources.ViewportStatus, bool) {
+func (r *fakeRuntime) AreaStatus(id string) (aoi.Status, bool) {
 	if !r.live[id] {
-		return sources.ViewportStatus{}, false
+		return aoi.Status{}, false
 	}
-	return sources.ViewportStatus{Active: r.last.Active, Idle: !r.last.Active, CreditsRemaining: 3999}, true
+	return aoi.Status{Active: r.last.Active, Idle: !r.last.Active, CreditsRemaining: 3999}, true
 }
 
 func newServer(t *testing.T, token string) (*httptest.Server, *memStore, *fakeRuntime) {
@@ -179,8 +180,17 @@ func TestListAndFilters(t *testing.T) {
 		}
 	}
 	_, body = do(t, srv, "GET", "/feeds?capability=area", "", reqOpts{})
-	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 1 || feeds[0].ID != "opensky" {
+	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 2 {
 		t.Fatalf("area filter = %s", body)
+	}
+	for _, f := range feeds {
+		if f.ID != "opensky" && f.ID != "adsb-lol" {
+			t.Errorf("unexpected area feed %s", f.ID)
+		}
+	}
+	_, body = do(t, srv, "GET", "/feeds?capability=poll&driver=celestrak", "", reqOpts{})
+	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 1 || feeds[0].ID != "celestrak" {
+		t.Fatalf("driver filter = %s", body)
 	}
 	_, body = do(t, srv, "GET", "/feeds?enabled=true", "", reqOpts{})
 	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 0 {
@@ -303,9 +313,9 @@ func TestAreaEndpoints(t *testing.T) {
 	if rt.last.Clients != 2 {
 		t.Fatalf("runtime did not receive the area: %+v", rt.last)
 	}
-	// Alias keeps the old gateway path working.
-	if resp, _ := do(t, srv, "PUT", "/feeds/opensky/viewport", body, reqOpts{}); resp.StatusCode != 200 {
-		t.Fatalf("viewport alias status %d", resp.StatusCode)
+	// The pre-registry viewport alias is gone.
+	if resp, _ := do(t, srv, "PUT", "/feeds/opensky/viewport", body, reqOpts{}); resp.StatusCode != 404 && resp.StatusCode != 405 {
+		t.Fatalf("viewport alias should be gone, status %d", resp.StatusCode)
 	}
 	resp, out = do(t, srv, "GET", "/feeds/opensky/area", "", reqOpts{})
 	if resp.StatusCode != 200 || !strings.Contains(string(out), `"live":true`) {
@@ -320,10 +330,10 @@ func TestAreaEndpoints(t *testing.T) {
 	}
 
 	cases := map[string]int{
-		`{"active":true,"clients":1,"boxes":[]}`:                                                          400,
-		`{"active":true,"clients":1,"boxes":[{"north":1,"south":2,"east":1,"west":0}]}`:                   400,
-		`{"active":true,"clients":1,"boxes":[{},{},{},{},{}]}`:                                            400,
-		`{"active":false,"clients":-1,"boxes":[]}`:                                                        400,
+		`{"active":true,"clients":1,"boxes":[]}`:                                        400,
+		`{"active":true,"clients":1,"boxes":[{"north":1,"south":2,"east":1,"west":0}]}`: 400,
+		`{"active":true,"clients":1,"boxes":[{},{},{},{},{}]}`:                          400,
+		`{"active":false,"clients":-1,"boxes":[]}`:                                      400,
 	}
 	for body, want := range cases {
 		if resp, _ := do(t, srv, "PUT", "/feeds/opensky/area", body, reqOpts{}); resp.StatusCode != want {

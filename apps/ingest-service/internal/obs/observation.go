@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/sentinel/ingest-service/internal/models"
 )
 
 // Identity types, spelled as the bare sentinel.v1.IdentityType names.
@@ -25,6 +23,27 @@ const (
 	IdentityFeedLocal    = "FEED_LOCAL"
 	IdentityCallsign     = "CALLSIGN"
 	IdentityRegistration = "REGISTRATION"
+)
+
+// Entity types, spelled as the bare sentinel.v1.EntityType names.
+const (
+	EntityAircraft  = "AIRCRAFT"
+	EntityVessel    = "VESSEL"
+	EntityVehicle   = "VEHICLE"
+	EntityPerson    = "PERSON"
+	EntitySensor    = "SENSOR"
+	EntitySatellite = "SATELLITE"
+	EntityUnknown   = "UNKNOWN"
+)
+
+// Track environments, spelled as the bare sentinel.v1.TrackEnvironment names.
+const (
+	EnvAir        = "AIR"
+	EnvGround     = "GROUND"
+	EnvSeaSurface = "SEA_SURFACE"
+	EnvSubsurface = "SUBSURFACE"
+	EnvSpace      = "SPACE"
+	EnvUnknown    = "UNKNOWN"
 )
 
 // Identity is one natural identifier of the observed object.
@@ -44,6 +63,11 @@ func (i Identity) Canonical() bool {
 
 // Observation mirrors sentinel.v1.Observation with Go types. Pointer and
 // bool fields carry presence: nil means the source did not report it.
+//
+// A decoder fills the object fields (source entity id, source, identities,
+// position, kinematics, platform detail). The feed runner fills the
+// provenance fields (feed id, driver, received time, raw payload, replica)
+// and computes the id.
 type Observation struct {
 	ID string // deterministic; see ComputeID
 
@@ -85,12 +109,12 @@ type Observation struct {
 	OperationalStatus string
 	Dimensions        *[3]float64 // length, width, height
 
-	AIS    *models.AISData
-	ADSB   *models.ADSBData
-	TLE    *models.TLEData
-	Link16 *models.Link16Data
-	CoT    *models.CoTData
-	UAV    *models.UAVData
+	AIS    *AISData
+	ADSB   *ADSBData
+	TLE    *TLEData
+	Link16 *Link16Data
+	CoT    *CoTData
+	UAV    *UAVData
 
 	RawContentType string
 	Raw            []byte
@@ -124,3 +148,55 @@ func (o *Observation) CanonicalIdentity() (Identity, bool) {
 	}
 	return o.Identities[0], true
 }
+
+// SetPosition records a fix.
+func (o *Observation) SetPosition(lat, lon float64) {
+	o.HasPosition = true
+	o.Latitude, o.Longitude = lat, lon
+}
+
+// AddIdentity appends an identity, keeping canonical types first and
+// dropping blanks and duplicates.
+func (o *Observation) AddIdentity(typ, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	id := Identity{Type: typ, Value: value}
+	for _, existing := range o.Identities {
+		if existing == id {
+			return
+		}
+	}
+	if !id.Canonical() {
+		o.Identities = append(o.Identities, id)
+		return
+	}
+	n := 0
+	for n < len(o.Identities) && o.Identities[n].Canonical() {
+		n++
+	}
+	o.Identities = append(o.Identities, Identity{})
+	copy(o.Identities[n+1:], o.Identities[n:])
+	o.Identities[n] = id
+}
+
+// EnsureIdentity guarantees Identities[0] exists: when no canonical identity
+// is known, a feed-local identity over feed id and source entity id is
+// placed first.
+func (o *Observation) EnsureIdentity() {
+	if _, ok := o.CanonicalIdentity(); ok {
+		return
+	}
+	local := Identity{Type: IdentityFeedLocal, Value: o.FeedID + ":" + o.SourceEntityID}
+	for i, existing := range o.Identities {
+		if existing == local {
+			o.Identities = append(o.Identities[:i], o.Identities[i+1:]...)
+			break
+		}
+	}
+	o.Identities = append([]Identity{local}, o.Identities...)
+}
+
+// Float returns a pointer to v, for the optional numeric fields.
+func Float(v float64) *float64 { return &v }

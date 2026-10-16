@@ -9,19 +9,22 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/sentinel/ingest-service/internal/config"
 	"github.com/sentinel/ingest-service/internal/drivers"
+	"github.com/sentinel/ingest-service/internal/feed"
 	"github.com/sentinel/ingest-service/internal/health"
-	"github.com/sentinel/ingest-service/internal/ingest"
 	kafkaproducer "github.com/sentinel/ingest-service/internal/kafka"
 	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/mgmt"
 	"github.com/sentinel/ingest-service/internal/publish"
 	"github.com/sentinel/ingest-service/internal/registry"
-	"github.com/sentinel/ingest-service/internal/runtime"
+	_ "github.com/sentinel/ingest-service/internal/source/all" // registers transports, decoders and drivers
+	"github.com/sentinel/ingest-service/internal/source/driver/stream"
 )
 
 func main() {
@@ -46,12 +49,14 @@ func main() {
 		zap.String("observation_topic", cfg.KafkaObservationTopic),
 		zap.String("http_addr", cfg.HTTPAddr),
 		zap.String("replica_id", cfg.ReplicaID),
-		zap.Int("worker_pool_size", cfg.WorkerPoolSize),
-		zap.Int("batch_size", cfg.BatchSize),
-		zap.Int("flush_interval_ms", cfg.FlushIntervalMs),
+		zap.Int("publisher_shards", cfg.PublisherShards),
+		zap.Int("frame_buffer", cfg.FrameBuffer),
 	)
+	stream.FrameBuffer = cfg.FrameBuffer
 
-	m := metrics.New()
+	promReg := prometheus.NewRegistry()
+	promReg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	m := metrics.New(promReg)
 
 	producer, err := kafkaproducer.NewProducer(cfg.KafkaBrokers, logger, m)
 	if err != nil {
@@ -59,8 +64,7 @@ func main() {
 	}
 	defer producer.Close()
 
-	// Observations: protobuf to observations.raw, dead letters to
-	// observations.dlq; the legacy JSON stream stays while a topic is set.
+	// Observations: protobuf to observations.raw, dead letters to observations.dlq.
 	publisher := publish.New(producer, m, logger, publish.Options{
 		Topic:           cfg.KafkaObservationTopic,
 		DeadLetterTopic: cfg.KafkaDeadLetterTopic,
@@ -70,9 +74,6 @@ func main() {
 		ReplicaID:       cfg.ReplicaID,
 	})
 	publisher.Start()
-
-	pipeline := ingest.NewPipeline(cfg, publisher, logger, m)
-	pipeline.Start()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -89,22 +90,26 @@ func main() {
 
 	catalog := drivers.Default()
 
-	// Runtime: runs the enabled feeds on this replica and reports status.
-	rt := runtime.New(reg, builtinFactories(cfg), pipeline.Input(), logger, m, runtime.Options{
+	// Supervisor: runs the enabled feeds on this replica and reports status.
+	sup := feed.New(reg, publisher, logger, m, feed.Options{
 		ReplicaID:     cfg.ReplicaID,
-		StaleWarn:     time.Duration(cfg.FeedStaleWarnSec) * time.Second,
-		StaleCritical: time.Duration(cfg.FeedStaleCriticalSec) * time.Second,
+		RetryMin:      cfg.FeedRetryMin,
+		RetryMax:      cfg.FeedRetryMax,
+		StaleWarn:     cfg.FeedStaleWarn,
+		StaleCritical: cfg.FeedStaleCritical,
+		RawMax:        cfg.RawPayloadMaxBytes,
 	})
-	runtimeDone := make(chan struct{})
+	supervisorDone := make(chan struct{})
 	go func() {
-		defer close(runtimeDone)
-		rt.Run(ctx)
+		defer close(supervisorDone)
+		sup.Run(ctx)
 	}()
 
 	// HTTP: health and metrics (open) plus the management API (guarded).
 	mux := http.NewServeMux()
-	health.NewHandler(producer, logger).RegisterRoutes(mux)
-	mgmt.NewHandler(reg, catalog, rt, logger).RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
+	healthHandler := health.NewHandler(producer, promReg, logger)
+	healthHandler.RegisterRoutes(mux)
+	mgmt.NewHandler(reg, catalog, sup, logger).RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
 
 	httpServer := &http.Server{
 		Addr:         cfg.HTTPAddr,
@@ -121,7 +126,7 @@ func main() {
 		}
 	}()
 
-	logger.Info("sentinel ingest service started successfully")
+	logger.Info("sentinel ingest service started successfully", zap.Strings("drivers", driverIDs(catalog)))
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
@@ -132,27 +137,42 @@ func main() {
 		logger.Error("http server failed", zap.Error(err))
 	}
 
-	// Graceful shutdown: stop feeds, drain the pipeline, stop HTTP, close Kafka.
-	logger.Info("initiating graceful shutdown")
+	// Graceful shutdown, bounded by SHUTDOWN_TIMEOUT_SEC: readiness 503 →
+	// supervisor stops drivers → publisher drains → producer flushes →
+	// HTTP shutdown → close.
+	logger.Info("initiating graceful shutdown", zap.Duration("timeout", cfg.ShutdownTimeout))
+	deadline := time.Now().Add(cfg.ShutdownTimeout)
+	healthHandler.SetDraining(true)
 	cancel()
 	select {
-	case <-runtimeDone:
-	case <-time.After(20 * time.Second):
-		logger.Warn("feed runtime did not stop in time")
+	case <-supervisorDone:
+	case <-time.After(time.Until(deadline)):
+		logger.Warn("feed supervisor did not stop in time")
 	}
-	pipeline.Stop()
 	publisher.Close()
-	if remaining := producer.Flush(10000); remaining > 0 {
+	flushMs := int(time.Until(deadline) / time.Millisecond)
+	if flushMs < 1000 {
+		flushMs = 1000
+	}
+	if remaining := producer.Flush(flushMs); remaining > 0 {
 		logger.Warn("kafka producer still has unflushed messages", zap.Int("remaining", remaining))
 	}
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http server shutdown error", zap.Error(err))
 	}
 
 	logger.Info("sentinel ingest service shut down gracefully")
+}
+
+func driverIDs(c *drivers.Catalog) []string {
+	var ids []string
+	for _, d := range c.List() {
+		ids = append(ids, d.ID)
+	}
+	return ids
 }
 
 // newLogger creates a production-ready structured logger with JSON output.

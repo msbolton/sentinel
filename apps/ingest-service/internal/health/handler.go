@@ -3,8 +3,10 @@ package health
 import (
 	"encoding/json"
 	"net/http"
+	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
@@ -15,18 +17,26 @@ import (
 // and Prometheus metrics exposition.
 type Handler struct {
 	producer  *kafkaproducer.Producer
+	registry  *prometheus.Registry
 	logger    *zap.Logger
 	startTime time.Time
+	draining  atomic.Bool
 }
 
-// NewHandler creates a new health/metrics HTTP handler.
-func NewHandler(producer *kafkaproducer.Producer, logger *zap.Logger) *Handler {
+// NewHandler creates a new health/metrics HTTP handler serving the given
+// Prometheus registry.
+func NewHandler(producer *kafkaproducer.Producer, registry *prometheus.Registry, logger *zap.Logger) *Handler {
 	return &Handler{
 		producer:  producer,
+		registry:  registry,
 		logger:    logger,
 		startTime: time.Now(),
 	}
 }
+
+// SetDraining makes the readiness probe fail so load balancers stop
+// routing to this replica while it shuts down.
+func (h *Handler) SetDraining(on bool) { h.draining.Store(on) }
 
 // healthResponse is the JSON response for health and readiness endpoints.
 type healthResponse struct {
@@ -39,7 +49,7 @@ type healthResponse struct {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", h.handleHealth)
 	mux.HandleFunc("/ready", h.handleReady)
-	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/metrics", promhttp.HandlerFor(h.registry, promhttp.HandlerOpts{}))
 }
 
 // handleHealth returns a simple health check response. This endpoint always
@@ -71,7 +81,7 @@ func (h *Handler) handleReady(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.producer.IsHealthy() {
+	if h.draining.Load() || !h.producer.IsHealthy() {
 		resp := healthResponse{
 			Status:  "not ready",
 			Uptime:  time.Since(h.startTime).Round(time.Second).String(),

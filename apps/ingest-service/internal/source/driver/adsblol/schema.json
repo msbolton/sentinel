@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sentinel.local/schemas/adsblol.json",
+  "title": "adsb.lol",
+  "type": "object",
+  "properties": {
+    "intervalSec": { "type": "integer", "minimum": 1, "maximum": 3600, "default": 10, "title": "Poll interval (s)" },
+    "scope": { "type": "string", "enum": ["mil", "area"], "default": "mil", "title": "Scope", "description": "mil: every military aircraft worldwide (/v2/mil). area: all aircraft within the clients' viewport (/v2/point), idle without one." },
+    "maxRadiusNm": { "type": "integer", "minimum": 1, "maximum": 250, "default": 250, "title": "Maximum point radius (nm)" },
+    "minPollSpacingSec": { "type": "integer", "minimum": 0, "default": 3, "title": "Minimum spacing between polls (s)" },
+    "baseUrl": { "type": "string", "format": "uri", "title": "API URL", "description": "Override for testing; default https://api.adsb.lol" }
+  }
+}

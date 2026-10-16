@@ -131,7 +131,7 @@ func (p *Publisher) Emit(ctx context.Context, o *obs.Observation) error {
 // DeadLetter sends an undecodable payload to the dead-letter topic, at
 // most DLQRatePerSec per feed; excess is counted and dropped so a
 // misconfigured feed cannot flood Kafka.
-func (p *Publisher) DeadLetter(feedID, sourceType, decoder string, raw []byte, reason string, cause error) {
+func (p *Publisher) DeadLetter(feedID, driverID, decoder string, raw []byte, reason string, cause error) {
 	if feedID == "" {
 		feedID = "unknown"
 	}
@@ -144,7 +144,7 @@ func (p *Publisher) DeadLetter(feedID, sourceType, decoder string, raw []byte, r
 	headers := []kafka.Header{
 		{Key: commonkafka.HeaderProducer, Value: []byte(wire.Producer)},
 		{Key: commonkafka.HeaderFeedID, Value: []byte(feedID)},
-		{Key: "source-type", Value: []byte(sourceType)},
+		{Key: "driver", Value: []byte(driverID)},
 		{Key: "decoder", Value: []byte(decoder)},
 		{Key: "reason", Value: []byte(reason)},
 		{Key: commonkafka.HeaderError, Value: []byte(errString(cause))},

@@ -49,6 +49,16 @@ export interface CreateFeedRequest {
   config: Record<string, unknown>;
 }
 
+/** Form format names → ingest decoder names. */
+const DECODER_BY_FORMAT: Record<StreamFormat, string> = {
+  json: 'json',
+  nmea: 'nmea-gps',
+  ais: 'nmea-ais',
+  cot: 'cot',
+  adsb: 'sbs',
+  link16: 'link16',
+};
+
 /** Maps the form's connector vocabulary onto the stream driver's config. */
 export function toStreamFeed(request: CreateFeedRequest): Record<string, unknown> {
   const transport: Record<string, unknown> = {};
@@ -69,7 +79,7 @@ export function toStreamFeed(request: CreateFeedRequest): Record<string, unknown
       transport['address'] = request.config['address'];
       break;
   }
-  const decoder = request.format === 'adsb' ? 'sbs' : request.format;
+  const decoder = DECODER_BY_FORMAT[request.format];
   return {
     name: request.name,
     driver: 'stream',

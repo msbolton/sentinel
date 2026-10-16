@@ -7,16 +7,17 @@ import (
 	"testing"
 
 	"github.com/sentinel/ingest-service/internal/drivers"
+	_ "github.com/sentinel/ingest-service/internal/source/all"
 )
 
 func newValidator() *Validator { return &Validator{Catalog: drivers.Default()} }
 
 func TestSlugify(t *testing.T) {
 	cases := map[string]string{
-		"My MQTT Feed":        "my-mqtt-feed",
+		"My MQTT Feed":       "my-mqtt-feed",
 		"  readsb @ site-1 ": "readsb-site-1",
-		"ALLCAPS":             "allcaps",
-		"---":                 "",
+		"ALLCAPS":            "allcaps",
+		"---":                "",
 	}
 	for in, want := range cases {
 		if got := Slugify(in); got != want {

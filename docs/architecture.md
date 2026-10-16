@@ -91,12 +91,12 @@ sequenceDiagram
 The OpenSky feed in the ingest service does not poll the whole globe. The API gateway knows which area every connected map client is looking at (each client sends `viewport:update` over the WebSocket), and it pushes the combined, padded area to the ingest service:
 
 ```
-PUT /feeds/opensky/viewport        (through the gateway: PUT /api/v1/feeds/opensky/viewport, operator or admin)
+PUT /feeds/opensky/area            (through the gateway: PUT /api/v1/feeds/opensky/area, operator or admin)
 { "active": true, "clients": 2,
   "boxes": [ { "north": 49.1, "south": 44.5, "east": 6.3, "west": -1.2 } ] }
 ```
 
-Boxes never cross the antimeridian; a viewport that wraps around 180° arrives as two boxes (at most four are accepted). `active: false` means nobody is looking. The ingest service answers with the same shape plus `enabled`, `areaSqDeg`, `effectiveIntervalSec`, `idle`, `lastPollAt`, `nextPollInSec` and `expiresAt`; `GET /feeds/opensky/viewport` returns it too, and `GET /feeds` carries a `viewport` field on the feed.
+Boxes never cross the antimeridian; a viewport that wraps around 180° arrives as two boxes (at most four are accepted). `active: false` means nobody is looking. The ingest service answers with the same shape plus `enabled`, `areaSqDeg`, `effectiveIntervalSec`, `idle`, `lastPollAt`, `nextPollInSec` and `expiresAt`; `GET /feeds/opensky/area` returns it too, and `GET /feeds/opensky/status` carries the live area detail.
 
 Rules the OpenSky listener applies:
 

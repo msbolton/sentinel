@@ -18,9 +18,9 @@ import (
 
 	"github.com/sentinel/go-common/middleware"
 
+	"github.com/sentinel/ingest-service/internal/aoi"
 	"github.com/sentinel/ingest-service/internal/drivers"
 	"github.com/sentinel/ingest-service/internal/registry"
-	"github.com/sentinel/ingest-service/internal/sources"
 )
 
 // maxBoxes bounds an area push; the gateway sends at most two.
@@ -40,8 +40,8 @@ type FeedStore interface {
 
 // Runtime is the local-replica fast path for area pushes.
 type Runtime interface {
-	SetArea(id string, a registry.Area) (sources.ViewportStatus, bool)
-	AreaStatus(id string) (sources.ViewportStatus, bool)
+	SetArea(id string, a registry.Area) (aoi.Status, bool)
+	AreaStatus(id string) (aoi.Status, bool)
 }
 
 // Handler serves the management routes.
@@ -78,8 +78,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, guard func(http.Handler) ht
 	route("GET /feeds/{id}/status", h.status)
 	route("GET /feeds/{id}/area", h.getArea)
 	route("PUT /feeds/{id}/area", h.putArea)
-	route("GET /feeds/{id}/viewport", h.getArea)
-	route("PUT /feeds/{id}/viewport", h.putArea)
 	route("GET /drivers", h.listDrivers)
 	route("GET /drivers/{id}", h.getDriver)
 }
@@ -326,8 +324,8 @@ func (h *Handler) putArea(w http.ResponseWriter, r *http.Request) {
 	if area.Boxes == nil {
 		area.Boxes = []registry.Box{}
 	}
-	if info.AreaTTL > 0 {
-		exp := time.Now().Add(info.AreaTTL).UTC()
+	if ttl := areaTTL(f, info); ttl > 0 {
+		exp := time.Now().Add(ttl).UTC()
 		area.ExpiresAt = &exp
 	}
 	if err := h.store.SetArea(r.Context(), area); err != nil {
@@ -341,6 +339,23 @@ func (h *Handler) putArea(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, areaFromRow(f, area))
+}
+
+// areaTTL is the driver's lease TTL unless the feed config overrides it
+// (viewportTtlSec, kept from the first OpenSky integration).
+func areaTTL(f registry.Feed, info drivers.Info) time.Duration {
+	var c struct {
+		ViewportTTLSec int `json:"viewportTtlSec"`
+		AreaTTLSec     int `json:"areaTtlSec"`
+	}
+	_ = json.Unmarshal(f.Config, &c)
+	switch {
+	case c.AreaTTLSec > 0:
+		return time.Duration(c.AreaTTLSec) * time.Second
+	case c.ViewportTTLSec > 0:
+		return time.Duration(c.ViewportTTLSec) * time.Second
+	}
+	return info.AreaTTL
 }
 
 // areaFeed loads the feed and checks its driver supports areas.
@@ -413,7 +428,7 @@ func validateArea(req areaRequest) string {
 		return "clients must not be negative"
 	}
 	for i, b := range req.Boxes {
-		bb := sources.BBox{North: b.North, South: b.South, East: b.East, West: b.West}
+		bb := aoi.BBox{North: b.North, South: b.South, East: b.East, West: b.West}
 		if err := bb.Validate(); err != nil {
 			return fmt.Sprintf("box %d: %v", i, err)
 		}
