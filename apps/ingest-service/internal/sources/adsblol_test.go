@@ -347,7 +347,6 @@ func TestADSBLolHTTPErrorHandling(t *testing.T) {
 			input := make(chan *models.IngestMessage, 100)
 
 			cfg := &config.Config{
-				ADSBLolEnabled:     true,
 				ADSBLolIntervalSec: 10,
 			}
 			l := NewADSBLolListener(cfg, input, logger, m, nil, nil)
@@ -383,7 +382,6 @@ func TestADSBLolPollWithTestServer(t *testing.T) {
 	input := make(chan *models.IngestMessage, 100)
 
 	cfg := &config.Config{
-		ADSBLolEnabled:     true,
 		ADSBLolIntervalSec: 10,
 	}
 	l := NewADSBLolListener(cfg, input, logger, m, nil, nil)

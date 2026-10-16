@@ -192,3 +192,16 @@ func TestFindPolicy_SpecificPrefixWins(t *testing.T) {
 		t.Error("prefix must match on path boundary")
 	}
 }
+
+func TestDriversAreProxiedToIngest(t *testing.T) {
+	up := echoServer(t)
+	defer up.Close()
+	h := newGateway(t, up)
+	rr, e := req(h, http.MethodGet, "/api/v1/drivers/opensky", "viewer")
+	if rr.Code != http.StatusOK || e.Path != "/drivers/opensky" {
+		t.Fatalf("status %d path %q", rr.Code, e.Path)
+	}
+	if rr, _ := req(h, http.MethodGet, "/api/v1/drivers", ""); rr.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous drivers status %d", rr.Code)
+	}
+}

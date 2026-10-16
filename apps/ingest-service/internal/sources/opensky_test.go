@@ -492,7 +492,6 @@ func TestHTTPErrorHandling(t *testing.T) {
 			input := make(chan *models.IngestMessage, 100)
 
 			cfg := &config.Config{
-				OpenSkyEnabled:     true,
 				OpenSkyIntervalSec: 15,
 			}
 			l := NewOpenSkyListener(cfg, input, logger, m, nil, nil)
@@ -522,7 +521,7 @@ func TestPollWithTestServer(t *testing.T) {
 	server, hits, _ := newFixtureServer(t)
 	input := make(chan *models.IngestMessage, 100)
 
-	cfg := &config.Config{OpenSkyEnabled: true, OpenSkyIntervalSec: 15}
+	cfg := &config.Config{OpenSkyIntervalSec: 15}
 	l := NewOpenSkyListener(cfg, input, zap.NewNop(), newTestMetrics(), nil, nil)
 	l.baseURL = server.URL
 	l.client = server.Client()
@@ -584,7 +583,6 @@ func TestOAuth2TokenFetch(t *testing.T) {
 	input := make(chan *models.IngestMessage, 100)
 
 	cfg := &config.Config{
-		OpenSkyEnabled:      true,
 		OpenSkyIntervalSec:  15,
 		OpenSkyClientID:     "test-client-id",
 		OpenSkyClientSecret: "test-client-secret",

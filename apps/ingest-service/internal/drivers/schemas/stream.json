@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sentinel.local/schemas/stream.json",
+  "title": "Message stream",
+  "description": "Bytes arrive over a transport and a decoder turns them into observations.",
+  "type": "object",
+  "required": ["transport", "decoder"],
+  "properties": {
+    "transport": {
+      "type": "object",
+      "title": "Transport",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["mqtt", "stomp", "tcpserver"], "title": "Kind" },
+        "brokerUrl": { "type": "string", "minLength": 1, "title": "Broker URL", "description": "mqtt: tcp://host:1883; stomp: host:61613" },
+        "topics": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "title": "MQTT topics" },
+        "qos": { "type": "integer", "minimum": 0, "maximum": 2, "default": 1, "title": "MQTT QoS" },
+        "queue": { "type": "string", "minLength": 1, "title": "STOMP queue" },
+        "address": { "type": "string", "minLength": 1, "title": "Listen address", "description": "tcpserver: host:port to bind, e.g. :4001" }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "mqtt" } } }, "then": { "required": ["brokerUrl", "topics"] } },
+        { "if": { "properties": { "kind": { "const": "stomp" } } }, "then": { "required": ["brokerUrl", "queue"] } },
+        { "if": { "properties": { "kind": { "const": "tcpserver" } } }, "then": { "required": ["address"] } }
+      ]
+    },
+    "framing": { "type": "string", "enum": ["line", "message"], "default": "line", "title": "Framing" },
+    "decoder": {
+      "type": "object",
+      "title": "Decoder",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "enum": ["auto", "json", "nmea", "cot", "ais", "sbs", "link16"], "title": "Format" },
+        "options": { "type": "object", "title": "Decoder options" }
+      }
+    }
+  }
+}

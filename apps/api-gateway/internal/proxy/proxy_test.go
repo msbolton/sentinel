@@ -23,7 +23,7 @@ func upstream(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		e := echo{Path: r.URL.Path, Query: r.URL.RawQuery, Headers: map[string]string{}}
-		for _, h := range []string{middleware.HeaderUserID, middleware.HeaderUserRoles, middleware.HeaderClassification, "X-Forwarded-For"} {
+		for _, h := range []string{middleware.HeaderUserID, middleware.HeaderUserRoles, middleware.HeaderClassification, middleware.HeaderServiceToken, "X-Forwarded-For"} {
 			e.Headers[h] = r.Header.Get(h)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -115,5 +115,24 @@ func TestProxy_UpstreamDownReturns503(t *testing.T) {
 func TestProxy_InvalidTarget(t *testing.T) {
 	if _, err := New(Options{Name: "x", Target: "not a url"}); err == nil {
 		t.Error("expected error for invalid target")
+	}
+}
+
+func TestProxy_ServiceTokenIsSetAndNeverForwardedFromCaller(t *testing.T) {
+	up := upstream(t)
+	defer up.Close()
+	h, _ := New(Options{Name: "ingest-service", Target: up.URL, ServiceToken: "s3cret"})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/feeds", nil)
+	req.Header.Set(middleware.HeaderServiceToken, "spoofed")
+	_, e := send(h, req)
+	if e.Headers[middleware.HeaderServiceToken] != "s3cret" {
+		t.Errorf("service token header = %q", e.Headers[middleware.HeaderServiceToken])
+	}
+	h, _ = New(Options{Name: "entity-service", Target: up.URL})
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/entities", nil)
+	req.Header.Set(middleware.HeaderServiceToken, "spoofed")
+	_, e = send(h, req)
+	if e.Headers[middleware.HeaderServiceToken] != "" {
+		t.Errorf("spoofed service token leaked: %q", e.Headers[middleware.HeaderServiceToken])
 	}
 }

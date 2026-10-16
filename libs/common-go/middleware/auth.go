@@ -11,6 +11,9 @@ const (
 	HeaderUserID         = "x-sentinel-user-id"
 	HeaderUserRoles      = "x-sentinel-user-roles"
 	HeaderClassification = "x-sentinel-classification"
+	// HeaderServiceToken carries the shared secret the gateway presents to
+	// services that are not reachable by end users directly (ingest).
+	HeaderServiceToken = "x-sentinel-service-token"
 )
 
 type contextKey string

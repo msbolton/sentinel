@@ -33,8 +33,9 @@ type Config struct {
 	MailPort                    string
 	MailFrom                    string
 
-	// Viewport sync: push the area connected map clients see to ingest-service
-	// so OpenSky is polled only for that area.
+	// Viewport sync: push the area connected map clients see to every ingest
+	// feed that polls an area of interest, so a remote API is polled only
+	// for what someone is looking at.
 	ViewportSyncEnabled   bool
 	ViewportSyncHeartbeat time.Duration
 	ViewportSyncDebounce  time.Duration
@@ -46,6 +47,9 @@ type Config struct {
 	LinkAnalysisServiceURL string
 	AlertServiceURL        string
 	IngestServiceURL       string
+	// IngestServiceToken is presented to ingest-service, which is reachable
+	// only through the gateway.
+	IngestServiceToken string
 }
 
 // IsProduction reports whether the gateway runs with production hardening.
@@ -102,6 +106,7 @@ func Load() Config {
 		LinkAnalysisServiceURL: commonCfg.EnvOrDefault("LINK_ANALYSIS_SERVICE_URL", "http://localhost:3004"),
 		AlertServiceURL:        commonCfg.EnvOrDefault("ALERT_SERVICE_URL", "http://localhost:3005"),
 		IngestServiceURL:       commonCfg.EnvOrDefault("INGEST_SERVICE_URL", "http://localhost:4000"),
+		IngestServiceToken:     commonCfg.EnvOrDefault("INGEST_SERVICE_TOKEN", ""),
 	}
 }
 

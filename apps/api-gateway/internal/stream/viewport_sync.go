@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,46 +13,61 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/sentinel/go-common/middleware"
 )
 
-// ViewportSink receives the aggregated viewport; ingest-service in production.
+// ErrFeedGone is returned by a sink when the feed no longer exists or no
+// longer takes an area; the sync forgets it and refreshes the directory.
+var ErrFeedGone = errors.New("feed does not take an area of interest")
+
+// ViewportSink receives the aggregated viewport for one feed; ingest-service
+// in production.
 type ViewportSink interface {
-	Push(ctx context.Context, v IngestViewport) error
+	Push(ctx context.Context, feedID string, v IngestViewport) error
 }
 
-// IngestHTTPSink pushes viewports to ingest-service's feeds API.
+// IngestHTTPSink pushes areas to ingest-service's management API.
 type IngestHTTPSink struct {
-	URL    string
-	Client *http.Client
+	BaseURL string
+	Token   string
+	Client  *http.Client
 }
 
-// NewIngestHTTPSink targets the OpenSky feed of the ingest service at baseURL.
-func NewIngestHTTPSink(baseURL string) *IngestHTTPSink {
+// NewIngestHTTPSink targets the ingest service at baseURL.
+func NewIngestHTTPSink(baseURL, token string) *IngestHTTPSink {
 	return &IngestHTTPSink{
-		URL:    strings.TrimRight(baseURL, "/") + "/feeds/opensky/viewport",
-		Client: &http.Client{Timeout: 5 * time.Second},
+		BaseURL: strings.TrimRight(baseURL, "/"),
+		Token:   token,
+		Client:  &http.Client{Timeout: 5 * time.Second},
 	}
 }
 
-// Push sends PUT /feeds/opensky/viewport.
-func (s *IngestHTTPSink) Push(ctx context.Context, v IngestViewport) error {
+// Push sends PUT /feeds/{id}/area.
+func (s *IngestHTTPSink) Push(ctx context.Context, feedID string, v IngestViewport) error {
 	body, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, s.URL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, s.BaseURL+"/feeds/"+feedID+"/area", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if s.Token != "" {
+		req.Header.Set(middleware.HeaderServiceToken, s.Token)
+	}
 	resp, err := s.Client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusConflict {
+		return fmt.Errorf("%w: %s (%d)", ErrFeedGone, feedID, resp.StatusCode)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return fmt.Errorf("ingest-service returned %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return fmt.Errorf("ingest-service returned %d for %s: %s", resp.StatusCode, feedID, strings.TrimSpace(string(msg)))
 	}
 	return nil
 }
@@ -59,7 +75,7 @@ func (s *IngestHTTPSink) Push(ctx context.Context, v IngestViewport) error {
 // ViewportSyncOptions tunes the pusher. Zero values take the defaults.
 type ViewportSyncOptions struct {
 	Debounce   time.Duration // trailing debounce after a viewport change (1 s)
-	MinSpacing time.Duration // floor between two pushes (2 s)
+	MinSpacing time.Duration // floor between two pushes to one feed (2 s)
 	Heartbeat  time.Duration // re-push while clients are connected (30 s)
 	PadFrac    float64       // padding as a fraction of each viewport's span (0.10)
 	PadMinDeg  float64       // minimum padding in degrees (0.25)
@@ -89,12 +105,14 @@ func (o ViewportSyncOptions) withDefaults() ViewportSyncOptions {
 }
 
 // ViewportSync watches the hub's client viewports and pushes their padded
-// union to the sink: debounced after changes, only when the change matters
-// (see ShouldPush), at most once per MinSpacing, and as a heartbeat while
-// anyone is connected so the ingest lease stays fresh.
+// union to every feed the directory lists: debounced after changes, only
+// when the change matters (see ShouldPush), at most once per MinSpacing per
+// feed, and as a heartbeat while anyone is connected so the ingest leases
+// stay fresh.
 type ViewportSync struct {
 	hub    *Hub
 	sink   ViewportSink
+	dir    FeedDirectory
 	opts   ViewportSyncOptions
 	logger *zap.Logger
 
@@ -104,20 +122,30 @@ type ViewportSync struct {
 	once   sync.Once
 
 	mu         sync.Mutex
-	lastPushed *IngestViewport
-	lastPushAt time.Time
+	lastPushed map[string]*IngestViewport
+	lastPushAt map[string]time.Time
 }
 
-// NewViewportSync wires a pusher to hub; call Start to run it.
-func NewViewportSync(hub *Hub, sink ViewportSink, opts ViewportSyncOptions, logger *zap.Logger) *ViewportSync {
+// NewViewportSync wires a pusher to hub; call Start to run it. A nil
+// directory means only the "opensky" feed.
+func NewViewportSync(hub *Hub, sink ViewportSink, dir FeedDirectory, opts ViewportSyncOptions, logger *zap.Logger) *ViewportSync {
+	if dir == nil {
+		dir = StaticDirectory{"opensky"}
+	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return &ViewportSync{
-		hub:    hub,
-		sink:   sink,
-		opts:   opts.withDefaults(),
-		logger: logger,
-		notify: make(chan struct{}, 1),
-		stop:   make(chan struct{}),
-		done:   make(chan struct{}),
+		hub:        hub,
+		sink:       sink,
+		dir:        dir,
+		opts:       opts.withDefaults(),
+		logger:     logger,
+		notify:     make(chan struct{}, 1),
+		stop:       make(chan struct{}),
+		done:       make(chan struct{}),
+		lastPushed: map[string]*IngestViewport{},
+		lastPushAt: map[string]time.Time{},
 	}
 }
 
@@ -134,35 +162,41 @@ func (s *ViewportSync) Start() {
 	go s.run()
 }
 
-// Stop ends the loop and tells the sink nobody is watching, so ingest can
-// idle before the lease expires.
+// Stop ends the loop and tells every active feed nobody is watching, so
+// ingest can idle before the leases expire.
 func (s *ViewportSync) Stop() {
 	s.once.Do(func() {
 		close(s.stop)
 		<-s.done
 		s.mu.Lock()
-		wasActive := s.lastPushed != nil && s.lastPushed.Active
-		s.mu.Unlock()
-		if wasActive {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			if err := s.sink.Push(ctx, IngestViewport{Active: false, Boxes: []IngestBox{}}); err != nil {
-				s.logger.Warn("viewport sync: final inactive push failed", zap.Error(err))
+		var active []string
+		for id, v := range s.lastPushed {
+			if v != nil && v.Active {
+				active = append(active, id)
 			}
+		}
+		s.mu.Unlock()
+		for _, id := range active {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if err := s.sink.Push(ctx, id, IngestViewport{Active: false, Boxes: []IngestBox{}}); err != nil {
+				s.logger.Warn("viewport sync: final inactive push failed", zap.String("feed", id), zap.Error(err))
+			}
+			cancel()
 		}
 	})
 }
 
-// LastPushed returns a copy of the last successfully pushed viewport.
-func (s *ViewportSync) LastPushed() *IngestViewport {
+// LastPushed returns a copy of the last viewport pushed to feedID.
+func (s *ViewportSync) LastPushed(feedID string) *IngestViewport {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.lastPushed == nil {
+	v, ok := s.lastPushed[feedID]
+	if !ok || v == nil {
 		return nil
 	}
-	v := *s.lastPushed
-	v.Boxes = append([]IngestBox(nil), s.lastPushed.Boxes...)
-	return &v
+	c := *v
+	c.Boxes = append([]IngestBox(nil), v.Boxes...)
+	return &c
 }
 
 func (s *ViewportSync) run() {
@@ -214,49 +248,92 @@ func (s *ViewportSync) scheduleRetry(retry *time.Timer, backoff time.Duration, e
 	return backoff
 }
 
-// sync aggregates and pushes when warranted. force (heartbeat, retry) skips
-// the change check and the spacing. It returns how long to wait before
-// trying again when the spacing floor blocked the push.
+// sync aggregates once and pushes to each listed feed when warranted. force
+// (heartbeat, retry) skips the change check and the spacing. It returns how
+// long to wait before trying again when a spacing floor blocked a push, and
+// the first push error.
 func (s *ViewportSync) sync(force bool) (time.Duration, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ids, err := s.dir.AreaFeeds(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("listing area feeds: %w", err)
+	}
+
 	next := Aggregate(s.hub.Viewports(), s.opts.PadFrac, s.opts.PadMinDeg)
 	next.Clients = s.hub.ClientCount()
 
+	listed := map[string]bool{}
+	for _, id := range ids {
+		listed[id] = true
+	}
 	s.mu.Lock()
-	prev := s.lastPushed
-	since := time.Since(s.lastPushAt)
-	s.mu.Unlock()
-
-	if force {
-		// An idle state needs no heartbeat once it has been delivered.
-		if prev != nil && !prev.Active && !next.Active {
-			return 0, nil
-		}
-	} else {
-		if !ShouldPush(prev, next) {
-			return 0, nil
-		}
-		if prev != nil && since < s.opts.MinSpacing {
-			return s.opts.MinSpacing - since, nil
+	for id := range s.lastPushed {
+		if !listed[id] {
+			delete(s.lastPushed, id)
+			delete(s.lastPushAt, id)
 		}
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := s.sink.Push(ctx, next); err != nil {
-		return 0, err
-	}
-
-	s.mu.Lock()
-	s.lastPushed = &next
-	s.lastPushAt = time.Now()
 	s.mu.Unlock()
 
-	s.logger.Info("viewport sync push",
-		zap.Bool("active", next.Active),
-		zap.Int("clients", next.Clients),
-		zap.Int("boxes", len(next.Boxes)),
-		zap.Float64("area_sq_deg", next.AreaSqDeg),
-		zap.Bool("heartbeat", force),
+	var (
+		wait     time.Duration
+		firstErr error
 	)
-	return 0, nil
+	for _, id := range ids {
+		s.mu.Lock()
+		prev := s.lastPushed[id]
+		since := time.Since(s.lastPushAt[id])
+		s.mu.Unlock()
+
+		if force {
+			if prev != nil && !prev.Active && !next.Active {
+				continue // an idle state needs no heartbeat once delivered
+			}
+		} else {
+			if !ShouldPush(prev, next) {
+				continue
+			}
+			if prev != nil && since < s.opts.MinSpacing {
+				if w := s.opts.MinSpacing - since; w > wait {
+					wait = w
+				}
+				continue
+			}
+		}
+
+		if err := s.sink.Push(ctx, id, next); err != nil {
+			if errors.Is(err, ErrFeedGone) {
+				s.logger.Info("viewport sync: feed no longer takes an area", zap.String("feed", id))
+				s.mu.Lock()
+				delete(s.lastPushed, id)
+				delete(s.lastPushAt, id)
+				s.mu.Unlock()
+				s.dir.Invalidate()
+				continue
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+
+		pushed := next
+		pushed.Boxes = append([]IngestBox(nil), next.Boxes...)
+		s.mu.Lock()
+		s.lastPushed[id] = &pushed
+		s.lastPushAt[id] = time.Now()
+		s.mu.Unlock()
+
+		s.logger.Info("viewport sync push",
+			zap.String("feed", id),
+			zap.Bool("active", next.Active),
+			zap.Int("clients", next.Clients),
+			zap.Int("boxes", len(next.Boxes)),
+			zap.Float64("area_sq_deg", next.AreaSqDeg),
+			zap.Bool("heartbeat", force),
+		)
+	}
+	return wait, firstErr
 }

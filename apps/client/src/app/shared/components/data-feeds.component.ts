@@ -560,7 +560,7 @@ export class DataFeedsComponent implements OnInit, OnDestroy {
         custom: false,
         lastUpdated: feed ? this.getRelativeTime(feed) : 'never',
         freshness: this.healthToFreshness(feed),
-        errorCount: feed?.health?.errorCount ?? 0,
+        errorCount: feed?.status?.errorsTotal ?? 0,
       };
     });
 
@@ -572,13 +572,13 @@ export class DataFeedsComponent implements OnInit, OnDestroy {
         layers.push({
           id: feed.id,
           name: feed.name,
-          source: feed.sourceType,
+          source: feed.source,
           count: this.extractCount(feed),
           enabled: overrides.has(feed.id) ? overrides.get(feed.id)! : baseEnabled,
-          custom: feed.custom ?? false,
+          custom: !feed.builtin,
           lastUpdated: this.getRelativeTime(feed),
           freshness: this.healthToFreshness(feed),
-          errorCount: feed.health?.errorCount ?? 0,
+          errorCount: feed.status?.errorsTotal ?? 0,
         });
       }
     }
@@ -753,8 +753,8 @@ export class DataFeedsComponent implements OnInit, OnDestroy {
   }
 
   private healthToFreshness(feed?: DataFeed): 'green' | 'yellow' | 'red' | 'gray' | 'none' {
-    if (!feed?.health) return 'none';
-    switch (feed.health.status) {
+    if (!feed?.status) return 'none';
+    switch (feed.status.health) {
       case 'healthy': return 'green';
       case 'warn': return 'yellow';
       case 'critical': return 'red';
@@ -764,14 +764,14 @@ export class DataFeedsComponent implements OnInit, OnDestroy {
   }
 
   private extractCount(feed: DataFeed): number | null {
-    return feed.health?.entitiesCount ?? null;
+    return feed.status?.entitiesLast ?? null;
   }
 
   private getRelativeTime(feed: DataFeed): string {
-    if (!feed.health?.lastSuccessAt) {
+    if (!feed.status?.lastSuccessAt) {
       return feed.enabled ? 'waiting...' : 'never';
     }
-    const lastSeen = new Date(feed.health.lastSuccessAt);
+    const lastSeen = new Date(feed.status.lastSuccessAt);
     const ageSec = Math.floor((Date.now() - lastSeen.getTime()) / 1000);
     if (ageSec < 5) return 'just now';
     if (ageSec < 60) return `${ageSec}s ago`;
