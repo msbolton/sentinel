@@ -28,7 +28,7 @@ Served by the ingest service on `HTTP_ADDR` (`:4000`) and proxied by the gateway
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/feeds?driver=&enabled=&capability=` | Every feed with its status (array) |
+| GET | `/feeds?driver=&enabled=&capability=&direction=` | Every feed with its status (array); `direction=in` or `out` also matches `both`, `direction=both` only `both` |
 | POST | `/feeds` | Create: `{ id?, name, description?, driver, config, secretRefs?, enabled? }`; the id is slugified from the name when omitted. 422 with `details[{path,message}]` on validation failure, 409 on a duplicate id |
 | GET | `/feeds/{id}` | One feed |
 | PUT | `/feeds/{id}` | Replace the mutable fields (`name`, `description`, `config`, `secretRefs`, `enabled`) |
@@ -37,9 +37,9 @@ Served by the ingest service on `HTTP_ADDR` (`:4000`) and proxied by the gateway
 | POST | `/feeds/{id}/enable`, `/feeds/{id}/disable` | Persisted desired state |
 | GET | `/feeds/{id}/status` | The status row (live when the feed runs on the answering replica) |
 | GET, PUT | `/feeds/{id}/area` | Area of interest for drivers with the `area` capability: `{ active, clients, boxes[{north,south,east,west}] }`, at most four boxes that never cross the antimeridian; the response adds `live`, `idle`, `areaSqDeg`, `effectiveIntervalSec`, `creditsRemaining`, `lowCredits`, `lastPollAt`, `nextPollInSec`, `expiresAt`. 409 for a driver without the capability |
-| GET | `/drivers`, `/drivers/{id}` | The catalog: id, name, description, source, capabilities, `configSchema`, `secretFields` |
+| GET | `/drivers`, `/drivers/{id}` | The catalog: id, name, description, source, `direction`, capabilities, `configSchema`, `secretFields` |
 
-The feed resource carries `source` (the EntitySource label its observations use), `capabilities` (`poll`, `area`, `listen`), `builtin`, `version` and `status`.
+The feed resource carries `source` (the EntitySource label its observations use), `direction` (`in`, `out` or `both`: the driver's direction, narrowed by `config.direction` when set), `capabilities` (`poll`, `area`, `listen`), `builtin`, `version` and `status`. A feed that sends (`out` or `both`) is a *connection*: it consumes `entities.events` and `alerts.events` under the same lease and status machinery and pushes what its `config.policy` allows to the remote system.
 
 ## Configuration and secrets
 
@@ -52,8 +52,11 @@ The feed resource carries `source` (the EntitySource label its observations use)
 | `pinnedReplica` | Run only on this replica; required for listening transports (`tcpserver`, `udp`) |
 | `classification` | Default level (`UNCLASSIFIED`, `CONFIDENTIAL`, `SECRET`, `TOP_SECRET`) stamped on every observation; a decoder may only raise it. Entities keep the highest level any feed reported. Link 16 feeds should set `SECRET`, since the decoder does not read the header's security field |
 | `rawPayload` | `none`, `bounded` (default) or `full` raw bytes kept on each observation |
+| `direction` | `in`, `out` or `both`; narrows a driver that can do both, never widens one (422 otherwise) |
+| `policy` | Sharing policy of an `out` or `both` connection (422 on a driver that only receives): `entityTypes[]`, `feeds[]` (feed ids that must have contributed), `boxes[{north,south,east,west}]` (up to 16; `west > east` wraps the antimeridian), `classificationCeiling` (default `UNCLASSIFIED`), `reexport` (send entities another connection contributed to; a loop back to the same connection is always prevented), `alerts{enabled, minSeverity, types[]}`. Empty lists mean no restriction |
+| `outbound` | Sink tuning: `queueMax` (10000), `perEntityMinSec` (5), `maxEventsPerSec` (200), `maxLagSec` (300), `policyExitGraceSec` (30) |
 
-Secrets never appear in `config`. Each driver declares `secretFields`, and `secretRefs` maps them to references the owning replica resolves at start, today `env:VARIABLE_NAME` (the variable must be set on every replica). Plain values are rejected.
+Secrets never appear in `config`. Each driver declares `secretFields`, and `secretRefs` maps them to references the owning replica resolves at start: `env:VARIABLE_NAME` (the variable must be set on every replica) or `file:/absolute/path` (the file's contents, trimmed; how mounted secrets and PEM certificates arrive). Plain values are rejected.
 
 ## Drivers
 
