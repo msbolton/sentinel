@@ -14,6 +14,24 @@
 -- One row per report from any feed, accepted or not, keyed by the ingest
 -- service's deterministic observation id so redelivery is idempotent.
 -- -----------------------------------------------------------------------------
+-- Development databases may still carry the NestJS-era observations table
+-- (TypeORM shape: "id", "timestamp", "rawData"). No Go service ever wrote to
+-- it, so it is replaced rather than migrated. The check is the absence of
+-- "observedAt", which every version of this file has defined.
+DO $$
+DECLARE n BIGINT;
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables
+              WHERE table_schema = 'sentinel' AND table_name = 'observations')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_schema = 'sentinel' AND table_name = 'observations' AND column_name = 'observedAt') THEN
+    EXECUTE 'SELECT count(*) FROM sentinel.observations' INTO n;
+    RAISE NOTICE 'dropping legacy sentinel.observations (% rows, pre-refactor shape)', n;
+    DROP TABLE sentinel.observations;
+  END IF;
+END
+$$;
+
 CREATE TABLE IF NOT EXISTS sentinel.observations (
   "observationId"    UUID NOT NULL,
   "observedAt"       TIMESTAMPTZ NOT NULL,          -- source timestamp, clamped to receivedAt + 60 s
