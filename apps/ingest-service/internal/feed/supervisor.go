@@ -71,6 +71,8 @@ type Options struct {
 	// connection; nil disables the outbound side (tests, or a replica
 	// without Kafka consume access).
 	ConsumerFactory outbound.ConsumerFactory
+	// Shapes lets exporting drivers read geofences and locations.
+	Shapes driver.ShapeSource
 }
 
 func (o Options) withDefaults() Options {
@@ -556,7 +558,7 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 	}
 	common := spec.Common()
 	logger := s.logger.With(zap.String("feed", spec.ID), zap.String("driver", spec.Driver))
-	drv, err := s.opts.Factory(driver.Spec{FeedID: spec.ID, Driver: spec.Driver, Config: spec.Config, Secrets: secrets, Backpressure: common.Backpressure}, driver.Deps{Logger: logger})
+	drv, err := s.opts.Factory(driver.Spec{FeedID: spec.ID, Driver: spec.Driver, Config: spec.Config, Secrets: secrets, Backpressure: common.Backpressure}, driver.Deps{Logger: logger, Shapes: s.opts.Shapes})
 	if err != nil {
 		fail(fmt.Errorf("building driver: %w", err))
 		return

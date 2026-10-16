@@ -104,6 +104,7 @@ func main() {
 		RawMax:         cfg.RawPayloadMaxBytes,
 		LeaseTick:      cfg.LeaseTick,
 		RebalanceAfter: cfg.LeaseRebalance,
+		Shapes: outbound.NewShapeStore(reg.Pool()),
 		ConsumerFactory: func(groupID, clientID string) (outbound.Consumer, error) {
 			return commonkafka.NewBatchConsumer(cfg.KafkaBrokers, groupID, clientID, "latest", commonkafka.BatchOptions{MaxMessages: 200, MaxWait: 200 * time.Millisecond, MaxRetries: 1}, logger.With(zap.String("group", groupID)))
 		},
