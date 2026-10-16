@@ -61,3 +61,6 @@ venv/
 *.key
 credentials.json
 .superpowers/
+
+# Local secrets mounted into containers (TAK certificates, ...)
+secrets/

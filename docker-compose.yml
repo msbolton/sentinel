@@ -715,6 +715,10 @@ services:
       # OpenSky credentials, referenced by the opensky feed's secretRefs (from the host environment / .env)
       OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
       OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
+    volumes:
+      # Certificates and other files that secretRefs reference as file:/etc/sentinel/tak/...
+      # (gitignored; empty is fine).
+      - ./secrets/tak:/etc/sentinel/tak:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -736,6 +740,30 @@ services:
         reservations:
           memory: 128m
           cpus: "0.1"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
+  # TAK Server for development (profile "tak": docker compose --profile tak up)
+  # Anything that speaks Cursor on Target on a streaming port will do; this is
+  # FreeTAKServer: plain TCP 8087, TLS 8089, REST API 19023. Check the image
+  # tag and ports against the project's current release.
+  # ===========================================================================
+  tak-server:
+    image: freetakteam/freetakserver:latest
+    container_name: sentinel-tak-server
+    profiles: ["tak"]
+    restart: unless-stopped
+    ports:
+      - "8087:8087"
+      - "8089:8089"
+      - "19023:19023"
+    volumes:
+      - tak-data:/opt/fts
+    deploy:
+      resources:
+        limits:
+          memory: 512m
     networks:
       - sentinel-network
 
@@ -834,6 +862,9 @@ volumes:
   postgres-data:
     driver: local
     name: sentinel-postgres-data
+  tak-data:
+    driver: local
+    name: sentinel-tak-data
   keycloak-db-data:
     driver: local
     name: sentinel-keycloak-db-data
