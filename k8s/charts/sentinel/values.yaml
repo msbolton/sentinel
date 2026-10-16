@@ -133,6 +133,16 @@ ingestService:
     tickSec: 2
     rebalanceSec: 30
   env: {}
+  # TAK connection certificates, mounted at mountPath so feeds can reference
+  # them as file:/etc/sentinel/tak/client.pem etc. Either name an existing
+  # Secret with keys tak-client-cert, tak-client-key and tak-ca, or set the
+  # PEM values here and the chart creates one.
+  tak:
+    existingSecret: ""
+    clientCert: ""
+    clientKey: ""
+    ca: ""
+    mountPath: /etc/sentinel/tak
   serviceMonitor:
     enabled: false
     interval: 30s

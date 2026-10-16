@@ -91,7 +91,40 @@ spec:
             periodSeconds: 5
           resources:
             {{- toYaml .Values.ingestService.resources | nindent 12 }}
+          volumeMounts:
+            # Files that feed secretRefs name as file:/etc/sentinel/tak/... (TAK
+            # client certificate, key and CA). The Secret is optional.
+            - name: tak-secrets
+              mountPath: {{ .Values.ingestService.tak.mountPath }}
+              readOnly: true
+      volumes:
+        - name: tak-secrets
+          secret:
+            secretName: {{ default (printf "%s-ingest-tak" (include "sentinel.fullname" .)) .Values.ingestService.tak.existingSecret }}
+            optional: true
+            items:
+              - key: tak-client-cert
+                path: client.pem
+              - key: tak-client-key
+                path: client.key
+              - key: tak-ca
+                path: ca.pem
 ---
+{{- if and (not .Values.ingestService.tak.existingSecret) .Values.ingestService.tak.clientCert }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "sentinel.fullname" . }}-ingest-tak
+  labels:
+    app.kubernetes.io/name: ingest-service
+    app.kubernetes.io/instance: {{ .Release.Name }}
+type: Opaque
+stringData:
+  tak-client-cert: {{ .Values.ingestService.tak.clientCert | quote }}
+  tak-client-key: {{ .Values.ingestService.tak.clientKey | quote }}
+  tak-ca: {{ .Values.ingestService.tak.ca | quote }}
+---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:

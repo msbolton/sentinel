@@ -103,6 +103,18 @@ Entity relationships for graph analysis: `"sourceEntityId"`, `"targetEntityId"`,
 
 `locations` holds the saved camera positions the gateway serves (`name`, `latitude`, `longitude`, `altitude`, `heading`, `pitch`, `"range"`, `"has3dTiles"`, `category`). `anomalies` is the analytics service's log of detections (`entity_id`, `anomaly_type`, `severity`, `score`, expected and actual values, `position`, `detected_at`).
 
+### GIS views (`db/schema/90_gis_views.sql`)
+
+`sentinel.entities_live` presents live, non-deleted entities with a position in snake_case for GeoServer (`entity_type`, `classification`, `classification_rank`, `feed_id`, `last_feed_id`, `source`, `affiliation`, `track_environment`, `heading`, `speed_knots`, `course`, `altitude`, `sidc`, `ageout_state`, `last_observed_at`, `last_seen_at`, `lat`, `lon`, `geom`). `entities_live_u`, `_c`, `_s` and `_ts` filter it by rank; `locations_geo` adds a `geom` point to locations. `gt_pk_metadata` tells GeoTools the views' primary key. The role `sentinel_gis` may read the views only, never `entities`. `09_gis_views_drop.sql` drops the views at the start of an apply so column changes on the tables go through; the views are recreated at the end.
+
+### sentinel.api_keys
+
+Per-user, read-only API keys for GIS tools and KML network links: `id`, `"userId"`, `username`, `name`, `prefix` (the first characters of the secret, for lists), `"keyHash"` (SHA-256 of the secret, unique), `roles` (viewer only), `classification` (capped at the issuer's clearance when issued), `"createdAt"`, `"expiresAt"`, `"lastUsedAt"`, `"revokedAt"`. The secret itself is never stored.
+
+### Connections in `sentinel.feeds`
+
+A feed whose driver sends (`out` or `both`, narrowable with `config.direction`) is a connection. `config.policy` holds the sharing policy, `config.outbound` the delivery tuning, `config.classification` the default level stamped on its observations; `feed_status.detail.outbound` carries the delivery counters. No new columns: `docs/feeds.md` lists the keys.
+
 ## Enums and the string convention
 
 Enum-like columns are `VARCHAR` holding the bare protobuf enum name without its type prefix: the database, the Kafka JSON produced by `pbjson`, the REST API and the client all spell `AIRCRAFT`, `OPENSKY`, `ICAO24`, `STALE`. The protobuf definitions in `proto/sentinel/v1` are the source of truth:
