@@ -25,7 +25,10 @@ type Options struct {
 	Target string
 	// RewritePath optionally transforms the outbound path.
 	RewritePath func(path string) string
-	Logger      *zap.Logger
+	// ServiceToken, when set, is sent as X-Sentinel-Service-Token so the
+	// upstream can tell the gateway from a stray caller.
+	ServiceToken string
+	Logger       *zap.Logger
 }
 
 var propagatedHeaders = []string{
@@ -53,14 +56,18 @@ func New(o Options) (http.Handler, error) {
 				pr.Out.URL.Path = o.RewritePath(pr.Out.URL.Path)
 				pr.Out.URL.RawPath = ""
 			}
-			// Never trust identity headers supplied by the caller.
+			// Never trust identity or service headers supplied by the caller.
 			for _, h := range propagatedHeaders {
 				pr.Out.Header.Del(h)
 			}
+			pr.Out.Header.Del(middleware.HeaderServiceToken)
 			if u, ok := auth.UserFrom(pr.In.Context()); ok {
 				pr.Out.Header.Set(middleware.HeaderUserID, u.UserID)
 				pr.Out.Header.Set(middleware.HeaderUserRoles, strings.Join(u.Roles, ","))
 				pr.Out.Header.Set(middleware.HeaderClassification, u.ClassificationLevel)
+			}
+			if o.ServiceToken != "" {
+				pr.Out.Header.Set(middleware.HeaderServiceToken, o.ServiceToken)
 			}
 		},
 		FlushInterval: -1,
