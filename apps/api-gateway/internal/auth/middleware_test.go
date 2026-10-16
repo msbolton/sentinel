@@ -142,3 +142,47 @@ func TestSecurityHeaders(t *testing.T) {
 		}
 	}
 }
+
+type fakeKeys struct{}
+
+func (fakeKeys) ResolveAPIKey(_ context.Context, secret string) (*User, error) {
+	if secret == "sk_good" {
+		return &User{UserID: "u9", Username: "key-owner", Roles: []string{RoleViewer}, ClassificationLevel: "SECRET", ViaAPIKey: true}, nil
+	}
+	return nil, errors.New("invalid api key")
+}
+
+func TestRequireAuth_APIKeys(t *testing.T) {
+	mw := NewMiddleware(fakeVerifier, false, zap.NewNop())
+	h := mw.RequireAuth(http.HandlerFunc(echoUser))
+
+	// Without a resolver an sk_ credential is refused, not parsed as a JWT.
+	if rr := do(h, http.MethodGet, "/api/v1/export/entities.kml", "sk_good"); rr.Code != http.StatusUnauthorized {
+		t.Fatalf("keys disabled: %d", rr.Code)
+	}
+	mw.UseAPIKeys(fakeKeys{})
+
+	rr := do(h, http.MethodGet, "/api/v1/entities", "sk_good")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("bearer key: %d %s", rr.Code, rr.Body.String())
+	}
+	var u User
+	_ = json.Unmarshal(rr.Body.Bytes(), &u)
+	if u.UserID != "u9" || u.Roles[0] != RoleViewer || u.ClassificationLevel != "SECRET" {
+		t.Errorf("principal = %+v", u)
+	}
+	if rr := do(h, http.MethodGet, "/api/v1/entities", "sk_bad"); rr.Code != http.StatusUnauthorized {
+		t.Errorf("bad key: %d", rr.Code)
+	}
+	// The query parameter form works only on export routes.
+	if rr := do(h, http.MethodGet, "/api/v1/export/entities.kml?api_key=sk_good", ""); rr.Code != http.StatusOK {
+		t.Errorf("query key on export: %d", rr.Code)
+	}
+	if rr := do(h, http.MethodGet, "/api/v1/entities?api_key=sk_good", ""); rr.Code != http.StatusUnauthorized {
+		t.Errorf("query key elsewhere: %d", rr.Code)
+	}
+	// A real token still goes through the verifier.
+	if rr := do(h, http.MethodGet, "/api/v1/entities", "analyst-token"); rr.Code != http.StatusOK {
+		t.Errorf("jwt: %d", rr.Code)
+	}
+}

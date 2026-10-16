@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -9,12 +11,42 @@ import (
 	"github.com/sentinel/go-common/httputil"
 )
 
+// APIKeyPrefix starts every API key secret, so the middleware can tell one
+// from a JWT without trying to parse it.
+const APIKeyPrefix = "sk_"
+
+// apiKeyQueryPaths are the only paths where a key may travel in the query
+// string (KML network links and GIS tools cannot set headers).
+const apiKeyQueryPrefix = "/api/v1/export/"
+
+// KeyResolver turns an API key secret into a principal. ErrInvalidKey (or
+// any error) denies the request.
+type KeyResolver interface {
+	ResolveAPIKey(ctx context.Context, secret string) (*User, error)
+}
+
 // Middleware provides authentication and authorization handlers.
 type Middleware struct {
 	verifier  Verifier
 	devBypass bool
 	audit     *Audit
 	logger    *zap.Logger
+	keys      KeyResolver
+}
+
+// UseAPIKeys enables API-key authentication through r.
+func (m *Middleware) UseAPIKeys(r KeyResolver) { m.keys = r }
+
+// credentialFromRequest is TokenFromRequest plus the api_key query parameter
+// on export routes.
+func credentialFromRequest(r *http.Request) string {
+	if raw := TokenFromRequest(r); raw != "" {
+		return raw
+	}
+	if strings.HasPrefix(r.URL.Path, apiKeyQueryPrefix) {
+		return strings.TrimSpace(r.URL.Query().Get("api_key"))
+	}
+	return ""
 }
 
 // NewMiddleware creates the auth middleware. When devBypass is true every
@@ -52,14 +84,24 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		raw := TokenFromRequest(r)
+		raw := credentialFromRequest(r)
 		if raw == "" {
 			m.audit.AccessDenied(r, nil, "missing bearer token")
 			httputil.Error(w, http.StatusUnauthorized, "Unauthorized")
 			return
 		}
 
-		user, err := m.verifier.Verify(r.Context(), raw)
+		var user *User
+		var err error
+		if strings.HasPrefix(raw, APIKeyPrefix) {
+			if m.keys == nil {
+				err = errors.New("api keys not enabled")
+			} else {
+				user, err = m.keys.ResolveAPIKey(r.Context(), raw)
+			}
+		} else {
+			user, err = m.verifier.Verify(r.Context(), raw)
+		}
 		if err != nil {
 			m.audit.AccessDenied(r, nil, err.Error())
 			httputil.Error(w, http.StatusUnauthorized, "Unauthorized")
