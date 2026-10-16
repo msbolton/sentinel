@@ -7,10 +7,18 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sentinel/go-common/classification"
 	"github.com/sentinel/go-common/httputil"
+	"github.com/sentinel/go-common/middleware"
 	"github.com/sentinel/search-service/internal/opensearch"
 	"go.uber.org/zap"
 )
+
+// ceilingOf is the caller's clearance as propagated by the gateway; a
+// missing header fails closed to UNCLASSIFIED.
+func ceilingOf(r *http.Request) string {
+	return classification.Normalize(middleware.Classification(r.Context()))
+}
 
 // SearchHandler handles search HTTP endpoints.
 type SearchHandler struct {
@@ -39,6 +47,7 @@ func (h *SearchHandler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		httputil.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	query.Classifications = classification.Intersect(query.Classifications, ceilingOf(r))
 
 	result, err := h.osClient.Search(r.Context(), query)
 	if err != nil {
@@ -58,6 +67,7 @@ func (h *SearchHandler) handleNearby(w http.ResponseWriter, r *http.Request) {
 		httputil.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	query.Classifications = classification.AtOrBelow(ceilingOf(r))
 
 	result, err := h.osClient.SearchNearby(r.Context(), query)
 	if err != nil {
@@ -76,7 +86,7 @@ func (h *SearchHandler) handleSuggest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	suggestions, err := h.osClient.Suggest(r.Context(), q)
+	suggestions, err := h.osClient.Suggest(r.Context(), q, classification.AtOrBelow(ceilingOf(r)))
 	if err != nil {
 		h.logger.Error("suggest failed", zap.Error(err))
 		httputil.Error(w, http.StatusInternalServerError, "Suggest failed")
@@ -87,7 +97,7 @@ func (h *SearchHandler) handleSuggest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SearchHandler) handleFacets(w http.ResponseWriter, r *http.Request) {
-	facets, err := h.osClient.GetFacets(r.Context())
+	facets, err := h.osClient.GetFacets(r.Context(), classification.AtOrBelow(ceilingOf(r)))
 	if err != nil {
 		h.logger.Error("get facets failed", zap.Error(err))
 		httputil.Error(w, http.StatusInternalServerError, "Get facets failed")

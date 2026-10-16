@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
+
+	"github.com/sentinel/go-common/classification"
 )
 
 // AlertRecord represents an alert row from the database.
@@ -92,6 +94,7 @@ type AlertQueryParams struct {
 	Types        []string
 	EntityID     *string
 	Acknowledged *bool
+	Ceiling      string // caller's clearance; "" = UNCLASSIFIED
 	Page         int
 	PageSize     int
 }
@@ -212,6 +215,10 @@ func (s *AlertStore) GetAlerts(ctx context.Context, p AlertQueryParams) (*AlertQ
 			where = append(where, `"acknowledgedAt" IS NULL`)
 		}
 	}
+
+	where = append(where, fmt.Sprintf(`sentinel.classification_rank(classification) <= $%d`, argIdx))
+	args = append(args, classification.Rank(p.Ceiling))
+	argIdx++
 
 	whereClause := ""
 	if len(where) > 0 {
