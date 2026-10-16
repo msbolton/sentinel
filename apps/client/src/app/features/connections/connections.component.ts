@@ -1,8 +1,19 @@
 import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 import { FeedService, problemsOf } from '../../core/services/feed.service';
-import { Feed, FeedHealthLevel, FeedState } from '../../shared/models/feed.model';
-import { FeedFormComponent } from './feed-form.component';
+import {
+  ConnectionPolicy,
+  Feed,
+  FeedDirection,
+  FeedHealthLevel,
+  FeedState,
+  SinkDetail,
+  directionOf,
+  isSending,
+  policySummaryOf,
+  sinkDetailOf,
+} from '../../shared/models/feed.model';
+import { ConnectionFormComponent } from './connection-form.component';
 
 export type DrawerState = { mode: 'create' } | { mode: 'edit'; feed: Feed };
 
@@ -11,6 +22,12 @@ interface FeedRow {
   /** What the toggle shows: the optimistic value while a change is in flight. */
   enabled: boolean;
   driverName: string;
+  direction: FeedDirection;
+  /** Whether the connection sends entities out (out or both). */
+  sending: boolean;
+  /** One line for a sending connection's policy. */
+  policySummary: string;
+  sink: SinkDetail;
   highlights: string[];
   detailEntries: Array<{ key: string; value: string }>;
 }
@@ -25,6 +42,12 @@ const STATE_LABELS: Record<FeedState, string> = {
   unassigned: 'Unassigned',
 };
 
+const DIRECTION_LABELS: Record<FeedDirection, string> = {
+  in: 'Receives entities',
+  out: 'Sends entities',
+  both: 'Receives and sends',
+};
+
 const HEALTH_LABELS: Record<FeedHealthLevel, string> = {
   healthy: 'Healthy',
   warn: 'Stale (warning)',
@@ -33,18 +56,19 @@ const HEALTH_LABELS: Record<FeedHealthLevel, string> = {
 };
 
 /**
- * Operator page for ingest feeds: lists every feed with its runtime
- * status, toggles them, and opens the drawer to create or edit one.
+ * Operator page for connections (ingest feeds and outbound sinks): lists
+ * every one with its runtime status, toggles them, and opens the drawer
+ * to create or edit one.
  */
 @Component({
-  selector: 'app-feeds',
+  selector: 'app-connections',
   standalone: true,
-  imports: [DecimalPipe, FeedFormComponent],
+  imports: [DecimalPipe, ConnectionFormComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  templateUrl: './feeds.component.html',
-  styleUrl: './feeds.component.scss',
+  templateUrl: './connections.component.html',
+  styleUrl: './connections.component.scss',
 })
-export class FeedsComponent implements OnInit, OnDestroy {
+export class ConnectionsComponent implements OnInit, OnDestroy {
   private readonly feedService = inject(FeedService);
 
   readonly loading = this.feedService.loading;
@@ -64,15 +88,23 @@ export class FeedsComponent implements OnInit, OnDestroy {
   readonly rows = computed<FeedRow[]>(() => {
     const pending = this.pendingEnabled();
     const drivers = this.feedService.drivers();
-    return this.feedService.feeds().map((feed) => ({
-      feed,
-      enabled: pending[feed.id] ?? feed.enabled,
-      driverName: drivers.find((d) => d.id === feed.driver)?.name ?? feed.driver,
-      highlights: highlightsOf(feed.status.detail),
-      detailEntries: Object.entries(feed.status.detail ?? {})
-        .filter(([key]) => key !== 'leaseToken')
-        .map(([key, value]) => ({ key, value: formatDetail(value) })),
-    }));
+    return this.feedService.feeds().map((feed) => {
+      const sink = sinkDetailOf(feed.status?.detail);
+      const policy = feed.config?.['policy'];
+      return {
+        feed,
+        enabled: pending[feed.id] ?? feed.enabled,
+        driverName: drivers.find((d) => d.id === feed.driver)?.name ?? feed.driver,
+        direction: directionOf(feed),
+        sending: isSending(feed),
+        policySummary: policySummaryOf(policy && typeof policy === 'object' ? (policy as ConnectionPolicy) : undefined),
+        sink,
+        highlights: highlightsOf(feed.status?.detail, sink),
+        detailEntries: Object.entries(feed.status?.detail ?? {})
+          .filter(([key]) => key !== 'leaseToken')
+          .map(([key, value]) => ({ key, value: formatDetail(value) })),
+      };
+    });
   });
 
   private release: (() => void) | null = null;
@@ -104,6 +136,10 @@ export class FeedsComponent implements OnInit, OnDestroy {
 
   healthLabel(health: FeedHealthLevel): string {
     return HEALTH_LABELS[health] ?? health;
+  }
+
+  directionLabel(direction: FeedDirection): string {
+    return DIRECTION_LABELS[direction] ?? direction;
   }
 
   /** "12s ago", "3m ago", … relative to the page clock (refreshed with each poll). */
@@ -223,11 +259,17 @@ export class FeedsComponent implements OnInit, OnDestroy {
 }
 
 /** The driver detail values worth a glance in the row. */
-function highlightsOf(detail: Record<string, unknown> | undefined): string[] {
+function highlightsOf(detail: Record<string, unknown> | undefined, sink: SinkDetail): string[] {
   if (!detail) {
     return [];
   }
   const out: string[] = [];
+  if (sink.remotePeer) {
+    out.push(sink.remotePeer);
+  }
+  if (sink.tls === true) {
+    out.push('tls: ok');
+  }
   if (detail['idle'] === true) {
     out.push('idle');
   }

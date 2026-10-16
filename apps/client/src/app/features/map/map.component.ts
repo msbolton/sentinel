@@ -27,6 +27,7 @@ import { ThemeService, ThemePreset } from '../../core/services/theme.service';
 import { LocationService } from '../../core/services/location.service';
 import { BuildingsService } from '../../core/services/buildings.service';
 import { LayerVisibilityService } from '../../core/services/layer-visibility.service';
+import { MapViewportService } from '../../core/services/map-viewport.service';
 import { Location } from '../../shared/models/location.model';
 import {
   configureCesium,
@@ -173,6 +174,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     readonly buildingsService: BuildingsService,
     private readonly http: HttpClient,
     private readonly layerVisibility: LayerVisibilityService,
+    private readonly mapViewport: MapViewportService,
   ) {
     // Entities stay in the viewer when their layer is hidden (show=false) so
     // dead reckoning keeps advancing them; this flips `show` when the user's
@@ -367,6 +369,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // the server keeps the previous bounds otherwise, and the ingest area
     // is derived from these bounds.
     const bounds = rectangleToBounds(rect, Cesium.Math.toDegrees);
+    this.mapViewport.set(bounds);
     this.wsService.sendViewportUpdate(bounds);
 
     // Also fetch entities in this viewport (no bbox when the globe is visible).

@@ -1,6 +1,7 @@
-import { Component, computed, CUSTOM_ELEMENTS_SCHEMA, effect, inject, input, output, signal } from '@angular/core';
+import { Component, computed, CUSTOM_ELEMENTS_SCHEMA, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { CommonModule } from '@angular/common';
+import { FeedService } from '../../core/services/feed.service';
 import { Entity } from '../models/entity.model';
 
 @Component({
@@ -419,13 +420,42 @@ import { Entity } from '../models/entity.model';
             }
           }
 
-          <!-- Source & Timing -->
-          <section class="section">
-            <h4 class="section-label">Source & Timing</h4>
+          <!-- Origin & Timing -->
+          <section class="section origin-section">
+            <h4 class="section-label">Origin & Timing</h4>
+            @if (connectionName(); as name) {
+              <div class="field-row">
+                <span class="field-label">Connection</span>
+                <span class="field-value" [title]="e.feedId ?? ''">{{ name }}</span>
+              </div>
+            }
             <div class="field-row">
               <span class="field-label">Source</span>
               <span class="chip chip-source">{{ e.source }}</span>
             </div>
+            @if (cotUid(); as uid) {
+              <div class="field-row">
+                <span class="field-label">TAK uid</span>
+                <span class="field-value mono" [title]="uid">{{ uid }}</span>
+              </div>
+              <div class="field-row">
+                <span class="field-label">Callsign</span>
+                <span class="field-value mono">{{ cotCallsign() }}</span>
+              </div>
+            }
+            @if (contributingFeeds().length > 0) {
+              <div class="field-row field-row-stack">
+                <span class="field-label">Contributing feeds</span>
+                <ul class="source-list">
+                  @for (s of contributingFeeds(); track s.feedId + '/' + s.source) {
+                    <li class="mono" [title]="s.lastObservedAt ?? ''">
+                      <span>{{ feedName(s.feedId) }}</span>
+                      <span class="source-tag">{{ s.source }}</span>
+                    </li>
+                  }
+                </ul>
+              </div>
+            }
             <div class="field-row">
               <span class="field-label">Created</span>
               <span class="field-value mono">{{ e.createdAt | date:'short' }}</span>
@@ -593,6 +623,33 @@ import { Entity } from '../models/entity.model';
       gap: 6px;
     }
 
+    .field-row-stack {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 4px;
+    }
+
+    .source-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+
+      li {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+      }
+    }
+
+    .source-tag {
+      color: var(--text-muted);
+    }
+
     .chip-source {
       background: color-mix(in srgb, var(--accent-cyan) 15%, transparent);
       color: var(--accent-cyan);
@@ -732,6 +789,8 @@ export class EntityDetailPanelComponent {
   private static readonly TYPES_WITH_MODELS = new Set(['AIRCRAFT', 'DRONE', 'VEHICLE', 'VESSEL', 'SATELLITE']);
 
   private sanitizer = inject(DomSanitizer);
+  private readonly feedService = inject(FeedService);
+  private feedsRequested = false;
 
   entity = input<Entity | null>(null);
   close = output<void>();
@@ -742,7 +801,52 @@ export class EntityDetailPanelComponent {
       this.entity();
       this.expandedSections.set({ platformDetails: false, signalQuality: false });
     });
+    // The connection name comes from the feed list; fetch it once, the
+    // first time an entity with a feed id is shown.
+    effect(() => {
+      const e = this.entity();
+      if (e?.feedId && !this.feedService.hasLoaded && !this.feedsRequested) {
+        this.feedsRequested = true;
+        untracked(() => this.feedService.load().subscribe({ error: () => undefined }));
+      }
+    });
   }
+
+  /** The connection the entity came from, by name when the feed list knows it. */
+  protected connectionName = computed(() => {
+    const feedId = this.entity()?.feedId;
+    if (!feedId) return null;
+    return this.feedService.feed(feedId)?.name ?? feedId;
+  });
+
+  protected feedName(feedId: string): string {
+    return this.feedService.feed(feedId)?.name ?? feedId;
+  }
+
+  /** The Cursor on Target uid, for entities that came through TAK. */
+  protected cotUid = computed(() => {
+    const identities = this.entity()?.identities;
+    if (!Array.isArray(identities)) return null;
+    const id = identities.find((i) => i?.type === 'COT_UID');
+    return id?.value ? String(id.value) : null;
+  });
+
+  protected cotCallsign = computed(() => {
+    const e = this.entity();
+    if (!e) return null;
+    const fromPlatformData = e.platformData?.cot?.callsign;
+    if (typeof fromPlatformData === 'string' && fromPlatformData !== '') return fromPlatformData;
+    const fromPlatforms = e.platforms?.['cot']?.['callsign'];
+    if (typeof fromPlatforms === 'string' && fromPlatforms !== '') return fromPlatforms;
+    return e.name;
+  });
+
+  /** Every feed that fed this entity, when there is more than one. */
+  protected contributingFeeds = computed(() => {
+    const sources = this.entity()?.sources;
+    if (!Array.isArray(sources) || sources.length < 2) return [];
+    return sources.filter((s) => s && typeof s.feedId === 'string');
+  });
 
   protected modelSrc = computed(() => {
     const e = this.entity();

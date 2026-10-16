@@ -99,9 +99,9 @@ import { MapComponent } from './features/map/map.component';
           <button
             *appHasRole="['sentinel-operator', 'sentinel-admin']"
             class="sidebar-btn"
-            routerLink="/feeds"
+            routerLink="/connections"
             routerLinkActive="active"
-            title="Feeds">
+            title="Connections">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M4 11a9 9 0 0 1 9 9"/>
               <path d="M4 4a16 16 0 0 1 16 16"/>
@@ -254,7 +254,7 @@ export class AppComponent implements OnInit, OnDestroy {
     const classifyRoute = (url: string) => {
       const path = url.replace(/\?.*$/, '');
       this.isFullScreenRoute.set(['/login', '/register'].includes(path));
-      this.isPageRoute.set(path.startsWith('/admin') || path.startsWith('/settings') || path.startsWith('/feeds'));
+      this.isPageRoute.set(path.startsWith('/admin') || path.startsWith('/settings') || path.startsWith('/connections') || path.startsWith('/feeds'));
     };
     classifyRoute(this.router.url);
     this.router.events.pipe(

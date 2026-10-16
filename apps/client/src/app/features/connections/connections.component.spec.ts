@@ -1,7 +1,8 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { FeedsComponent } from './feeds.component';
+import { ConnectionsComponent } from './connections.component';
+import { AuthService } from '../../core/services/auth.service';
 import { Feed, FeedDriver } from '../../shared/models/feed.model';
 
 function makeFeed(over: Partial<Feed> & { id: string }): Feed {
@@ -47,9 +48,9 @@ const drivers: FeedDriver[] = [
   },
 ];
 
-describe('FeedsComponent', () => {
-  let fixture: ComponentFixture<FeedsComponent>;
-  let component: FeedsComponent;
+describe('ConnectionsComponent', () => {
+  let fixture: ComponentFixture<ConnectionsComponent>;
+  let component: ConnectionsComponent;
   let el: HTMLElement;
   let httpMock: HttpTestingController;
 
@@ -70,11 +71,15 @@ describe('FeedsComponent', () => {
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
-      imports: [FeedsComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      imports: [ConnectionsComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: AuthService, useValue: { getClassificationLevel: () => 'UNCLASSIFIED' } },
+      ],
     }).compileComponents();
     httpMock = TestBed.inject(HttpTestingController);
-    fixture = TestBed.createComponent(FeedsComponent);
+    fixture = TestBed.createComponent(ConnectionsComponent);
     component = fixture.componentInstance;
     el = fixture.nativeElement as HTMLElement;
     fixture.detectChanges();
@@ -108,27 +113,101 @@ describe('FeedsComponent', () => {
     expect(builtin.querySelector('.tag')?.textContent?.trim()).toBe('built-in');
     expect(builtin.querySelector('.feed-description')?.textContent?.trim()).toBe('Everything');
     expect(builtin.cells[2].textContent?.trim()).toBe('OpenSky Network');
-    expect(builtin.cells[3].textContent?.trim()).toBe('OPENSKY');
-    expect(builtin.cells[4].textContent?.trim()).toBe('ingest-0');
+    expect(builtin.querySelector('.direction-badge')?.textContent?.trim()).toBe('in');
+    expect(builtin.cells[4].textContent?.trim()).toBe('OPENSKY');
+    expect(builtin.cells[5].textContent?.trim()).toBe('ingest-0');
     expect(builtin.querySelector('.state-badge')?.textContent?.trim()).toBe('Running');
     expect(builtin.querySelector('.health-dot')?.classList.contains('health-healthy')).toBe(true);
     expect(builtin.querySelector('.highlights')?.textContent?.trim()).toBe('idle · 3900 credits');
-    expect(builtin.cells[6].textContent?.trim()).toMatch(/^1[0-9]s ago$/);
+    expect(builtin.cells[7].textContent?.trim()).toMatch(/^1[0-9]s ago$/);
     expect(builtin.querySelector('.col-counters')?.textContent?.replace(/\s+/g, '')).toBe('1,234/56/0');
     expect(builtin.querySelector<HTMLInputElement>('.switch input')?.checked).toBe(true);
 
     const deleteBtn = builtin.querySelector<HTMLButtonElement>('.btn-delete');
     expect(deleteBtn?.disabled).toBe(true);
-    expect(deleteBtn?.parentElement?.getAttribute('title')).toBe('Built-in feeds cannot be deleted');
+    expect(deleteBtn?.parentElement?.getAttribute('title')).toBe('Built-in connections cannot be deleted');
 
     const custom = rowOf('custom');
     expect(custom.querySelector('.state-badge')?.textContent?.trim()).toBe('Error');
     expect(custom.querySelector('.health-dot')?.classList.contains('health-critical')).toBe(true);
     expect(custom.querySelector('.last-error')?.textContent?.trim()).toBe('boom');
-    expect(custom.cells[6].textContent?.trim()).toBe('never');
+    expect(custom.cells[7].textContent?.trim()).toBe('never');
     expect(custom.querySelector('.errors')?.textContent?.trim()).toBe('3');
     expect(custom.querySelector<HTMLInputElement>('.switch input')?.checked).toBe(false);
     expect(custom.querySelector<HTMLButtonElement>('.btn-delete')?.disabled).toBe(false);
+  });
+
+  it('shows a sending connection with its policy, delivery counters and sink rows', () => {
+    flushInitial([
+      makeFeed({
+        id: 'tak-hq',
+        name: 'TAK HQ',
+        driver: 'tak',
+        source: 'COT',
+        direction: 'both',
+        config: {
+          classification: 'SECRET',
+          policy: {
+            entityTypes: ['AIRCRAFT', 'VESSEL'],
+            boxes: [{ north: 1, south: 0, east: 1, west: 0 }, { north: 3, south: 2, east: 3, west: 2 }],
+            classificationCeiling: 'SECRET',
+          },
+        },
+        status: {
+          ...makeFeed({ id: 'x' }).status,
+          messagesTotal: 900,
+          detail: {
+            direction: 'both',
+            remotePeer: 'tak.example.org:8089',
+            tls: true,
+            protocol: 'cot-tls',
+            outbound: {
+              delivered: 1500,
+              deliveryErrors: 2,
+              denied: 7,
+              coalesced: 10,
+              dropped: 0,
+              queueDepth: 3,
+              tracked: 42,
+              consumerGroup: 'sink-tak-hq',
+              lastDeliveredAt: new Date(Date.now() - 5_000).toISOString(),
+            },
+          },
+        },
+      }),
+      makeFeed({ id: 'kml', driver: 'kml-push', direction: 'out', config: {} }),
+    ]);
+
+    const tak = rowOf('tak-hq');
+    expect(tak.querySelector('.direction-badge')?.textContent?.trim()).toBe('both');
+    expect(tak.querySelector('.direction-badge')?.classList.contains('direction-both')).toBe(true);
+    expect(tak.cells[4].textContent?.trim()).toBe('AIRCRAFT, VESSEL · 2 areas · ≤ SECRET');
+    expect(tak.querySelector('.col-counters')?.textContent?.replace(/\s+/g, '')).toBe('1,500/3');
+    expect(tak.querySelector('.col-counters span[title="Delivered"]')?.textContent?.trim()).toBe('1,500');
+    expect(tak.querySelector('.col-counters span[title="Waiting to go out"]')?.textContent?.trim()).toBe('3');
+    expect(tak.querySelector('.highlights')?.textContent?.trim()).toBe('tak.example.org:8089 · tls: ok');
+
+    const kml = rowOf('kml');
+    expect(kml.querySelector('.direction-badge')?.textContent?.trim()).toBe('out');
+    expect(kml.cells[4].textContent?.trim()).toBe('all types · everywhere · ≤ UNCLASSIFIED');
+    expect(kml.querySelector('.col-counters')?.textContent?.replace(/\s+/g, '')).toBe('0/0');
+
+    tak.querySelector<HTMLButtonElement>('.expand-btn')?.click();
+    fixture.detectChanges();
+    const status = Array.from(el.querySelectorAll('tr.detail-row .detail-block')).find((b) => b.querySelector('h4')?.textContent === 'Status')!;
+    const rows = Array.from(status.querySelectorAll('dt')).map((dt) => [dt.textContent?.trim(), dt.nextElementSibling?.textContent?.trim()]);
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        ['Last delivered', expect.stringMatching(/^[0-9]+s ago$/)],
+        ['Backlog', '3'],
+        ['Tracked', '42'],
+        ['Denied by policy', '7'],
+        ['Delivery errors', '2'],
+        ['Remote peer', 'tak.example.org:8089'],
+        ['TLS', 'on'],
+      ]),
+    );
+    expect(el.querySelector('tr.detail-row')?.textContent).not.toContain('leaseToken');
   });
 
   it('expands a row to show status and driver detail', () => {
@@ -214,20 +293,20 @@ describe('FeedsComponent', () => {
 
   it('opens the drawer in create and edit mode', () => {
     flushInitial([makeFeed({ id: 'a', name: 'Feed A' })]);
-    expect(el.querySelector('app-feed-form')).toBeNull();
+    expect(el.querySelector('app-connection-form')).toBeNull();
 
-    (Array.from(el.querySelectorAll<HTMLButtonElement>('.page-header .btn')).find((b) => b.textContent?.includes('Add feed')))?.click();
+    (Array.from(el.querySelectorAll<HTMLButtonElement>('.page-header .btn')).find((b) => b.textContent?.includes('Add connection')))?.click();
     fixture.detectChanges();
-    expect(el.querySelector('app-feed-form')).toBeTruthy();
-    expect(el.querySelector('app-feed-form h2')?.textContent).toContain('choose a driver');
+    expect(el.querySelector('app-connection-form')).toBeTruthy();
+    expect(el.querySelector('app-connection-form h2')?.textContent).toContain('Add connection: choose a driver');
 
     component.closeDrawer();
     fixture.detectChanges();
-    expect(el.querySelector('app-feed-form')).toBeNull();
+    expect(el.querySelector('app-connection-form')).toBeNull();
 
     Array.from(rowOf('a').querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.trim() === 'Edit')?.click();
     fixture.detectChanges();
-    expect(el.querySelector('app-feed-form h2')?.textContent).toContain('Edit Feed A');
+    expect(el.querySelector('app-connection-form h2')?.textContent).toContain('Edit Feed A');
   });
 
   it('releases the poll on destroy', () => {

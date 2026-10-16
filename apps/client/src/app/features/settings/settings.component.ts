@@ -3,6 +3,8 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { HttpClient } from '@angular/common/http';
 import { DatePipe, UpperCasePipe } from '@angular/common';
 import { AuthService, UserProfile } from '../../core/services/auth.service';
+import { ApiKeyService } from '../../core/services/api-key.service';
+import { ApiKeysTabComponent } from './api-keys-tab.component';
 
 export interface PendingUser {
   id: string;
@@ -28,7 +30,7 @@ export interface ActiveUser {
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [DatePipe, UpperCasePipe],
+  imports: [DatePipe, UpperCasePipe, ApiKeysTabComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="settings-page">
@@ -46,6 +48,13 @@ export interface ActiveUser {
             [class.active]="activeTab() === 'management'"
             (click)="switchTab('management')"
           >User Management</button>
+        }
+        @if (apiKeyService.available() !== false) {
+          <button
+            class="tab-btn"
+            [class.active]="activeTab() === 'api-keys'"
+            (click)="switchTab('api-keys')"
+          >API keys</button>
         }
       </div>
 
@@ -78,6 +87,12 @@ export interface ActiveUser {
               </div>
             </div>
           }
+        </div>
+      }
+
+      @if (activeTab() === 'api-keys') {
+        <div class="tab-content api-keys-tab">
+          <app-api-keys-tab></app-api-keys-tab>
         </div>
       }
 
@@ -478,10 +493,16 @@ export interface ActiveUser {
 export class SettingsComponent {
   private readonly authService = inject(AuthService);
   private readonly http = inject(HttpClient);
+  readonly apiKeyService = inject(ApiKeyService);
 
   readonly profile = toSignal(this.authService.userProfile$);
 
-  readonly activeTab = signal<'profile' | 'management'>('profile');
+  readonly activeTab = signal<'profile' | 'management' | 'api-keys'>('profile');
+
+  constructor() {
+    // Learn whether this gateway serves API keys; the tab hides itself on 404.
+    this.apiKeyService.list().subscribe({ error: () => undefined });
+  }
 
   readonly isAdmin = computed(() => {
     const p = this.profile();
@@ -514,7 +535,7 @@ export class SettingsComponent {
     { value: 'classification-ts', label: 'TOP SECRET' },
   ] as const;
 
-  switchTab(tab: 'profile' | 'management'): void {
+  switchTab(tab: 'profile' | 'management' | 'api-keys'): void {
     this.activeTab.set(tab);
     if (tab === 'management' && !this.managementLoaded) {
       this.managementLoaded = true;
