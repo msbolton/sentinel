@@ -524,9 +524,9 @@ services:
       DB_DATABASE: sentinel
       DB_USERNAME: sentinel
       DB_PASSWORD: sentinel_dev
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
+      # Keep the legacy JSON entity topics fed until every consumer reads entities.events
+      KAFKA_LEGACY_EVENTS: "true"
     ports:
       - "3001:3001"
     depends_on:

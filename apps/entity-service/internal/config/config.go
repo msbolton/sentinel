@@ -1,29 +1,46 @@
 package config
 
 import (
+	"encoding/json"
+	"time"
+
 	commonCfg "github.com/sentinel/go-common/config"
 )
 
 // Config holds the entity-service configuration.
 type Config struct {
-	Port          string
-	DatabaseURL   string
-	KafkaBrokers  string
-	RedisHost     string
-	RedisPort     string
-	RedisPassword string
-	CORSOrigin    string
+	Port         string
+	DatabaseURL  string
+	KafkaBrokers string
+	CORSOrigin   string
+
+	// KafkaLegacyEvents keeps the JSON events.entity.* topics fed while
+	// older consumers remain (KAFKA_LEGACY_EVENTS, default true).
+	KafkaLegacyEvents bool
+	// ConsumerBatchSize and ConsumerMaxWait bound one fusion batch.
+	ConsumerBatchSize int
+	ConsumerMaxWait   time.Duration
+	// FusionSourcePriority overrides the tie-break ranking between sources
+	// reporting the same timestamp (FUSION_SOURCE_PRIORITY, JSON object).
+	FusionSourcePriority map[string]int
+	// IdentityCacheSize bounds the in-memory identity cache.
+	IdentityCacheSize int
 }
 
 // Load reads configuration from environment variables.
 func Load() Config {
-	return Config{
-		Port:          commonCfg.EnvOrDefault("PORT", "3001"),
-		DatabaseURL:   commonCfg.DatabaseURL(),
-		KafkaBrokers:  commonCfg.EnvOrDefault("KAFKA_BROKERS", "localhost:9092"),
-		RedisHost:     commonCfg.EnvOrDefault("REDIS_HOST", "localhost"),
-		RedisPort:     commonCfg.EnvOrDefault("REDIS_PORT", "6379"),
-		RedisPassword: commonCfg.EnvOrDefault("REDIS_PASSWORD", ""),
-		CORSOrigin:    commonCfg.EnvOrDefault("CORS_ORIGIN", "*"),
+	cfg := Config{
+		Port:              commonCfg.EnvOrDefault("PORT", "3001"),
+		DatabaseURL:       commonCfg.DatabaseURL(),
+		KafkaBrokers:      commonCfg.EnvOrDefault("KAFKA_BROKERS", "localhost:9092"),
+		CORSOrigin:        commonCfg.EnvOrDefault("CORS_ORIGIN", "*"),
+		KafkaLegacyEvents: commonCfg.EnvOrDefaultBool("KAFKA_LEGACY_EVENTS", true),
+		ConsumerBatchSize: commonCfg.EnvOrDefaultInt("CONSUMER_BATCH_SIZE", 500),
+		ConsumerMaxWait:   time.Duration(commonCfg.EnvOrDefaultInt("CONSUMER_MAX_WAIT_MS", 100)) * time.Millisecond,
+		IdentityCacheSize: commonCfg.EnvOrDefaultInt("IDENTITY_CACHE_SIZE", 200000),
 	}
+	if raw := commonCfg.EnvOrDefault("FUSION_SOURCE_PRIORITY", ""); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &cfg.FusionSourcePriority)
+	}
+	return cfg
 }
