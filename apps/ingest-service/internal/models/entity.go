@@ -246,13 +246,3 @@ const (
 	SourceADSBLol   = "adsblol"
 	SourceCelesTrak = "celestrak"
 )
-
-// Well-known feed UUID constants for built-in feeds.
-const (
-	FeedIDMQTT      = "00000000-0000-0000-0000-000000000001"
-	FeedIDSTOMP     = "00000000-0000-0000-0000-000000000002"
-	FeedIDTCP       = "00000000-0000-0000-0000-000000000003"
-	FeedIDOpenSky   = "00000000-0000-0000-0000-000000000004"
-	FeedIDADSBLol   = "00000000-0000-0000-0000-000000000005"
-	FeedIDCelesTrak = "00000000-0000-0000-0000-000000000006"
-)

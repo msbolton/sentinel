@@ -10,7 +10,10 @@ require (
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/joshuaferrara/go-satellite v0.0.0-20220611180459-512638c64e5b
 	github.com/prometheus/client_golang v1.19.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+	github.com/sentinel/go-common v0.0.0
 	go.uber.org/zap v1.27.0
+	golang.org/x/text v0.29.0
 )
 
 require (
@@ -28,6 +31,7 @@ require (
 	golang.org/x/net v0.23.0 // indirect
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.19.0 // indirect
-	golang.org/x/text v0.29.0 // indirect
 	google.golang.org/protobuf v1.34.0 // indirect
 )
+
+replace github.com/sentinel/go-common => ../../libs/common-go
