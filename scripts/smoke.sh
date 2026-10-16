@@ -72,6 +72,32 @@ else
   echo "  skip viewer 403 on feed toggle (set SENTINEL_VIEWER_TOKEN)"
 fi
 
+echo "== connections"
+check GET /api/v1/drivers/tak 200
+grep -q '"direction":"both"' /tmp/smoke-body && echo "  ok   tak driver direction both" || { echo "  FAIL tak driver direction missing"; fail=1; }
+check POST /api/v1/feeds 422 '{"name":"Smoke bad policy","driver":"tak","config":{"address":"x:8089","policy":{"boxes":[{"north":10,"south":20,"east":0,"west":0}]}}}'
+check POST /api/v1/feeds 422 '{"name":"Smoke bad ceiling","driver":"tak","config":{"address":"x:8089","policy":{"classificationCeiling":"ULTRA"}}}'
+check POST /api/v1/feeds 422 '{"name":"Smoke policy on a source","driver":"opensky","config":{"policy":{"entityTypes":["AIRCRAFT"]}}}'
+check GET "/api/v1/feeds?direction=out" 200
+
+echo "== export"
+check GET "/api/v1/export/entities.geojson?limit=1" 200
+grep -q '"type":"FeatureCollection"' /tmp/smoke-body && echo "  ok   geojson FeatureCollection" || { echo "  FAIL geojson body: $(head -c 120 /tmp/smoke-body)"; fail=1; }
+check GET "/api/v1/export/entities.kml?limit=1" 200
+grep -q '<kml' /tmp/smoke-body && echo "  ok   kml document" || { echo "  FAIL kml body: $(head -c 120 /tmp/smoke-body)"; fail=1; }
+check GET "/api/v1/export/entities.kml?link=1&refresh=30" 200
+grep -q '<NetworkLink>' /tmp/smoke-body && echo "  ok   kml NetworkLink" || { echo "  FAIL kml network link: $(head -c 120 /tmp/smoke-body)"; fail=1; }
+check GET "/api/v1/export/entities.geojson?bbox=1,2,3" 400
+check GET /api/v1/auth/api-keys 200
+
+if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx sentinel-geoserver; then
+  echo "== geoserver"
+  caps=$(curl -s -u "${GIS_USER:-gis-ts}:${GIS_PASSWORD:-gis-ts-dev}" "http://localhost:8600/geoserver/sentinel/wfs?service=WFS&version=2.0.0&request=GetCapabilities" 2>/dev/null)
+  for layer in entities_live_u locations_geo; do
+    if printf '%s' "$caps" | grep -q "sentinel:$layer"; then echo "  ok   wfs    sentinel:$layer"; else echo "  FAIL wfs    sentinel:$layer missing (run docker compose up geoserver-init)"; fail=1; fi
+  done
+fi
+
 if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx sentinel-kafka; then
   echo "== kafka topics"
   topics=$(docker exec sentinel-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list 2>/dev/null)
