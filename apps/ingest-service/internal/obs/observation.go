@@ -46,6 +46,30 @@ const (
 	EnvUnknown    = "UNKNOWN"
 )
 
+// Classification levels, spelled as the bare sentinel.v1.Classification
+// names, lowest first.
+const (
+	ClassUnclassified = "UNCLASSIFIED"
+	ClassConfidential = "CONFIDENTIAL"
+	ClassSecret       = "SECRET"
+	ClassTopSecret    = "TOP_SECRET"
+)
+
+// ClassificationRank orders classification levels: 0 for UNCLASSIFIED,
+// unknown or empty, up to 3 for TOP_SECRET. Unknown values rank lowest so
+// a typo never raises a report's level.
+func ClassificationRank(level string) int {
+	switch strings.ToUpper(level) {
+	case ClassTopSecret:
+		return 3
+	case ClassSecret:
+		return 2
+	case ClassConfidential:
+		return 1
+	}
+	return 0
+}
+
 // Identity is one natural identifier of the observed object.
 type Identity struct {
 	Type  string
@@ -108,6 +132,11 @@ type Observation struct {
 	Affiliation       string
 	OperationalStatus string
 	Dimensions        *[3]float64 // length, width, height
+
+	// Classification is the bare Classification name. A decoder sets it only
+	// when the source carries a level; the runner raises it to the feed's
+	// configured default and never lowers it.
+	Classification string
 
 	AIS    *AISData
 	ADSB   *ADSBData

@@ -50,6 +50,7 @@ The feed resource carries `source` (the EntitySource label its observations use)
 | `staleWarnSec`, `staleCriticalSec` | Health thresholds (defaults `FEED_STALE_WARN_SEC` 120, `FEED_STALE_CRITICAL_SEC` 300) |
 | `backpressure` | `block`, `drop` or `nack` between a transport and its decoder; the transport default applies when absent |
 | `pinnedReplica` | Run only on this replica; required for listening transports (`tcpserver`, `udp`) |
+| `classification` | Default level (`UNCLASSIFIED`, `CONFIDENTIAL`, `SECRET`, `TOP_SECRET`) stamped on every observation; a decoder may only raise it. Entities keep the highest level any feed reported. Link 16 feeds should set `SECRET`, since the decoder does not read the header's security field |
 | `rawPayload` | `none`, `bounded` (default) or `full` raw bytes kept on each observation |
 
 Secrets never appear in `config`. Each driver declares `secretFields`, and `secretRefs` maps them to references the owning replica resolves at start, today `env:VARIABLE_NAME` (the variable must be set on every replica). Plain values are rejected.

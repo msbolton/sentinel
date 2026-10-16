@@ -40,6 +40,9 @@ type RunnerOptions struct {
 	// FencingToken is the lease token stamped on every observation; 0
 	// when the feed runs without a lease.
 	FencingToken int64
+	// Classification is the feed's default level (bare Classification
+	// name). Observations below it are raised to it; "" means UNCLASSIFIED.
+	Classification string
 }
 
 // Stats is what a runner has counted so far.
@@ -126,6 +129,12 @@ func (r *Runner) Emit(ctx context.Context, o *obs.Observation) error {
 	}
 	if o.TrackEnvironment == "" {
 		o.TrackEnvironment = obs.EnvUnknown
+	}
+	if obs.ClassificationRank(o.Classification) < obs.ClassificationRank(r.opts.Classification) {
+		o.Classification = r.opts.Classification
+	}
+	if o.Classification == "" {
+		o.Classification = obs.ClassUnclassified
 	}
 	o.EnsureIdentity()
 	r.boundRaw(o)

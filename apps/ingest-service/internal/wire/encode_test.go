@@ -59,6 +59,18 @@ func TestMarshalRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClassificationOnWire(t *testing.T) {
+	o := sample()
+	o.Classification = obs.ClassSecret
+	if got := ToProto(o).Classification; got != sentinelv1.Classification_CLASSIFICATION_SECRET {
+		t.Errorf("classification = %v, want SECRET", got)
+	}
+	o.Classification = ""
+	if got := ToProto(o).Classification; got != sentinelv1.Classification_CLASSIFICATION_UNSPECIFIED {
+		t.Errorf("empty classification = %v, want UNSPECIFIED", got)
+	}
+}
+
 func TestNoPositionAndUnknownEnums(t *testing.T) {
 	o := &obs.Observation{ID: "x", FeedID: "f", Source: "NOPE", EntityType: "", Identities: []obs.Identity{{Type: obs.IdentityFeedLocal, Value: "f:x"}}}
 	m := ToProto(o)
