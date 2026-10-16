@@ -53,6 +53,28 @@ type Spec struct {
 // Deps are shared services handed to a driver.
 type Deps struct {
 	Logger *zap.Logger
+	// Shapes lists Sentinel's own geofences and locations for drivers that
+	// export them (nil when the replica has no database access).
+	Shapes ShapeSource
+}
+
+// Geofence is an operator-drawn polygon (an alert rule's area).
+type Geofence struct {
+	ID     string
+	Name   string
+	Points [][2]float64 // lat, lon
+}
+
+// Location is a named point of interest.
+type Location struct {
+	ID, Name, Description string
+	Lat, Lon              float64
+}
+
+// ShapeSource reads the shapes an outbound driver may publish.
+type ShapeSource interface {
+	Geofences(ctx context.Context) ([]Geofence, error)
+	Locations(ctx context.Context) ([]Location, error)
 }
 
 // Sink receives what a driver produces. Implementations are safe for

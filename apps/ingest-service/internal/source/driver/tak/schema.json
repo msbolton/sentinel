@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sentinel.local/schemas/tak.json",
+  "title": "TAK Server",
+  "description": "One TCP or TLS session to a TAK Server streaming port. Inbound: every Cursor on Target event (ATAK/WinTAK positions, markers) becomes an observation with a COT_UID identity. Outbound: entities the sharing policy allows are published as CoT tracks, alerts as markers, geofences and locations as shapes. Client certificates come from secretRefs clientCert, clientKey and caCert (PEM, usually file: references).",
+  "type": "object",
+  "required": ["address"],
+  "properties": {
+    "address": { "type": "string", "minLength": 3, "title": "Server address", "description": "host:port of the streaming port: 8087 for plain TCP, 8089 for TLS with a client certificate." },
+    "siteId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,32}$", "default": "sentinel", "title": "Site id", "description": "Names this Sentinel in the uids it publishes and in the provenance marker used to ignore its own events coming back." },
+    "tls": {
+      "type": "object", "title": "TLS", "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "serverName": { "type": "string", "title": "Expected server name" },
+        "insecureSkipVerify": { "type": "boolean", "default": false, "title": "Skip certificate verification" }
+      }
+    },
+    "protocol": { "type": "string", "enum": ["xml"], "default": "xml", "title": "Wire protocol", "description": "XML CoT; TAK Protocol (protobuf) negotiation is not offered yet." },
+    "heartbeatSec": { "type": "integer", "minimum": 5, "default": 30, "title": "Heartbeat (s)", "description": "Interval of the t-x-c-t ping that keeps the session alive." },
+    "readTimeoutSec": { "type": "integer", "minimum": 0, "default": 75, "title": "Read timeout (s)", "description": "Close and reconnect when nothing arrives for this long (0 = never)." },
+    "maxFrameBytes": { "type": "integer", "minimum": 1024, "default": 1048576, "title": "Max event size (bytes)" },
+    "tracks": {
+      "type": "object", "title": "Tracks", "additionalProperties": false,
+      "properties": {
+        "staleSec": { "type": "integer", "minimum": 5, "default": 120, "title": "Stale after (s)", "description": "How long a published track stays valid on TAK after its last fix." },
+        "how": { "type": "string", "default": "m-g", "title": "CoT how", "description": "Default how attribute for machine-generated tracks." }
+      }
+    },
+    "alerts": {
+      "type": "object", "title": "Alerts", "additionalProperties": false,
+      "properties": {
+        "staleSec": { "type": "integer", "minimum": 5, "default": 300, "title": "Marker stale after (s)" },
+        "emergencyMinSeverity": { "type": "string", "enum": ["", "LOW", "MEDIUM", "HIGH", "CRITICAL"], "default": "CRITICAL", "title": "911 alert from severity", "description": "Alerts at or above this severity are sent as TAK emergencies, which take over every connected screen; empty never does." }
+      }
+    },
+    "shapes": {
+      "type": "object", "title": "Geofences and locations", "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true, "title": "Publish geofences and locations" },
+        "refreshSec": { "type": "integer", "minimum": 10, "default": 60, "title": "Refresh (s)" },
+        "strokeColor": { "type": "integer", "default": -65536, "title": "Stroke colour (ARGB)" },
+        "fillColor": { "type": "integer", "default": 1090453504, "title": "Fill colour (ARGB)" }
+      }
+    }
+  }
+}
