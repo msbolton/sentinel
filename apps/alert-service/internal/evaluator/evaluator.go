@@ -34,14 +34,15 @@ func NewEvaluator(store *store.AlertStore, producer *kafka.Producer, logger *zap
 }
 
 // EvaluatePosition evaluates geofence and speed rules for a position event.
-func (e *Evaluator) EvaluatePosition(ctx context.Context, entityID string, lat, lng float64, entityType string, speedKnots *float64) {
-	e.evaluateGeofence(ctx, entityID, lat, lng, entityType)
+// Alerts inherit the entity's classification at the moment they fire.
+func (e *Evaluator) EvaluatePosition(ctx context.Context, entityID string, lat, lng float64, entityType string, speedKnots *float64, classification string) {
+	e.evaluateGeofence(ctx, entityID, lat, lng, entityType, classification)
 	if speedKnots != nil {
-		e.evaluateSpeed(ctx, entityID, *speedKnots, entityType)
+		e.evaluateSpeed(ctx, entityID, *speedKnots, entityType, classification)
 	}
 }
 
-func (e *Evaluator) evaluateGeofence(ctx context.Context, entityID string, lat, lng float64, entityType string) {
+func (e *Evaluator) evaluateGeofence(ctx context.Context, entityID string, lat, lng float64, entityType, classification string) {
 	rules, err := e.store.GetEnabledRules(ctx, "GEOFENCE", &entityType)
 	if err != nil {
 		e.logger.Error("failed to get geofence rules", zap.Error(err))
@@ -87,10 +88,11 @@ func (e *Evaluator) evaluateGeofence(ctx context.Context, entityID string, lat, 
 			Severity:    rule.Severity,
 			Title:       fmt.Sprintf("Geofence %s: %s", alertType, rule.Name),
 			Description: fmt.Sprintf("Entity %s triggered %s for rule %s", entityID, alertType, rule.Name),
-			EntityID:    entityID,
-			Lat:         &lat,
-			Lng:         &lng,
-			RuleID:      &rule.ID,
+			EntityID:       entityID,
+			Lat:            &lat,
+			Lng:            &lng,
+			RuleID:         &rule.ID,
+			Classification: classification,
 		})
 		if err != nil {
 			e.logger.Error("failed to create geofence alert", zap.Error(err))
@@ -106,7 +108,7 @@ func (e *Evaluator) evaluateGeofence(ctx context.Context, entityID string, lat, 
 	}
 }
 
-func (e *Evaluator) evaluateSpeed(ctx context.Context, entityID string, speedKnots float64, entityType string) {
+func (e *Evaluator) evaluateSpeed(ctx context.Context, entityID string, speedKnots float64, entityType, classification string) {
 	rules, err := e.store.GetEnabledRules(ctx, "SPEED_THRESHOLD", &entityType)
 	if err != nil {
 		e.logger.Error("failed to get speed rules", zap.Error(err))
@@ -127,12 +129,13 @@ func (e *Evaluator) evaluateSpeed(ctx context.Context, entityID string, speedKno
 		}
 
 		alert, err := e.store.CreateAlert(ctx, store.CreateAlertParams{
-			AlertType:   "SPEED_ANOMALY",
-			Severity:    rule.Severity,
-			Title:       fmt.Sprintf("Speed anomaly: %s", rule.Name),
-			Description: description,
-			EntityID:    entityID,
-			RuleID:      &rule.ID,
+			AlertType:      "SPEED_ANOMALY",
+			Severity:       rule.Severity,
+			Title:          fmt.Sprintf("Speed anomaly: %s", rule.Name),
+			Description:    description,
+			EntityID:       entityID,
+			RuleID:         &rule.ID,
+			Classification: classification,
 		})
 		if err != nil {
 			e.logger.Error("failed to create speed alert", zap.Error(err))
@@ -192,6 +195,15 @@ func (e *Evaluator) StoreExternalAlert(ctx context.Context, ev *sentinelv1.Alert
 		lat, lng := a.Position.Latitude, a.Position.Longitude
 		p.Lat, p.Lng = &lat, &lng
 	}
+	// A producer that does not classify its alerts (analytics) must not land
+	// a SECRET entity's anomaly as UNCLASSIFIED: inherit from the entity.
+	if a.Classification != sentinelv1.Classification_CLASSIFICATION_UNSPECIFIED {
+		p.Classification = pbjson.EnumName(a.Classification)
+	} else if level, err := e.store.EntityClassification(ctx, a.EntityId); err == nil {
+		p.Classification = level
+	} else {
+		e.logger.Warn("entity classification unavailable for external alert", zap.String("entityId", a.EntityId), zap.Error(err))
+	}
 	rec, err := e.store.CreateAlert(ctx, p)
 	if err != nil {
 		return err
@@ -214,6 +226,7 @@ func AlertProto(a *store.AlertRecord) *sentinelv1.Alert {
 		RelatedEntityIds: a.RelatedEntityIDs,
 		Metadata:         a.Metadata,
 		AcknowledgedBy:   deref(a.AcknowledgedBy),
+		Classification:   parseEnum[sentinelv1.Classification](a.Classification),
 	}
 	if a.Description != nil {
 		out.Description = *a.Description
