@@ -7,7 +7,15 @@
 /* eslint-disable */
 import _m0 from "protobufjs/minimal";
 import { Timestamp, Timestamp as Timestamp1 } from "../../google/protobuf/timestamp";
-import { BoundingBox, Coordinate, Pagination } from "./common";
+import {
+  BoundingBox,
+  Classification,
+  classificationFromJSON,
+  classificationToJSON,
+  classificationToNumber,
+  Coordinate,
+  Pagination,
+} from "./common";
 import { EntityType, entityTypeFromJSON, entityTypeToJSON, entityTypeToNumber } from "./entity";
 
 /** AlertSeverity indicates the urgency level of an alert. */
@@ -433,6 +441,8 @@ export interface Alert {
   acknowledgedBy: string;
   /** Arbitrary key-value metadata associated with this alert. */
   metadata: { [key: string]: string };
+  /** Classification inherited from the primary entity when the alert fired. */
+  classification: Classification;
 }
 
 export interface Alert_MetadataEntry {
@@ -694,6 +704,7 @@ function createBaseAlert(): Alert {
     acknowledgedAt: undefined,
     acknowledgedBy: "",
     metadata: {},
+    classification: Classification.UNSPECIFIED,
   };
 }
 
@@ -738,6 +749,9 @@ export const Alert = {
     Object.entries(message.metadata).forEach(([key, value]) => {
       Alert_MetadataEntry.encode({ key: key as any, value }, writer.uint32(106).fork()).ldelim();
     });
+    if (message.classification !== Classification.UNSPECIFIED) {
+      writer.uint32(112).int32(classificationToNumber(message.classification));
+    }
     return writer;
   },
 
@@ -842,6 +856,13 @@ export const Alert = {
             message.metadata[entry13.key] = entry13.value;
           }
           continue;
+        case 14:
+          if (tag !== 112) {
+            break;
+          }
+
+          message.classification = classificationFromJSON(reader.int32());
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -873,6 +894,9 @@ export const Alert = {
           return acc;
         }, {})
         : {},
+      classification: isSet(object.classification)
+        ? classificationFromJSON(object.classification)
+        : Classification.UNSPECIFIED,
     };
   },
 
@@ -923,6 +947,9 @@ export const Alert = {
         });
       }
     }
+    if (message.classification !== Classification.UNSPECIFIED) {
+      obj.classification = classificationToJSON(message.classification);
+    }
     return obj;
   },
 
@@ -951,6 +978,7 @@ export const Alert = {
       }
       return acc;
     }, {});
+    message.classification = object.classification ?? Classification.UNSPECIFIED;
     return message;
   },
 };

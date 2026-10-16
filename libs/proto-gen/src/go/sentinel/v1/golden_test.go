@@ -53,6 +53,7 @@ func goldenObservation() *sentinelv1.Observation {
 		Raw:       &sentinelv1.RawPayload{ContentType: "application/json", Data: []byte(`["a1b2c3","UAL123 "]`)},
 		ReplicaId: "ingest-1",
 		FencingToken: 7,
+		Classification: sentinelv1.Classification_CLASSIFICATION_CONFIDENTIAL,
 	}
 }
 
@@ -98,6 +99,7 @@ func goldenAlertEvent() *sentinelv1.AlertEvent {
 			Position:  &sentinelv1.Coordinate{Latitude: 41.9742, Longitude: -87.9073},
 			CreatedAt: fixtureTime(),
 			Metadata:  map[string]string{"score": "0.93"},
+			Classification: sentinelv1.Classification_CLASSIFICATION_CONFIDENTIAL,
 		},
 		EventType:     sentinelv1.AlertEventType_ALERT_EVENT_TYPE_TRIGGERED,
 		Producer:      "analytics-service",

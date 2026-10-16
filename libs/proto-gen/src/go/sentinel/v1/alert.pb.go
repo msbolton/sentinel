@@ -407,9 +407,11 @@ type Alert struct {
 	// Identifier of the user who acknowledged the alert.
 	AcknowledgedBy string `protobuf:"bytes,12,opt,name=acknowledged_by,json=acknowledgedBy,proto3" json:"acknowledged_by,omitempty"`
 	// Arbitrary key-value metadata associated with this alert.
-	Metadata      map[string]string `protobuf:"bytes,13,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Metadata map[string]string `protobuf:"bytes,13,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Classification inherited from the primary entity when the alert fired.
+	Classification Classification `protobuf:"varint,14,opt,name=classification,proto3,enum=sentinel.v1.Classification" json:"classification,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Alert) Reset() {
@@ -531,6 +533,13 @@ func (x *Alert) GetMetadata() map[string]string {
 		return x.Metadata
 	}
 	return nil
+}
+
+func (x *Alert) GetClassification() Classification {
+	if x != nil {
+		return x.Classification
+	}
+	return Classification_CLASSIFICATION_UNSPECIFIED
 }
 
 // CreateAlertRuleRequest registers a new geofence-based alert rule.
@@ -1043,7 +1052,7 @@ const file_sentinel_v1_alert_proto_rawDesc = "" +
 	"\apolygon\x18\x03 \x03(\v2\x17.sentinel.v1.CoordinateR\apolygon\x12M\n" +
 	"\x16monitored_entity_types\x18\x04 \x03(\x0e2\x17.sentinel.v1.EntityTypeR\x14monitoredEntityTypes\x12(\n" +
 	"\x10trigger_on_enter\x18\x05 \x01(\bR\x0etriggerOnEnter\x12&\n" +
-	"\x0ftrigger_on_exit\x18\x06 \x01(\bR\rtriggerOnExit\"\x86\x05\n" +
+	"\x0ftrigger_on_exit\x18\x06 \x01(\bR\rtriggerOnExit\"\xcb\x05\n" +
 	"\x05Alert\x12\x19\n" +
 	"\balert_id\x18\x01 \x01(\tR\aalertId\x125\n" +
 	"\n" +
@@ -1060,7 +1069,8 @@ const file_sentinel_v1_alert_proto_rawDesc = "" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12C\n" +
 	"\x0facknowledged_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\x0eacknowledgedAt\x12'\n" +
 	"\x0facknowledged_by\x18\f \x01(\tR\x0eacknowledgedBy\x12<\n" +
-	"\bmetadata\x18\r \x03(\v2 .sentinel.v1.Alert.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\r \x03(\v2 .sentinel.v1.Alert.MetadataEntryR\bmetadata\x12C\n" +
+	"\x0eclassification\x18\x0e \x01(\x0e2\x1b.sentinel.v1.ClassificationR\x0eclassification\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x80\x02\n" +
@@ -1178,8 +1188,9 @@ var file_sentinel_v1_alert_proto_goTypes = []any{
 	(*Coordinate)(nil),               // 14: sentinel.v1.Coordinate
 	(EntityType)(0),                  // 15: sentinel.v1.EntityType
 	(*timestamppb.Timestamp)(nil),    // 16: google.protobuf.Timestamp
-	(*BoundingBox)(nil),              // 17: sentinel.v1.BoundingBox
-	(*Pagination)(nil),               // 18: sentinel.v1.Pagination
+	(Classification)(0),              // 17: sentinel.v1.Classification
+	(*BoundingBox)(nil),              // 18: sentinel.v1.BoundingBox
+	(*Pagination)(nil),               // 19: sentinel.v1.Pagination
 }
 var file_sentinel_v1_alert_proto_depIdxs = []int32{
 	14, // 0: sentinel.v1.GeofenceRule.polygon:type_name -> sentinel.v1.Coordinate
@@ -1190,26 +1201,27 @@ var file_sentinel_v1_alert_proto_depIdxs = []int32{
 	16, // 5: sentinel.v1.Alert.created_at:type_name -> google.protobuf.Timestamp
 	16, // 6: sentinel.v1.Alert.acknowledged_at:type_name -> google.protobuf.Timestamp
 	13, // 7: sentinel.v1.Alert.metadata:type_name -> sentinel.v1.Alert.MetadataEntry
-	14, // 8: sentinel.v1.CreateAlertRuleRequest.polygon:type_name -> sentinel.v1.Coordinate
-	15, // 9: sentinel.v1.CreateAlertRuleRequest.monitored_entity_types:type_name -> sentinel.v1.EntityType
-	4,  // 10: sentinel.v1.CreateAlertRuleResponse.rule:type_name -> sentinel.v1.GeofenceRule
-	0,  // 11: sentinel.v1.GetAlertsRequest.severity_min:type_name -> sentinel.v1.AlertSeverity
-	1,  // 12: sentinel.v1.GetAlertsRequest.alert_types:type_name -> sentinel.v1.AlertType
-	17, // 13: sentinel.v1.GetAlertsRequest.bounding_box:type_name -> sentinel.v1.BoundingBox
-	16, // 14: sentinel.v1.GetAlertsRequest.start_time:type_name -> google.protobuf.Timestamp
-	16, // 15: sentinel.v1.GetAlertsRequest.end_time:type_name -> google.protobuf.Timestamp
-	18, // 16: sentinel.v1.GetAlertsRequest.pagination:type_name -> sentinel.v1.Pagination
-	5,  // 17: sentinel.v1.GetAlertsResponse.alerts:type_name -> sentinel.v1.Alert
-	18, // 18: sentinel.v1.GetAlertsResponse.pagination:type_name -> sentinel.v1.Pagination
-	5,  // 19: sentinel.v1.AcknowledgeAlertResponse.alert:type_name -> sentinel.v1.Alert
-	5,  // 20: sentinel.v1.AlertEvent.alert:type_name -> sentinel.v1.Alert
-	2,  // 21: sentinel.v1.AlertEvent.event_type:type_name -> sentinel.v1.AlertEventType
-	16, // 22: sentinel.v1.AlertEvent.event_time:type_name -> google.protobuf.Timestamp
-	23, // [23:23] is the sub-list for method output_type
-	23, // [23:23] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	17, // 8: sentinel.v1.Alert.classification:type_name -> sentinel.v1.Classification
+	14, // 9: sentinel.v1.CreateAlertRuleRequest.polygon:type_name -> sentinel.v1.Coordinate
+	15, // 10: sentinel.v1.CreateAlertRuleRequest.monitored_entity_types:type_name -> sentinel.v1.EntityType
+	4,  // 11: sentinel.v1.CreateAlertRuleResponse.rule:type_name -> sentinel.v1.GeofenceRule
+	0,  // 12: sentinel.v1.GetAlertsRequest.severity_min:type_name -> sentinel.v1.AlertSeverity
+	1,  // 13: sentinel.v1.GetAlertsRequest.alert_types:type_name -> sentinel.v1.AlertType
+	18, // 14: sentinel.v1.GetAlertsRequest.bounding_box:type_name -> sentinel.v1.BoundingBox
+	16, // 15: sentinel.v1.GetAlertsRequest.start_time:type_name -> google.protobuf.Timestamp
+	16, // 16: sentinel.v1.GetAlertsRequest.end_time:type_name -> google.protobuf.Timestamp
+	19, // 17: sentinel.v1.GetAlertsRequest.pagination:type_name -> sentinel.v1.Pagination
+	5,  // 18: sentinel.v1.GetAlertsResponse.alerts:type_name -> sentinel.v1.Alert
+	19, // 19: sentinel.v1.GetAlertsResponse.pagination:type_name -> sentinel.v1.Pagination
+	5,  // 20: sentinel.v1.AcknowledgeAlertResponse.alert:type_name -> sentinel.v1.Alert
+	5,  // 21: sentinel.v1.AlertEvent.alert:type_name -> sentinel.v1.Alert
+	2,  // 22: sentinel.v1.AlertEvent.event_type:type_name -> sentinel.v1.AlertEventType
+	16, // 23: sentinel.v1.AlertEvent.event_time:type_name -> google.protobuf.Timestamp
+	24, // [24:24] is the sub-list for method output_type
+	24, // [24:24] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_sentinel_v1_alert_proto_init() }

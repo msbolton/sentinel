@@ -1,4 +1,5 @@
 {
+  "classification": "CONFIDENTIAL",
   "decoder": "opensky-states",
   "displayName": "UAL123",
   "driver": "opensky",

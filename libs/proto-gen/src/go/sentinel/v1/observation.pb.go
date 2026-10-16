@@ -144,10 +144,14 @@ type Observation struct {
 	Raw      *RawPayload     `protobuf:"bytes,31,opt,name=raw,proto3" json:"raw,omitempty"`
 	// Ingest replica that produced the observation and its feed-lease fencing
 	// token, for diagnosing duplicate delivery during lease handover.
-	ReplicaId     string `protobuf:"bytes,32,opt,name=replica_id,json=replicaId,proto3" json:"replica_id,omitempty"`
-	FencingToken  int64  `protobuf:"varint,33,opt,name=fencing_token,json=fencingToken,proto3" json:"fencing_token,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ReplicaId    string `protobuf:"bytes,32,opt,name=replica_id,json=replicaId,proto3" json:"replica_id,omitempty"`
+	FencingToken int64  `protobuf:"varint,33,opt,name=fencing_token,json=fencingToken,proto3" json:"fencing_token,omitempty"`
+	// Classification of the report: the feed's configured default, raised by
+	// the decoder when the source carries a higher level. Entities take the
+	// highest level any contributing observation carried.
+	Classification Classification `protobuf:"varint,34,opt,name=classification,proto3,enum=sentinel.v1.Classification" json:"classification,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Observation) Reset() {
@@ -411,6 +415,13 @@ func (x *Observation) GetFencingToken() int64 {
 	return 0
 }
 
+func (x *Observation) GetClassification() Classification {
+	if x != nil {
+		return x.Classification
+	}
+	return Classification_CLASSIFICATION_UNSPECIFIED
+}
+
 var File_sentinel_v1_observation_proto protoreflect.FileDescriptor
 
 const file_sentinel_v1_observation_proto_rawDesc = "" +
@@ -420,7 +431,7 @@ const file_sentinel_v1_observation_proto_rawDesc = "" +
 	"RawPayload\x12!\n" +
 	"\fcontent_type\x18\x01 \x01(\tR\vcontentType\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x12\x1c\n" +
-	"\ttruncated\x18\x03 \x01(\bR\ttruncated\"\x95\x0e\n" +
+	"\ttruncated\x18\x03 \x01(\bR\ttruncated\"\xda\x0e\n" +
 	"\vObservation\x12%\n" +
 	"\x0eobservation_id\x18\x01 \x01(\tR\robservationId\x12\x17\n" +
 	"\afeed_id\x18\x02 \x01(\tR\x06feedId\x12\x16\n" +
@@ -463,7 +474,8 @@ const file_sentinel_v1_observation_proto_rawDesc = "" +
 	"\x03raw\x18\x1f \x01(\v2\x17.sentinel.v1.RawPayloadR\x03raw\x12\x1d\n" +
 	"\n" +
 	"replica_id\x18  \x01(\tR\treplicaId\x12#\n" +
-	"\rfencing_token\x18! \x01(\x03R\ffencingTokenB\n" +
+	"\rfencing_token\x18! \x01(\x03R\ffencingToken\x12C\n" +
+	"\x0eclassification\x18\" \x01(\x0e2\x1b.sentinel.v1.ClassificationR\x0eclassificationB\n" +
 	"\n" +
 	"\b_headingB\x0e\n" +
 	"\f_speed_knotsB\t\n" +
@@ -503,6 +515,7 @@ var file_sentinel_v1_observation_proto_goTypes = []any{
 	(OperationalStatus)(0),             // 17: sentinel.v1.OperationalStatus
 	(*Dimensions)(nil),                 // 18: sentinel.v1.Dimensions
 	(*PlatformDetail)(nil),             // 19: sentinel.v1.PlatformDetail
+	(Classification)(0),                // 20: sentinel.v1.Classification
 }
 var file_sentinel_v1_observation_proto_depIdxs = []int32{
 	2,  // 0: sentinel.v1.Observation.source:type_name -> sentinel.v1.EntitySource
@@ -525,11 +538,12 @@ var file_sentinel_v1_observation_proto_depIdxs = []int32{
 	18, // 17: sentinel.v1.Observation.dimensions:type_name -> sentinel.v1.Dimensions
 	19, // 18: sentinel.v1.Observation.platform:type_name -> sentinel.v1.PlatformDetail
 	0,  // 19: sentinel.v1.Observation.raw:type_name -> sentinel.v1.RawPayload
-	20, // [20:20] is the sub-list for method output_type
-	20, // [20:20] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	20, // 20: sentinel.v1.Observation.classification:type_name -> sentinel.v1.Classification
+	21, // [21:21] is the sub-list for method output_type
+	21, // [21:21] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_sentinel_v1_observation_proto_init() }
