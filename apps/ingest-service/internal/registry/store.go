@@ -46,6 +46,9 @@ func NewWithPool(pool *pgxpool.Pool, logger *zap.Logger) *Store {
 // Close releases the pool.
 func (s *Store) Close() { s.pool.Close() }
 
+// Pool exposes the connection pool for the lease coordinator.
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
 // Ping checks the connection; used by the readiness probe.
 func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 
@@ -228,12 +231,18 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	})
 }
 
-// UpsertStatus records the observed state of a feed.
+// ErrFenced is returned when a fenced status write finds the lease gone.
+var ErrFenced = errors.New("status write fenced: lease no longer held")
+
+// UpsertStatus records the observed state of a feed. With FencedBy and
+// FencingToken set, an existing row is only overwritten while that
+// replica still holds the feed's lease with that token, so a replica that
+// lost its lease cannot clobber the new owner's report.
 func (s *Store) UpsertStatus(ctx context.Context, st Status) error {
 	if len(st.Detail) == 0 {
 		st.Detail = json.RawMessage("{}")
 	}
-	_, err := s.pool.Exec(ctx, `
+	query := `
 		INSERT INTO sentinel.feed_status
 		  (feed_id, owner, state, health, last_error, last_message_at, last_success_at,
 		   messages_total, entities_last, errors_total, applied_version, detail, updated_at)
@@ -243,11 +252,20 @@ func (s *Store) UpsertStatus(ctx context.Context, st Status) error {
 		  last_error = EXCLUDED.last_error, last_message_at = EXCLUDED.last_message_at,
 		  last_success_at = EXCLUDED.last_success_at, messages_total = EXCLUDED.messages_total,
 		  entities_last = EXCLUDED.entities_last, errors_total = EXCLUDED.errors_total,
-		  applied_version = EXCLUDED.applied_version, detail = EXCLUDED.detail, updated_at = NOW()`,
-		st.FeedID, st.Owner, st.State, st.Health, st.LastError, st.LastMessageAt, st.LastSuccessAt,
-		st.MessagesTotal, st.EntitiesLast, st.ErrorsTotal, st.AppliedVersion, st.Detail)
+		  applied_version = EXCLUDED.applied_version, detail = EXCLUDED.detail, updated_at = NOW()`
+	args := []any{st.FeedID, st.Owner, st.State, st.Health, st.LastError, st.LastMessageAt, st.LastSuccessAt,
+		st.MessagesTotal, st.EntitiesLast, st.ErrorsTotal, st.AppliedVersion, st.Detail}
+	if st.FencingToken > 0 {
+		query += `
+		WHERE EXISTS (SELECT 1 FROM sentinel.feed_leases l WHERE l.feed_id = EXCLUDED.feed_id AND l.owner_id = $13 AND l.fencing_token = $14)`
+		args = append(args, st.FencedBy, st.FencingToken)
+	}
+	tag, err := s.pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("upserting status for %s: %w", st.FeedID, err)
+	}
+	if st.FencingToken > 0 && tag.RowsAffected() == 0 {
+		return ErrFenced
 	}
 	return nil
 }

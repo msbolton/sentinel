@@ -3,7 +3,9 @@ package feed
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"hash/fnv"
 	"sync"
 	"time"
 
@@ -27,6 +29,22 @@ type Registry interface {
 // Factory builds a driver for a feed; driver.New by default.
 type Factory func(spec driver.Spec, deps driver.Deps) (driver.Driver, error)
 
+// Leaser assigns feeds to replicas (see the lease package). A nil Leaser
+// runs every enabled feed on this replica.
+type Leaser interface {
+	Heartbeat(ctx context.Context) error
+	Live(ctx context.Context) ([]string, error)
+	Acquire(ctx context.Context, feedID string) (token int64, ok bool, err error)
+	Renew(ctx context.Context, feedID string, token int64) (bool, error)
+	Release(ctx context.Context, feedID string, token int64) error
+	Leave(ctx context.Context) error
+	TTL() time.Duration
+}
+
+// Preferred picks a feed's owner from the live set; lease.Preferred by
+// default (rendezvous hash, pin wins).
+type Preferred func(feedID, pinned string, live []string) string
+
 // Options tune the supervisor. Zero values take the defaults.
 type Options struct {
 	ReplicaID      string
@@ -39,6 +57,14 @@ type Options struct {
 	Secrets        registry.Lookup
 	Factory        Factory
 	RawMax         int
+	// Leaser enables sharding; LeaseTick is how often leases are renewed
+	// and ownership re-evaluated (2 s), RebalanceAfter how long a feed
+	// keeps running here while another live replica is its preferred
+	// owner before it is handed over (30 s).
+	Leaser         Leaser
+	Preferred      Preferred
+	LeaseTick      time.Duration
+	RebalanceAfter time.Duration
 }
 
 func (o Options) withDefaults() Options {
@@ -66,7 +92,35 @@ func (o Options) withDefaults() Options {
 	if o.Factory == nil {
 		o.Factory = driver.New
 	}
+	if o.LeaseTick <= 0 {
+		o.LeaseTick = 2 * time.Second
+	}
+	if o.RebalanceAfter <= 0 {
+		o.RebalanceAfter = 30 * time.Second
+	}
+	if o.Preferred == nil {
+		o.Preferred = defaultPreferred
+	}
 	return o
+}
+
+// defaultPreferred is the rendezvous hash; it mirrors lease.Preferred
+// without importing it so the feed package stays free of Postgres.
+func defaultPreferred(feedID, pinned string, live []string) string {
+	if pinned != "" {
+		return pinned
+	}
+	best, bestScore := "", uint64(0)
+	for _, r := range live {
+		h := fnv.New64a()
+		_, _ = h.Write([]byte(feedID))
+		_, _ = h.Write([]byte{'|'})
+		_, _ = h.Write([]byte(r))
+		if s := h.Sum64(); best == "" || s > bestScore || (s == bestScore && r < best) {
+			best, bestScore = r, s
+		}
+	}
+	return best
 }
 
 // instance is one feed this replica runs (or failed to start).
@@ -85,6 +139,9 @@ type instance struct {
 	warn, critical time.Duration
 	nextRetry      time.Time
 	retryDelay     time.Duration
+
+	token          int64     // lease fencing token; 0 without a leaser
+	elsewhereSince time.Time // when another live replica became the preferred owner
 }
 
 // Supervisor owns this replica's feed runners.
@@ -98,6 +155,11 @@ type Supervisor struct {
 	mu      sync.Mutex
 	running map[string]*instance
 	stopped bool
+	// waitingSince records when a feed another replica should own was
+	// first seen free, so this replica only takes it after the preferred
+	// owner had a lease TTL to claim it.
+	waitingSince map[string]time.Time
+	live         []string
 }
 
 // New creates a supervisor; call Run to start reconciling.
@@ -105,14 +167,21 @@ func New(reg Registry, pub Publisher, logger *zap.Logger, m *metrics.Metrics, op
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Supervisor{reg: reg, pub: pub, logger: logger, metrics: m, opts: opts.withDefaults(), running: map[string]*instance{}}
+	return &Supervisor{reg: reg, pub: pub, logger: logger, metrics: m, opts: opts.withDefaults(), running: map[string]*instance{}, waitingSince: map[string]time.Time{}}
 }
+
+// ReplicaID returns this replica's id.
+func (s *Supervisor) ReplicaID() string { return s.opts.ReplicaID }
 
 // Run reconciles until ctx is cancelled, then stops every feed and
 // releases this replica's status rows.
 func (s *Supervisor) Run(ctx context.Context) {
 	changes := s.reg.Watch(ctx)
-	poll := time.NewTicker(s.opts.Poll)
+	pollEvery := s.opts.Poll
+	if s.opts.Leaser != nil && s.opts.LeaseTick < pollEvery {
+		pollEvery = s.opts.LeaseTick
+	}
+	poll := time.NewTicker(pollEvery)
 	defer poll.Stop()
 	status := time.NewTicker(s.opts.StatusInterval)
 	defer status.Stop()
@@ -144,6 +213,101 @@ func (s *Supervisor) Run(ctx context.Context) {
 	}
 }
 
+// renewLeases heartbeats this replica and renews every held lease; a
+// lease that cannot be renewed stops its feed at once, without touching
+// the status row the new owner now writes.
+func (s *Supervisor) renewLeases(ctx context.Context) {
+	if err := s.opts.Leaser.Heartbeat(ctx); err != nil {
+		s.logger.Warn("replica heartbeat failed", zap.Error(err))
+	}
+	s.mu.Lock()
+	held := make([]*instance, 0, len(s.running))
+	for _, inst := range s.running {
+		if inst.token > 0 && inst.state != registry.StateError {
+			held = append(held, inst)
+		}
+	}
+	s.mu.Unlock()
+	for _, inst := range held {
+		ok, err := s.opts.Leaser.Renew(ctx, inst.spec.ID, inst.token)
+		if err != nil {
+			s.logger.Warn("lease renew failed", zap.String("feed", inst.spec.ID), zap.Error(err))
+			continue
+		}
+		if !ok {
+			s.mu.Lock()
+			delete(s.running, inst.spec.ID)
+			s.mu.Unlock()
+			s.logger.Warn("lease lost; stopping feed", zap.String("feed", inst.spec.ID), zap.Int64("token", inst.token))
+			if s.metrics != nil {
+				s.metrics.LeasesLost.WithLabelValues(inst.spec.ID).Inc()
+			}
+			s.stopInstance(inst, "lease lost", false)
+		}
+	}
+}
+
+// owns reports whether this replica should run the feed now and, when it
+// should, takes the lease. ok false means skip the feed this round.
+func (s *Supervisor) owns(ctx context.Context, spec registry.Feed, now time.Time) (token int64, ok bool) {
+	if s.opts.Leaser == nil {
+		return 0, true
+	}
+	pinned := spec.Common().PinnedReplica
+	preferred := s.opts.Preferred(spec.ID, pinned, s.live)
+	if pinned != "" && pinned != s.opts.ReplicaID {
+		return 0, false
+	}
+	if preferred != s.opts.ReplicaID {
+		// Give the preferred owner a lease TTL to claim it before stepping in.
+		since, seen := s.waitingSince[spec.ID]
+		if !seen {
+			s.waitingSince[spec.ID] = now
+			return 0, false
+		}
+		if now.Sub(since) < s.opts.Leaser.TTL() {
+			return 0, false
+		}
+	}
+	token, got, err := s.opts.Leaser.Acquire(ctx, spec.ID)
+	if err != nil {
+		s.logger.Warn("lease acquire failed", zap.String("feed", spec.ID), zap.Error(err))
+		return 0, false
+	}
+	if !got {
+		return 0, false
+	}
+	delete(s.waitingSince, spec.ID)
+	return token, true
+}
+
+// rebalance hands a running feed over when another live replica has been
+// its preferred owner for RebalanceAfter; call with s.mu held. It returns
+// true when the feed was removed from the running set.
+func (s *Supervisor) rebalance(inst *instance, now time.Time) bool {
+	if s.opts.Leaser == nil || inst.token == 0 {
+		return false
+	}
+	preferred := s.opts.Preferred(inst.spec.ID, inst.spec.Common().PinnedReplica, s.live)
+	if preferred == "" || preferred == s.opts.ReplicaID {
+		inst.elsewhereSince = time.Time{}
+		return false
+	}
+	if inst.elsewhereSince.IsZero() {
+		inst.elsewhereSince = now
+		return false
+	}
+	if now.Sub(inst.elsewhereSince) < s.opts.RebalanceAfter {
+		return false
+	}
+	delete(s.running, inst.spec.ID)
+	s.logger.Info("handing feed over", zap.String("feed", inst.spec.ID), zap.String("to", preferred))
+	if s.metrics != nil {
+		s.metrics.LeaseHandovers.WithLabelValues(inst.spec.ID).Inc()
+	}
+	return true
+}
+
 // Reconcile makes the running set match the enabled feeds: stops feeds
 // that were disabled, deleted or changed (version bump), starts missing
 // ones, and restarts failed ones whose retry delay has passed.
@@ -159,6 +323,18 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 			desired[f.ID] = f
 		}
 	}
+	now := time.Now()
+	if s.opts.Leaser != nil {
+		s.renewLeases(ctx)
+		live, err := s.opts.Leaser.Live(ctx)
+		if err != nil {
+			s.logger.Warn("reconcile: listing replicas failed", zap.Error(err))
+		} else {
+			s.mu.Lock()
+			s.live = live
+			s.mu.Unlock()
+		}
+	}
 
 	s.mu.Lock()
 	if s.stopped {
@@ -166,19 +342,36 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 		return
 	}
 	var toStop []*instance
+	var handover []*instance
 	for id, inst := range s.running {
 		spec, want := desired[id]
 		if !want || spec.Version != inst.spec.Version {
 			toStop = append(toStop, inst)
 			delete(s.running, id)
+			continue
+		}
+		if pinned := spec.Common().PinnedReplica; pinned != "" && pinned != s.opts.ReplicaID {
+			toStop = append(toStop, inst)
+			delete(s.running, id)
+			continue
+		}
+		if inst.state != registry.StateError && s.rebalance(inst, now) {
+			handover = append(handover, inst)
+		}
+	}
+	for id := range s.waitingSince {
+		if _, want := desired[id]; !want {
+			delete(s.waitingSince, id)
 		}
 	}
 	s.mu.Unlock()
 	for _, inst := range toStop {
-		s.stopInstance(inst, "disabled or changed")
+		s.stopInstance(inst, "disabled or changed", true)
+	}
+	for _, inst := range handover {
+		s.stopInstance(inst, "handed over", true)
 	}
 
-	now := time.Now()
 	for id, spec := range desired {
 		s.mu.Lock()
 		inst, exists := s.running[id]
@@ -193,8 +386,21 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 			s.mu.Unlock()
 			continue
 		}
+		token := int64(0)
 		if !exists {
-			inst = &instance{spec: spec, state: registry.StateStarting}
+			var ok bool
+			if token, ok = s.owns(ctx, spec, now); !ok {
+				s.mu.Unlock()
+				continue
+			}
+			inst = &instance{spec: spec, state: registry.StateStarting, token: token}
+			if s.opts.Leaser != nil {
+				// Start the handover clock when we take a feed another live
+				// replica should own (it did not claim it within a TTL).
+				if p := s.opts.Preferred(spec.ID, spec.Common().PinnedReplica, s.live); p != "" && p != s.opts.ReplicaID {
+					inst.elsewhereSince = now
+				}
+			}
 			s.running[id] = inst
 		} else {
 			inst.spec = spec
@@ -269,7 +475,7 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 		fail(fmt.Errorf("building driver: %w", err))
 		return
 	}
-	runner := NewRunner(spec.ID, spec.Driver, drv, s.pub, s.metrics, logger, RunnerOptions{RawPolicy: common.RawPayload, RawMax: s.opts.RawMax})
+	runner := NewRunner(spec.ID, spec.Driver, drv, s.pub, s.metrics, logger, RunnerOptions{RawPolicy: common.RawPayload, RawMax: s.opts.RawMax, FencingToken: inst.token})
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -287,7 +493,7 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 	if s.metrics != nil {
 		s.metrics.FeedsRunning.WithLabelValues(spec.Driver).Inc()
 	}
-	s.logger.Info("feed started", zap.String("feed", spec.ID), zap.String("driver", spec.Driver), zap.Int("version", spec.Version))
+	s.logger.Info("feed started", zap.String("feed", spec.ID), zap.String("driver", spec.Driver), zap.Int("version", spec.Version), zap.Int64("lease_token", inst.token))
 
 	go func() {
 		defer close(done)
@@ -307,7 +513,11 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 	}
 }
 
-func (s *Supervisor) stopInstance(inst *instance, reason string) {
+// stopInstance stops a feed. With held true the replica still owns the
+// lease: it writes the stopped status (fenced) and releases the lease;
+// with held false the lease is already someone else's and nothing is
+// written.
+func (s *Supervisor) stopInstance(inst *instance, reason string, held bool) {
 	s.mu.Lock()
 	cancel, done, runner, state := inst.cancel, inst.done, inst.runner, inst.state
 	s.mu.Unlock()
@@ -321,14 +531,23 @@ func (s *Supervisor) stopInstance(inst *instance, reason string) {
 		s.metrics.FeedsRunning.WithLabelValues(inst.spec.Driver).Dec()
 	}
 	s.logger.Info("feed stopped", zap.String("feed", inst.spec.ID), zap.String("reason", reason))
+	if !held {
+		return
+	}
 	var stats Stats
 	if runner != nil {
 		stats = runner.Stats()
 	}
 	ctx, cancelStatus := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelStatus()
-	if err := s.reg.UpsertStatus(ctx, registry.Status{FeedID: inst.spec.ID, Owner: "", State: registry.StateStopped, Health: registry.HealthUnknown, AppliedVersion: inst.spec.Version, ErrorsTotal: inst.errorsTotal + stats.ErrorsTotal, MessagesTotal: stats.Observations, Detail: json.RawMessage("{}")}); err != nil {
+	st := registry.Status{FeedID: inst.spec.ID, Owner: "", State: registry.StateStopped, Health: registry.HealthUnknown, AppliedVersion: inst.spec.Version, ErrorsTotal: inst.errorsTotal + stats.ErrorsTotal, MessagesTotal: stats.Observations, Detail: json.RawMessage("{}"), FencedBy: s.opts.ReplicaID, FencingToken: inst.token}
+	if err := s.reg.UpsertStatus(ctx, st); err != nil && !errors.Is(err, registry.ErrFenced) {
 		s.logger.Warn("status update failed", zap.String("feed", inst.spec.ID), zap.Error(err))
+	}
+	if s.opts.Leaser != nil && inst.token > 0 {
+		if err := s.opts.Leaser.Release(ctx, inst.spec.ID, inst.token); err != nil {
+			s.logger.Warn("lease release failed", zap.String("feed", inst.spec.ID), zap.Error(err))
+		}
 	}
 }
 
@@ -406,6 +625,7 @@ func (s *Supervisor) statusOf(inst *instance, now time.Time) registry.Status {
 	st := registry.Status{
 		FeedID: inst.spec.ID, Owner: s.opts.ReplicaID, State: inst.state, Health: registry.HealthUnknown,
 		LastError: inst.lastErr, ErrorsTotal: inst.errorsTotal, AppliedVersion: inst.spec.Version, Detail: json.RawMessage("{}"),
+		FencedBy: s.opts.ReplicaID, FencingToken: inst.token,
 	}
 	if inst.runner == nil {
 		return st
@@ -469,6 +689,9 @@ func (s *Supervisor) statusOf(inst *instance, now time.Time) registry.Status {
 			detail["creditsRemaining"] = as.CreditsRemaining
 		}
 	}
+	if inst.token > 0 {
+		detail["leaseToken"] = inst.token
+	}
 	if b, err := json.Marshal(detail); err == nil {
 		st.Detail = b
 	}
@@ -485,7 +708,7 @@ func (s *Supervisor) flushStatus(ctx context.Context) {
 	}
 	s.mu.Unlock()
 	for _, st := range rows {
-		if err := s.reg.UpsertStatus(ctx, st); err != nil {
+		if err := s.reg.UpsertStatus(ctx, st); err != nil && !errors.Is(err, registry.ErrFenced) {
 			s.logger.Warn("status update failed", zap.String("feed", st.FeedID), zap.Error(err))
 		}
 	}
@@ -505,7 +728,7 @@ func (s *Supervisor) shutdown() {
 		wg.Add(1)
 		go func(inst *instance) {
 			defer wg.Done()
-			s.stopInstance(inst, "shutdown")
+			s.stopInstance(inst, "shutdown", true)
 		}(inst)
 	}
 	wg.Wait()
@@ -513,6 +736,11 @@ func (s *Supervisor) shutdown() {
 	defer cancel()
 	if err := s.reg.ReleaseStatuses(ctx, s.opts.ReplicaID); err != nil {
 		s.logger.Warn("releasing statuses failed", zap.Error(err))
+	}
+	if s.opts.Leaser != nil {
+		if err := s.opts.Leaser.Leave(ctx); err != nil {
+			s.logger.Warn("leaving the replica set failed", zap.Error(err))
+		}
 	}
 }
 

@@ -106,10 +106,12 @@ alertService:
       memory: 1Gi
 
 ingestService:
-  replicaCount: 1  # feeds are not sharded across replicas yet; each replica would run every feed
+  # Feeds are leased so each runs on exactly one replica; scale freely.
+  replicaCount: 3
   image:
     repository: sentinel/ingest-service
     tag: latest
+    pullPolicy: IfNotPresent
   service:
     port: 4000
   resources:
@@ -119,6 +121,22 @@ ingestService:
     limits:
       cpu: 4000m
       memory: 512Mi
+  # Secret holding INGEST_SERVICE_TOKEN (and optional OPENSKY_CLIENT_ID /
+  # OPENSKY_CLIENT_SECRET). Leave existingSecret empty to have the chart
+  # create one from the values below.
+  existingSecret: ""
+  serviceToken: ""
+  opensky:
+    clientId: ""
+    clientSecret: ""
+  lease:
+    ttlSec: 15
+    tickSec: 2
+    rebalanceSec: 30
+  env: {}
+  serviceMonitor:
+    enabled: false
+    interval: 30s
 
 analyticsService:
   replicaCount: 1

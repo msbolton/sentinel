@@ -77,7 +77,11 @@ func TestKeyAndHeaders(t *testing.T) {
 		t.Errorf("feed-local key = %q", got)
 	}
 	h := Headers(sample())
-	if h[commonkafka.HeaderSchema] != "sentinel.v1.Observation" || h[commonkafka.HeaderFeedID] != "opensky" || h[commonkafka.HeaderProducer] != Producer || h[commonkafka.HeaderContentType] != commonkafka.ContentTypeProtobuf {
+	if h[commonkafka.HeaderSchema] != "sentinel.v1.Observation" || h[commonkafka.HeaderFeedID] != "opensky" || h[commonkafka.HeaderProducer] != Producer || h[commonkafka.HeaderContentType] != commonkafka.ContentTypeProtobuf || h[commonkafka.HeaderFence] != "3" {
 		t.Errorf("headers = %v", h)
+	}
+	o.FencingToken = 0
+	if _, has := Headers(o)[commonkafka.HeaderFence]; has {
+		t.Error("no fence header without a lease")
 	}
 }

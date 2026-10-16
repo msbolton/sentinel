@@ -25,6 +25,8 @@ type Metrics struct {
 	FeedEntityCount *prometheus.GaugeVec   // feed_id
 	FeedErrorsTotal *prometheus.CounterVec // feed_id
 	FeedRestarts    *prometheus.CounterVec // feed_id
+	LeasesLost      *prometheus.CounterVec // feed_id
+	LeaseHandovers  *prometheus.CounterVec // feed_id
 
 	ObservationsPublished      *prometheus.CounterVec // feed_id
 	ObservationsDeliveryFailed *prometheus.CounterVec // feed_id

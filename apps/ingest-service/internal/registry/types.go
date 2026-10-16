@@ -27,6 +27,9 @@ const (
 	StateIdle     = "idle"
 	StateDegraded = "degraded"
 	StateError    = "error"
+	// StateUnassigned is rendered, never stored: the owning replica stopped
+	// reporting and no other replica has taken the feed yet.
+	StateUnassigned = "unassigned"
 )
 
 // Health values reported in feed_status.health.
@@ -74,6 +77,10 @@ type Status struct {
 	AppliedVersion int             `json:"appliedVersion"`
 	Detail         json.RawMessage `json:"detail"`
 	UpdatedAt      *time.Time      `json:"updatedAt"`
+	// FencedBy and FencingToken, when set, make the write conditional on
+	// the replica still holding the feed's lease with that token.
+	FencedBy     string `json:"-"`
+	FencingToken int64  `json:"-"`
 }
 
 // Box is a latitude/longitude box that does not cross the antimeridian.

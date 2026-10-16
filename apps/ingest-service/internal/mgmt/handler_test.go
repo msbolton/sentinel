@@ -95,8 +95,14 @@ func (s *memStore) SetArea(_ context.Context, a registry.Area) error {
 }
 
 type fakeRuntime struct {
-	live map[string]bool
-	last registry.Area
+	live  map[string]bool
+	last  registry.Area
+	snaps map[string]registry.Status
+}
+
+func (r *fakeRuntime) Snapshot(id string) (registry.Status, bool) {
+	st, ok := r.snaps[id]
+	return st, ok
 }
 
 func (r *fakeRuntime) SetArea(id string, a registry.Area) (aoi.Status, bool) {
@@ -380,5 +386,36 @@ func TestMergeConfig(t *testing.T) {
 	}
 	if m["c"] != 3.0 {
 		t.Errorf("new key missing: %v", m)
+	}
+}
+
+func TestLiveSnapshotAndStaleRows(t *testing.T) {
+	srv, store, rt := newServer(t, "")
+	now := time.Now().UTC()
+	old := now.Add(-time.Minute)
+	f := store.feeds["celestrak"]
+	f.Status = &registry.Status{Owner: "other-replica", State: registry.StateRunning, Health: registry.HealthHealthy, UpdatedAt: &old, Detail: json.RawMessage("{}")}
+	store.feeds["celestrak"] = f
+	rt.snaps = map[string]registry.Status{"opensky": {Owner: "me", State: registry.StateIdle, Health: registry.HealthHealthy, Detail: json.RawMessage(`{"leaseToken":3}`)}}
+	_, body := do(t, srv, "GET", "/feeds", "", reqOpts{})
+	var feeds []feedDTO
+	if err := json.Unmarshal(body, &feeds); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range feeds {
+		switch d.ID {
+		case "opensky":
+			if d.Status.State != registry.StateIdle || d.Status.Owner != "me" || d.Status.UpdatedAt == nil {
+				t.Errorf("live snapshot not used: %+v", d.Status)
+			}
+		case "celestrak":
+			if d.Status.State != registry.StateUnassigned || d.Status.Health != registry.HealthUnknown || d.Status.Owner != "other-replica" {
+				t.Errorf("stale row should render unassigned: %+v", d.Status)
+			}
+		}
+	}
+	_, body = do(t, srv, "GET", "/feeds/celestrak/status", "", reqOpts{})
+	if !strings.Contains(string(body), `"state":"unassigned"`) {
+		t.Errorf("status endpoint = %s", body)
 	}
 }
