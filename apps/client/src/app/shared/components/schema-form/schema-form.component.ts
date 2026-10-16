@@ -53,7 +53,7 @@ export interface FieldDef {
   children?: FieldDef[];
 }
 
-export const SECRET_REF_PATTERN = /^env:[A-Z0-9_]+$/;
+export const SECRET_REF_PATTERN = /^(env:[A-Z0-9_]+|file:\/\S+)$/;
 
 /**
  * Builds a reactive form from a driver's JSON Schema. Driver options and
@@ -608,7 +608,7 @@ function describeErrors(errors: ValidationErrors): string[] {
       case 'pattern':
         out.push(
           detail.requiredPattern === SECRET_REF_PATTERN.toString()
-            ? 'Use an environment reference like env:MY_SECRET.'
+            ? 'Use a reference like env:MY_SECRET or file:/etc/sentinel/secret, never the value.'
             : 'Does not match the required format.',
         );
         break;

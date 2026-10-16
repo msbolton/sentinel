@@ -40,9 +40,11 @@ export interface Feed {
   enabled: boolean;
   version: number;
   config: Record<string, unknown>;
-  /** Secret references by field, e.g. { clientSecret: 'env:OPENSKY_CLIENT_SECRET' }. */
+  /** Secret references by field, e.g. { clientSecret: 'env:OPENSKY_CLIENT_SECRET', clientCert: 'file:/etc/sentinel/tak/client.pem' }. */
   secretRefs: Record<string, string>;
   capabilities: string[];
+  /** Effective direction: the driver's, narrowed by config.direction. Absent on older servers. */
+  direction?: FeedDirection;
   createdBy?: string;
   createdAt: string;
   updatedAt: string;
@@ -96,11 +98,16 @@ export interface JsonSchema {
   then?: JsonSchema;
 }
 
+/** Which way a feed moves data: a source (in), a sink (out), or both over one connection. */
+export type FeedDirection = 'in' | 'out' | 'both';
+
 export interface FeedDriver {
   id: string;
   name: string;
   description: string;
   source: string;
+  /** Absent on older servers; treat as 'in'. */
+  direction?: FeedDirection;
   capabilities: string[];
   configSchema: JsonSchema;
   /** secretRefs keys the driver expects (clientId, clientSecret, password…). */

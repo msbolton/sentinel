@@ -18,6 +18,7 @@ type feedDTO struct {
 	Description  string            `json:"description"`
 	Driver       string            `json:"driver"`
 	Source       string            `json:"source"`
+	Direction    string            `json:"direction"` // effective: config.direction narrowed from the driver's
 	Builtin      bool              `json:"builtin"`
 	Enabled      bool              `json:"enabled"`
 	Version      int               `json:"version"`
@@ -46,6 +47,7 @@ func toFeedDTO(f registry.Feed, catalog *drivers.Catalog) feedDTO {
 	if info, ok := catalog.Get(f.Driver); ok {
 		dto.Source = info.Source
 		dto.Capabilities = info.Capabilities
+		dto.Direction = string(f.Direction(info.Dir()))
 	}
 	if dto.Source == "" {
 		dto.Source = decoderSource(f.Config)

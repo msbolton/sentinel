@@ -91,6 +91,40 @@ type Health struct {
 // Factory builds a driver for a feed.
 type Factory func(spec Spec, deps Deps) (Driver, error)
 
+// Direction says which way a driver moves data: in (a source producing
+// observations), out (a sink consuming entity and alert events), or both
+// over one connection.
+type Direction string
+
+const (
+	DirectionIn   Direction = "in"
+	DirectionOut  Direction = "out"
+	DirectionBoth Direction = "both"
+)
+
+// Normalize treats an unset direction as a source.
+func (d Direction) Normalize() Direction {
+	if d == "" {
+		return DirectionIn
+	}
+	return d
+}
+
+// Inbound reports whether the direction produces observations.
+func (d Direction) Inbound() bool { n := d.Normalize(); return n == DirectionIn || n == DirectionBoth }
+
+// Outbound reports whether the direction consumes events.
+func (d Direction) Outbound() bool { n := d.Normalize(); return n == DirectionOut || n == DirectionBoth }
+
+// Valid reports whether d is one of the three directions (or unset).
+func (d Direction) Valid() bool {
+	switch d {
+	case "", DirectionIn, DirectionOut, DirectionBoth:
+		return true
+	}
+	return false
+}
+
 // Definition registers one driver with its catalog information.
 type Definition struct {
 	ID          string
@@ -98,7 +132,10 @@ type Definition struct {
 	Description string
 	// Source is the EntitySource name written on observations, or "" when
 	// the decoder decides (stream).
-	Source       string
+	Source string
+	// Direction is what the driver can do; "" means in. A feed may narrow a
+	// "both" driver with config.direction.
+	Direction    Direction
 	Capabilities []string
 	// SecretFields are secret_refs keys the driver expects; they must never
 	// appear in config.
