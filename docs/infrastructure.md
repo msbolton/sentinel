@@ -12,7 +12,6 @@ SENTINEL uses two Compose files:
 | Service | Image | Host Port | Container Port | Purpose |
 |---------|-------|-----------|----------------|---------|
 | PostgreSQL | `postgis/postgis:16-3.4` | 5432 | 5432 | Primary database with PostGIS, TimescaleDB, Apache AGE |
-| Redis | `redis:7-alpine` | 6379 | 6379 | Geospatial cache, session store |
 | Kafka | `apache/kafka:3.7.0` | 9092, 9093 | 9092, 9093 | Event streaming (KRaft mode, no Zookeeper) |
 | OpenSearch | `opensearchproject/opensearch:2.17.1` | 9200 | 9200 | Full-text + geospatial search |
 | Keycloak | `quay.io/keycloak/keycloak:24.0` | 8080 | 8080 | Identity provider (OIDC/JWT) |
@@ -30,7 +29,7 @@ SENTINEL uses two Compose files:
 | Search Service | 3003 | Go |
 | Link Analysis | 3004 | Go |
 | Alert Service | 3005 | Go |
-| Ingest Service | 4000 | Go |
+| Ingest Service | 4000 (not published; reached through the gateway) | Go, `--scale ingest-service=N` |
 | Analytics Service | 5000 | Python |
 | Web UI | 4200 | Angular |
 
@@ -40,7 +39,6 @@ SENTINEL uses two Compose files:
 |--------|-----------|---------|
 | `sentinel-postgres-data` | `/var/lib/postgresql/data` | PostgreSQL persistence |
 | `sentinel-keycloak-db-data` | `/var/lib/postgresql/data` | Keycloak DB persistence |
-| `sentinel-redis-data` | `/data` | Redis AOF + RDB persistence |
 | `sentinel-kafka-data` | `/var/lib/kafka` | Kafka log segments |
 | `sentinel-opensearch-data` | `/usr/share/opensearch/data` | OpenSearch indices |
 | `sentinel-geoserver-data` | `/opt/geoserver/data_dir` | GeoServer configuration |
@@ -52,7 +50,6 @@ All services communicate over `sentinel-network` (bridge mode, subnet `172.28.0.
 
 Internal service discovery uses Docker Compose service names as hostnames:
 - `postgres:5432` (not `localhost`)
-- `redis:6379`
 - `kafka:9093` (internal listener)
 - `opensearch:9200`
 - `keycloak:8080`
@@ -63,16 +60,7 @@ Internal service discovery uses Docker Compose service names as hostnames:
 - **Extensions**: PostGIS (spatial), TimescaleDB (time-series, optional), Apache AGE (graph, optional)
 - **Initialization**: `config/postgres/init-extensions.sql` runs on first start to enable extensions
 - **Credentials**: `sentinel` / `sentinel_dev` (database: `sentinel`)
-- **Schema**: `sentinel` (created by seed script)
-
-## Redis Configuration
-
-- **Persistence**: AOF (appendonly, everysec fsync) + RDB snapshots (900/1, 300/10, 60/10000)
-- **Eviction**: `allkeys-lru` when memory limit reached
-- **Key patterns**:
-  - `sentinel:entities:geo` — Geospatial sorted set
-  - `sentinel:entities:cache:{id}` — Entity JSON (TTL: 300s)
-  - `sentinel:positions`, `sentinel:viewports`, `sentinel:sessions`
+- **Schema**: `sentinel`, applied from `db/schema/*.sql` by the `db-schema` compose job (or `make db-schema`); see `docs/data-model.md`
 
 ## Kafka Configuration
 
@@ -82,22 +70,18 @@ Internal service discovery uses Docker Compose service names as hostnames:
   - `INTERNAL` on port 9093 — for container-to-container
   - `CONTROLLER` on port 9094 — for KRaft controller
 - **Auto-topic creation**: Disabled (topics created by `config/kafka/create-topics.sh`)
-- **Default partitions**: 6 (position topics: 12)
-- **Log retention**: 7 days (604,800,000 ms)
 - **Max message size**: 10 MB
 
 ### Kafka Topics
 
 | Topic | Partitions | Retention | Purpose |
 |-------|-----------|-----------|---------|
-| `events.entity.position` | 12 | 7 days | Real-time position updates |
-| `events.entity.created` | 6 | 30 days | Entity creation events |
-| `events.entity.updated` | 6 | 30 days | Entity update events |
-| `events.track.point` | 12 | 7 days | Track point events |
-| `alerts.geofence` | 3 | 30 days | Geofence breach alerts |
-| `alerts.anomaly` | 3 | 30 days | Anomaly detection alerts |
-| `analytics.pattern` | 3 | 30 days | Pattern analysis results |
-| `ingest.raw` | 12 | 7 days | Raw ingested data |
+| `observations.raw` | 24 | 3 days | Every report from every feed (protobuf), keyed by identity |
+| `observations.dlq` | 3 | 30 days | Payloads nothing could decode, with reason headers |
+| `entities.events` | 12 | 7 days | Typed entity events with full snapshots, keyed by entity id |
+| `alerts.events` | 3 | 30 days | Alerts from every producer |
+
+Messages are protobuf (`proto/sentinel/v1`); see the topic table in `docs/data-model.md` for keys, headers and consumers.
 
 ## Keycloak Configuration
 
@@ -106,7 +90,7 @@ Internal service discovery uses Docker Compose service names as hostnames:
 - **Clients**:
   - `sentinel-web` — Angular frontend (public, PKCE)
   - `sentinel-api` — API gateway (confidential, bearer-only)
-- **Roles**: `analyst`, `operator`, `admin`
+- **Roles**: `sentinel-viewer`, `sentinel-analyst`, `sentinel-operator`, `sentinel-admin`, plus `classification-u|c|s|ts`
 - **Custom claim**: `classification_level` (added to JWT via protocol mapper)
 
 ## Environment Variables
@@ -114,16 +98,13 @@ Internal service discovery uses Docker Compose service names as hostnames:
 See `.env.example` for the full list. Key variables:
 
 ```bash
-# Database
-DATABASE_HOST=localhost
-DATABASE_PORT=5432
-DATABASE_NAME=sentinel
-DATABASE_USER=sentinel
-DATABASE_PASSWORD=sentinel_dev
-
-# Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
+# Database (DB_* for the services, DATABASE_URL for the ingest registry)
+DB_HOST=localhost
+DB_PORT=5432
+DB_DATABASE=sentinel
+DB_USERNAME=sentinel
+DB_PASSWORD=sentinel_dev
+DATABASE_URL=postgres://sentinel:sentinel_dev@localhost:5432/sentinel?sslmode=disable
 
 # Kafka
 KAFKA_BROKERS=localhost:9092
@@ -132,9 +113,15 @@ KAFKA_BROKERS=localhost:9092
 KEYCLOAK_URL=http://localhost:8080
 KEYCLOAK_REALM=sentinel
 
+# Ingest: gateway → ingest service token, feeds to enable on first start, OpenSky credentials
+INGEST_SERVICE_TOKEN=dev-ingest-token
+FEEDS_BOOTSTRAP_ENABLED=
+OPENSKY_CLIENT_ID=
+OPENSKY_CLIENT_SECRET=
+
 # Service ports
 API_GATEWAY_PORT=3000
 WEB_PORT=4200
 ```
 
-When running inside Docker Compose, services use internal hostnames and the `KAFKA_BROKER=kafka:9093` internal listener.
+Ingest replica settings (`LEASE_TTL_SEC`, `LEASE_TICK_SEC`, `LEASE_REBALANCE_SEC`, `FEED_STALE_*`, `FEED_RETRY_*`, `SHUTDOWN_TIMEOUT_SEC`, buffers) are listed in `docs/feeds.md`. When running inside Docker Compose, services use internal hostnames and the `KAFKA_BROKERS=kafka:9093` internal listener.

@@ -110,46 +110,6 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Redis 7 (with AOF + RDB persistence)
-  # ===========================================================================
-  redis:
-    image: redis:7-alpine
-    container_name: sentinel-redis
-    hostname: redis
-    restart: unless-stopped
-    command: >
-      redis-server
-      --appendonly yes
-      --appendfsync everysec
-      --save 900 1
-      --save 300 10
-      --save 60 10000
-      --maxmemory 512mb
-      --maxmemory-policy allkeys-lru
-      --tcp-keepalive 60
-      --timeout 300
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          memory: 768m
-          cpus: "1.0"
-        reservations:
-          memory: 128m
-          cpus: "0.1"
-    networks:
-      - sentinel-network
-
-  # ===========================================================================
   # Apache Kafka 3.7 (KRaft mode, official apache/kafka image)
   # ===========================================================================
   kafka:
@@ -451,9 +411,6 @@ volumes:
   keycloak-db-data:
     driver: local
     name: sentinel-keycloak-db-data
-  redis-data:
-    driver: local
-    name: sentinel-redis-data
   opensearch-data:
     driver: local
     name: sentinel-opensearch-data
