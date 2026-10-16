@@ -90,7 +90,7 @@ Unknown body fields are rejected with 400, matching the former NestJS validation
 | POST | `/api/v1/auth/approve-registration/:userId` | `sentinel-admin` | Body `{ classificationLevel? }` (default `classification-u`). Enables the user, assigns `sentinel-viewer` plus the clearance role, clears `registrationDate`, triggers the verification email. If role assignment fails the user is re-disabled and stays pending |
 | POST | `/api/v1/auth/reject-registration/:userId` | `sentinel-admin` | Deletes the user and emails them; a mail failure is logged, not surfaced |
 | GET | `/api/v1/auth/users` | `sentinel-admin` | Enabled users (service accounts excluded) with roles and highest clearance |
-| PUT | `/api/v1/auth/users/:userId/classification` | `sentinel-admin` | Body `{ classificationLevel }` in `classification-u`, `classification-s`, `classification-ts` |
+| PUT | `/api/v1/auth/users/:userId/classification` | `sentinel-admin` | Body `{ classificationLevel }` in `classification-u`, `classification-c`, `classification-s`, `classification-ts` |
 
 ## WebSocket
 

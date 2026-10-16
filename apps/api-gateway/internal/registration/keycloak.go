@@ -20,10 +20,10 @@ import (
 )
 
 // ValidClassifications are the realm roles that encode clearance.
-var ValidClassifications = []string{"classification-u", "classification-s", "classification-ts"}
+var ValidClassifications = []string{"classification-u", "classification-c", "classification-s", "classification-ts"}
 
 // classificationPriority lists clearance roles highest first.
-var classificationPriority = []string{"classification-ts", "classification-s", "classification-u"}
+var classificationPriority = []string{"classification-ts", "classification-s", "classification-c", "classification-u"}
 
 // IsValidClassification reports whether s is an assignable clearance role.
 func IsValidClassification(s string) bool {
