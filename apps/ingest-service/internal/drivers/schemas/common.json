@@ -10,6 +10,53 @@
     "backpressure": { "type": "string", "enum": ["block", "drop", "nack"], "title": "Backpressure policy" },
     "pinnedReplica": { "type": "string", "title": "Pinned replica", "description": "Run this feed only on the named ingest replica (required for listening transports)." },
     "rawPayload": { "type": "string", "enum": ["none", "bounded", "full"], "default": "bounded", "title": "Raw payload retention" },
-    "classification": { "type": "string", "enum": ["UNCLASSIFIED", "CONFIDENTIAL", "SECRET", "TOP_SECRET"], "default": "UNCLASSIFIED", "title": "Classification", "description": "Stamped on every observation this feed emits unless the decoder reports a higher level. Entities keep the highest level any feed reported." }
+    "classification": { "type": "string", "enum": ["UNCLASSIFIED", "CONFIDENTIAL", "SECRET", "TOP_SECRET"], "default": "UNCLASSIFIED", "title": "Classification", "description": "Stamped on every observation this feed emits unless the decoder reports a higher level. Entities keep the highest level any feed reported." },
+    "direction": { "type": "string", "enum": ["in", "out", "both"], "title": "Direction", "description": "Narrows a driver that can do both to one way; cannot widen a driver's own direction." },
+    "policy": {
+      "type": "object",
+      "title": "Sharing policy",
+      "description": "What an outbound connection may send. Every filter is optional; an empty list means no restriction.",
+      "additionalProperties": false,
+      "properties": {
+        "entityTypes": { "type": "array", "title": "Entity types", "items": { "type": "string", "enum": ["PERSON", "VEHICLE", "VESSEL", "AIRCRAFT", "FACILITY", "EQUIPMENT", "UNIT", "SIGNAL", "CYBER", "SENSOR", "SATELLITE", "DRONE", "UNKNOWN"] } },
+        "feeds": { "type": "array", "title": "Feeds", "description": "Only entities that one of these feeds contributed to.", "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$" } },
+        "boxes": {
+          "type": "array", "title": "Areas", "maxItems": 16,
+          "description": "Only entities inside one of these boxes; west > east wraps the antimeridian.",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["north", "south", "east", "west"],
+            "properties": {
+              "north": { "type": "number", "minimum": -90, "maximum": 90 },
+              "south": { "type": "number", "minimum": -90, "maximum": 90 },
+              "east": { "type": "number", "minimum": -180, "maximum": 180 },
+              "west": { "type": "number", "minimum": -180, "maximum": 180 }
+            }
+          }
+        },
+        "classificationCeiling": { "type": "string", "enum": ["UNCLASSIFIED", "CONFIDENTIAL", "SECRET", "TOP_SECRET"], "default": "UNCLASSIFIED", "title": "Classification ceiling", "description": "Entities and alerts above this level are never sent." },
+        "reexport": { "type": "boolean", "default": false, "title": "Re-export", "description": "Also send entities that another outbound connection contributed to (loops back to this connection are always prevented)." },
+        "alerts": {
+          "type": "object", "title": "Alerts", "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "minSeverity": { "type": "string", "enum": ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+            "types": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "outbound": {
+      "type": "object",
+      "title": "Outbound tuning",
+      "additionalProperties": false,
+      "properties": {
+        "queueMax": { "type": "integer", "minimum": 100, "default": 10000, "title": "Queue size", "description": "Pending updates kept per connection; the oldest position update is dropped beyond it." },
+        "perEntityMinSec": { "type": "number", "minimum": 0, "default": 5, "title": "Min seconds between updates per entity" },
+        "maxEventsPerSec": { "type": "integer", "minimum": 1, "default": 200, "title": "Max events per second" },
+        "maxLagSec": { "type": "integer", "minimum": 0, "default": 300, "title": "Max lag (s)", "description": "Events older than this when delivered are dropped instead of replayed." },
+        "policyExitGraceSec": { "type": "integer", "minimum": 0, "default": 30, "title": "Policy exit grace (s)", "description": "How long an entity must stay outside the policy before the remote is told to drop it." }
+      }
+    }
   }
 }

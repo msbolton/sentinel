@@ -13,7 +13,11 @@
 -- feeds  (apps/ingest-service/internal/registry)
 -- Desired state of every feed, built-in or user-defined. id is an immutable
 -- slug that entities."feedId", track_points."feedId" and
--- feed_ageout_config."feedId" store as-is.
+-- feed_ageout_config."feedId" store as-is. A row is a source feed or a
+-- connection that also (or only) sends: the driver's direction, narrowed by
+-- config.direction, decides; config.policy and config.outbound hold the
+-- sharing policy and sink tuning; feed_status.detail.outbound carries the
+-- sink counters. The Kafka consumer group sentinel-conn-<id> is derived.
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS sentinel.feeds (
   id           VARCHAR(64)  PRIMARY KEY CHECK (id ~ '^[a-z0-9][a-z0-9-]{0,62}$'),

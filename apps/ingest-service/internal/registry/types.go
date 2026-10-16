@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/sentinel/ingest-service/internal/source/driver"
 )
 
 // Notification channels.
@@ -122,6 +124,27 @@ type CommonOptions struct {
 	// Classification is the default level stamped on this feed's
 	// observations (bare sentinel.v1.Classification name; "" = UNCLASSIFIED).
 	Classification string `json:"classification"`
+	// Direction narrows a "both" driver to one way; "" keeps the driver's.
+	Direction string `json:"direction"`
+	// Policy is the outbound sharing policy (entity types, feeds, boxes,
+	// classification ceiling, alerts); only meaningful for out|both.
+	Policy json.RawMessage `json:"policy"`
+	// Outbound tunes the sink pipeline (queue, rate, lag, grace).
+	Outbound json.RawMessage `json:"outbound"`
+}
+
+// Direction is the feed's effective direction given its driver's: the
+// config may narrow "both" to "in" or "out" but never widen.
+func (f Feed) Direction(driverDir driver.Direction) driver.Direction {
+	want := driver.Direction(f.Common().Direction)
+	drv := driverDir.Normalize()
+	if want == "" || want == drv {
+		return drv
+	}
+	if drv == driver.DirectionBoth && (want == driver.DirectionIn || want == driver.DirectionOut) {
+		return want
+	}
+	return drv
 }
 
 // Common decodes the common options out of a feed's config.

@@ -117,7 +117,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	driver, capability := q.Get("driver"), q.Get("capability")
+	driver, capability, direction := q.Get("driver"), q.Get("capability"), q.Get("direction")
 	var enabled *bool
 	if v := q.Get("enabled"); v != "" {
 		b := v == "true"
@@ -137,9 +137,26 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		out = append(out, toFeedDTO(h.present(f), h.catalog))
+		dto := toFeedDTO(h.present(f), h.catalog)
+		// direction=in|out lists every feed that moves data that way, so
+		// "both" matches either; direction=both matches only "both".
+		if direction != "" && !matchesDirection(dto.Direction, direction) {
+			continue
+		}
+		out = append(out, dto)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func matchesDirection(have, want string) bool {
+	switch want {
+	case "in":
+		return have == "in" || have == "both"
+	case "out":
+		return have == "out" || have == "both"
+	default:
+		return have == want
+	}
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {

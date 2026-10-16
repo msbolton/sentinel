@@ -202,6 +202,18 @@ func TestListAndFilters(t *testing.T) {
 	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 0 {
 		t.Fatalf("enabled filter = %s", body)
 	}
+	// Every built-in feed is a source: direction=in lists all, out none.
+	_, body = do(t, srv, "GET", "/feeds?direction=in", "", reqOpts{})
+	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 3 || feeds[0].Direction != "in" {
+		t.Fatalf("direction=in filter = %s", body)
+	}
+	_, body = do(t, srv, "GET", "/feeds?direction=out", "", reqOpts{})
+	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 0 {
+		t.Fatalf("direction=out filter = %s", body)
+	}
+	if !matchesDirection("both", "in") || !matchesDirection("both", "out") || matchesDirection("in", "both") || matchesDirection("out", "in") {
+		t.Error("matchesDirection")
+	}
 }
 
 func TestCreatePatchEnableDelete(t *testing.T) {
@@ -363,7 +375,7 @@ func TestDrivers(t *testing.T) {
 	}
 	resp, out = do(t, srv, "GET", "/drivers/opensky", "", reqOpts{})
 	var info drivers.Info
-	if resp.StatusCode != 200 || json.Unmarshal(out, &info) != nil || len(info.ConfigSchema) == 0 || len(info.SecretFields) != 2 {
+	if resp.StatusCode != 200 || json.Unmarshal(out, &info) != nil || len(info.ConfigSchema) == 0 || len(info.SecretFields) != 2 || info.Direction != "in" {
 		t.Fatalf("driver = %d %s", resp.StatusCode, out)
 	}
 	if resp, _ := do(t, srv, "GET", "/drivers/nope", "", reqOpts{}); resp.StatusCode != 404 {
