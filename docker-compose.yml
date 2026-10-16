@@ -380,6 +380,34 @@ services:
       - sentinel-network
 
   # ===========================================================================
+  # GeoServer provisioning (idempotent; see config/geoserver/README.md)
+  # ===========================================================================
+  geoserver-init:
+    image: curlimages/curl:8.10.1
+    container_name: sentinel-geoserver-init
+    depends_on:
+      geoserver:
+        condition: service_healthy
+      db-schema:
+        condition: service_completed_successfully
+    environment:
+      GEOSERVER_URL: http://geoserver:8600/geoserver
+      GEOSERVER_ADMIN_USER: admin
+      GEOSERVER_ADMIN_PASSWORD: geoserver_dev
+      GIS_DB_PASSWORD: ${GIS_DB_PASSWORD:-sentinel_gis_dev}
+      GIS_USER_PASSWORD_U: ${GIS_USER_PASSWORD_U:-gis-u-dev}
+      GIS_USER_PASSWORD_C: ${GIS_USER_PASSWORD_C:-gis-c-dev}
+      GIS_USER_PASSWORD_S: ${GIS_USER_PASSWORD_S:-gis-s-dev}
+      GIS_USER_PASSWORD_TS: ${GIS_USER_PASSWORD_TS:-gis-ts-dev}
+    volumes:
+      - ./config/geoserver/provision.sh:/scripts/provision.sh:ro
+      - ./config/geoserver/entities.sld:/scripts/entities.sld:ro
+    entrypoint: ["/bin/sh", "/scripts/provision.sh"]
+    restart: "no"
+    networks:
+      - sentinel-network
+
+  # ===========================================================================
   #
   #  APPLICATION SERVICES
   #
