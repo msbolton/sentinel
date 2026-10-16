@@ -36,6 +36,7 @@ func ToProto(o *obs.Observation) *sentinelv1.Observation {
 		CountryOfOrigin:   o.CountryOfOrigin,
 		Affiliation:       parse[sentinelv1.Affiliation](o.Affiliation),
 		OperationalStatus: parse[sentinelv1.OperationalStatus](o.OperationalStatus),
+		Classification:    parse[sentinelv1.Classification](o.Classification),
 		ReplicaId:         o.ReplicaID,
 		FencingToken:      o.FencingToken,
 		Heading:           o.Heading,

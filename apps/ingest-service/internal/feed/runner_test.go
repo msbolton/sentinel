@@ -93,6 +93,37 @@ func TestRunnerStampsProvenanceAndDedupes(t *testing.T) {
 	}
 }
 
+func TestRunnerStampsClassification(t *testing.T) {
+	ts := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name, feedLevel, obsLevel, want string
+	}{
+		{"default unclassified", "", "", obs.ClassUnclassified},
+		{"feed default applied", obs.ClassSecret, "", obs.ClassSecret},
+		{"decoder may raise", obs.ClassConfidential, obs.ClassTopSecret, obs.ClassTopSecret},
+		{"decoder never lowers", obs.ClassSecret, obs.ClassUnclassified, obs.ClassSecret},
+		{"unknown level ranks lowest", obs.ClassConfidential, "ULTRA", obs.ClassConfidential},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pub := &memPublisher{}
+			drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+				o := fix("a", 40, -80, ts)
+				o.Classification = tc.obsLevel
+				return sink.Emit(ctx, o)
+			}}
+			r := NewRunner("f", "d", drv, pub, nil, nil, RunnerOptions{Classification: tc.feedLevel})
+			if err := r.Run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			got := pub.observations()
+			if len(got) != 1 || got[0].Classification != tc.want {
+				t.Fatalf("classification = %q, want %q", got[0].Classification, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunnerRawPolicies(t *testing.T) {
 	for policy, want := range map[string]string{RawNone: "", RawFull: "0123456789", RawBounded: "0123"} {
 		pub := &memPublisher{}

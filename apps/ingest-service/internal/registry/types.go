@@ -119,6 +119,9 @@ type CommonOptions struct {
 	Backpressure     string `json:"backpressure"`
 	PinnedReplica    string `json:"pinnedReplica"`
 	RawPayload       string `json:"rawPayload"`
+	// Classification is the default level stamped on this feed's
+	// observations (bare sentinel.v1.Classification name; "" = UNCLASSIFIED).
+	Classification string `json:"classification"`
 }
 
 // Common decodes the common options out of a feed's config.

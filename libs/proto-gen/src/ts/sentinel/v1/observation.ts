@@ -9,6 +9,10 @@ import Long from "long";
 import _m0 from "protobufjs/minimal";
 import { Timestamp, Timestamp as Timestamp1 } from "../../google/protobuf/timestamp";
 import {
+  Classification,
+  classificationFromJSON,
+  classificationToJSON,
+  classificationToNumber,
   Coordinate,
   Identity,
   OperationalStatus,
@@ -138,6 +142,12 @@ export interface Observation {
    */
   replicaId: string;
   fencingToken: number;
+  /**
+   * Classification of the report: the feed's configured default, raised by
+   * the decoder when the source carries a higher level. Entities take the
+   * highest level any contributing observation carried.
+   */
+  classification: Classification;
 }
 
 function createBaseRawPayload(): RawPayload {
@@ -264,6 +274,7 @@ function createBaseObservation(): Observation {
     raw: undefined,
     replicaId: "",
     fencingToken: 0,
+    classification: Classification.UNSPECIFIED,
   };
 }
 
@@ -367,6 +378,9 @@ export const Observation = {
     }
     if (message.fencingToken !== 0) {
       writer.uint32(264).int64(message.fencingToken);
+    }
+    if (message.classification !== Classification.UNSPECIFIED) {
+      writer.uint32(272).int32(classificationToNumber(message.classification));
     }
     return writer;
   },
@@ -609,6 +623,13 @@ export const Observation = {
 
           message.fencingToken = longToNumber(reader.int64() as Long);
           continue;
+        case 34:
+          if (tag !== 272) {
+            break;
+          }
+
+          message.classification = classificationFromJSON(reader.int32());
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -667,6 +688,9 @@ export const Observation = {
       raw: isSet(object.raw) ? RawPayload.fromJSON(object.raw) : undefined,
       replicaId: isSet(object.replicaId) ? globalThis.String(object.replicaId) : "",
       fencingToken: isSet(object.fencingToken) ? globalThis.Number(object.fencingToken) : 0,
+      classification: isSet(object.classification)
+        ? classificationFromJSON(object.classification)
+        : Classification.UNSPECIFIED,
     };
   },
 
@@ -771,6 +795,9 @@ export const Observation = {
     if (message.fencingToken !== 0) {
       obj.fencingToken = Math.round(message.fencingToken);
     }
+    if (message.classification !== Classification.UNSPECIFIED) {
+      obj.classification = classificationToJSON(message.classification);
+    }
     return obj;
   },
 
@@ -833,6 +860,7 @@ export const Observation = {
     message.raw = (object.raw !== undefined && object.raw !== null) ? RawPayload.fromPartial(object.raw) : undefined;
     message.replicaId = object.replicaId ?? "";
     message.fencingToken = object.fencingToken ?? 0;
+    message.classification = object.classification ?? Classification.UNSPECIFIED;
     return message;
   },
 };

@@ -57,6 +57,11 @@ CREATE INDEX IF NOT EXISTS idx_alerts_severity ON sentinel.alerts (severity);
 CREATE INDEX IF NOT EXISTS idx_alerts_type     ON sentinel.alerts ("alertType");
 CREATE INDEX IF NOT EXISTS idx_alerts_created  ON sentinel.alerts ("createdAt" DESC);
 
+-- Inherited from the primary entity when the alert fired; reads apply the
+-- caller's clearance as a ceiling (see db/schema/05_classification.sql).
+ALTER TABLE sentinel.alerts ADD COLUMN IF NOT EXISTS classification VARCHAR(50) NOT NULL DEFAULT 'UNCLASSIFIED';
+CREATE INDEX IF NOT EXISTS idx_alerts_classification ON sentinel.alerts (classification);
+
 CREATE TABLE IF NOT EXISTS sentinel.alert_rules (
   id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name                   VARCHAR(255) NOT NULL,

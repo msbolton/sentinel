@@ -104,6 +104,9 @@ message Alert {
 
   // Arbitrary key-value metadata associated with this alert.
   map<string, string> metadata = 13;
+
+  // Classification inherited from the primary entity when the alert fired.
+  Classification classification = 14;
 }
 
 // CreateAlertRuleRequest registers a new geofence-based alert rule.

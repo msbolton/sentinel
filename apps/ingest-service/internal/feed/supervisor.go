@@ -475,7 +475,7 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 		fail(fmt.Errorf("building driver: %w", err))
 		return
 	}
-	runner := NewRunner(spec.ID, spec.Driver, drv, s.pub, s.metrics, logger, RunnerOptions{RawPolicy: common.RawPayload, RawMax: s.opts.RawMax, FencingToken: inst.token})
+	runner := NewRunner(spec.ID, spec.Driver, drv, s.pub, s.metrics, logger, RunnerOptions{RawPolicy: common.RawPayload, RawMax: s.opts.RawMax, FencingToken: inst.token, Classification: common.Classification})
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
