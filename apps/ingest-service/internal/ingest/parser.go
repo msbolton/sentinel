@@ -59,19 +59,26 @@ func (p *Parser) ParseFormat(format, sourceType string, data []byte) (*models.En
 	var entity *models.EntityPosition
 	var err error
 
+	var decoder string
 	switch format {
 	case "json":
 		entity, err = p.ParseJSON(data)
-	case "nmea":
+		decoder = DecoderJSON
+	case "nmea", "nmea-gps":
 		entity, err = p.ParseNMEA(data)
+		decoder = DecoderNMEAGPS
 	case "cot":
 		entity, err = p.ParseCoT(data)
-	case "ais":
+		decoder = DecoderCoT
+	case "ais", "nmea-ais":
 		entity, err = p.ParseAIS(data)
-	case "adsb":
+		decoder = DecoderNMEAAIS
+	case "adsb", "sbs":
 		entity, err = p.ParseADSB(data)
+		decoder = DecoderSBS
 	case "link16":
 		entity, err = p.ParseLink16(data)
+		decoder = DecoderLink16
 	default:
 		return p.ParseGeneric(sourceType, data)
 	}
@@ -79,8 +86,24 @@ func (p *Parser) ParseFormat(format, sourceType string, data []byte) (*models.En
 	if err != nil {
 		return nil, err
 	}
-	entity.Source = sourceType
-	return entity, nil
+	return stamp(entity, sourceType, decoder), nil
+}
+
+// Decoder names reported on parsed entities; they match the observation
+// vocabulary in proto/sentinel/v1/observation.proto.
+const (
+	DecoderJSON    = "json"
+	DecoderNMEAGPS = "nmea-gps"
+	DecoderNMEAAIS = "nmea-ais"
+	DecoderCoT     = "cot"
+	DecoderSBS     = "sbs"
+	DecoderLink16  = "link16"
+)
+
+func stamp(e *models.EntityPosition, sourceType, decoder string) *models.EntityPosition {
+	e.Source = sourceType
+	e.Decoder = decoder
+	return e
 }
 
 // ParseGeneric attempts auto-detection of the message format and delegates
@@ -92,13 +115,15 @@ func (p *Parser) ParseGeneric(sourceType string, data []byte) (*models.EntityPos
 	}
 
 	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return nil, fmt.Errorf("blank payload")
+	}
 
 	// Try JSON first (most common ingest format).
 	if trimmed[0] == '{' {
 		entity, err := p.ParseJSON(data)
 		if err == nil {
-			entity.Source = sourceType
-			return entity, nil
+			return stamp(entity, sourceType, DecoderJSON), nil
 		}
 	}
 
@@ -106,8 +131,7 @@ func (p *Parser) ParseGeneric(sourceType string, data []byte) (*models.EntityPos
 	if strings.HasPrefix(trimmed, "<?xml") || strings.HasPrefix(trimmed, "<event") {
 		entity, err := p.ParseCoT(data)
 		if err == nil {
-			entity.Source = sourceType
-			return entity, nil
+			return stamp(entity, sourceType, DecoderCoT), nil
 		}
 	}
 
@@ -115,8 +139,7 @@ func (p *Parser) ParseGeneric(sourceType string, data []byte) (*models.EntityPos
 	if strings.HasPrefix(trimmed, "MSG,") {
 		entity, err := p.ParseADSB(data)
 		if err == nil {
-			entity.Source = sourceType
-			return entity, nil
+			return stamp(entity, sourceType, DecoderSBS), nil
 		}
 	}
 
@@ -126,14 +149,12 @@ func (p *Parser) ParseGeneric(sourceType string, data []byte) (*models.EntityPos
 		if strings.HasPrefix(trimmed, "!") {
 			entity, err := p.ParseAIS(data)
 			if err == nil {
-				entity.Source = sourceType
-				return entity, nil
+				return stamp(entity, sourceType, DecoderNMEAAIS), nil
 			}
 		}
 		entity, err := p.ParseNMEA(data)
 		if err == nil {
-			entity.Source = sourceType
-			return entity, nil
+			return stamp(entity, sourceType, DecoderNMEAGPS), nil
 		}
 	}
 
@@ -141,8 +162,7 @@ func (p *Parser) ParseGeneric(sourceType string, data []byte) (*models.EntityPos
 	if len(data) >= 16 && isJREAPCHeader(data) {
 		entity, err := p.ParseLink16(data)
 		if err == nil {
-			entity.Source = sourceType
-			return entity, nil
+			return stamp(entity, sourceType, DecoderLink16), nil
 		}
 	}
 
@@ -670,12 +690,13 @@ func (p *Parser) parseAISType5(bits []byte, rawData []byte) (*models.EntityPosit
 		aisData.Flag = mmsiMIDToCountry(mmsiStr[:3])
 	}
 
+	// A static and voyage report carries no fix: NoPosition tells the
+	// pipeline not to move the track and the observation carries no position.
 	return &models.EntityPosition{
 		EntityID:         fmt.Sprintf("MMSI-%d", mmsi),
 		EntityType:       models.EntityTypeVessel,
 		Name:             name,
-		Latitude:         0,
-		Longitude:        0,
+		NoPosition:       true,
 		Timestamp:        time.Now().UTC(),
 		RawData:          rawData,
 		TrackEnvironment: "SEA_SURFACE",
@@ -763,7 +784,7 @@ func (p *Parser) ParseADSB(data []byte) (*models.EntityPosition, error) {
 		return nil, fmt.Errorf("ADS-B transmission type %s has no position data (only types 2/3 supported)", txType)
 	}
 
-	icaoHex := strings.TrimSpace(fields[4])
+	icaoHex := strings.ToUpper(strings.TrimSpace(fields[4]))
 	if icaoHex == "" {
 		return nil, fmt.Errorf("ADS-B message missing ICAO hex address")
 	}

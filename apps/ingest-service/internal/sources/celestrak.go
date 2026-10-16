@@ -27,6 +27,8 @@ const kmsToKnots = 1943.84
 // CelesTrakListener fetches TLE data from CelesTrak, propagates satellite
 // positions using SGP4, and feeds them into the ingestion pipeline.
 type CelesTrakListener struct {
+	// FeedID is stamped on every emitted message; set by the feed runtime.
+	FeedID string
 	cfg     *config.Config
 	input   chan<- *models.IngestMessage
 	logger  *zap.Logger
@@ -314,6 +316,7 @@ func (l *CelesTrakListener) propagateAll() {
 			SourceAddr: "celestrak.org",
 			Payload:    payload,
 			ReceivedAt: now,
+			FeedID:     l.FeedID,
 		}
 
 		select {

@@ -41,6 +41,8 @@ const (
 // Large areas stretch the poll interval (see effectiveInterval) so a global
 // view does not burn OpenSky credits at the viewport rate.
 type OpenSkyListener struct {
+	// FeedID is stamped on every emitted message; set by the feed runtime.
+	FeedID string
 	cfg     *config.Config
 	input   chan<- *models.IngestMessage
 	logger  *zap.Logger
@@ -411,6 +413,7 @@ func (l *OpenSkyListener) poll() error {
 			SourceAddr: "opensky-network.org",
 			Payload:    payload,
 			ReceivedAt: time.Now().UTC(),
+			FeedID:     l.FeedID,
 		}
 
 		select {

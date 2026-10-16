@@ -1,103 +1,124 @@
 package ingest
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/sentinel/ingest-service/internal/config"
-	kafkaproducer "github.com/sentinel/ingest-service/internal/kafka"
 	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/models"
+	"github.com/sentinel/ingest-service/internal/obs"
 )
 
-// Pipeline is the core ingestion pipeline that receives raw messages from
-// multiple sensor sources, parses and normalizes them, correlates entity
-// tracks, batches the results, and produces them to Kafka.
+// LegacyProducer sends the JSON entity positions older consumers still read.
+type LegacyProducer interface {
+	ProduceBatch(topic string, messages []*models.EntityPosition) error
+}
+
+// ObservationPublisher receives every decoded report and the payloads that
+// could not be decoded.
+type ObservationPublisher interface {
+	Emit(ctx context.Context, o *obs.Observation) error
+	DeadLetter(feedID, sourceType, decoder string, raw []byte, reason string, cause error)
+}
+
+// Pipeline receives raw messages from the source listeners, parses and
+// normalises them, correlates tracks, and publishes each report as an
+// observation. While a legacy topic is configured it also batches the JSON
+// entity positions to it.
 type Pipeline struct {
 	input         chan *models.IngestMessage
 	output        chan *models.EntityPosition
-	producer      *kafkaproducer.Producer
+	legacy        LegacyProducer
+	publisher     ObservationPublisher
 	logger        *zap.Logger
 	metrics       *metrics.Metrics
 	parser        *Parser
 	correlator    *TrackCorrelator
 	batchSize     int
 	flushInterval time.Duration
-	entityTopic   string
+	legacyTopic   string
+	rawMax        int
 	workerCount   int
 	workerWg      sync.WaitGroup
 	wg            sync.WaitGroup
 	stop          chan struct{}
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
-// NewPipeline creates a new ingestion pipeline with the given configuration,
-// Kafka producer, logger, and metrics collector.
-func NewPipeline(cfg *config.Config, producer *kafkaproducer.Producer, logger *zap.Logger, m *metrics.Metrics) *Pipeline {
+// NewPipeline creates a pipeline. legacy may be nil when cfg.KafkaLegacyTopic
+// is empty.
+func NewPipeline(cfg *config.Config, legacy LegacyProducer, publisher ObservationPublisher, logger *zap.Logger, m *metrics.Metrics) *Pipeline {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Pipeline{
 		input:         make(chan *models.IngestMessage, cfg.WorkerPoolSize*cfg.BatchSize),
 		output:        make(chan *models.EntityPosition, cfg.WorkerPoolSize*cfg.BatchSize),
-		producer:      producer,
+		legacy:        legacy,
+		publisher:     publisher,
 		logger:        logger,
 		metrics:       m,
 		parser:        NewParser(),
 		correlator:    NewTrackCorrelator(),
 		batchSize:     cfg.BatchSize,
 		flushInterval: time.Duration(cfg.FlushIntervalMs) * time.Millisecond,
-		entityTopic:   cfg.KafkaEntityTopic,
+		legacyTopic:   cfg.KafkaLegacyTopic,
+		rawMax:        cfg.RawPayloadMaxBytes,
 		workerCount:   cfg.WorkerPoolSize,
 		stop:          make(chan struct{}),
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 }
 
-// Input returns the pipeline's input channel where raw ingest messages
-// should be sent by source listeners.
+// Input returns the channel source listeners send raw messages to.
 func (p *Pipeline) Input() chan<- *models.IngestMessage {
 	return p.input
 }
 
-// Start launches the worker pool goroutines for parsing/normalization
-// and the batcher goroutine for Kafka production.
+// Start launches the worker pool and, when a legacy topic is configured,
+// the JSON batcher.
 func (p *Pipeline) Start() {
 	p.logger.Info("starting ingestion pipeline",
 		zap.Int("workers", p.workerCount),
 		zap.Int("batch_size", p.batchSize),
 		zap.Duration("flush_interval", p.flushInterval),
+		zap.String("legacy_topic", p.legacyTopic),
 	)
 
-	// Start worker pool for parsing and correlation.
 	for i := 0; i < p.workerCount; i++ {
 		p.workerWg.Add(1)
 		go p.worker(i)
 	}
 
-	// Start batcher for Kafka production.
 	p.wg.Add(1)
 	go p.batcher()
 
-	// Start queue depth reporter.
 	p.wg.Add(1)
 	go p.reportQueueDepth()
 }
 
-// Stop signals all pipeline goroutines to shut down and waits for them to finish.
+// Stop closes the input, waits for the workers to drain it, then flushes
+// the legacy batcher. The observation publisher is closed by the caller
+// afterwards, so every observation the workers emitted is already queued.
 func (p *Pipeline) Stop() {
 	p.logger.Info("stopping ingestion pipeline")
 	close(p.stop)
 	close(p.input)
 
-	// Wait for workers to finish processing, then close the output channel
-	// so the batcher can drain remaining items and exit.
 	p.workerWg.Wait()
+	p.cancel()
 	close(p.output)
 
 	p.wg.Wait()
 	p.logger.Info("ingestion pipeline stopped")
 }
 
-// worker is a goroutine that reads from the input channel, parses and normalizes
-// each message, runs track correlation, and forwards the result to the output channel.
 func (p *Pipeline) worker(id int) {
 	defer p.workerWg.Done()
 
@@ -110,61 +131,107 @@ func (p *Pipeline) worker(id int) {
 	p.logger.Debug("pipeline worker stopped", zap.Int("worker_id", id))
 }
 
-// processMessage handles a single ingest message through the full pipeline:
-// parse, normalize, correlate, and forward to the output channel.
+// processMessage parses, correlates and publishes one raw message. A
+// parser panic is recovered and dead-lettered so one bad payload cannot
+// take the service down.
 func (p *Pipeline) processMessage(msg *models.IngestMessage) {
 	start := time.Now()
-
 	p.metrics.MessagesReceived.WithLabelValues(msg.SourceType).Inc()
 
-	// Parse the raw message into an entity position.
-	var entity *models.EntityPosition
-	var err error
-	if msg.Format != "" {
-		entity, err = p.parser.ParseFormat(msg.Format, msg.SourceType, msg.Payload)
-	} else {
-		entity, err = p.parser.ParseGeneric(msg.SourceType, msg.Payload)
-	}
+	entity, err := p.parse(msg)
 	if err != nil {
-		p.metrics.MessagesFailed.WithLabelValues(msg.SourceType, "parse_error").Inc()
-		p.logger.Debug("failed to parse message",
-			zap.String("source_type", msg.SourceType),
-			zap.String("source_addr", msg.SourceAddr),
-			zap.Error(err),
-		)
+		var pe *panicError
+		reason := "parse_error"
+		if errors.As(err, &pe) {
+			reason = "panic"
+			p.metrics.DecodePanics.WithLabelValues(msg.SourceType).Inc()
+			p.logger.Error("parser panic recovered",
+				zap.String("source_type", msg.SourceType),
+				zap.String("feed_id", msg.FeedID),
+				zap.Any("panic", pe.value),
+			)
+		} else {
+			p.logger.Debug("failed to parse message",
+				zap.String("source_type", msg.SourceType),
+				zap.String("source_addr", msg.SourceAddr),
+				zap.Error(err),
+			)
+		}
+		p.metrics.MessagesFailed.WithLabelValues(msg.SourceType, reason).Inc()
+		if p.publisher != nil {
+			p.publisher.DeadLetter(msg.FeedID, msg.SourceType, msg.Format, msg.Payload, reason, err)
+		}
 		return
 	}
 
-	// Propagate feed ID from source to entity.
-	entity.FeedID = msg.FeedID
+	if msg.FeedID != "" {
+		entity.FeedID = msg.FeedID
+	}
 
-	// Correlate with existing tracks.
+	// A report without a fix (an AIS static report) is published as an
+	// observation but neither moves the track nor reaches legacy consumers.
+	if entity.NoPosition {
+		p.metrics.FramesSkipped.WithLabelValues(msg.SourceType, "no_position").Inc()
+		p.emit(entity, msg)
+		return
+	}
+
 	correlated, isDuplicate := p.correlator.Correlate(entity)
 	if isDuplicate {
-		p.metrics.MessagesFailed.WithLabelValues(msg.SourceType, "duplicate").Inc()
+		p.metrics.FramesSkipped.WithLabelValues(msg.SourceType, "duplicate").Inc()
 		return
 	}
 
-	// Forward to the output channel for batching.
-	select {
-	case p.output <- correlated:
-		p.metrics.MessagesProcessed.WithLabelValues(correlated.EntityType).Inc()
-	case <-p.stop:
-		return
-	default:
-		// Output channel full; drop the message and record the failure.
-		p.metrics.MessagesFailed.WithLabelValues(msg.SourceType, "backpressure").Inc()
-		p.logger.Warn("output channel full, dropping message",
-			zap.String("entity_id", correlated.EntityID),
-		)
+	p.emit(correlated, msg)
+	p.metrics.MessagesProcessed.WithLabelValues(correlated.EntityType).Inc()
+
+	if p.legacyTopic != "" {
+		select {
+		case p.output <- correlated:
+		case <-p.stop:
+			return
+		default:
+			p.metrics.MessagesFailed.WithLabelValues(msg.SourceType, "backpressure").Inc()
+			p.logger.Warn("legacy output channel full, dropping message",
+				zap.String("entity_id", correlated.EntityID),
+			)
+		}
 	}
 
 	p.metrics.ProcessingDuration.Observe(time.Since(start).Seconds())
 }
 
-// batcher accumulates entity positions from the output channel and produces
-// them to Kafka in batches, flushing either when the batch is full or when
-// the flush interval elapses.
+// emit converts and publishes one report. Emit blocks while the publisher
+// is saturated; that stall propagates to the input channel and on to the
+// listeners' own backpressure policies.
+func (p *Pipeline) emit(entity *models.EntityPosition, msg *models.IngestMessage) {
+	if p.publisher == nil {
+		return
+	}
+	o := obs.FromEntityPosition(entity, msg, p.rawMax)
+	if err := p.publisher.Emit(p.ctx, o); err != nil && !errors.Is(err, context.Canceled) {
+		p.metrics.MessagesFailed.WithLabelValues(msg.SourceType, "publish").Inc()
+		p.logger.Warn("observation not published", zap.String("feed_id", o.FeedID), zap.Error(err))
+	}
+}
+
+type panicError struct{ value any }
+
+func (e *panicError) Error() string { return fmt.Sprintf("parser panic: %v", e.value) }
+
+func (p *Pipeline) parse(msg *models.IngestMessage) (entity *models.EntityPosition, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			entity, err = nil, &panicError{value: r}
+		}
+	}()
+	if msg.Format != "" {
+		return p.parser.ParseFormat(msg.Format, msg.SourceType, msg.Payload)
+	}
+	return p.parser.ParseGeneric(msg.SourceType, msg.Payload)
+}
+
+// batcher accumulates legacy entity positions and produces them in batches.
 func (p *Pipeline) batcher() {
 	defer p.wg.Done()
 
@@ -176,7 +243,6 @@ func (p *Pipeline) batcher() {
 		select {
 		case entity, ok := <-p.output:
 			if !ok {
-				// Channel closed; flush remaining.
 				p.flush(batch)
 				return
 			}
@@ -193,7 +259,6 @@ func (p *Pipeline) batcher() {
 			}
 
 		case <-p.stop:
-			// Drain remaining messages from the output channel.
 			for entity := range p.output {
 				batch = append(batch, entity)
 				if len(batch) >= p.batchSize {
@@ -207,26 +272,18 @@ func (p *Pipeline) batcher() {
 	}
 }
 
-// flush produces a batch of entity positions to Kafka.
 func (p *Pipeline) flush(batch []*models.EntityPosition) {
-	if len(batch) == 0 {
+	if len(batch) == 0 || p.legacy == nil || p.legacyTopic == "" {
 		return
 	}
-
-	if err := p.producer.ProduceBatch(p.entityTopic, batch); err != nil {
-		p.logger.Error("failed to produce batch to kafka",
+	if err := p.legacy.ProduceBatch(p.legacyTopic, batch); err != nil {
+		p.logger.Error("failed to produce legacy batch to kafka",
 			zap.Int("batch_size", len(batch)),
 			zap.Error(err),
-		)
-	} else {
-		p.logger.Debug("flushed batch to kafka",
-			zap.Int("batch_size", len(batch)),
-			zap.String("topic", p.entityTopic),
 		)
 	}
 }
 
-// reportQueueDepth periodically updates the pipeline queue depth gauge metric.
 func (p *Pipeline) reportQueueDepth() {
 	defer p.wg.Done()
 

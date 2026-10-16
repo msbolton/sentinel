@@ -12,8 +12,11 @@ require (
 	github.com/prometheus/client_golang v1.19.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/sentinel/go-common v0.0.0
+	github.com/sentinel/proto-gen v0.0.0
 	go.uber.org/zap v1.27.0
 	golang.org/x/text v0.29.0
+	golang.org/x/time v0.5.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -31,7 +34,8 @@ require (
 	golang.org/x/net v0.23.0 // indirect
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.19.0 // indirect
-	google.golang.org/protobuf v1.34.0 // indirect
 )
 
 replace github.com/sentinel/go-common => ../../libs/common-go
+
+replace github.com/sentinel/proto-gen => ../../libs/proto-gen/src/go

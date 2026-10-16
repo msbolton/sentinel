@@ -134,21 +134,27 @@ func builtinFactories(base *config.Config) map[string]runtime.Factory {
 			if err != nil {
 				return nil, err
 			}
-			return sources.NewOpenSkyListener(cfg, deps.Input, deps.Logger, deps.Metrics, deps.OnSuccess, deps.OnError), nil
+			l := sources.NewOpenSkyListener(cfg, deps.Input, deps.Logger, deps.Metrics, deps.OnSuccess, deps.OnError)
+			l.FeedID = spec.ID
+			return l, nil
 		},
 		"adsblol": func(spec registry.Feed, _ map[string]string, deps runtime.Deps) (sources.Listener, error) {
 			cfg, err := adsblolListenerConfig(base, spec)
 			if err != nil {
 				return nil, err
 			}
-			return sources.NewADSBLolListener(cfg, deps.Input, deps.Logger, deps.Metrics, deps.OnSuccess, deps.OnError), nil
+			l := sources.NewADSBLolListener(cfg, deps.Input, deps.Logger, deps.Metrics, deps.OnSuccess, deps.OnError)
+			l.FeedID = spec.ID
+			return l, nil
 		},
 		"celestrak": func(spec registry.Feed, _ map[string]string, deps runtime.Deps) (sources.Listener, error) {
 			cfg, err := celestrakListenerConfig(base, spec)
 			if err != nil {
 				return nil, err
 			}
-			return sources.NewCelesTrakListener(cfg, deps.Input, deps.Logger, deps.Metrics, deps.OnSuccess, deps.OnError), nil
+			l := sources.NewCelesTrakListener(cfg, deps.Input, deps.Logger, deps.Metrics, deps.OnSuccess, deps.OnError)
+			l.FeedID = spec.ID
+			return l, nil
 		},
 		"stream": func(spec registry.Feed, _ map[string]string, deps runtime.Deps) (sources.Listener, error) {
 			var c streamConfig

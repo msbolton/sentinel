@@ -19,6 +19,7 @@ import (
 	kafkaproducer "github.com/sentinel/ingest-service/internal/kafka"
 	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/mgmt"
+	"github.com/sentinel/ingest-service/internal/publish"
 	"github.com/sentinel/ingest-service/internal/registry"
 	"github.com/sentinel/ingest-service/internal/runtime"
 )
@@ -42,6 +43,8 @@ func main() {
 	}
 	logger.Info("configuration loaded",
 		zap.String("kafka_brokers", cfg.KafkaBrokers),
+		zap.String("observation_topic", cfg.KafkaObservationTopic),
+		zap.String("legacy_topic", cfg.KafkaLegacyTopic),
 		zap.String("http_addr", cfg.HTTPAddr),
 		zap.String("replica_id", cfg.ReplicaID),
 		zap.Int("worker_pool_size", cfg.WorkerPoolSize),
@@ -57,7 +60,19 @@ func main() {
 	}
 	defer producer.Close()
 
-	pipeline := ingest.NewPipeline(cfg, producer, logger, m)
+	// Observations: protobuf to observations.raw, dead letters to
+	// observations.dlq; the legacy JSON stream stays while a topic is set.
+	publisher := publish.New(producer, m, logger, publish.Options{
+		Topic:           cfg.KafkaObservationTopic,
+		DeadLetterTopic: cfg.KafkaDeadLetterTopic,
+		Shards:          cfg.PublisherShards,
+		Buffer:          cfg.ObservationBuffer,
+		DLQRatePerSec:   float64(cfg.DLQRatePerSec),
+		ReplicaID:       cfg.ReplicaID,
+	})
+	publisher.Start()
+
+	pipeline := ingest.NewPipeline(cfg, producer, publisher, logger, m)
 	pipeline.Start()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -127,6 +142,10 @@ func main() {
 		logger.Warn("feed runtime did not stop in time")
 	}
 	pipeline.Stop()
+	publisher.Close()
+	if remaining := producer.Flush(10000); remaining > 0 {
+		logger.Warn("kafka producer still has unflushed messages", zap.Int("remaining", remaining))
+	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()

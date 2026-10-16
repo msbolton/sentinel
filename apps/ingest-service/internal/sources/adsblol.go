@@ -22,6 +22,8 @@ const adsbLolBaseURL = "https://api.adsb.lol/v2/mil"
 // ADSBLolListener polls the adsb.lol military aircraft API at a configurable
 // interval and feeds aircraft positions into the ingestion pipeline.
 type ADSBLolListener struct {
+	// FeedID is stamped on every emitted message; set by the feed runtime.
+	FeedID string
 	cfg     *config.Config
 	input   chan<- *models.IngestMessage
 	logger  *zap.Logger
@@ -172,6 +174,7 @@ func (l *ADSBLolListener) poll() error {
 			SourceAddr: "api.adsb.lol",
 			Payload:    payload,
 			ReceivedAt: now,
+			FeedID:     l.FeedID,
 		}
 
 		select {
