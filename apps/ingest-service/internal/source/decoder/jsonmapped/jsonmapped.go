@@ -232,9 +232,29 @@ func (d *Decoder) mapRecord(rec any, received time.Time) (*obs.Observation, erro
 		o.AddIdentity(obs.IdentityCallsign, cs)
 	}
 	if d.opts.IdentityType != "" {
-		o.AddIdentity(strings.ToUpper(d.opts.IdentityType), o.SourceEntityID)
+		o.AddIdentity(strings.ToUpper(d.opts.IdentityType), normaliseIdentity(strings.ToUpper(d.opts.IdentityType), o.SourceEntityID))
 	}
 	return o, nil
+}
+
+// normaliseIdentity spells canonical identities the way the other decoders
+// do, so an aircraft seen through a JSON API fuses with the same aircraft
+// from OpenSky or a Beast receiver: ICAO24 upper-case hex, MMSI and
+// NORAD_ID digits only.
+func normaliseIdentity(typ, value string) string {
+	switch typ {
+	case obs.IdentityICAO24:
+		return strings.ToUpper(strings.TrimSpace(value))
+	case obs.IdentityMMSI, obs.IdentityNoradID:
+		var b strings.Builder
+		for _, r := range value {
+			if r >= '0' && r <= '9' {
+				b.WriteRune(r)
+			}
+		}
+		return b.String()
+	}
+	return value
 }
 
 func (d *Decoder) timestamp(rec any) (time.Time, bool) {

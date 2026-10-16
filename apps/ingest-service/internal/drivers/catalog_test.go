@@ -21,7 +21,7 @@ func TestDefaultCatalogListsDrivers(t *testing.T) {
 			t.Errorf("%s schema is not JSON: %v", d.ID, err)
 		}
 	}
-	for _, want := range []string{"opensky", "adsblol", "celestrak", "stream"} {
+	for _, want := range []string{"opensky", "adsblol", "celestrak", "stream", "httpjson"} {
 		if !ids[want] {
 			t.Errorf("missing driver %s", want)
 		}
@@ -43,6 +43,9 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 		"stream":    `{"transport": {"kind": "mqtt", "brokerUrl": "tcp://broker:1883", "topics": ["a/#"]}, "decoder": {"name": "json"}}`,
 		"stream2":   `{"transport": {"kind": "tcpclient", "address": "readsb:30003"}, "framing": "line", "decoder": {"name": "sbs"}, "backpressure": "drop"}`,
 		"stream3":   `{"transport": {"kind": "websocket", "url": "wss://x/y"}, "decoder": {"name": "json", "options": {"records": "ac"}}}`,
+		"stream4":   `{"transport": {"kind": "tcpclient", "address": "readsb:30005"}, "framing": "beast", "decoder": {"name": "beast"}}`,
+		"stream5":   `{"transport": {"kind": "udp", "address": ":10110"}, "decoder": {"name": "nmea-ais"}, "pinnedReplica": "site-1"}`,
+		"httpjson":  `{"url": "https://api.example.com/v2/point/{lat}/{lon}/{radius_nm}", "intervalSec": 15, "requireArea": true, "decoder": {"options": {"records": "ac", "identityType": "ICAO24", "fields": {"id": "hex", "latitude": "lat", "longitude": "lon"}}}}`,
 		"empty":     ``,
 	}
 	for driver, cfg := range cases {
@@ -50,7 +53,7 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 		switch d {
 		case "empty":
 			d = "adsblol"
-		case "stream2", "stream3":
+		case "stream2", "stream3", "stream4", "stream5":
 			d = "stream"
 		}
 		if problems := c.Validate(d, json.RawMessage(cfg)); len(problems) != 0 {

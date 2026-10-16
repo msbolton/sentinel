@@ -13,6 +13,7 @@ import (
 	_ "github.com/sentinel/ingest-service/internal/source/transport/websocket"
 
 	// Decoders.
+	_ "github.com/sentinel/ingest-service/internal/source/decoder/beast"
 	_ "github.com/sentinel/ingest-service/internal/source/decoder/cot"
 	_ "github.com/sentinel/ingest-service/internal/source/decoder/jsonmapped"
 	_ "github.com/sentinel/ingest-service/internal/source/decoder/link16"
@@ -23,6 +24,7 @@ import (
 	// Drivers.
 	_ "github.com/sentinel/ingest-service/internal/source/driver/adsblol"
 	_ "github.com/sentinel/ingest-service/internal/source/driver/celestrak"
+	_ "github.com/sentinel/ingest-service/internal/source/driver/httpjson"
 	_ "github.com/sentinel/ingest-service/internal/source/driver/opensky"
 	_ "github.com/sentinel/ingest-service/internal/source/driver/stream"
 )
