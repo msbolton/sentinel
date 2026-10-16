@@ -363,3 +363,202 @@ CREATE TABLE IF NOT EXISTS sentinel.anomalies (
 );
 
 CREATE INDEX IF NOT EXISTS idx_anomalies_entity_time ON sentinel.anomalies (entity_id, detected_at DESC);
+
+-- =============================================================================
+-- Feed architecture (observations, identity-based fusion, feed registry)
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- feeds  (apps/ingest-service/internal/registry)
+-- Desired state of every feed, built-in or user-defined. id is an immutable
+-- slug that entities."feedId", track_points."feedId" and
+-- feed_ageout_config."feedId" store as-is.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sentinel.feeds (
+  id           VARCHAR(64)  PRIMARY KEY CHECK (id ~ '^[a-z0-9][a-z0-9-]{0,62}$'),
+  name         VARCHAR(255) NOT NULL,
+  description  TEXT         NOT NULL DEFAULT '',
+  driver       VARCHAR(64)  NOT NULL,                 -- key in the ingest driver registry
+  config       JSONB        NOT NULL DEFAULT '{}',    -- validated against the driver's JSON schema
+  secret_refs  JSONB        NOT NULL DEFAULT '{}',    -- {"clientSecret": "env:OPENSKY_CLIENT_SECRET"}; never plaintext
+  enabled      BOOLEAN      NOT NULL DEFAULT FALSE,   -- desired state
+  builtin      BOOLEAN      NOT NULL DEFAULT FALSE,   -- seeded; id and driver immutable, not deletable
+  version      INTEGER      NOT NULL DEFAULT 1,       -- bumped on every write; the owner restarts when behind
+  created_by   VARCHAR(255),
+  created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- Observed state, written only by the ingest replica that owns the feed.
+CREATE TABLE IF NOT EXISTS sentinel.feed_status (
+  feed_id          VARCHAR(64) PRIMARY KEY REFERENCES sentinel.feeds(id) ON DELETE CASCADE,
+  owner            VARCHAR(128),
+  state            VARCHAR(16) NOT NULL DEFAULT 'stopped',   -- stopped|starting|running|idle|degraded|error
+  health           VARCHAR(16) NOT NULL DEFAULT 'unknown',   -- healthy|warn|critical|unknown
+  last_error       TEXT,
+  last_message_at  TIMESTAMPTZ,
+  last_success_at  TIMESTAMPTZ,
+  messages_total   BIGINT  NOT NULL DEFAULT 0,
+  entities_last    INTEGER NOT NULL DEFAULT 0,
+  errors_total     BIGINT  NOT NULL DEFAULT 0,
+  applied_version  INTEGER NOT NULL DEFAULT 0,
+  detail           JSONB   NOT NULL DEFAULT '{}',            -- driver-specific: credits, effectiveIntervalSec, idle
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Area-of-interest lease pushed by the API gateway from the connected
+-- clients' viewports; read by whichever replica owns the feed.
+CREATE TABLE IF NOT EXISTS sentinel.feed_areas (
+  feed_id     VARCHAR(64) PRIMARY KEY REFERENCES sentinel.feeds(id) ON DELETE CASCADE,
+  active      BOOLEAN NOT NULL DEFAULT FALSE,
+  clients     INTEGER NOT NULL DEFAULT 0,
+  boxes       JSONB   NOT NULL DEFAULT '[]',
+  expires_at  TIMESTAMPTZ,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Feed ownership across ingest replicas. A feed runs on the replica holding
+-- an unexpired lease; the fencing token guards against a stale owner.
+CREATE TABLE IF NOT EXISTS sentinel.ingest_replicas (
+  replica_id    VARCHAR(128) PRIMARY KEY,
+  started_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  heartbeat_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at    TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sentinel.feed_leases (
+  feed_id        VARCHAR(64) PRIMARY KEY REFERENCES sentinel.feeds(id) ON DELETE CASCADE,
+  owner_id       VARCHAR(128) NOT NULL,
+  fencing_token  BIGINT NOT NULL DEFAULT 1,
+  acquired_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  heartbeat_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at     TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_feed_leases_expires ON sentinel.feed_leases (expires_at);
+
+-- The ingest service used to create its own custom_feeds table at startup in
+-- the default schema; the feeds table above replaces it.
+DROP TABLE IF EXISTS public.custom_feeds;
+DROP TABLE IF EXISTS sentinel.custom_feeds;
+
+-- -----------------------------------------------------------------------------
+-- observations  (apps/entity-service/internal/store/observation_store.go)
+-- One row per report from any feed, accepted or not, keyed by the ingest
+-- service's deterministic observation id so redelivery is idempotent.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sentinel.observations (
+  "observationId"    UUID NOT NULL,
+  "observedAt"       TIMESTAMPTZ NOT NULL,          -- source timestamp, clamped to receivedAt + 60 s
+  "receivedAt"       TIMESTAMPTZ NOT NULL,
+  "ingestedAt"       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "entityId"         UUID NOT NULL,
+  "feedId"           VARCHAR(64) NOT NULL,
+  driver             VARCHAR(50) NOT NULL,
+  decoder            VARCHAR(50),
+  "sourceEntityId"   VARCHAR(255) NOT NULL,
+  source             VARCHAR(50) NOT NULL,
+  "sensorId"         VARCHAR(255),
+  accepted           BOOLEAN NOT NULL,
+  "rejectReason"     VARCHAR(30),                   -- DUPLICATE | STALE_FIX | INVALID_POSITION
+  "entityType"       VARCHAR(50),
+  position           geometry(Point, 4326),
+  altitude           DOUBLE PRECISION,
+  heading            DOUBLE PRECISION,
+  "speedKnots"       DOUBLE PRECISION,
+  course             DOUBLE PRECISION,
+  "velocityNorth"    DOUBLE PRECISION,
+  "velocityEast"     DOUBLE PRECISION,
+  "velocityUp"       DOUBLE PRECISION,
+  "accelNorth"       DOUBLE PRECISION,
+  "accelEast"        DOUBLE PRECISION,
+  "accelUp"          DOUBLE PRECISION,
+  "circularError"    DOUBLE PRECISION,
+  "altitudeError"    DOUBLE PRECISION,
+  "posCovariance"    DOUBLE PRECISION[],
+  "posVelCovariance" DOUBLE PRECISION[],
+  "velCovariance"    DOUBLE PRECISION[],
+  identities         JSONB NOT NULL DEFAULT '[]',
+  platform           JSONB,                         -- PlatformDetail as platform JSON
+  "rawContentType"   VARCHAR(100),
+  raw                BYTEA,
+  "rawTruncated"     BOOLEAN NOT NULL DEFAULT FALSE,
+  PRIMARY KEY ("observedAt", "observationId")
+);
+
+CREATE INDEX IF NOT EXISTS idx_observations_entity_time ON sentinel.observations ("entityId", "observedAt" DESC);
+CREATE INDEX IF NOT EXISTS idx_observations_feed_source ON sentinel.observations ("feedId", "sourceEntityId", "observedAt" DESC);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
+    PERFORM create_hypertable('sentinel.observations', 'observedAt', chunk_time_interval => INTERVAL '6 hours', if_not_exists => TRUE, migrate_data => TRUE);
+    IF NOT EXISTS (SELECT 1 FROM timescaledb_information.compression_settings WHERE hypertable_schema = 'sentinel' AND hypertable_name = 'observations') THEN
+      ALTER TABLE sentinel.observations SET (timescaledb.compress, timescaledb.compress_segmentby = '"entityId"', timescaledb.compress_orderby = '"observedAt" DESC');
+    END IF;
+    PERFORM add_compression_policy('sentinel.observations', INTERVAL '1 day', if_not_exists => TRUE);
+    PERFORM add_retention_policy('sentinel.observations', INTERVAL '7 days', if_not_exists => TRUE);
+    RAISE NOTICE 'sentinel.observations is a TimescaleDB hypertable (compress after 1 day, drop after 7 days).';
+  ELSE
+    RAISE NOTICE 'TimescaleDB not installed; sentinel.observations is a regular table.';
+  END IF;
+END
+$$;
+
+-- -----------------------------------------------------------------------------
+-- entity_identities / entity_sources  (apps/entity-service/internal/fusion)
+-- Natural identifiers resolve observations from different feeds to one
+-- entity; the FEED_LOCAL value is "<feedId>:<sourceEntityId>".
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sentinel.entity_identities (
+  "identityType"  VARCHAR(30) NOT NULL,
+  "identityValue" VARCHAR(255) NOT NULL,
+  "entityId"      UUID NOT NULL REFERENCES sentinel.entities(id) ON DELETE CASCADE,
+  "firstSeenAt"   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "lastSeenAt"    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY ("identityType", "identityValue")
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_identities_entity ON sentinel.entity_identities ("entityId");
+
+CREATE TABLE IF NOT EXISTS sentinel.entity_sources (
+  "entityId"         UUID NOT NULL REFERENCES sentinel.entities(id) ON DELETE CASCADE,
+  "feedId"           VARCHAR(64) NOT NULL,
+  source             VARCHAR(50) NOT NULL,
+  "sourceEntityId"   VARCHAR(255) NOT NULL,
+  "lastObservedAt"   TIMESTAMPTZ NOT NULL,
+  "lastReceivedAt"   TIMESTAMPTZ NOT NULL,
+  "observationCount" BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY ("entityId", "feedId")
+);
+
+ALTER TABLE sentinel.entities
+  ADD COLUMN IF NOT EXISTS "lastObservedAt"       TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS "lastFeedId"           VARCHAR(64),
+  ADD COLUMN IF NOT EXISTS "primaryIdentityType"  VARCHAR(30),
+  ADD COLUMN IF NOT EXISTS "primaryIdentityValue" VARCHAR(255);
+
+ALTER TABLE sentinel.track_points
+  ADD COLUMN IF NOT EXISTS "observationId"  UUID,
+  ADD COLUMN IF NOT EXISTS "sourceEntityId" VARCHAR(255),
+  ADD COLUMN IF NOT EXISTS "entityType"     VARCHAR(50);
+
+-- Development backfill: entities ingested before the identity table existed
+-- carry "ICAO-<hex>" or "MMSI-<digits>" source ids. Register them so the
+-- fusion path finds them instead of creating duplicates. Where two rows share
+-- a source id only the most recently seen one is registered.
+INSERT INTO sentinel.entity_identities ("identityType", "identityValue", "entityId", "firstSeenAt", "lastSeenAt")
+SELECT DISTINCT ON (upper(substr(e."sourceEntityId", 6)))
+       'ICAO24', upper(substr(e."sourceEntityId", 6)), e.id, e."createdAt", COALESCE(e."lastSeenAt", e."updatedAt")
+  FROM sentinel.entities e
+ WHERE e.deleted = FALSE AND e."sourceEntityId" ~ '^ICAO-[0-9A-Fa-f]{6}$'
+ ORDER BY upper(substr(e."sourceEntityId", 6)), e."lastSeenAt" DESC NULLS LAST
+ON CONFLICT DO NOTHING;
+
+INSERT INTO sentinel.entity_identities ("identityType", "identityValue", "entityId", "firstSeenAt", "lastSeenAt")
+SELECT DISTINCT ON (substr(e."sourceEntityId", 6))
+       'MMSI', substr(e."sourceEntityId", 6), e.id, e."createdAt", COALESCE(e."lastSeenAt", e."updatedAt")
+  FROM sentinel.entities e
+ WHERE e.deleted = FALSE AND e."sourceEntityId" ~ '^MMSI-[0-9]{7,9}$'
+ ORDER BY substr(e."sourceEntityId", 6), e."lastSeenAt" DESC NULLS LAST
+ON CONFLICT DO NOTHING;

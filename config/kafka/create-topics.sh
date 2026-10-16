@@ -6,9 +6,10 @@
 # This script is executed by the kafka-init container after Kafka is healthy.
 #
 # Partition strategy:
-#   12 partitions - High-throughput streams (position updates, raw ingest)
-#    6 partitions - Moderate-throughput entity lifecycle events
-#    3 partitions - Low-throughput alert and analytics topics
+#   24 partitions - observations.raw (every report from every feed, keyed by identity)
+#   12 partitions - entity events and high-throughput legacy streams
+#    6 partitions - Moderate-throughput legacy entity lifecycle events
+#    3 partitions - Low-throughput alert, dead-letter and analytics topics
 # =============================================================================
 
 set -euo pipefail
@@ -32,7 +33,13 @@ echo "Kafka is ready."
 
 # Define topics: name|partitions|retention_ms
 # Retention: 7 days = 604800000ms, 30 days = 2592000000ms
+# Retention: 3 days = 259200000ms, 7 days = 604800000ms, 30 days = 2592000000ms
 TOPICS=(
+  "observations.raw|24|259200000"
+  "observations.dlq|3|2592000000"
+  "entities.events|12|604800000"
+  "alerts.events|3|2592000000"
+  # Legacy JSON topics, removed once every consumer reads the typed topics above.
   "events.entity.position|12|604800000"
   "events.entity.created|6|2592000000"
   "events.entity.updated|6|2592000000"

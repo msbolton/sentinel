@@ -209,6 +209,18 @@ kafka:
   provisioning:
     enabled: true
     topics:
+      - name: observations.raw
+        partitions: 24
+        replicationFactor: 3
+      - name: observations.dlq
+        partitions: 3
+        replicationFactor: 3
+      - name: entities.events
+        partitions: 12
+        replicationFactor: 3
+      - name: alerts.events
+        partitions: 3
+        replicationFactor: 3
       - name: events.entity.position
         partitions: 12
         replicationFactor: 3
