@@ -12,9 +12,17 @@ import (
 // feeds table; the driver factories copy them into the listener fields
 // below for each feed they build.
 type Config struct {
-	KafkaBrokers     string // KAFKA_BROKERS (default: localhost:9092)
-	KafkaEntityTopic string // KAFKA_ENTITY_TOPIC (default: ingest.raw)
-	HTTPAddr         string // HTTP_ADDR (default: :4000)
+	KafkaBrokers          string // KAFKA_BROKERS (default: localhost:9092)
+	KafkaObservationTopic string // KAFKA_OBSERVATION_TOPIC (default: observations.raw)
+	KafkaDeadLetterTopic  string // KAFKA_DEADLETTER_TOPIC (default: observations.dlq)
+	// KafkaLegacyTopic receives the JSON entity positions older consumers
+	// still read (KAFKA_LEGACY_TOPIC, default: ingest.raw). Empty disables it.
+	KafkaLegacyTopic   string
+	PublisherShards    int // PUBLISHER_SHARDS (default: 8)
+	ObservationBuffer  int // OBS_BUFFER (default: 1000) observations queued per publisher shard
+	RawPayloadMaxBytes int // RAW_PAYLOAD_MAX_BYTES (default: 4096) raw bytes kept per observation, 0 keeps none
+	DLQRatePerSec      int // DLQ_RATE_PER_SEC (default: 10) dead letters per feed per second
+	HTTPAddr           string // HTTP_ADDR (default: :4000)
 	WorkerPoolSize   int    // WORKER_POOL_SIZE (default: 100)
 	BatchSize        int    // BATCH_SIZE (default: 500)
 	FlushIntervalMs  int    // FLUSH_INTERVAL_MS (default: 100)
@@ -60,9 +68,15 @@ func Load() *Config {
 		hostname = "local"
 	}
 	return &Config{
-		KafkaBrokers:     envOrDefault("KAFKA_BROKERS", "localhost:9092"),
-		KafkaEntityTopic: envOrDefault("KAFKA_ENTITY_TOPIC", "ingest.raw"),
-		HTTPAddr:         envOrDefault("HTTP_ADDR", ":4000"),
+		KafkaBrokers:          envOrDefault("KAFKA_BROKERS", "localhost:9092"),
+		KafkaObservationTopic: envOrDefault("KAFKA_OBSERVATION_TOPIC", "observations.raw"),
+		KafkaDeadLetterTopic:  envOrDefault("KAFKA_DEADLETTER_TOPIC", "observations.dlq"),
+		KafkaLegacyTopic:      legacyTopic(),
+		PublisherShards:       envOrDefaultInt("PUBLISHER_SHARDS", 8),
+		ObservationBuffer:     envOrDefaultInt("OBS_BUFFER", 1000),
+		RawPayloadMaxBytes:    envOrDefaultInt("RAW_PAYLOAD_MAX_BYTES", 4096),
+		DLQRatePerSec:         envOrDefaultInt("DLQ_RATE_PER_SEC", 10),
+		HTTPAddr:              envOrDefault("HTTP_ADDR", ":4000"),
 		WorkerPoolSize:   envOrDefaultInt("WORKER_POOL_SIZE", 100),
 		BatchSize:        envOrDefaultInt("BATCH_SIZE", 500),
 		FlushIntervalMs:  envOrDefaultInt("FLUSH_INTERVAL_MS", 100),
@@ -88,6 +102,12 @@ func (c *Config) Validate() error {
 	if c.KafkaBrokers == "" {
 		return errors.New("KAFKA_BROKERS is required")
 	}
+	if c.KafkaObservationTopic == "" || c.KafkaDeadLetterTopic == "" {
+		return errors.New("KAFKA_OBSERVATION_TOPIC and KAFKA_DEADLETTER_TOPIC are required")
+	}
+	if c.PublisherShards <= 0 || c.ObservationBuffer <= 0 || c.RawPayloadMaxBytes < 0 {
+		return errors.New("PUBLISHER_SHARDS and OBS_BUFFER must be positive and RAW_PAYLOAD_MAX_BYTES non-negative")
+	}
 	if c.DatabaseURL == "" {
 		return errors.New("DATABASE_URL is required")
 	}
@@ -95,6 +115,15 @@ func (c *Config) Validate() error {
 		return errors.New("BATCH_SIZE, FLUSH_INTERVAL_MS and WORKER_POOL_SIZE must be positive")
 	}
 	return nil
+}
+
+// legacyTopic reads KAFKA_LEGACY_TOPIC; an explicitly empty value disables
+// the legacy JSON stream. KAFKA_ENTITY_TOPIC is honoured as the old name.
+func legacyTopic() string {
+	if v, ok := os.LookupEnv("KAFKA_LEGACY_TOPIC"); ok {
+		return v
+	}
+	return envOrDefault("KAFKA_ENTITY_TOPIC", "ingest.raw")
 }
 
 func splitList(s string) []string {

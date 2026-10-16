@@ -10,6 +10,12 @@ import (
 type EntityPosition struct {
 	EntityID   string    `json:"entity_id"`
 	EntityType string    `json:"entity_type"`
+	// Decoder names the parser that produced this report (json, nmea-gps,
+	// nmea-ais, cot, sbs, link16); not part of the legacy wire format.
+	Decoder string `json:"-"`
+	// NoPosition marks a report that carries no fix (an AIS static report).
+	// Latitude and Longitude are meaningless when set.
+	NoPosition bool `json:"-"`
 	Name       string    `json:"name"`
 	Source     string    `json:"source"`
 	FeedID     string    `json:"feed_id,omitempty"`

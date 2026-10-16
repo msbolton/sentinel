@@ -18,6 +18,16 @@ type Metrics struct {
 	FeedLastSuccess     *prometheus.GaugeVec
 	FeedEntityCount     *prometheus.GaugeVec
 	FeedErrorsTotal     *prometheus.CounterVec
+
+	// Observation publishing (observations.raw / observations.dlq).
+	ObservationsPublished      *prometheus.CounterVec // feed_id
+	ObservationsDeliveryFailed *prometheus.CounterVec // feed_id
+	DeadLetterTotal            *prometheus.CounterVec // feed_id, reason
+	DeadLetterDropped          *prometheus.CounterVec // feed_id
+	DecodePanics               *prometheus.CounterVec // source_type
+	FramesSkipped              *prometheus.CounterVec // source_type, reason
+	PublisherShardDepth        *prometheus.GaugeVec   // shard
+	PublisherBlockedSeconds    prometheus.Counter
 }
 
 // New creates and registers all Prometheus metrics for the ingest service.
@@ -120,6 +130,37 @@ func New() *Metrics {
 				Help:      "Total number of poll errors for an external feed.",
 			},
 			[]string{"feed"},
+		),
+		ObservationsPublished: promauto.NewCounterVec(
+			prometheus.CounterOpts{Namespace: "sentinel", Subsystem: "ingest", Name: "observations_published_total", Help: "Observations handed to the Kafka producer, per feed."},
+			[]string{"feed_id"},
+		),
+		ObservationsDeliveryFailed: promauto.NewCounterVec(
+			prometheus.CounterOpts{Namespace: "sentinel", Subsystem: "ingest", Name: "observations_delivery_failed_total", Help: "Observations Kafka reported as undelivered, per feed."},
+			[]string{"feed_id"},
+		),
+		DeadLetterTotal: promauto.NewCounterVec(
+			prometheus.CounterOpts{Namespace: "sentinel", Subsystem: "ingest", Name: "deadletter_total", Help: "Payloads sent to the dead-letter topic, per feed and reason."},
+			[]string{"feed_id", "reason"},
+		),
+		DeadLetterDropped: promauto.NewCounterVec(
+			prometheus.CounterOpts{Namespace: "sentinel", Subsystem: "ingest", Name: "deadletter_dropped_total", Help: "Dead letters dropped by the per-feed rate limit."},
+			[]string{"feed_id"},
+		),
+		DecodePanics: promauto.NewCounterVec(
+			prometheus.CounterOpts{Namespace: "sentinel", Subsystem: "ingest", Name: "decode_panics_total", Help: "Parser panics recovered and dead-lettered, per source type."},
+			[]string{"source_type"},
+		),
+		FramesSkipped: promauto.NewCounterVec(
+			prometheus.CounterOpts{Namespace: "sentinel", Subsystem: "ingest", Name: "frames_skipped_total", Help: "Frames that produced no position (duplicates, static reports), per source type and reason."},
+			[]string{"source_type", "reason"},
+		),
+		PublisherShardDepth: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{Namespace: "sentinel", Subsystem: "ingest", Name: "publisher_shard_depth", Help: "Observations waiting in each publisher shard."},
+			[]string{"shard"},
+		),
+		PublisherBlockedSeconds: promauto.NewCounter(
+			prometheus.CounterOpts{Namespace: "sentinel", Subsystem: "ingest", Name: "publisher_blocked_seconds_total", Help: "Time publisher shards spent waiting on a full Kafka queue."},
 		),
 	}
 }

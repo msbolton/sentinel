@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -61,9 +62,14 @@ func (p *Producer) handleDeliveryReports() {
 	for ev := range p.producer.Events() {
 		switch e := ev.(type) {
 		case *kafka.Message:
+			feedID, _ := e.Opaque.(string)
 			if e.TopicPartition.Error != nil {
+				if feedID != "" && p.metrics != nil {
+					p.metrics.ObservationsDeliveryFailed.WithLabelValues(feedID).Inc()
+				}
 				p.logger.Error("kafka delivery failed",
 					zap.String("topic", *e.TopicPartition.Topic),
+					zap.String("feed", feedID),
 					zap.Error(e.TopicPartition.Error),
 				)
 			}
@@ -74,6 +80,19 @@ func (p *Producer) handleDeliveryReports() {
 			)
 		}
 	}
+}
+
+// Produce enqueues one message. The returned error is librdkafka's: a
+// kafka.Error with code ErrQueueFull when the local queue is full, which
+// callers should treat as backpressure and retry.
+func (p *Producer) Produce(msg *kafka.Message) error {
+	return p.producer.Produce(msg, nil)
+}
+
+// IsQueueFull reports whether err is the local-queue-full condition.
+func IsQueueFull(err error) bool {
+	var kerr kafka.Error
+	return errors.As(err, &kerr) && kerr.Code() == kafka.ErrQueueFull
 }
 
 // ProduceBatch sends a batch of entity positions to the specified Kafka topic.
