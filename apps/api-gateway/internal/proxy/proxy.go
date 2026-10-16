@@ -62,9 +62,9 @@ func New(o Options) (http.Handler, error) {
 			}
 			pr.Out.Header.Del(middleware.HeaderServiceToken)
 			if u, ok := auth.UserFrom(pr.In.Context()); ok {
-				pr.Out.Header.Set(middleware.HeaderUserID, u.UserID)
-				pr.Out.Header.Set(middleware.HeaderUserRoles, strings.Join(u.Roles, ","))
-				pr.Out.Header.Set(middleware.HeaderClassification, u.ClassificationLevel)
+				for k, v := range IdentityHeaders(u) {
+					pr.Out.Header[k] = v
+				}
 			}
 			if o.ServiceToken != "" {
 				pr.Out.Header.Set(middleware.HeaderServiceToken, o.ServiceToken)
@@ -80,6 +80,20 @@ func New(o Options) (http.Handler, error) {
 			commonhttp.Error(w, http.StatusServiceUnavailable, o.Name+" unavailable")
 		},
 	}, nil
+}
+
+// IdentityHeaders are the x-sentinel-* headers a service receives for a
+// user: the same ones the proxy sets, for callers that talk to a service
+// themselves (the export source).
+func IdentityHeaders(u *auth.User) http.Header {
+	h := http.Header{}
+	if u == nil {
+		return h
+	}
+	h.Set(middleware.HeaderUserID, u.UserID)
+	h.Set(middleware.HeaderUserRoles, strings.Join(u.Roles, ","))
+	h.Set(middleware.HeaderClassification, u.ClassificationLevel)
+	return h
 }
 
 // StripPrefix returns a RewritePath that removes prefix from the outbound path.

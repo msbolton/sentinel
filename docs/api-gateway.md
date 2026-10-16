@@ -144,6 +144,18 @@ Tokens are RS256 JWTs validated against `{KEYCLOAK_URL}/realms/{realm}/protocol/
 
 The authenticated user carries realm roles plus the `sentinel-api` client roles, and a clearance level. Clearance comes from the `classification_level` claim when present, otherwise from the highest `classification-*` realm role (`classification-ts` → TOP_SECRET, `-s` → SECRET, `-c` → CONFIDENTIAL, `-u` → UNCLASSIFIED). Roles are checked by name as Keycloak issues them: `sentinel-admin`, `sentinel-analyst`, `sentinel-operator`, `sentinel-viewer`.
 
+### Export for GIS consumers and API keys
+
+| Method | Path | Roles | Notes |
+|--------|------|-------|-------|
+| GET | `/api/v1/export/entities.geojson` | any | FeatureCollection of live entities with a position (`[lon, lat, alt]` points; properties `name`, `entityType`, `classification`, `feedId`, `lastFeedId`, `source`, `heading`, `speedKnots`, `course`, `altitude`, `sidc`, `affiliation`, `trackEnvironment`, `countryOfOrigin`, `ageoutState`, `lastObservedAt`). Query `bbox=west,south,east,north`, `types=`, `feeds=`, `page` (1), `limit` (1000, max 5000). `X-Total-Count` header. Reads through the entity service with the caller's identity, so the clearance ceiling applies |
+| GET | `/api/v1/export/entities.kml` | any | The same as KML Placemarks (ExtendedData, `TimeStamp`, absolute altitude). With `link=1&refresh=30` it returns a `NetworkLink` document that reopens the plain URL every `refresh` seconds (min 5) and after the view stops, passing the view as `bbox`; every other parameter, including `api_key`, is kept in the link |
+| GET | `/api/v1/auth/api-keys` | any user token | The caller's live keys (`id`, `name`, `prefix`, `classification`, `createdAt`, `expiresAt`, `lastUsedAt`) |
+| POST | `/api/v1/auth/api-keys` | any user token | Body `{ name, classification?, expiresInDays? }`. 201 with the key plus `secret` (`sk_…`, shown once). A key carries the viewer role only and `classification = min(requested, caller's clearance)` |
+| DELETE | `/api/v1/auth/api-keys/{id}` | owner or admin | Revokes; 404 when not the caller's |
+
+Google Earth and other KML or GIS tools cannot send an `Authorization` header, so an API key may be presented as the bearer token or, on `/api/v1/export/*` only, as `?api_key=sk_…`. The middleware tells a key from a JWT by the `sk_` prefix, resolves it through `sentinel.api_keys` (SHA-256 at rest, revoked and expired keys refused, `lastUsedAt` stamped) and runs the request as the owner with viewer rights and the key's classification. A principal that authenticated with a key cannot list, make or revoke keys. With `AUTH_DEV_BYPASS` every request is the dev user and keys are never consulted.
+
 Clearance is a ceiling on every read. The services apply `x-sentinel-classification` themselves (`libs/common-go/classification` gives them one ordering): entity lists, nearby, counts, by-id and observations; alerts; search, nearby search, suggestions and facets; track history, latest, segments and the timeline. An entity or alert above the caller's clearance answers 404, a list simply omits it, and a missing header fails closed to UNCLASSIFIED (so a service called directly, without the gateway, serves only unclassified rows). The WebSocket stream filters the same way: entity frames and `alert:new` are sent only to clients cleared to at least the row's level; id-only frames (`entity:deleted`, ageout) are not filtered. `PATCH /api/v1/entities/{id}` refuses to mark an entity above the caller's clearance (403).
 
 Denials are logged as structured audit events (`ACCESS_DENIED`, `ROLE_CHECK_FAILED`, `CLASSIFICATION_CHECK_FAILED`) with the user, method, path, and client IP.
