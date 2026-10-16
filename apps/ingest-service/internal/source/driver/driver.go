@@ -8,12 +8,15 @@ package driver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
+
+	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
 	"github.com/sentinel/ingest-service/internal/obs"
 )
@@ -68,6 +71,40 @@ type Sink interface {
 	Succeeded(count int)
 	// Blocked accounts time spent waiting on backpressure.
 	Blocked(d time.Duration)
+}
+
+// UpdateKind says what an outbound entity update means to the remote.
+type UpdateKind int
+
+const (
+	// UpsertEntity carries the entity's current snapshot.
+	UpsertEntity UpdateKind = iota
+	// RemoveEntity tells the remote to drop the entity; Entity is nil.
+	RemoveEntity
+)
+
+// EntityUpdate is one unit of outbound work after policy and coalescing.
+type EntityUpdate struct {
+	Kind     UpdateKind
+	EntityID string
+	Entity   *sentinelv1.Entity // nil for RemoveEntity
+	// Reason for a removal: "deleted", "aged_out" or "policy" (the entity
+	// no longer passes the connection's sharing policy).
+	Reason  string
+	EventAt time.Time
+}
+
+// ErrNotConnected is returned by a Consumer while the remote is unreachable;
+// the pump pauses and retries instead of counting a delivery failure.
+var ErrNotConnected = errors.New("driver: not connected")
+
+// Consumer is implemented by sink drivers (direction out) and by
+// bidirectional drivers (both) in addition to Driver. Calls arrive from one
+// goroutine per connection, in order per entity. Returning an error other
+// than ErrNotConnected counts a delivery failure for the update.
+type Consumer interface {
+	HandleEntity(ctx context.Context, u EntityUpdate) error
+	HandleAlert(ctx context.Context, ev *sentinelv1.AlertEvent) error
 }
 
 // Driver produces observations until the context ends.

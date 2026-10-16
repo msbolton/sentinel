@@ -34,6 +34,13 @@ type Metrics struct {
 	DeadLetterDropped          *prometheus.CounterVec // feed_id
 	PublisherShardDepth        *prometheus.GaugeVec   // shard
 	PublisherBlockedSeconds    prometheus.Counter
+
+	// Outbound connections (sink drivers).
+	OutboundEventsTotal         *prometheus.CounterVec // feed_id, kind (upsert|remove|alert)
+	OutboundDeniedTotal         *prometheus.CounterVec // feed_id, reason
+	OutboundDroppedTotal        *prometheus.CounterVec // feed_id, reason (lag|undecodable|alert_queue_full)
+	OutboundDeliveryErrorsTotal *prometheus.CounterVec // feed_id
+	OutboundLagSeconds          *prometheus.GaugeVec   // feed_id
 }
 
 // New registers every collector on reg (a fresh registry when nil).
@@ -73,6 +80,11 @@ func New(reg *prometheus.Registry) *Metrics {
 		DeadLetterTotal:            counter("deadletter_total", "Payloads sent to the dead-letter topic, per feed and reason.", "feed_id", "reason"),
 		DeadLetterDropped:          counter("deadletter_dropped_total", "Dead letters dropped by the per-feed rate limit.", "feed_id"),
 		PublisherShardDepth:        gauge("publisher_shard_depth", "Observations waiting in each publisher shard.", "shard"),
+		OutboundEventsTotal:         counter("outbound_events_total", "Updates delivered to a connection's remote, per feed and kind.", "feed_id", "kind"),
+		OutboundDeniedTotal:         counter("outbound_denied_total", "Events the sharing policy kept back, per feed and reason.", "feed_id", "reason"),
+		OutboundDroppedTotal:        counter("outbound_dropped_total", "Events dropped before delivery, per feed and reason.", "feed_id", "reason"),
+		OutboundDeliveryErrorsTotal: counter("outbound_delivery_errors_total", "Updates the driver failed to deliver, per feed.", "feed_id"),
+		OutboundLagSeconds:          gauge("outbound_lag_seconds", "Age of the last delivered event at delivery, per feed.", "feed_id"),
 		PublisherBlockedSeconds:    blocked,
 	}
 }
