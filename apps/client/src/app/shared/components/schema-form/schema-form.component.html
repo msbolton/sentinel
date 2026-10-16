@@ -1,0 +1,146 @@
+<ng-template #fieldList let-defs>
+  @for (def of defs; track def.id) {
+    @switch (def.kind) {
+      @case ('group') {
+        <fieldset class="sf-group" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
+          <legend>{{ def.label }}@if (def.required) {<span class="sf-required" aria-hidden="true">*</span>}</legend>
+          @if (def.help) {
+            <p class="sf-help">{{ def.help }}</p>
+          }
+          @for (msg of problemsOf(def); track msg) {
+            <p class="sf-error sf-error-server">{{ msg }}</p>
+          }
+          <ng-container *ngTemplateOutlet="fieldList; context: { $implicit: def.children }"></ng-container>
+        </fieldset>
+      }
+      @case ('const') {
+        <div class="sf-field" [attr.data-pointer]="def.pointer">
+          <label [attr.for]="def.id">{{ def.label }}</label>
+          <input [id]="def.id" [attr.name]="def.key" type="text" readonly class="sf-readonly" [value]="def.constValue" />
+          @if (def.help) {
+            <p class="sf-help">{{ def.help }}</p>
+          }
+        </div>
+      }
+      @case ('boolean') {
+        <div class="sf-field sf-field-check" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
+          <label class="sf-check">
+            <input [id]="def.id" [attr.name]="def.key" type="checkbox" [formControl]="def.control!" (blur)="touch()" />
+            <span>{{ def.label }}</span>
+          </label>
+          @if (def.help) {
+            <p class="sf-help">{{ def.help }}</p>
+          }
+          <ng-container *ngTemplateOutlet="messages; context: { $implicit: def }"></ng-container>
+        </div>
+      }
+      @case ('select') {
+        <div class="sf-field" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
+          <label [attr.for]="def.id">{{ def.label }}@if (def.required) {<span class="sf-required" aria-hidden="true">*</span>}</label>
+          <select [id]="def.id" [attr.name]="def.key" [formControl]="def.control!" (blur)="touch()">
+            <option [ngValue]="''">
+              @if (def.defaultLabel) { Default ({{ def.defaultLabel }}) } @else if (def.required) { Select… } @else { — }
+            </option>
+            @for (opt of def.options; track opt) {
+              <option [ngValue]="opt">{{ opt }}</option>
+            }
+          </select>
+          @if (def.help) {
+            <p class="sf-help">{{ def.help }}</p>
+          }
+          <ng-container *ngTemplateOutlet="messages; context: { $implicit: def }"></ng-container>
+        </div>
+      }
+      @case ('number') {
+        <div class="sf-field" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
+          <label [attr.for]="def.id">{{ def.label }}@if (def.required) {<span class="sf-required" aria-hidden="true">*</span>}</label>
+          <input
+            [id]="def.id"
+            [attr.name]="def.key"
+            type="number"
+            [step]="def.step"
+            [formControl]="def.control!"
+            [attr.placeholder]="def.placeholder ?? null"
+            (blur)="touch()"
+          />
+          @if (def.help) {
+            <p class="sf-help">{{ def.help }}</p>
+          }
+          <ng-container *ngTemplateOutlet="messages; context: { $implicit: def }"></ng-container>
+        </div>
+      }
+      @default {
+        <div class="sf-field" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
+          <label [attr.for]="def.id">{{ def.label }}@if (def.required) {<span class="sf-required" aria-hidden="true">*</span>}</label>
+          <input
+            [id]="def.id"
+            [attr.name]="def.key"
+            [type]="def.kind === 'url' ? 'url' : 'text'"
+            [formControl]="def.control!"
+            [attr.placeholder]="def.placeholder ?? null"
+            [attr.autocomplete]="def.kind === 'secret' ? 'off' : null"
+            [attr.spellcheck]="def.kind === 'secret' || def.kind === 'url' ? 'false' : null"
+            (blur)="touch()"
+          />
+          @if (def.help) {
+            <p class="sf-help">{{ def.help }}</p>
+          }
+          <ng-container *ngTemplateOutlet="messages; context: { $implicit: def }"></ng-container>
+        </div>
+      }
+    }
+  }
+</ng-template>
+
+<ng-template #messages let-def>
+  @for (msg of errorsOf(def); track msg) {
+    <p class="sf-error">{{ msg }}</p>
+  }
+  @for (msg of problemsOf(def); track msg) {
+    <p class="sf-error sf-error-server">{{ msg }}</p>
+  }
+</ng-template>
+
+<div class="schema-form" [class.is-disabled]="disabled()">
+  @if (unmatchedProblems().length > 0) {
+    <ul class="sf-unmatched" role="alert">
+      @for (p of unmatchedProblems(); track p.path + p.message) {
+        <li><code>{{ p.path }}</code> {{ p.message }}</li>
+      }
+    </ul>
+  }
+
+  @if (driverFields().length > 0) {
+    <section class="sf-section sf-section-driver">
+      <ng-container *ngTemplateOutlet="fieldList; context: { $implicit: driverFields() }"></ng-container>
+    </section>
+  } @else {
+    <p class="sf-empty">This driver has no options.</p>
+  }
+
+  @if (secretDefs().length > 0) {
+    <section class="sf-section sf-section-secrets">
+      <h4 class="sf-section-title">Credentials</h4>
+      <p class="sf-help">
+        Secrets never leave the environment: enter a reference such as <code>env:VARIABLE_NAME</code> and the ingest
+        service reads the value from that variable.
+      </p>
+      <ng-container *ngTemplateOutlet="fieldList; context: { $implicit: secretDefs() }"></ng-container>
+    </section>
+  }
+
+  @if (advancedFields().length > 0) {
+    <section class="sf-section sf-section-advanced" [class.open]="advancedOpen()">
+      <button type="button" class="sf-section-toggle" (click)="toggleAdvanced()" [attr.aria-expanded]="advancedOpen()">
+        <span class="sf-chevron" aria-hidden="true">{{ advancedOpen() ? '▾' : '▸' }}</span>
+        Advanced
+        <span class="sf-section-sub">staleness, backpressure, replica pinning, raw payload</span>
+      </button>
+      @if (advancedOpen()) {
+        <div class="sf-section-body">
+          <ng-container *ngTemplateOutlet="fieldList; context: { $implicit: advancedFields() }"></ng-container>
+        </div>
+      }
+    </section>
+  }
+</div>

@@ -1,0 +1,197 @@
+<div class="feeds-page">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Feeds</h1>
+      <p class="page-subtitle">Ingest sources and the drivers running them. Changes apply to every user.</p>
+    </div>
+    <button type="button" class="btn btn-primary" (click)="openCreate()">+ Add feed</button>
+  </header>
+
+  @if (loadError(); as err) {
+    <div class="banner banner-error" role="alert">
+      <span>Could not load feeds: {{ err }}</span>
+      <button type="button" class="btn btn-ghost btn-sm" (click)="retry()">Retry</button>
+    </div>
+  }
+  @if (driversError(); as err) {
+    <div class="banner banner-warn" role="alert">{{ err }}</div>
+  }
+  @if (actionError(); as err) {
+    <div class="banner banner-error" role="alert">
+      <span>{{ err }}</span>
+      <button type="button" class="btn btn-ghost btn-sm" (click)="dismissActionError()">Dismiss</button>
+    </div>
+  }
+
+  <section class="feeds-card">
+    @if (!hasLoaded() && loading()) {
+      <div class="empty">Loading feeds…</div>
+    } @else if (rows().length === 0) {
+      <div class="empty">
+        No feeds yet.
+        <button type="button" class="link" (click)="openCreate()">Add the first one.</button>
+      </div>
+    } @else {
+      <table class="feeds-table">
+        <thead>
+          <tr>
+            <th class="col-expand"></th>
+            <th>Feed</th>
+            <th>Driver</th>
+            <th>Source</th>
+            <th>Owner</th>
+            <th>State</th>
+            <th>Last message</th>
+            <th class="col-counters">Messages / entities / errors</th>
+            <th>Enabled</th>
+            <th class="col-actions"></th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of rows(); track row.feed.id) {
+            <tr class="feed-row" [class.disabled]="!row.enabled" [class.expanded]="isExpanded(row.feed.id)">
+              <td class="col-expand">
+                <button
+                  type="button"
+                  class="expand-btn"
+                  (click)="toggleExpanded(row.feed.id)"
+                  [attr.aria-expanded]="isExpanded(row.feed.id)"
+                  [attr.aria-label]="isExpanded(row.feed.id) ? 'Hide details' : 'Show details'"
+                >{{ isExpanded(row.feed.id) ? '▾' : '▸' }}</button>
+              </td>
+              <td class="col-name">
+                <div class="feed-name">
+                  {{ row.feed.name }}
+                  @if (row.feed.builtin) {
+                    <span class="tag" title="Shipped with Sentinel; cannot be deleted">built-in</span>
+                  }
+                </div>
+                <div class="feed-id mono">{{ row.feed.id }}</div>
+                @if (row.feed.description) {
+                  <div class="feed-description">{{ row.feed.description }}</div>
+                }
+              </td>
+              <td class="mono">{{ row.driverName }}</td>
+              <td class="mono">{{ row.feed.source }}</td>
+              <td class="mono muted">{{ row.feed.status.owner || '—' }}</td>
+              <td class="col-state">
+                <div class="state-line">
+                  <span
+                    class="health-dot"
+                    [class]="'health-dot health-' + row.feed.status.health"
+                    [title]="healthLabel(row.feed.status.health)"
+                  ></span>
+                  <span class="state-badge" [class]="'state-badge state-' + row.feed.status.state">
+                    {{ stateLabel(row.feed.status.state) }}
+                  </span>
+                </div>
+                @if (row.highlights.length > 0) {
+                  <div class="highlights muted">{{ row.highlights.join(' · ') }}</div>
+                }
+                @if (row.feed.status.lastError; as lastError) {
+                  <div class="last-error" [title]="lastError">{{ lastError }}</div>
+                }
+              </td>
+              <td class="mono muted" [title]="row.feed.status.lastMessageAt ?? ''">{{ ago(row.feed.status.lastMessageAt) }}</td>
+              <td class="mono col-counters">
+                <span title="Messages total">{{ row.feed.status.messagesTotal | number }}</span>
+                <span class="sep">/</span>
+                <span title="Entities in the last batch">{{ row.feed.status.entitiesLast | number }}</span>
+                <span class="sep">/</span>
+                <span title="Errors total" [class.errors]="row.feed.status.errorsTotal > 0">{{ row.feed.status.errorsTotal | number }}</span>
+              </td>
+              <td>
+                <label class="switch" [title]="row.enabled ? 'Disable feed' : 'Enable feed'">
+                  <input
+                    type="checkbox"
+                    [checked]="row.enabled"
+                    (change)="toggleEnabled(row.feed, $any($event.target).checked)"
+                  />
+                  <span class="slider"></span>
+                </label>
+              </td>
+              <td class="col-actions">
+                @if (confirmingDelete() === row.feed.id) {
+                  <span class="confirm">
+                    <span>Delete?</span>
+                    <button
+                      type="button"
+                      class="btn btn-danger btn-sm"
+                      [disabled]="deleting() === row.feed.id"
+                      (click)="confirmDelete(row.feed)"
+                    >{{ deleting() === row.feed.id ? 'Deleting…' : 'Yes' }}</button>
+                    <button type="button" class="btn btn-ghost btn-sm" [disabled]="deleting() === row.feed.id" (click)="cancelDelete()">No</button>
+                  </span>
+                } @else {
+                  <span class="actions">
+                    <button type="button" class="btn btn-secondary btn-sm" (click)="openEdit(row.feed)">Edit</button>
+                    <span [title]="row.feed.builtin ? 'Built-in feeds cannot be deleted' : 'Delete feed'">
+                      <button type="button" class="btn btn-ghost btn-sm btn-delete" [disabled]="row.feed.builtin" (click)="askDelete(row.feed)">Delete</button>
+                    </span>
+                  </span>
+                }
+              </td>
+            </tr>
+            @if (isExpanded(row.feed.id)) {
+              <tr class="detail-row">
+                <td></td>
+                <td colspan="9">
+                  <div class="detail-grid">
+                    <div class="detail-block">
+                      <h4>Status</h4>
+                      <dl>
+                        <dt>Last success</dt>
+                        <dd class="mono">{{ ago(row.feed.status.lastSuccessAt) }}</dd>
+                        <dt>Applied version</dt>
+                        <dd class="mono">{{ row.feed.status.appliedVersion }} of {{ row.feed.version }}</dd>
+                        <dt>Updated</dt>
+                        <dd class="mono">{{ ago(row.feed.status.updatedAt) }}</dd>
+                        @if (row.feed.status.lastError; as lastError) {
+                          <dt>Last error</dt>
+                          <dd class="mono error-text">{{ lastError }}</dd>
+                        }
+                      </dl>
+                    </div>
+                    <div class="detail-block">
+                      <h4>Driver detail</h4>
+                      @if (row.detailEntries.length === 0) {
+                        <p class="muted">Nothing reported yet.</p>
+                      } @else {
+                        <dl>
+                          @for (entry of row.detailEntries; track entry.key) {
+                            <dt>{{ entry.key }}</dt>
+                            <dd class="mono">{{ entry.value }}</dd>
+                          }
+                        </dl>
+                      }
+                    </div>
+                    <div class="detail-block">
+                      <h4>Capabilities</h4>
+                      @if (row.feed.capabilities.length === 0) {
+                        <p class="muted">None.</p>
+                      } @else {
+                        <div class="chips">
+                          @for (cap of row.feed.capabilities; track cap) {
+                            <span class="chip">{{ cap }}</span>
+                          }
+                        </div>
+                      }
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            }
+          }
+        </tbody>
+      </table>
+    }
+  </section>
+</div>
+
+@if (drawer(); as state) {
+  <app-feed-form
+    [mode]="state.mode"
+    [feed]="state.mode === 'edit' ? state.feed : null"
+    (closed)="closeDrawer()"
+  ></app-feed-form>
+}

@@ -5,6 +5,7 @@ import {
   ViewChild,
   ElementRef,
   signal,
+  effect,
   NgZone,
   ChangeDetectionStrategy,
 } from '@angular/core';
@@ -25,6 +26,7 @@ import { WebSocketService } from '../../core/services/websocket.service';
 import { ThemeService, ThemePreset } from '../../core/services/theme.service';
 import { LocationService } from '../../core/services/location.service';
 import { BuildingsService } from '../../core/services/buildings.service';
+import { LayerVisibilityService } from '../../core/services/layer-visibility.service';
 import { Location } from '../../shared/models/location.model';
 import {
   configureCesium,
@@ -170,7 +172,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly locationService: LocationService,
     readonly buildingsService: BuildingsService,
     private readonly http: HttpClient,
+    private readonly layerVisibility: LayerVisibilityService,
   ) {
+    // Entities stay in the viewer when their layer is hidden (show=false) so
+    // dead reckoning keeps advancing them; this flips `show` when the user's
+    // hidden set changes.
+    effect(() => {
+      this.layerVisibility.hidden();
+      this.ngZone.runOutsideAngular(() => this.applyLayerVisibility());
+    });
+
     // Track whether a panel route is active (anything other than /map or /)
     const routerSub = this.router.events.pipe(
       filter((e): e is NavigationEnd => e instanceof NavigationEnd),
@@ -554,6 +565,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       : 0;
 
     const existing = this.entityMap.get(entity.id);
+    const shown = this.layerVisibility.isVisible(entity);
 
     // Moving aircraft are dead-reckoned: the tracker owns their displayed
     // position and blends this fix in instead of jumping to it.
@@ -566,6 +578,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
     if (existing) {
       // Update existing entity
+      existing.show = shown;
       existing._posProp.setValue(displayPosition);
       existing.label.text = entity.name;
       if (existing.billboard) {
@@ -608,6 +621,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       const posProp = new Cesium.ConstantPositionProperty(displayPosition);
       const cesiumEntity = this.viewer.entities.add({
         position: posProp,
+        show: shown,
         billboard: {
           image: this.getBillboardImage(entity),
           scale: 0.5,
@@ -773,8 +787,19 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.entityMap.forEach((cesiumEntity) => {
       const sentinelEntity = cesiumEntity._sentinelEntity as Entity;
       if (sentinelEntity.entityType === layer.entityType) {
-        cesiumEntity.show = layer.visible;
+        cesiumEntity.show = layer.visible && this.layerVisibility.isVisible(sentinelEntity);
       }
+    });
+    this.scheduleRender();
+  }
+
+  /** Re-applies the user's hidden layer set (feed id / source) to every entity. */
+  private applyLayerVisibility(): void {
+    if (this.entityMap.size === 0) return;
+    this.entityMap.forEach((cesiumEntity) => {
+      const sentinelEntity = cesiumEntity._sentinelEntity as Entity;
+      const typeLayer = this.layers.find((l) => l.entityType === sentinelEntity.entityType);
+      cesiumEntity.show = (typeLayer?.visible ?? true) && this.layerVisibility.isVisible(sentinelEntity);
     });
     this.scheduleRender();
   }
