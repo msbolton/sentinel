@@ -6,6 +6,7 @@ require (
 	github.com/confluentinc/confluent-kafka-go/v2 v2.5.0
 	github.com/prometheus/client_golang v1.19.0
 	go.uber.org/zap v1.27.0
+	google.golang.org/protobuf v1.34.0
 )
 
 require (
@@ -19,5 +20,4 @@ require (
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.19.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
-	google.golang.org/protobuf v1.34.0 // indirect
 )

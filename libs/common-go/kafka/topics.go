@@ -1,27 +1,44 @@
 package kafka
 
-// Topic constants mirror libs/common/src/kafka-topics.ts exactly.
+// Topic names. config/kafka/create-topics.sh and the Helm chart's
+// kafka.provisioning.topics must list the same names.
 const (
-	TopicEntityPosition = "events.entity.position"
-	TopicEntityCreated  = "events.entity.created"
-	TopicEntityUpdated  = "events.entity.updated"
-	TopicEntityDeleted  = "events.entity.deleted"
-	TopicEntityStale    = "events.entity.stale"
-	TopicEntityAgedOut  = "events.entity.agedout"
-	TopicEntityRestored = "events.entity.restored"
-	TopicTrackPoint     = "events.track.point"
-	TopicAlertGeofence  = "alerts.geofence"
-	TopicAlertAnomaly   = "alerts.anomaly"
-	TopicAnalyticsPattern = "analytics.pattern"
-	TopicIngestRaw      = "ingest.raw"
+	// TopicObservationsRaw carries one sentinel.v1.Observation per report
+	// from the ingest service, keyed by ObservationKey.
+	TopicObservationsRaw = "observations.raw"
+	// TopicObservationsDLQ receives payloads a consumer could not process,
+	// with the failure in the "error" header.
+	TopicObservationsDLQ = "observations.dlq"
+	// TopicEntityEvents carries sentinel.v1.EntityEvent, keyed by entity id.
+	TopicEntityEvents = "entities.events"
+	// TopicAlertEvents carries sentinel.v1.AlertEvent, keyed by entity id.
+	TopicAlertEvents = "alerts.events"
 )
 
-// Consumer group IDs mirror libs/common/src/kafka-topics.ts exactly.
+// Legacy JSON topics. Producers and consumers move to the typed topics above
+// during the feed-architecture refactor; these constants go away once the
+// last consumer has switched.
 const (
-	GroupAPIGateway     = "sentinel-api-gateway"
-	GroupEntityService  = "sentinel-entity-service"
-	GroupTrackService   = "sentinel-track-service"
-	GroupSearchService  = "sentinel-search-service"
-	GroupAlertService   = "sentinel-alert-service"
+	TopicEntityPosition   = "events.entity.position"
+	TopicEntityCreated    = "events.entity.created"
+	TopicEntityUpdated    = "events.entity.updated"
+	TopicEntityDeleted    = "events.entity.deleted"
+	TopicEntityStale      = "events.entity.stale"
+	TopicEntityAgedOut    = "events.entity.agedout"
+	TopicEntityRestored   = "events.entity.restored"
+	TopicTrackPoint       = "events.track.point"
+	TopicAlertGeofence    = "alerts.geofence"
+	TopicAlertAnomaly     = "alerts.anomaly"
+	TopicAnalyticsPattern = "analytics.pattern"
+	TopicIngestRaw        = "ingest.raw"
+)
+
+// Consumer group ids.
+const (
+	GroupAPIGateway       = "sentinel-api-gateway"
+	GroupEntityService    = "sentinel-entity-service"
+	GroupTrackService     = "sentinel-track-service"
+	GroupSearchService    = "sentinel-search-service"
+	GroupAlertService     = "sentinel-alert-service"
 	GroupAnalyticsService = "sentinel-analytics"
 )

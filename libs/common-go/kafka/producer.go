@@ -7,6 +7,7 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 // Producer wraps a confluent-kafka-go producer with delivery report
@@ -106,6 +107,17 @@ func (p *Producer) ProduceRaw(topic string, key []byte, value []byte, headers ma
 		Value:   value,
 		Headers: hdrs,
 	}, nil)
+}
+
+// ProduceProto serialises msg as protobuf and sends it with the standard
+// headers (see ProtoHeaders). extra headers are merged in; use it for
+// HeaderFeedID and HeaderEventType.
+func (p *Producer) ProduceProto(topic, key string, msg proto.Message, producer string, extra map[string]string) error {
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshaling %s: %w", msg.ProtoReflect().Descriptor().FullName(), err)
+	}
+	return p.ProduceRaw(topic, []byte(key), data, ProtoHeaders(msg, producer, extra))
 }
 
 // Flush waits for all outstanding messages to be delivered.

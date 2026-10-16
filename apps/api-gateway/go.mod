@@ -21,6 +21,7 @@ require (
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
+	google.golang.org/protobuf v1.34.0 // indirect
 )
 
 replace github.com/sentinel/go-common => ../../libs/common-go
