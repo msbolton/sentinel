@@ -44,7 +44,6 @@ func main() {
 	logger.Info("configuration loaded",
 		zap.String("kafka_brokers", cfg.KafkaBrokers),
 		zap.String("observation_topic", cfg.KafkaObservationTopic),
-		zap.String("legacy_topic", cfg.KafkaLegacyTopic),
 		zap.String("http_addr", cfg.HTTPAddr),
 		zap.String("replica_id", cfg.ReplicaID),
 		zap.Int("worker_pool_size", cfg.WorkerPoolSize),
@@ -72,7 +71,7 @@ func main() {
 	})
 	publisher.Start()
 
-	pipeline := ingest.NewPipeline(cfg, producer, publisher, logger, m)
+	pipeline := ingest.NewPipeline(cfg, publisher, logger, m)
 	pipeline.Start()
 
 	ctx, cancel := context.WithCancel(context.Background())

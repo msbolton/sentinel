@@ -26,12 +26,12 @@ func NewTrackStore(pool *pgxpool.Pool, logger *zap.Logger) *TrackStore {
 
 // BulkInsert performs a bulk INSERT of track points using parameterized SQL.
 // paramsPerRow is the number of bind parameters one track point needs.
-const paramsPerRow = 13
+const paramsPerRow = 17
 
 // maxRowsPerInsert keeps a multi-row INSERT under PostgreSQL's 65,535 bind
-// parameter limit (13 parameters per row allows 5,041). A backlog replayed
+// parameter limit (17 parameters per row allows 3,855). A backlog replayed
 // at startup can easily exceed that in one flush.
-const maxRowsPerInsert = 4000
+const maxRowsPerInsert = 3800
 
 // BulkInsert writes points with as few multi-row INSERTs as the parameter
 // limit allows. On error the whole batch is reported failed so the batcher
@@ -54,7 +54,7 @@ func (s *TrackStore) BulkInsert(ctx context.Context, points []models.BufferedPoi
 // buildInsert renders one multi-row INSERT for up to maxRowsPerInsert points.
 func buildInsert(points []models.BufferedPoint) (string, []interface{}) {
 	var b strings.Builder
-	b.WriteString(`INSERT INTO sentinel.track_points ("entityId", "source", "position", "heading", "speedKnots", "course", "timestamp", "altitude", "velocityNorth", "velocityEast", "velocityUp", "circularError") VALUES `)
+	b.WriteString(`INSERT INTO sentinel.track_points ("entityId", "source", "position", "heading", "speedKnots", "course", "timestamp", "altitude", "velocityNorth", "velocityEast", "velocityUp", "circularError", "feedId", "sourceEntityId", "observationId", "entityType") VALUES `)
 
 	args := make([]interface{}, 0, len(points)*paramsPerRow)
 	for i, p := range points {
@@ -63,10 +63,11 @@ func buildInsert(points []models.BufferedPoint) (string, []interface{}) {
 		}
 		idx := i*paramsPerRow + 1
 		b.WriteString(fmt.Sprintf(
-			"($%d, $%d, ST_SetSRID(ST_MakePoint($%d, $%d), 4326), $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
-			idx, idx+1, idx+2, idx+3, idx+4, idx+5, idx+6, idx+7, idx+8, idx+9, idx+10, idx+11, idx+12,
+			"($%d, $%d, ST_SetSRID(ST_MakePoint($%d, $%d), 4326), $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d::uuid, $%d)",
+			idx, idx+1, idx+2, idx+3, idx+4, idx+5, idx+6, idx+7, idx+8, idx+9, idx+10, idx+11, idx+12, idx+13, idx+14, idx+15, idx+16,
 		))
-		args = append(args, p.EntityID, p.Source, p.Longitude, p.Latitude, p.Heading, p.SpeedKnots, p.Course, p.Timestamp, p.Altitude, p.VelocityNorth, p.VelocityEast, p.VelocityUp, p.CircularError)
+		args = append(args, p.EntityID, p.Source, p.Longitude, p.Latitude, p.Heading, p.SpeedKnots, p.Course, p.Timestamp, p.Altitude, p.VelocityNorth, p.VelocityEast, p.VelocityUp, p.CircularError,
+			p.FeedID, p.SourceEntityID, p.ObservationID, p.EntityType)
 	}
 	return b.String(), args
 }

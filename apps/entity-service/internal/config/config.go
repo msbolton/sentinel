@@ -14,9 +14,6 @@ type Config struct {
 	KafkaBrokers string
 	CORSOrigin   string
 
-	// KafkaLegacyEvents keeps the JSON events.entity.* topics fed while
-	// older consumers remain (KAFKA_LEGACY_EVENTS, default true).
-	KafkaLegacyEvents bool
 	// ConsumerBatchSize and ConsumerMaxWait bound one fusion batch.
 	ConsumerBatchSize int
 	ConsumerMaxWait   time.Duration
@@ -34,7 +31,6 @@ func Load() Config {
 		DatabaseURL:       commonCfg.DatabaseURL(),
 		KafkaBrokers:      commonCfg.EnvOrDefault("KAFKA_BROKERS", "localhost:9092"),
 		CORSOrigin:        commonCfg.EnvOrDefault("CORS_ORIGIN", "*"),
-		KafkaLegacyEvents: commonCfg.EnvOrDefaultBool("KAFKA_LEGACY_EVENTS", true),
 		ConsumerBatchSize: commonCfg.EnvOrDefaultInt("CONSUMER_BATCH_SIZE", 500),
 		ConsumerMaxWait:   time.Duration(commonCfg.EnvOrDefaultInt("CONSUMER_MAX_WAIT_MS", 100)) * time.Millisecond,
 		IdentityCacheSize: commonCfg.EnvOrDefaultInt("IDENTITY_CACHE_SIZE", 200000),

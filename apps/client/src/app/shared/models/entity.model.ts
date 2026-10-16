@@ -64,6 +64,16 @@ export interface Entity {
 
   // Ageout state
   ageoutState?: 'LIVE' | 'STALE' | 'AGED_OUT';
+
+  // Provenance from the fused entity (feed slug and natural identifiers)
+  feedId?: string;
+  identities?: EntityIdentity[];
+  lastObservedAt?: string;
+}
+
+export interface EntityIdentity {
+  type: string; // ICAO24, MMSI, NORAD_ID, COT_UID, CALLSIGN, REGISTRATION, IMO, FEED_LOCAL
+  value: string;
 }
 
 export interface EntityEvent {

@@ -109,6 +109,9 @@ func (c *Client) EnsureIndex(ctx context.Context) error {
 				"operationalStatus": map[string]interface{}{"type": "keyword"},
 				"countryOfOrigin":   map[string]interface{}{"type": "keyword"},
 				"sourceEntityId":    map[string]interface{}{"type": "keyword"},
+				"feedId":            map[string]interface{}{"type": "keyword"},
+				"ageoutState":       map[string]interface{}{"type": "keyword"},
+				"identities":        map[string]interface{}{"type": "keyword"},
 				"platformIdentifiers": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -281,6 +284,25 @@ func (c *Client) IndexEntity(ctx context.Context, doc EntityDocument) error {
 		return fmt.Errorf("index entity failed: %s", string(respBody))
 	}
 
+	return nil
+}
+
+// UpdateFields applies a partial document update (e.g. the ageout state).
+// A missing document is reported as an error the caller may ignore.
+func (c *Client) UpdateFields(ctx context.Context, id string, fields map[string]interface{}) error {
+	body, err := json.Marshal(map[string]interface{}{"doc": fields})
+	if err != nil {
+		return fmt.Errorf("marshal update: %w", err)
+	}
+	res, err := c.os.Update(indexName, id, bytes.NewReader(body), c.os.Update.WithContext(ctx))
+	if err != nil {
+		return fmt.Errorf("update entity: %w", err)
+	}
+	defer res.Body.Close()
+	if res.IsError() {
+		respBody, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("update entity failed: %s", string(respBody))
+	}
 	return nil
 }
 

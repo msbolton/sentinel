@@ -1,17 +1,14 @@
 package kafka
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"go.uber.org/zap"
 
 	"github.com/sentinel/ingest-service/internal/metrics"
-	"github.com/sentinel/ingest-service/internal/models"
 )
 
 // Producer wraps a confluent-kafka-go producer with delivery report
@@ -93,52 +90,6 @@ func (p *Producer) Produce(msg *kafka.Message) error {
 func IsQueueFull(err error) bool {
 	var kerr kafka.Error
 	return errors.As(err, &kerr) && kerr.Code() == kafka.ErrQueueFull
-}
-
-// ProduceBatch sends a batch of entity positions to the specified Kafka topic.
-// Messages are keyed by entity_id to guarantee per-entity ordering within a partition.
-func (p *Producer) ProduceBatch(topic string, messages []*models.EntityPosition) error {
-	if len(messages) == 0 {
-		return nil
-	}
-
-	start := time.Now()
-
-	for _, msg := range messages {
-		value, err := json.Marshal(msg)
-		if err != nil {
-			p.logger.Error("failed to marshal entity position",
-				zap.String("entity_id", msg.EntityID),
-				zap.Error(err),
-			)
-			continue
-		}
-
-		err = p.producer.Produce(&kafka.Message{
-			TopicPartition: kafka.TopicPartition{
-				Topic:     &topic,
-				Partition: kafka.PartitionAny,
-			},
-			Key:   []byte(msg.EntityID),
-			Value: value,
-			Headers: []kafka.Header{
-				{Key: "source", Value: []byte(msg.Source)},
-				{Key: "entity_type", Value: []byte(msg.EntityType)},
-				{Key: "feed_id", Value: []byte(msg.FeedID)},
-			},
-		}, nil)
-		if err != nil {
-			p.logger.Error("failed to enqueue kafka message",
-				zap.String("entity_id", msg.EntityID),
-				zap.Error(err),
-			)
-		}
-	}
-
-	p.metrics.KafkaProduceDuration.Observe(time.Since(start).Seconds())
-	p.metrics.BatchSize.Observe(float64(len(messages)))
-
-	return nil
 }
 
 // Flush waits for all outstanding messages to be delivered, up to the given timeout.

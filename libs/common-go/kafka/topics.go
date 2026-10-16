@@ -15,24 +15,6 @@ const (
 	TopicAlertEvents = "alerts.events"
 )
 
-// Legacy JSON topics. Producers and consumers move to the typed topics above
-// during the feed-architecture refactor; these constants go away once the
-// last consumer has switched.
-const (
-	TopicEntityPosition   = "events.entity.position"
-	TopicEntityCreated    = "events.entity.created"
-	TopicEntityUpdated    = "events.entity.updated"
-	TopicEntityDeleted    = "events.entity.deleted"
-	TopicEntityStale      = "events.entity.stale"
-	TopicEntityAgedOut    = "events.entity.agedout"
-	TopicEntityRestored   = "events.entity.restored"
-	TopicTrackPoint       = "events.track.point"
-	TopicAlertGeofence    = "alerts.geofence"
-	TopicAlertAnomaly     = "alerts.anomaly"
-	TopicAnalyticsPattern = "analytics.pattern"
-	TopicIngestRaw        = "ingest.raw"
-)
-
 // Consumer group ids.
 const (
 	GroupAPIGateway       = "sentinel-api-gateway"
