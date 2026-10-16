@@ -10,8 +10,23 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	"github.com/sentinel/go-common/classification"
 	"github.com/sentinel/track-service/internal/models"
 )
+
+// EntityClassification returns an entity's stored classification, or
+// UNCLASSIFIED when the entity row is gone (its points may remain).
+func (s *TrackStore) EntityClassification(ctx context.Context, entityID string) (string, error) {
+	var level string
+	err := s.pool.QueryRow(ctx, `SELECT classification FROM sentinel.entities WHERE id = $1`, entityID).Scan(&level)
+	if err == pgx.ErrNoRows {
+		return classification.Unclassified, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("entity classification: %w", err)
+	}
+	return level, nil
+}
 
 // TrackStore handles all database operations for track points.
 type TrackStore struct {
@@ -160,7 +175,9 @@ type TimelineBucket struct {
 
 // GetTimeline counts track points in `buckets` equal slices of [start, end),
 // with a per-entity-type breakdown. Empty slices are returned with zero counts.
-func (s *TrackStore) GetTimeline(ctx context.Context, start, end time.Time, buckets int) ([]TimelineBucket, error) {
+// Only points of entities at or below the caller's clearance are counted;
+// points whose entity is gone count as UNCLASSIFIED.
+func (s *TrackStore) GetTimeline(ctx context.Context, start, end time.Time, buckets int, ceiling string) ([]TimelineBucket, error) {
 	rows, err := s.pool.Query(ctx, `
 		WITH counts AS (
 			SELECT width_bucket(EXTRACT(EPOCH FROM t."timestamp"), EXTRACT(EPOCH FROM $1::timestamptz), EXTRACT(EPOCH FROM $2::timestamptz), $3::int) - 1 AS i,
@@ -169,6 +186,7 @@ func (s *TrackStore) GetTimeline(ctx context.Context, start, end time.Time, buck
 			FROM sentinel.track_points t
 			LEFT JOIN sentinel.entities e ON e.id = t."entityId"
 			WHERE t."timestamp" >= $1 AND t."timestamp" < $2
+			  AND sentinel.classification_rank(COALESCE(e.classification, 'UNCLASSIFIED')) <= $4
 			GROUP BY 1, 2
 		)
 		SELECT $1::timestamptz + (($2::timestamptz - $1::timestamptz) / $3::int) * g.i AS bucket_start,
@@ -178,7 +196,7 @@ func (s *TrackStore) GetTimeline(ctx context.Context, start, end time.Time, buck
 		LEFT JOIN counts c ON c.i = g.i
 		GROUP BY g.i
 		ORDER BY g.i
-	`, start, end, buckets)
+	`, start, end, buckets, classification.Rank(ceiling))
 	if err != nil {
 		return nil, fmt.Errorf("querying timeline: %w", err)
 	}

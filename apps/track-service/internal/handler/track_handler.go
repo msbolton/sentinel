@@ -8,10 +8,33 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/sentinel/go-common/classification"
 	"github.com/sentinel/go-common/httputil"
+	"github.com/sentinel/go-common/middleware"
 	"github.com/sentinel/track-service/internal/models"
 	"github.com/sentinel/track-service/internal/store"
 )
+
+// ceilingOf is the caller's clearance as propagated by the gateway; a
+// missing header fails closed to UNCLASSIFIED.
+func ceilingOf(r *http.Request) string {
+	return classification.Normalize(middleware.Classification(r.Context()))
+}
+
+// visible reports whether the caller may see the entity's track; an entity
+// above the caller's clearance does not exist for them (404).
+func (h *TrackHandler) visible(w http.ResponseWriter, r *http.Request, entityID string) bool {
+	level, err := h.store.EntityClassification(r.Context(), entityID)
+	if err != nil {
+		httputil.ErrorWithLogger(w, http.StatusInternalServerError, "failed to check entity", h.logger, err)
+		return false
+	}
+	if classification.Rank(level) > classification.Rank(ceilingOf(r)) {
+		httputil.Error(w, http.StatusNotFound, "entity not found")
+		return false
+	}
+	return true
+}
 
 // TrackHandler handles HTTP requests for track history.
 type TrackHandler struct {
@@ -35,6 +58,9 @@ func (h *TrackHandler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *TrackHandler) getTrackHistory(w http.ResponseWriter, r *http.Request) {
 	entityID := r.PathValue("entityId")
+	if !h.visible(w, r, entityID) {
+		return
+	}
 
 	startTime := parseOptionalTime(r, "startTime")
 	endTime := parseOptionalTime(r, "endTime")
@@ -54,6 +80,9 @@ func (h *TrackHandler) getTrackHistory(w http.ResponseWriter, r *http.Request) {
 
 func (h *TrackHandler) getLatestPosition(w http.ResponseWriter, r *http.Request) {
 	entityID := r.PathValue("entityId")
+	if !h.visible(w, r, entityID) {
+		return
+	}
 
 	results, err := h.store.GetLatestPositions(r.Context(), []string{entityID})
 	if err != nil {
@@ -71,6 +100,9 @@ func (h *TrackHandler) getLatestPosition(w http.ResponseWriter, r *http.Request)
 
 func (h *TrackHandler) getTrackSegments(w http.ResponseWriter, r *http.Request) {
 	entityID := r.PathValue("entityId")
+	if !h.visible(w, r, entityID) {
+		return
+	}
 
 	startTime := parseOptionalTime(r, "startTime")
 	endTime := parseOptionalTime(r, "endTime")
@@ -87,6 +119,9 @@ func (h *TrackHandler) getTrackSegments(w http.ResponseWriter, r *http.Request) 
 
 func (h *TrackHandler) replayTrack(w http.ResponseWriter, r *http.Request) {
 	entityID := r.PathValue("entityId")
+	if !h.visible(w, r, entityID) {
+		return
+	}
 	channelID := fmt.Sprintf("track-replay-%s-%d", entityID, time.Now().UnixMilli())
 
 	httputil.JSON(w, http.StatusOK, map[string]interface{}{
@@ -157,7 +192,7 @@ func (h *TrackHandler) getTimeline(w http.ResponseWriter, r *http.Request) {
 		httputil.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	buckets, err := h.store.GetTimeline(r.Context(), p.Start, p.End, p.Buckets)
+	buckets, err := h.store.GetTimeline(r.Context(), p.Start, p.End, p.Buckets, ceilingOf(r))
 	if err != nil {
 		httputil.ErrorWithLogger(w, http.StatusInternalServerError, "failed to query timeline", h.logger, err)
 		return

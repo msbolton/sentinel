@@ -29,6 +29,10 @@ type Client struct {
 	hasViewport bool // false until the client sends its first viewport:update
 	subs        map[string]struct{}
 
+	// clearance is the user's classification rank, fixed at connect time;
+	// events ranked above it are never sent, subscribed or not.
+	clearance int
+
 	closeOnce sync.Once
 	done      chan struct{}
 }
@@ -90,6 +94,9 @@ func (c *Client) filter(events []PositionedEvent) []EntityEvent {
 	defer c.mu.RUnlock()
 	var out []EntityEvent
 	for _, e := range events {
+		if e.Rank > c.clearance {
+			continue
+		}
 		if _, subscribed := c.subs[e.Event.Entity.ID]; subscribed || c.viewport.Contains(e.Lat, e.Lng) {
 			out = append(out, e.Event)
 		}

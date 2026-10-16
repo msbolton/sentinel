@@ -11,6 +11,8 @@ import (
 
 	"github.com/coder/websocket"
 	"go.uber.org/zap"
+
+	"github.com/sentinel/api-gateway/internal/auth"
 )
 
 // Handler upgrades GET /ws/entities to a websocket and runs the client loops.
@@ -61,6 +63,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := newClient(newClientID(), h.hub, conn, h.logger)
+	if u, ok := auth.UserFrom(r.Context()); ok {
+		client.clearance = auth.ClassificationRank(u.ClassificationLevel)
+	}
 	h.hub.register(client)
 	defer h.hub.unregister(client)
 

@@ -14,6 +14,8 @@ import (
 
 	"github.com/sentinel/go-common/kafka"
 	"github.com/sentinel/proto-gen/pbjson"
+
+	"github.com/sentinel/api-gateway/internal/auth"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 )
 
@@ -101,7 +103,7 @@ func (b *Bridge) Handle(topic string, value []byte) {
 			b.logger.Debug("bad alert event", zap.Error(err))
 			return
 		}
-		b.hub.BroadcastAll(MsgAlertNew, alertFromProto(&ev))
+		b.hub.BroadcastRanked(MsgAlertNew, alertFromProto(&ev), auth.ClassificationRank(enumOrEmpty(ev.Alert.Classification)))
 	default:
 		b.logger.Warn("unhandled topic", zap.String("topic", topic))
 	}
@@ -158,6 +160,7 @@ func (b *Bridge) enqueueEntity(en *sentinelv1.Entity, eventType, ts string) {
 	b.batcher.Add(PositionedEvent{
 		Lat:   en.Position.Latitude,
 		Lng:   en.Position.Longitude,
+		Rank:  auth.ClassificationRank(enumOrEmpty(en.Classification)),
 		Event: EntityEvent{Type: eventType, Entity: entity, Timestamp: firstNonEmpty(entity.LastObservedAt, ts)},
 	})
 }

@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"github.com/sentinel/alert-service/internal/store"
+	"github.com/sentinel/go-common/classification"
 	"github.com/sentinel/go-common/httputil"
+	"github.com/sentinel/go-common/middleware"
 	"go.uber.org/zap"
 )
 
@@ -34,8 +36,35 @@ func (h *AlertHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/alerts/rules/{id}", h.handleUpdateRule)
 }
 
+// ceilingOf is the caller's clearance as propagated by the gateway; a
+// missing header fails closed to UNCLASSIFIED.
+func ceilingOf(r *http.Request) string {
+	return classification.Normalize(middleware.Classification(r.Context()))
+}
+
+// findVisible fetches an alert the caller is cleared to see; alerts above
+// the caller's clearance do not exist for them.
+func (h *AlertHandler) findVisible(w http.ResponseWriter, r *http.Request, id string) (*store.AlertRecord, bool) {
+	alert, err := h.store.GetAlert(r.Context(), id)
+	if err != nil {
+		if strings.Contains(err.Error(), "no rows") {
+			httputil.Error(w, http.StatusNotFound, "Alert not found")
+			return nil, false
+		}
+		h.logger.Error("get alert failed", zap.Error(err))
+		httputil.Error(w, http.StatusInternalServerError, "Failed to get alert")
+		return nil, false
+	}
+	if classification.Rank(alert.Classification) > classification.Rank(ceilingOf(r)) {
+		httputil.Error(w, http.StatusNotFound, "Alert not found")
+		return nil, false
+	}
+	return alert, true
+}
+
 func (h *AlertHandler) handleGetAlerts(w http.ResponseWriter, r *http.Request) {
 	params := parseAlertQuery(r.URL.Query())
+	params.Ceiling = ceilingOf(r)
 
 	result, err := h.store.GetAlerts(r.Context(), params)
 	if err != nil {
@@ -48,23 +77,18 @@ func (h *AlertHandler) handleGetAlerts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AlertHandler) handleGetAlert(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	alert, err := h.store.GetAlert(r.Context(), id)
-	if err != nil {
-		if strings.Contains(err.Error(), "no rows") {
-			httputil.Error(w, http.StatusNotFound, "Alert not found")
-			return
-		}
-		h.logger.Error("get alert failed", zap.Error(err))
-		httputil.Error(w, http.StatusInternalServerError, "Failed to get alert")
+	alert, ok := h.findVisible(w, r, r.PathValue("id"))
+	if !ok {
 		return
 	}
-
 	httputil.JSON(w, http.StatusOK, alert)
 }
 
 func (h *AlertHandler) handleAcknowledge(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if _, ok := h.findVisible(w, r, id); !ok {
+		return
+	}
 
 	var body struct {
 		UserID string `json:"userId"`
@@ -90,6 +114,9 @@ func (h *AlertHandler) handleAcknowledge(w http.ResponseWriter, r *http.Request)
 
 func (h *AlertHandler) handleResolve(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if _, ok := h.findVisible(w, r, id); !ok {
+		return
+	}
 
 	if err := h.store.ResolveAlert(r.Context(), id); err != nil {
 		if strings.Contains(err.Error(), "not found") {

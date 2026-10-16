@@ -195,3 +195,78 @@ func TestClassificationHighWaterMark(t *testing.T) {
 		t.Fatal("update of a missing entity must fail")
 	}
 }
+
+// Reads apply the caller's clearance as a ceiling.
+func TestCeilingOnReads(t *testing.T) {
+	pool, ctx := testPool(t)
+	ids := store.NewIdentityStore(pool, nil)
+	ents := store.NewEntityStore(pool, nil)
+	t0 := time.Now().UTC().Truncate(time.Millisecond)
+	icao := "TSR" + t0.Format("150405")
+
+	r1 := report("test-ceiling", icao, t0, 10.5, 10.5)
+	spec := fusion.SpecFor(r1)
+	spec.Classification = "SECRET"
+	created, _, err := ids.CreateEntities(ctx, []identity.NewEntity{spec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entityID := created[r1.Key]
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM sentinel.entities WHERE id = $1`, entityID) })
+	if _, err := ents.ApplyFused(ctx, []store.FusedUpdate{{EntityID: entityID, ObservedAt: t0, FeedID: "test-ceiling", Source: "OPENSKY", SourceEntityID: r1.Obs.SourceEntityId,
+		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "X", Lat: 10.5, Lon: 10.5, Classification: "SECRET"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	north, south, east, west := 11.0, 10.0, 11.0, 10.0
+	find := func(ceiling string, requested *string) int {
+		res, err := ents.FindWithinBoundingBox(ctx, store.QueryParams{North: &north, South: &south, East: &east, West: &west, FeedIDs: []string{"test-ceiling"}, Ceiling: ceiling, Classification: requested, PageSize: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Total
+	}
+	if n := find("CONFIDENTIAL", nil); n != 0 {
+		t.Errorf("CONFIDENTIAL caller sees %d SECRET entities", n)
+	}
+	if n := find("TOP_SECRET", nil); n != 1 {
+		t.Errorf("TOP_SECRET caller sees %d, want 1", n)
+	}
+	lower := "UNCLASSIFIED"
+	if n := find("TOP_SECRET", &lower); n != 0 {
+		t.Errorf("requested UNCLASSIFIED still sees %d", n)
+	}
+	if n := find("", nil); n != 0 {
+		t.Errorf("missing clearance sees %d, want 0 (fail closed)", n)
+	}
+
+	near, err := ents.FindNearby(ctx, 10.5, 10.5, 1000, "SECRET")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, e := range near {
+		if e.ID == entityID {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Error("SECRET caller cannot find the SECRET entity nearby")
+	}
+	near, _ = ents.FindNearby(ctx, 10.5, 10.5, 1000, "UNCLASSIFIED")
+	for _, e := range near {
+		if e.ID == entityID {
+			t.Error("UNCLASSIFIED caller found the SECRET entity nearby")
+		}
+	}
+
+	counts, err := ents.GetEntityCounts(ctx, "CONFIDENTIAL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range counts {
+		if c.Classification == "SECRET" || c.Classification == "TOP_SECRET" {
+			t.Errorf("counts leak %s rows to a CONFIDENTIAL caller", c.Classification)
+		}
+	}
+}
