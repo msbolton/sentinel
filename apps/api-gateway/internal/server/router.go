@@ -62,6 +62,7 @@ func New(d Deps) http.Handler {
 	mountProxy(api, "/api/v1/links", d.Upstreams.Links)
 	mountProxy(api, "/api/v1/search", d.Upstreams.Search)
 	mountProxy(api, "/api/v1/feeds", d.Upstreams.Feeds)
+	mountProxy(api, "/api/v1/drivers", d.Upstreams.Feeds)
 	if d.Locations != nil {
 		d.Locations.RegisterRoutes(api)
 	}

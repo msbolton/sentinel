@@ -60,21 +60,27 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Schema migrations (runs once then exits)
+  # Schema (runs once then exits)
   # ===========================================================================
-  # Applies db/migrations with golang-migrate. Application services wait for
-  # this container to complete successfully before starting.
+  # Applies every file in db/schema in name order with psql. The files are
+  # idempotent, so re-running after an edit is how the schema changes before
+  # the first release. Application services wait for this container to
+  # complete successfully before starting.
   # ===========================================================================
-  db-migrate:
-    image: migrate/migrate:v4.18.1
-    platform: linux/amd64
-    container_name: sentinel-db-migrate
+  db-schema:
+    image: postgis/postgis:16-3.4
+    container_name: sentinel-db-schema
     depends_on:
       postgres:
         condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: sentinel
+      PGPASSWORD: sentinel_dev
+      PGDATABASE: sentinel
     volumes:
-      - ./db/migrations:/migrations:ro
-    command: ["-path=/migrations", "-database", "postgres://sentinel:sentinel_dev@postgres:5432/sentinel?sslmode=disable", "up"]
+      - ./db/schema:/schema:ro
+    entrypoint: ["sh", "-c", "for f in /schema/*.sql; do echo \"== $$f\"; psql -v ON_ERROR_STOP=1 -q -f \"$$f\" || exit 1; done"]
     restart: "no"
     networks:
       - sentinel-network
@@ -466,11 +472,11 @@ services:
       LINK_ANALYSIS_SERVICE_URL: http://link-analysis-service:3004
       ALERT_SERVICE_URL: http://alert-service:3005
       INGEST_SERVICE_URL: http://ingest-service:4000
-      # Push the area connected map clients see to ingest-service (OpenSky polling area)
+      INGEST_SERVICE_TOKEN: ${INGEST_SERVICE_TOKEN:-dev-ingest-token}
+      # Push the area connected map clients see to every ingest feed that polls an area
       VIEWPORT_SYNC_ENABLED: "true"
       VIEWPORT_SYNC_HEARTBEAT_SEC: "30"
       VIEWPORT_SYNC_DEBOUNCE_MS: "1000"
-      ANALYTICS_SERVICE_URL: http://analytics-service:5000
       # MinIO / S3
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: sentinel_minio
@@ -481,7 +487,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      db-migrate:
+      db-schema:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
@@ -524,15 +530,13 @@ services:
       DB_DATABASE: sentinel
       DB_USERNAME: sentinel
       DB_PASSWORD: sentinel_dev
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
     ports:
       - "3001:3001"
     depends_on:
       postgres:
         condition: service_healthy
-      db-migrate:
+      db-schema:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
@@ -581,7 +585,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      db-migrate:
+      db-schema:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
@@ -632,7 +636,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      db-migrate:
+      db-schema:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
@@ -681,7 +685,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      db-migrate:
+      db-schema:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
@@ -730,7 +734,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      db-migrate:
+      db-schema:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
@@ -758,54 +762,33 @@ services:
   # ===========================================================================
   ingest-service:
     build:
-      context: ./apps/ingest-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./apps/ingest-service/Dockerfile
     image: sentinel/ingest-service:dev
-    container_name: sentinel-ingest-service
-    hostname: ingest-service
+    # No hostname or container_name: `docker compose up --scale ingest-service=3`
+    # runs three replicas, each identified by its container id (REPLICA_ID).
     restart: unless-stopped
     environment:
       APP_ENV: development
-      PORT: "4000"
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_DATABASE: sentinel
-      DB_USERNAME: sentinel
-      DB_PASSWORD: sentinel_dev
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
       KAFKA_BROKERS: kafka:9093
-      S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: sentinel_minio
-      S3_SECRET_KEY: minio_dev_secret
-      S3_BUCKET_RAW: sentinel-imagery
-      S3_REGION: us-east-1
-      S3_USE_PATH_STYLE: "true"
-      # Custom feeds Postgres store
+      # Feed registry (feeds, feed_status, feed_areas) and leases (feed_leases, ingest_replicas):
+      # every enabled feed runs on exactly one replica.
       DATABASE_URL: postgres://sentinel:sentinel_dev@postgres:5432/sentinel?sslmode=disable
-      # OpenSky Network (credentials come from the host environment / .env)
-      OPENSKY_ENABLED: ${OPENSKY_ENABLED:-false}
+      LEASE_TTL_SEC: "15"
+      LEASE_TICK_SEC: "2"
+      # Presented by the api-gateway; the management API is not reachable from the host.
+      INGEST_SERVICE_TOKEN: ${INGEST_SERVICE_TOKEN:-dev-ingest-token}
+      # Built-in feeds to insert enabled when the feeds table is empty (comma-separated ids).
+      FEEDS_BOOTSTRAP_ENABLED: ${FEEDS_BOOTSTRAP_ENABLED:-}
+      # OpenSky credentials, referenced by the opensky feed's secretRefs (from the host environment / .env)
       OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
       OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
-      OPENSKY_INTERVAL_SEC: "10"
-      # Viewport-driven polling: poll only the area connected map clients see,
-      # as pushed by the api-gateway. false = continuous polling of OPENSKY_BBOX.
-      OPENSKY_VIEWPORT_MODE: "true"
-      OPENSKY_VIEWPORT_TTL_SEC: "90"
-      OPENSKY_MIN_POLL_SPACING_SEC: "3"
-      OPENSKY_MAX_AREA_SQDEG: "400"
-      OPENSKY_MAX_INTERVAL_SEC: "60"
-      OPENSKY_CREDIT_FLOOR: "200"
-    ports:
-      - "4000:4000"
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
+      db-schema:
+        condition: service_completed_successfully
       kafka:
-        condition: service_healthy
-      minio:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:4000/health || exit 1"]
@@ -829,8 +812,8 @@ services:
   # ===========================================================================
   analytics-service:
     build:
-      context: ./apps/analytics-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./apps/analytics-service/Dockerfile
     image: sentinel/analytics-service:dev
     container_name: sentinel-analytics-service
     hostname: analytics-service
@@ -857,7 +840,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      db-migrate:
+      db-schema:
         condition: service_completed_successfully
       redis:
         condition: service_healthy

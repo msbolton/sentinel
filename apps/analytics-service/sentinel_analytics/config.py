@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     # Kafka
     kafka_brokers: str = "localhost:9092"
     kafka_group_id: str = "sentinel-analytics"
-    kafka_position_topic: str = "events.entity.position"
-    kafka_anomaly_topic: str = "alerts.anomaly"
+    kafka_entity_events_topic: str = "entities.events"
+    kafka_alert_events_topic: str = "alerts.events"
 
     # PostgreSQL / TimescaleDB
     postgres_dsn: str = "postgresql://sentinel:sentinel_dev@localhost:5432/sentinel"

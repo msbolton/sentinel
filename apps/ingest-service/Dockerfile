@@ -2,10 +2,11 @@ FROM golang:1.24-alpine AS builder
 # librdkafka is linked dynamically against the Alpine package: the static bundle
 # shipped with confluent-kafka-go has no musl build for arm64.
 RUN apk add --no-cache gcc musl-dev librdkafka-dev
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
+WORKDIR /build
+COPY libs/common-go/ ./libs/common-go/
+COPY libs/proto-gen/src/go/ ./libs/proto-gen/src/go/
+COPY apps/ingest-service/ ./apps/ingest-service/
+WORKDIR /build/apps/ingest-service
 RUN CGO_ENABLED=1 GOOS=linux go build -tags dynamic -o /ingest-service ./cmd/server
 
 # Runtime librdkafka must be at least the version confluent-kafka-go was built against;

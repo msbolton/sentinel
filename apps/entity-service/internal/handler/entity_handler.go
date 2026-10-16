@@ -6,24 +6,26 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sentinel/go-common/httputil"
-	"github.com/sentinel/go-common/kafka"
-	"github.com/sentinel/entity-service/internal/redis"
-	"github.com/sentinel/entity-service/internal/store"
 	"go.uber.org/zap"
+
+	"github.com/sentinel/go-common/httputil"
+	"github.com/sentinel/go-common/ids"
+
+	"github.com/sentinel/entity-service/internal/events"
+	"github.com/sentinel/entity-service/internal/store"
 )
 
 // EntityHandler handles entity HTTP endpoints.
 type EntityHandler struct {
-	store    *store.EntityStore
-	producer *kafka.Producer
-	geoCache *redis.GeoCache
-	logger   *zap.Logger
+	store        *store.EntityStore
+	observations *store.ObservationStore
+	events       *events.Publisher
+	logger       *zap.Logger
 }
 
 // NewEntityHandler creates a new entity handler.
-func NewEntityHandler(store *store.EntityStore, producer *kafka.Producer, geoCache *redis.GeoCache, logger *zap.Logger) *EntityHandler {
-	return &EntityHandler{store: store, producer: producer, geoCache: geoCache, logger: logger}
+func NewEntityHandler(store *store.EntityStore, observations *store.ObservationStore, publisher *events.Publisher, logger *zap.Logger) *EntityHandler {
+	return &EntityHandler{store: store, observations: observations, events: publisher, logger: logger}
 }
 
 // RegisterRoutes registers entity endpoints on the mux.
@@ -32,6 +34,9 @@ func (h *EntityHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/entities/nearby", h.handleNearby)
 	mux.HandleFunc("GET /api/v1/entities/counts", h.handleCounts)
 	mux.HandleFunc("GET /api/v1/entities/{id}", h.handleGetByID)
+	// Registered under a literal segment: "{id}/observations" would be
+	// ambiguous with "ageout-config/{sourceType}" in the Go mux.
+	mux.HandleFunc("GET /api/v1/entities/observations/{id}", h.handleObservations)
 	mux.HandleFunc("POST /api/v1/entities", h.handleCreate)
 	mux.HandleFunc("PATCH /api/v1/entities/{id}", h.handleUpdate)
 	mux.HandleFunc("PATCH /api/v1/entities/{id}/position", h.handleUpdatePosition)
@@ -175,13 +180,19 @@ func (h *EntityHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		classification = *req.Classification
 	}
 
+	feedID := req.FeedID
+	if feedID == nil || *feedID == "" {
+		manual := ids.FeedIDManual
+		feedID = &manual
+	}
+
 	rec := &store.EntityRecord{
 		EntityType:       req.EntityType,
 		Name:             req.Name,
 		Description:      req.Description,
 		Source:           req.Source,
 		Classification:   classification,
-		FeedID:           req.FeedID,
+		FeedID:           feedID,
 		Heading:          req.Heading,
 		SpeedKnots:       req.SpeedKnots,
 		Course:           req.Course,
@@ -215,12 +226,7 @@ func (h *EntityHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Emit created event.
-	h.emitCreatedEvent(entity)
-
-	if entity.Position != nil {
-		h.geoCache.Add(r.Context(), entity.ID, entity.Position.Lon, entity.Position.Lat)
-	}
+	h.events.Created(events.EntityProto(entity, nil, nil), nil)
 
 	httputil.JSON(w, http.StatusCreated, entity)
 }
@@ -251,21 +257,7 @@ func (h *EntityHandler) handleUpdatePosition(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Emit position event.
-	payload, _ := json.Marshal(map[string]interface{}{
-		"entity_id":   entity.ID,
-		"entity_type": entity.EntityType,
-		"latitude":    req.Lat,
-		"longitude":   req.Lng,
-		"altitude":    req.Altitude,
-		"heading":     req.Heading,
-		"speed_knots": req.SpeedKnots,
-		"course":      req.Course,
-		"source":      entity.Source,
-		"timestamp":   entity.UpdatedAt,
-	})
-	h.producer.ProduceRaw(kafka.TopicEntityPosition, []byte(entity.ID), payload, nil)
-	h.geoCache.Add(r.Context(), entity.ID, req.Lng, req.Lat)
+	h.events.Position(events.EntityProto(entity, nil, nil), nil)
 
 	httputil.JSON(w, http.StatusOK, entity)
 }
@@ -283,9 +275,7 @@ func (h *EntityHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, _ := json.Marshal(map[string]interface{}{"id": id})
-	h.producer.ProduceRaw(kafka.TopicEntityDeleted, []byte(id), payload, nil)
-	h.geoCache.Remove(r.Context(), id)
+	h.events.Deleted(id, false, 0)
 
 	httputil.NoContent(w)
 }
@@ -298,27 +288,32 @@ func (h *EntityHandler) handleDeleteAll(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	h.geoCache.Flush(r.Context())
+	h.events.Deleted("", true, int(count))
 
 	httputil.JSON(w, http.StatusOK, map[string]int64{"deleted": count})
 }
 
-func (h *EntityHandler) emitCreatedEvent(entity *store.EntityRecord) {
-	event := map[string]interface{}{
-		"id":             entity.ID,
-		"entity_type":    entity.EntityType,
-		"name":           entity.Name,
-		"source":         entity.Source,
-		"classification": entity.Classification,
-		"created_at":     entity.CreatedAt,
-		"updated_at":     entity.UpdatedAt,
+// handleObservations lists an entity's stored reports, newest first,
+// including the ones that did not move it (duplicates, stale fixes).
+func (h *EntityHandler) handleObservations(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := h.store.FindByID(r.Context(), id); err != nil {
+		if strings.Contains(err.Error(), "no rows") {
+			httputil.Error(w, http.StatusNotFound, "Entity not found")
+			return
+		}
+		h.logger.Error("get entity failed", zap.Error(err))
+		httputil.Error(w, http.StatusInternalServerError, "Failed to get entity")
+		return
 	}
-	if entity.Position != nil {
-		event["latitude"] = entity.Position.Lat
-		event["longitude"] = entity.Position.Lon
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 100)
+	rows, err := h.observations.ListByEntity(r.Context(), id, limit)
+	if err != nil {
+		h.logger.Error("list observations failed", zap.Error(err))
+		httputil.Error(w, http.StatusInternalServerError, "Failed to list observations")
+		return
 	}
-	payload, _ := json.Marshal(event)
-	h.producer.ProduceRaw(kafka.TopicEntityCreated, []byte(entity.ID), payload, nil)
+	httputil.JSON(w, http.StatusOK, map[string]interface{}{"data": rows, "count": len(rows)})
 }
 
 type geoPointDTO struct {

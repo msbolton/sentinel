@@ -124,10 +124,10 @@ The gateway is the only component that knows what every connected client is look
 
 1. Every `viewport:update` and every disconnect notifies the `ViewportSync` loop. Clients that have not sent a viewport yet are ignored, so a fresh connection does not widen the area to the globe.
 2. After a 1 s debounce the loop pads each client viewport by 10 % of its span (at least 0.25°), takes the smallest box covering all of them with the longitude union computed on the circle, and splits it at the antimeridian into at most two boxes. A padded extent covering 90 % of the globe becomes the global box.
-3. It pushes `PUT {INGEST_SERVICE_URL}/feeds/opensky/viewport` with `{ active, clients, boxes }` only when the change matters: the first time, when the unpadded extent leaves the last pushed padded one, when the area shrinks below 70 % of the previous one, or when the client count crosses zero. Small pans stay inside the padding and cost nothing. Pushes are at least 2 s apart.
+3. It pushes `PUT {INGEST_SERVICE_URL}/feeds/{id}/area` with `{ active, clients, boxes }` only when the change matters: the first time, when the unpadded extent leaves the last pushed padded one, when the area shrinks below 70 % of the previous one, or when the client count crosses zero. Small pans stay inside the padding and cost nothing. Pushes are at least 2 s apart.
 4. Every 30 s it re-pushes while clients are connected; the ingest lease expires after 90 s without a push, so a dead gateway stops polling and a restarted ingest-service recovers within one heartbeat. Shutdown pushes `active: false`.
 
-Failed pushes retry with a 1 s doubling to 30 s backoff. `GET /api/v1/feeds/opensky/viewport` (proxied to ingest-service) shows the area currently being polled.
+Failed pushes retry with a 1 s doubling to 30 s backoff. `GET /api/v1/feeds/opensky/area` (proxied to ingest-service) shows the area currently being polled.
 
 ### Kafka bridge
 

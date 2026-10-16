@@ -9,22 +9,26 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/sentinel/ingest-service/internal/config"
-	"github.com/sentinel/ingest-service/internal/feeds"
+	"github.com/sentinel/ingest-service/internal/drivers"
+	"github.com/sentinel/ingest-service/internal/feed"
 	"github.com/sentinel/ingest-service/internal/health"
-	"github.com/sentinel/ingest-service/internal/ingest"
 	kafkaproducer "github.com/sentinel/ingest-service/internal/kafka"
+	"github.com/sentinel/ingest-service/internal/lease"
 	"github.com/sentinel/ingest-service/internal/metrics"
-	"github.com/sentinel/ingest-service/internal/models"
-	"github.com/sentinel/ingest-service/internal/sources"
-	"github.com/sentinel/ingest-service/internal/store"
+	"github.com/sentinel/ingest-service/internal/mgmt"
+	"github.com/sentinel/ingest-service/internal/publish"
+	"github.com/sentinel/ingest-service/internal/registry"
+	_ "github.com/sentinel/ingest-service/internal/source/all" // registers transports, decoders and drivers
+	"github.com/sentinel/ingest-service/internal/source/driver/stream"
 )
 
 func main() {
-	// Initialize structured logger.
 	logger, err := newLogger()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize logger: %v\n", err)
@@ -34,141 +38,94 @@ func main() {
 
 	logger.Info("starting sentinel ingest service")
 
-	// Load configuration from environment variables.
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		logger.Fatal("invalid configuration", zap.Error(err))
+	}
+	if cfg.ServiceToken == "" {
+		logger.Warn("INGEST_SERVICE_TOKEN is not set; the management API accepts unauthenticated callers (development only)")
+	}
 	logger.Info("configuration loaded",
 		zap.String("kafka_brokers", cfg.KafkaBrokers),
-		zap.String("mqtt_broker", cfg.MQTTBroker),
-		zap.String("stomp_addr", cfg.STOMPAddr),
-		zap.String("tcp_addr", cfg.TCPAddr),
+		zap.String("observation_topic", cfg.KafkaObservationTopic),
 		zap.String("http_addr", cfg.HTTPAddr),
-		zap.Int("worker_pool_size", cfg.WorkerPoolSize),
-		zap.Int("batch_size", cfg.BatchSize),
-		zap.Int("flush_interval_ms", cfg.FlushIntervalMs),
+		zap.String("replica_id", cfg.ReplicaID),
+		zap.Int("publisher_shards", cfg.PublisherShards),
+		zap.Int("frame_buffer", cfg.FrameBuffer),
 	)
+	stream.FrameBuffer = cfg.FrameBuffer
 
-	// Initialize Prometheus metrics.
-	m := metrics.New()
+	promReg := prometheus.NewRegistry()
+	promReg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	m := metrics.New(promReg)
 
-	// Create Kafka producer.
 	producer, err := kafkaproducer.NewProducer(cfg.KafkaBrokers, logger, m)
 	if err != nil {
 		logger.Fatal("failed to create kafka producer", zap.Error(err))
 	}
 	defer producer.Close()
 
-	// Create and start the ingestion pipeline.
-	pipeline := ingest.NewPipeline(cfg, producer, logger, m)
-	pipeline.Start()
+	// Observations: protobuf to observations.raw, dead letters to observations.dlq.
+	publisher := publish.New(producer, m, logger, publish.Options{
+		Topic:           cfg.KafkaObservationTopic,
+		DeadLetterTopic: cfg.KafkaDeadLetterTopic,
+		Shards:          cfg.PublisherShards,
+		Buffer:          cfg.ObservationBuffer,
+		DLQRatePerSec:   float64(cfg.DLQRatePerSec),
+		ReplicaID:       cfg.ReplicaID,
+	})
+	publisher.Start()
 
-	// Start source listeners. Each listener runs in its own goroutine and
-	// feeds messages into the pipeline's input channel. Listeners that fail
-	// to connect log an error but do not prevent the service from starting,
-	// since other sources may still function.
-	pipelineInput := pipeline.Input()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// MQTT listener.
-	mqttListener := sources.NewMQTTListener(cfg.MQTTBroker, cfg.MQTTTopics, models.FeedIDMQTT, pipelineInput, logger, m)
-	if err := mqttListener.Start(); err != nil {
-		logger.Error("failed to start mqtt listener (will retry on reconnect)", zap.Error(err))
-	}
-
-	// STOMP/ActiveMQ listener.
-	stompListener := sources.NewSTOMPListener(cfg.STOMPAddr, cfg.STOMPQueue, models.FeedIDSTOMP, pipelineInput, logger, m)
-	if err := stompListener.Start(); err != nil {
-		logger.Error("failed to start stomp listener (will retry on reconnect)", zap.Error(err))
-	}
-
-	// Raw TCP listener.
-	tcpListener := sources.NewTCPListener(cfg.TCPAddr, models.FeedIDTCP, pipelineInput, logger, m)
-	if err := tcpListener.Start(); err != nil {
-		logger.Fatal("failed to start tcp listener", zap.Error(err))
-	}
-
-	// Open Postgres connection for custom feed persistence.
-	feedStore, err := store.New(context.Background(), cfg.DatabaseURL)
+	// Feed registry: desired state in Postgres, shared by every replica.
+	reg, err := registry.Open(ctx, cfg.DatabaseURL, logger)
 	if err != nil {
-		logger.Fatal("failed to connect to postgres for feed store", zap.Error(err))
+		logger.Fatal("failed to connect to postgres for the feed registry", zap.Error(err))
 	}
-	defer feedStore.Close()
-
-	if err := feedStore.Migrate(context.Background()); err != nil {
-		logger.Fatal("failed to migrate custom_feeds table", zap.Error(err))
-	}
-
-	// Feed manager for runtime-toggleable data sources.
-	feedManager := feeds.NewManager(logger, feedStore, pipelineInput, m)
-
-	// Register OpenSky feed (toggleable via /feeds API).
-	if err := feedManager.Register(
-		"opensky", "OpenSky Network", models.SourceOpenSky,
-		"Global ADS-B aircraft positions from OpenSky Network",
-		func() (sources.Listener, error) {
-			return sources.NewOpenSkyListener(cfg, pipelineInput, logger, m,
-				func(count int, at time.Time) { feedManager.RecordSuccess("opensky", count, at) },
-				func() { feedManager.RecordError("opensky") },
-			), nil
-		},
-		cfg.OpenSkyEnabled,
-	); err != nil {
-		logger.Error("failed to register opensky feed", zap.Error(err))
+	defer reg.Close()
+	if err := reg.EnsureBuiltins(ctx, cfg.FeedsBootstrapEnabled); err != nil {
+		logger.Fatal("failed to ensure built-in feeds", zap.Error(err))
 	}
 
-	// Register adsb.lol military flights feed (toggleable via /feeds API).
-	if err := feedManager.Register(
-		"adsb-lol", "Military Flights", models.SourceADSBLol,
-		"Military/government aircraft positions from adsb.lol",
-		func() (sources.Listener, error) {
-			return sources.NewADSBLolListener(cfg, pipelineInput, logger, m,
-				func(count int, at time.Time) { feedManager.RecordSuccess("adsb-lol", count, at) },
-				func() { feedManager.RecordError("adsb-lol") },
-			), nil
-		},
-		cfg.ADSBLolEnabled,
-	); err != nil {
-		logger.Error("failed to register adsb-lol feed", zap.Error(err))
+	catalog := drivers.Default()
+
+	// Supervisor: runs the feeds this replica owns and reports status.
+	supOpts := feed.Options{
+		ReplicaID:      cfg.ReplicaID,
+		RetryMin:       cfg.FeedRetryMin,
+		RetryMax:       cfg.FeedRetryMax,
+		StaleWarn:      cfg.FeedStaleWarn,
+		StaleCritical:  cfg.FeedStaleCritical,
+		RawMax:         cfg.RawPayloadMaxBytes,
+		LeaseTick:      cfg.LeaseTick,
+		RebalanceAfter: cfg.LeaseRebalance,
 	}
-
-	// Register CelesTrak satellite feed (toggleable via /feeds API).
-	if err := feedManager.Register(
-		"celestrak", "CelesTrak Satellites", models.SourceCelesTrak,
-		"Satellite positions computed from CelesTrak TLE data via SGP4",
-		func() (sources.Listener, error) {
-			return sources.NewCelesTrakListener(cfg, pipelineInput, logger, m,
-				func(count int, at time.Time) { feedManager.RecordSuccess("celestrak", count, at) },
-				func() { feedManager.RecordError("celestrak") },
-			), nil
-		},
-		cfg.CelesTrakEnabled,
-	); err != nil {
-		logger.Error("failed to register celestrak feed", zap.Error(err))
+	if cfg.LeaseEnabled {
+		supOpts.Leaser = lease.New(reg.Pool(), cfg.ReplicaID, lease.Options{TTL: cfg.LeaseTTL})
+		supOpts.Preferred = lease.Preferred
+		logger.Info("feed leases enabled", zap.Duration("ttl", cfg.LeaseTTL), zap.Duration("tick", cfg.LeaseTick), zap.Duration("rebalance_after", cfg.LeaseRebalance))
+	} else {
+		logger.Warn("LEASE_ENABLED=false: this replica runs every enabled feed")
 	}
+	sup := feed.New(reg, publisher, logger, m, supOpts)
+	supervisorDone := make(chan struct{})
+	go func() {
+		defer close(supervisorDone)
+		sup.Run(ctx)
+	}()
 
-	// Configure per-feed staleness thresholds.
-	feedManager.SetStaleThresholds("opensky",
-		staleThreshold(cfg.OpenSkyStaleWarnSec, cfg.FeedStaleWarnSec),
-		staleThreshold(cfg.OpenSkyStaleCriticalSec, cfg.FeedStaleCriticalSec),
-	)
-	feedManager.SetStaleThresholds("adsb-lol",
-		staleThreshold(cfg.ADSBLolStaleWarnSec, cfg.FeedStaleWarnSec),
-		staleThreshold(cfg.ADSBLolStaleCriticalSec, cfg.FeedStaleCriticalSec),
-	)
-	feedManager.SetStaleThresholds("celestrak",
-		staleThreshold(cfg.CelesTrakStaleWarnSec, cfg.FeedStaleWarnSec),
-		staleThreshold(cfg.CelesTrakStaleCriticalSec, cfg.FeedStaleCriticalSec),
-	)
-
-	// Load custom feeds persisted in Postgres.
-	if err := feedManager.LoadCustomFeeds(context.Background()); err != nil {
-		logger.Error("failed to load custom feeds from database", zap.Error(err))
-	}
-
-	// Start HTTP health/metrics/feeds server.
-	healthHandler := health.NewHandler(producer, logger)
-	feedsHandler := feeds.NewHandler(feedManager, logger)
+	// HTTP: health and metrics (open) plus the management API (guarded).
 	mux := http.NewServeMux()
+	healthHandler := health.NewHandler(producer, promReg, logger)
 	healthHandler.RegisterRoutes(mux)
-	feedsHandler.RegisterRoutes(mux)
+	mgmtHandler := mgmt.NewHandler(reg, catalog, sup, logger)
+	mgmtHandler.StaleAfter = 3 * cfg.LeaseTick * 2
+	if cfg.LeaseEnabled {
+		mgmtHandler.StaleAfter = cfg.LeaseTTL
+	}
+	mgmtHandler.RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
 
 	httpServer := &http.Server{
 		Addr:         cfg.HTTPAddr,
@@ -177,44 +134,61 @@ func main() {
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
-
+	httpErr := make(chan error, 1)
 	go func() {
 		logger.Info("http server starting", zap.String("addr", cfg.HTTPAddr))
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatal("http server failed", zap.Error(err))
+			httpErr <- err
 		}
 	}()
 
-	logger.Info("sentinel ingest service started successfully")
+	logger.Info("sentinel ingest service started successfully", zap.Strings("drivers", driverIDs(catalog)))
 
-	// Wait for shutdown signal.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	sig := <-sigCh
+	select {
+	case sig := <-sigCh:
+		logger.Info("shutdown signal received", zap.String("signal", sig.String()))
+	case err := <-httpErr:
+		logger.Error("http server failed", zap.Error(err))
+	}
 
-	logger.Info("shutdown signal received", zap.String("signal", sig.String()))
+	// Graceful shutdown, bounded by SHUTDOWN_TIMEOUT_SEC: readiness 503 →
+	// supervisor stops drivers → publisher drains → producer flushes →
+	// HTTP shutdown → close.
+	logger.Info("initiating graceful shutdown", zap.Duration("timeout", cfg.ShutdownTimeout))
+	deadline := time.Now().Add(cfg.ShutdownTimeout)
+	healthHandler.SetDraining(true)
+	cancel()
+	select {
+	case <-supervisorDone:
+	case <-time.After(time.Until(deadline)):
+		logger.Warn("feed supervisor did not stop in time")
+	}
+	publisher.Close()
+	flushMs := int(time.Until(deadline) / time.Millisecond)
+	if flushMs < 1000 {
+		flushMs = 1000
+	}
+	if remaining := producer.Flush(flushMs); remaining > 0 {
+		logger.Warn("kafka producer still has unflushed messages", zap.Int("remaining", remaining))
+	}
 
-	// Graceful shutdown: stop sources first, then pipeline, then Kafka.
-	logger.Info("initiating graceful shutdown")
-
-	// Stop accepting new messages from sources.
-	mqttListener.Stop()
-	stompListener.Stop()
-	tcpListener.Stop()
-	feedManager.StopAll()
-
-	// Stop the pipeline (drains remaining messages).
-	pipeline.Stop()
-
-	// Shut down the HTTP server.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := httpServer.Shutdown(ctx); err != nil {
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http server shutdown error", zap.Error(err))
 	}
 
-	// Kafka producer is closed by its deferred Close().
 	logger.Info("sentinel ingest service shut down gracefully")
+}
+
+func driverIDs(c *drivers.Catalog) []string {
+	var ids []string
+	for _, d := range c.List() {
+		ids = append(ids, d.ID)
+	}
+	return ids
 }
 
 // newLogger creates a production-ready structured logger with JSON output.
@@ -248,12 +222,4 @@ func newLogger() (*zap.Logger, error) {
 	}
 
 	return cfg.Build()
-}
-
-// staleThreshold returns the per-feed threshold if set (> 0), otherwise the global default.
-func staleThreshold(perFeed, global int) int {
-	if perFeed > 0 {
-		return perFeed
-	}
-	return global
 }

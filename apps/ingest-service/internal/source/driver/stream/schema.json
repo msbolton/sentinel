@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sentinel.local/schemas/stream.json",
+  "title": "Message stream",
+  "description": "Bytes arrive over a transport, a framer splits them, and a decoder turns each frame into observations.",
+  "type": "object",
+  "required": ["transport", "decoder"],
+  "properties": {
+    "transport": {
+      "type": "object",
+      "title": "Transport",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["tcpclient", "tcpserver", "udp", "mqtt", "stomp", "websocket"], "title": "Kind" },
+        "address": { "type": "string", "minLength": 1, "title": "Address", "description": "tcpclient: host:port to connect to; tcpserver/udp: host:port to bind, e.g. :4001" },
+        "url": { "type": "string", "pattern": "^wss?://", "title": "WebSocket URL" },
+        "brokerUrl": { "type": "string", "minLength": 1, "title": "Broker URL", "description": "mqtt: tcp://host:1883 or ssl://host:8883; stomp: host:61613" },
+        "topics": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "title": "MQTT topics" },
+        "qos": { "type": "integer", "minimum": 0, "maximum": 2, "default": 1, "title": "MQTT QoS" },
+        "clientId": { "type": "string", "title": "MQTT client id" },
+        "queue": { "type": "string", "minLength": 1, "title": "STOMP queue" },
+        "username": { "type": "string", "title": "Username", "description": "The password comes from secretRefs.password." },
+        "maxFrameBytes": { "type": "integer", "minimum": 64, "default": 1048576, "title": "Maximum frame size (bytes)" },
+        "readTimeoutSec": { "type": "integer", "minimum": 0, "default": 0, "title": "Read timeout (s)", "description": "Close an idle stream connection after this long; 0 disables." },
+        "tls": {
+          "type": "object",
+          "title": "TLS",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "insecureSkipVerify": { "type": "boolean", "default": false },
+            "serverName": { "type": "string" },
+            "caFile": { "type": "string" },
+            "certFile": { "type": "string" },
+            "keyFile": { "type": "string" }
+          }
+        }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "tcpclient" } } }, "then": { "required": ["address"] } },
+        { "if": { "properties": { "kind": { "const": "tcpserver" } } }, "then": { "required": ["address"] } },
+        { "if": { "properties": { "kind": { "const": "udp" } } }, "then": { "required": ["address"] } },
+        { "if": { "properties": { "kind": { "const": "websocket" } } }, "then": { "required": ["url"] } },
+        { "if": { "properties": { "kind": { "const": "mqtt" } } }, "then": { "required": ["brokerUrl", "topics"] } },
+        { "if": { "properties": { "kind": { "const": "stomp" } } }, "then": { "required": ["brokerUrl", "queue"] } }
+      ]
+    },
+    "framing": { "type": "string", "enum": ["line", "lengthprefix", "beast", "xmlevent", "message"], "title": "Framing", "description": "How a byte stream is split into frames (stream transports); message transports deliver whole messages." },
+    "decoder": {
+      "type": "object",
+      "title": "Decoder",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "enum": ["json", "nmea-gps", "nmea-ais", "cot", "sbs", "beast", "link16"], "title": "Format" },
+        "options": { "type": "object", "title": "Decoder options" }
+      }
+    }
+  }
+}

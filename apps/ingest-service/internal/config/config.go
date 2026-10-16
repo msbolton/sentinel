@@ -1,148 +1,158 @@
+// Package config is the ingest service's process-level configuration. Per
+// feed settings (intervals, brokers, credential references) live in the
+// feeds table.
 package config
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 )
 
-// Config holds all configuration for the ingest service.
-// Values are populated from environment variables with sensible defaults.
+// Config is read from the environment by Load.
 type Config struct {
-	KafkaBrokers     string // KAFKA_BROKERS (default: localhost:9092)
-	KafkaEntityTopic string // KAFKA_ENTITY_TOPIC (default: events.entity.position)
-	KafkaIngestTopic string // KAFKA_INGEST_TOPIC (default: ingest.raw)
-	MQTTBroker       string // MQTT_BROKER (default: tcp://localhost:1883)
-	MQTTTopics       string // MQTT_TOPICS (default: sensors/#)
-	STOMPAddr        string // STOMP_ADDR (default: localhost:61613)
-	STOMPQueue       string // STOMP_QUEUE (default: /queue/sensor-feeds)
-	TCPAddr          string // TCP_ADDR (default: :4001)
-	HTTPAddr         string // HTTP_ADDR (default: :4000)
-	WorkerPoolSize   int    // WORKER_POOL_SIZE (default: 100)
-	BatchSize        int    // BATCH_SIZE (default: 500)
-	FlushIntervalMs  int    // FLUSH_INTERVAL_MS (default: 100)
+	KafkaBrokers          string // KAFKA_BROKERS (default: localhost:9092)
+	KafkaObservationTopic string // KAFKA_OBSERVATION_TOPIC (default: observations.raw)
+	KafkaDeadLetterTopic  string // KAFKA_DEADLETTER_TOPIC (default: observations.dlq)
+	DatabaseURL           string // DATABASE_URL
+	HTTPAddr              string // HTTP_ADDR (default: :4000)
 
-	OpenSkyEnabled      bool   // OPENSKY_ENABLED (default: false)
-	OpenSkyIntervalSec  int    // OPENSKY_INTERVAL_SEC (default: 10) base poll interval
-	OpenSkyBBox         string // OPENSKY_BBOX (default: "" = global) legacy fixed bbox "lamin,lomin,lamax,lomax", used when viewport mode is off
-	OpenSkyClientID     string // OPENSKY_CLIENT_ID (default: "")
-	OpenSkyClientSecret string // OPENSKY_CLIENT_SECRET (default: "")
-	OpenSkyTokenURL     string // OPENSKY_TOKEN_URL (default: "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token")
+	AppEnv       string // APP_ENV (default: development)
+	ServiceToken string // INGEST_SERVICE_TOKEN; required in production, presented by the API gateway
+	ReplicaID    string // REPLICA_ID (default: hostname)
+	// FeedsBootstrapEnabled lists built-in feeds to insert enabled when the
+	// feeds table does not have them yet (FEEDS_BOOTSTRAP_ENABLED, comma-separated).
+	FeedsBootstrapEnabled []string
 
-	// Viewport-driven polling: the gateway pushes the area connected map
-	// clients can see (PUT /feeds/opensky/viewport) and OpenSky is polled only
-	// for that area while the lease is fresh.
-	OpenSkyViewportMode      bool    // OPENSKY_VIEWPORT_MODE (default: true) poll only while a pushed viewport lease is active
-	OpenSkyViewportTTLSec    int     // OPENSKY_VIEWPORT_TTL_SEC (default: 90) lease lifetime; must exceed the gateway heartbeat
-	OpenSkyMinPollSpacingSec int     // OPENSKY_MIN_POLL_SPACING_SEC (default: 3) floor between two polls, also after a viewport change
-	OpenSkyMaxAreaSqDeg      float64 // OPENSKY_MAX_AREA_SQDEG (default: 400) above this area the interval is stretched
-	OpenSkyMaxIntervalSec    int     // OPENSKY_MAX_INTERVAL_SEC (default: 60) cap on the stretched interval
-	OpenSkyCreditFloor       int     // OPENSKY_CREDIT_FLOOR (default: 200) below this many remaining daily credits, poll at the max interval
+	PublisherShards    int // PUBLISHER_SHARDS (default: 8)
+	ObservationBuffer  int // OBS_BUFFER (default: 1000) observations queued per publisher shard
+	FrameBuffer        int // FRAME_BUFFER (default: 1024) frames queued between a transport and its decoder
+	RawPayloadMaxBytes int // RAW_PAYLOAD_MAX_BYTES (default: 4096) raw bytes kept per observation under the bounded policy
+	DLQRatePerSec      int // DLQ_RATE_PER_SEC (default: 10) dead letters per feed per second
 
-	ADSBLolEnabled     bool // ADSBLOL_ENABLED (default: false)
-	ADSBLolIntervalSec int  // ADSBLOL_INTERVAL_SEC (default: 10)
+	FeedStaleWarn     time.Duration // FEED_STALE_WARN_SEC (default: 120) default health thresholds
+	FeedStaleCritical time.Duration // FEED_STALE_CRITICAL_SEC (default: 300)
+	FeedRetryMin      time.Duration // FEED_RETRY_MIN_SEC (default: 5) first restart delay after a feed failure
+	FeedRetryMax      time.Duration // FEED_RETRY_MAX_SEC (default: 60)
+	ShutdownTimeout   time.Duration // SHUTDOWN_TIMEOUT_SEC (default: 25)
 
-	CelesTrakEnabled                bool   // CELESTRAK_ENABLED (default: false)
-	CelesTrakGroups                 string // CELESTRAK_GROUPS (default: "active")
-	CelesTrakTLERefreshHours        int    // CELESTRAK_TLE_REFRESH_HOURS (default: 6)
-	CelesTrakPropagationIntervalSec int    // CELESTRAK_PROPAGATION_INTERVAL_SEC (default: 60)
-
-	DatabaseURL string // DATABASE_URL (default: postgres://sentinel:sentinel_dev@localhost:5432/sentinel?sslmode=disable)
-
-	FeedStaleWarnSec     int // FEED_STALE_WARN_SEC (default: 120)
-	FeedStaleCriticalSec int // FEED_STALE_CRITICAL_SEC (default: 300)
-
-	OpenSkyStaleWarnSec     int // OPENSKY_STALE_WARN_SEC (default: 0 = use global)
-	OpenSkyStaleCriticalSec int // OPENSKY_STALE_CRITICAL_SEC (default: 0 = use global)
-
-	ADSBLolStaleWarnSec     int // ADSBLOL_STALE_WARN_SEC (default: 0 = use global)
-	ADSBLolStaleCriticalSec int // ADSBLOL_STALE_CRITICAL_SEC (default: 0 = use global)
-
-	CelesTrakStaleWarnSec     int // CELESTRAK_STALE_WARN_SEC (default: 600)
-	CelesTrakStaleCriticalSec int // CELESTRAK_STALE_CRITICAL_SEC (default: 900)
+	// Feed leases: each feed runs on exactly one replica.
+	LeaseEnabled   bool          // LEASE_ENABLED (default: true); false runs every feed on this replica
+	LeaseTTL       time.Duration // LEASE_TTL_SEC (default: 15) lease and replica expiry
+	LeaseTick      time.Duration // LEASE_TICK_SEC (default: 2) renew and re-evaluate ownership
+	LeaseRebalance time.Duration // LEASE_REBALANCE_SEC (default: 30) hand a feed to its preferred replica after this long
 }
 
 // Load reads configuration from environment variables, applying defaults
 // where no value is set.
 func Load() *Config {
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "local"
+	}
 	return &Config{
-		KafkaBrokers:     envOrDefault("KAFKA_BROKERS", "localhost:9092"),
-		KafkaEntityTopic: envOrDefault("KAFKA_ENTITY_TOPIC", "ingest.raw"),
-		KafkaIngestTopic: envOrDefault("KAFKA_INGEST_TOPIC", "ingest.raw"),
-		MQTTBroker:       envOrDefault("MQTT_BROKER", "tcp://localhost:1883"),
-		MQTTTopics:       envOrDefault("MQTT_TOPICS", "sensors/#"),
-		STOMPAddr:        envOrDefault("STOMP_ADDR", "localhost:61613"),
-		STOMPQueue:       envOrDefault("STOMP_QUEUE", "/queue/sensor-feeds"),
-		TCPAddr:          envOrDefault("TCP_ADDR", ":4001"),
-		HTTPAddr:         envOrDefault("HTTP_ADDR", ":4000"),
-		WorkerPoolSize:   envOrDefaultInt("WORKER_POOL_SIZE", 100),
-		BatchSize:        envOrDefaultInt("BATCH_SIZE", 500),
-		FlushIntervalMs:  envOrDefaultInt("FLUSH_INTERVAL_MS", 100),
+		KafkaBrokers:          envOr("KAFKA_BROKERS", "localhost:9092"),
+		KafkaObservationTopic: envOr("KAFKA_OBSERVATION_TOPIC", "observations.raw"),
+		KafkaDeadLetterTopic:  envOr("KAFKA_DEADLETTER_TOPIC", "observations.dlq"),
+		DatabaseURL:           envOr("DATABASE_URL", "postgres://sentinel:sentinel_dev@localhost:5432/sentinel?sslmode=disable"),
+		HTTPAddr:              envOr("HTTP_ADDR", ":4000"),
 
-		OpenSkyEnabled:      os.Getenv("OPENSKY_ENABLED") == "true",
-		OpenSkyIntervalSec:  envOrDefaultInt("OPENSKY_INTERVAL_SEC", 10),
-		OpenSkyBBox:         envOrDefault("OPENSKY_BBOX", ""),
-		OpenSkyClientID:     envOrDefault("OPENSKY_CLIENT_ID", ""),
-		OpenSkyClientSecret: envOrDefault("OPENSKY_CLIENT_SECRET", ""),
-		OpenSkyTokenURL:     envOrDefault("OPENSKY_TOKEN_URL", "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"),
+		AppEnv:                envOr("APP_ENV", "development"),
+		ServiceToken:          envOr("INGEST_SERVICE_TOKEN", ""),
+		ReplicaID:             envOr("REPLICA_ID", hostname),
+		FeedsBootstrapEnabled: splitList(envOr("FEEDS_BOOTSTRAP_ENABLED", "")),
 
-		OpenSkyViewportMode:      envOrDefault("OPENSKY_VIEWPORT_MODE", "true") == "true",
-		OpenSkyViewportTTLSec:    envOrDefaultInt("OPENSKY_VIEWPORT_TTL_SEC", 90),
-		OpenSkyMinPollSpacingSec: envOrDefaultInt("OPENSKY_MIN_POLL_SPACING_SEC", 3),
-		OpenSkyMaxAreaSqDeg:      envOrDefaultFloat("OPENSKY_MAX_AREA_SQDEG", 400),
-		OpenSkyMaxIntervalSec:    envOrDefaultInt("OPENSKY_MAX_INTERVAL_SEC", 60),
-		OpenSkyCreditFloor:       envOrDefaultInt("OPENSKY_CREDIT_FLOOR", 200),
+		PublisherShards:    envOrInt("PUBLISHER_SHARDS", 8),
+		ObservationBuffer:  envOrInt("OBS_BUFFER", 1000),
+		FrameBuffer:        envOrInt("FRAME_BUFFER", 1024),
+		RawPayloadMaxBytes: envOrInt("RAW_PAYLOAD_MAX_BYTES", 4096),
+		DLQRatePerSec:      envOrInt("DLQ_RATE_PER_SEC", 10),
 
-		ADSBLolEnabled:     os.Getenv("ADSBLOL_ENABLED") == "true",
-		ADSBLolIntervalSec: envOrDefaultInt("ADSBLOL_INTERVAL_SEC", 10),
+		FeedStaleWarn:     envOrSeconds("FEED_STALE_WARN_SEC", 120),
+		FeedStaleCritical: envOrSeconds("FEED_STALE_CRITICAL_SEC", 300),
+		FeedRetryMin:      envOrSeconds("FEED_RETRY_MIN_SEC", 5),
+		FeedRetryMax:      envOrSeconds("FEED_RETRY_MAX_SEC", 60),
+		ShutdownTimeout:   envOrSeconds("SHUTDOWN_TIMEOUT_SEC", 25),
 
-		CelesTrakEnabled:                os.Getenv("CELESTRAK_ENABLED") == "true",
-		CelesTrakGroups:                 envOrDefault("CELESTRAK_GROUPS", "active"),
-		CelesTrakTLERefreshHours:        envOrDefaultInt("CELESTRAK_TLE_REFRESH_HOURS", 6),
-		CelesTrakPropagationIntervalSec: envOrDefaultInt("CELESTRAK_PROPAGATION_INTERVAL_SEC", 60),
-
-		DatabaseURL: envOrDefault("DATABASE_URL", "postgres://sentinel:sentinel_dev@localhost:5432/sentinel?sslmode=disable"),
-
-		FeedStaleWarnSec:     envOrDefaultInt("FEED_STALE_WARN_SEC", 120),
-		FeedStaleCriticalSec: envOrDefaultInt("FEED_STALE_CRITICAL_SEC", 300),
-
-		OpenSkyStaleWarnSec:     envOrDefaultInt("OPENSKY_STALE_WARN_SEC", 0),
-		OpenSkyStaleCriticalSec: envOrDefaultInt("OPENSKY_STALE_CRITICAL_SEC", 0),
-
-		ADSBLolStaleWarnSec:     envOrDefaultInt("ADSBLOL_STALE_WARN_SEC", 0),
-		ADSBLolStaleCriticalSec: envOrDefaultInt("ADSBLOL_STALE_CRITICAL_SEC", 0),
-
-		CelesTrakStaleWarnSec:     envOrDefaultInt("CELESTRAK_STALE_WARN_SEC", 600),
-		CelesTrakStaleCriticalSec: envOrDefaultInt("CELESTRAK_STALE_CRITICAL_SEC", 900),
+		LeaseEnabled:   envOr("LEASE_ENABLED", "true") != "false",
+		LeaseTTL:       envOrSeconds("LEASE_TTL_SEC", 15),
+		LeaseTick:      envOrSeconds("LEASE_TICK_SEC", 2),
+		LeaseRebalance: envOrSeconds("LEASE_REBALANCE_SEC", 30),
 	}
 }
 
-func envOrDefault(key, defaultVal string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
+// Validate rejects configurations that must not start.
+func (c *Config) Validate() error {
+	if c.AppEnv == "production" && c.ServiceToken == "" {
+		return errors.New("INGEST_SERVICE_TOKEN is required in production")
 	}
-	return defaultVal
+	if c.KafkaBrokers == "" {
+		return errors.New("KAFKA_BROKERS is required")
+	}
+	if c.KafkaObservationTopic == "" || c.KafkaDeadLetterTopic == "" {
+		return errors.New("KAFKA_OBSERVATION_TOPIC and KAFKA_DEADLETTER_TOPIC are required")
+	}
+	if c.DatabaseURL == "" {
+		return errors.New("DATABASE_URL is required")
+	}
+	if c.PublisherShards <= 0 || c.ObservationBuffer <= 0 || c.FrameBuffer <= 0 {
+		return errors.New("PUBLISHER_SHARDS, OBS_BUFFER and FRAME_BUFFER must be positive")
+	}
+	if c.RawPayloadMaxBytes < 0 || c.DLQRatePerSec <= 0 {
+		return errors.New("RAW_PAYLOAD_MAX_BYTES must be non-negative and DLQ_RATE_PER_SEC positive")
+	}
+	for name, d := range map[string]time.Duration{"FEED_STALE_WARN_SEC": c.FeedStaleWarn, "FEED_STALE_CRITICAL_SEC": c.FeedStaleCritical, "FEED_RETRY_MIN_SEC": c.FeedRetryMin, "FEED_RETRY_MAX_SEC": c.FeedRetryMax, "SHUTDOWN_TIMEOUT_SEC": c.ShutdownTimeout} {
+		if d <= 0 {
+			return fmt.Errorf("%s must be positive", name)
+		}
+	}
+	if c.FeedStaleWarn >= c.FeedStaleCritical {
+		return errors.New("FEED_STALE_WARN_SEC must be below FEED_STALE_CRITICAL_SEC")
+	}
+	if c.FeedRetryMin > c.FeedRetryMax {
+		return errors.New("FEED_RETRY_MIN_SEC must not exceed FEED_RETRY_MAX_SEC")
+	}
+	if c.LeaseTTL <= 0 || c.LeaseTick <= 0 || c.LeaseRebalance <= 0 {
+		return errors.New("LEASE_TTL_SEC, LEASE_TICK_SEC and LEASE_REBALANCE_SEC must be positive")
+	}
+	if c.LeaseTick*2 > c.LeaseTTL {
+		return errors.New("LEASE_TICK_SEC must be at most half of LEASE_TTL_SEC")
+	}
+	return nil
 }
 
-func envOrDefaultInt(key string, defaultVal int) int {
-	val := os.Getenv(key)
-	if val == "" {
-		return defaultVal
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
 	}
-	parsed, err := strconv.Atoi(val)
+	return out
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func envOrInt(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
 	if err != nil {
-		return defaultVal
+		return def
 	}
-	return parsed
+	return n
 }
 
-func envOrDefaultFloat(key string, defaultVal float64) float64 {
-	val := os.Getenv(key)
-	if val == "" {
-		return defaultVal
-	}
-	parsed, err := strconv.ParseFloat(val, 64)
-	if err != nil {
-		return defaultVal
-	}
-	return parsed
+func envOrSeconds(key string, def int) time.Duration {
+	return time.Duration(envOrInt(key, def)) * time.Second
 }

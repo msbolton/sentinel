@@ -13,7 +13,7 @@ func TestBuildInsertParameterNumbering(t *testing.T) {
 	if len(args) != 2*paramsPerRow {
 		t.Fatalf("args = %d, want %d", len(args), 2*paramsPerRow)
 	}
-	if !strings.Contains(query, "($1, $2, ST_SetSRID(ST_MakePoint($3, $4), 4326)") || !strings.Contains(query, "($14, $15, ST_SetSRID(ST_MakePoint($16, $17), 4326)") {
+	if !strings.Contains(query, "($1, $2, ST_SetSRID(ST_MakePoint($3, $4), 4326)") || !strings.Contains(query, "($18, $19, ST_SetSRID(ST_MakePoint($20, $21), 4326)") {
 		t.Errorf("unexpected parameter numbering:\n%s", query)
 	}
 	if args[0] != "a" || args[paramsPerRow] != "b" {

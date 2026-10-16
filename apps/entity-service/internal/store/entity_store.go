@@ -50,6 +50,10 @@ type EntityRecord struct {
 	UpdatedAt             string                 `json:"updatedAt"`
 	LastSeenAt            *string                `json:"lastSeenAt,omitempty"`
 	Deleted               bool                   `json:"deleted,omitempty"`
+	LastObservedAt        *string                `json:"lastObservedAt,omitempty"`
+	LastFeedID            *string                `json:"lastFeedId,omitempty"`
+	PrimaryIdentityType   *string                `json:"primaryIdentityType,omitempty"`
+	PrimaryIdentityValue  *string                `json:"primaryIdentityValue,omitempty"`
 }
 
 // GeoPoint represents a geographic point.
@@ -69,33 +73,6 @@ type EntityCount struct {
 	EntityType     string `json:"entityType"`
 	Classification string `json:"classification"`
 	Count          int    `json:"count"`
-}
-
-// BulkPositionUpdate holds data for a single position update in a bulk operation.
-type BulkPositionUpdate struct {
-	ID               string
-	Lng              float64
-	Lat              float64
-	Heading          *float64
-	SpeedKnots       *float64
-	Course           *float64
-	Altitude         *float64
-	PlatformData     map[string]interface{}
-	Kinematics       map[string]interface{}
-	TrackEnvironment *string
-	CircularError    *float64
-}
-
-// ExistingEntityInfo holds minimal info for upsert lookups.
-type ExistingEntityInfo struct {
-	ID             string
-	Name           string
-	EntityType     string
-	Classification string
-	Source         string
-	Metadata       map[string]interface{}
-	SourceEntityID *string
-	AgeoutState    string
 }
 
 // QueryParams holds parameters for querying entities.
@@ -147,7 +124,8 @@ const entitySelectColumns = `
 	"dimensionLength", "dimensionWidth", "dimensionHeight",
 	"countryOfOrigin", "circularError",
 	kinematics, "platformData", "lastObservationSource", "sourceEntityId",
-	"ageoutState", "createdAt"::text, "updatedAt"::text, "lastSeenAt"::text, deleted
+	"ageoutState", "createdAt"::text, "updatedAt"::text, "lastSeenAt"::text, deleted,
+	"lastObservedAt"::text, "lastFeedId", "primaryIdentityType", "primaryIdentityValue"
 `
 
 // FindByID returns an entity by ID.
@@ -294,6 +272,7 @@ func (s *EntityStore) FindNearby(ctx context.Context, lat, lng, radiusMeters flo
 			&rec.CountryOfOrigin, &rec.CircularError,
 			&rec.Kinematics, &rec.PlatformData, &rec.LastObservationSource, &rec.SourceEntityID,
 			&rec.AgeoutState, &rec.CreatedAt, &rec.UpdatedAt, &rec.LastSeenAt, &rec.Deleted,
+			&rec.LastObservedAt, &rec.LastFeedID, &rec.PrimaryIdentityType, &rec.PrimaryIdentityValue,
 			&distance,
 		)
 		if err != nil {
@@ -305,102 +284,6 @@ func (s *EntityStore) FindNearby(ctx context.Context, lat, lng, radiusMeters flo
 		results = append(results, EntityWithDistance{EntityRecord: rec, Distance: distance})
 	}
 	return results, nil
-}
-
-// BulkUpdatePositions performs a VALUES-based bulk UPDATE for entity positions.
-func (s *EntityStore) BulkUpdatePositions(ctx context.Context, updates []BulkPositionUpdate) error {
-	if len(updates) == 0 {
-		return nil
-	}
-
-	const paramsPerRow = 11
-	values := make([]string, 0, len(updates))
-	args := make([]interface{}, 0, len(updates)*paramsPerRow)
-
-	for i, u := range updates {
-		base := i * paramsPerRow
-		values = append(values, fmt.Sprintf(
-			"($%d::uuid, $%d::double precision, $%d::double precision, $%d::double precision, $%d::double precision, $%d::double precision, $%d::double precision, $%d::jsonb, $%d::jsonb, $%d::varchar, $%d::double precision)",
-			base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8, base+9, base+10, base+11,
-		))
-
-		platformJSON, _ := json.Marshal(u.PlatformData)
-		kinematicsJSON, _ := json.Marshal(u.Kinematics)
-
-		var platformArg, kinematicsArg interface{}
-		if u.PlatformData != nil {
-			platformArg = string(platformJSON)
-		}
-		if u.Kinematics != nil {
-			kinematicsArg = string(kinematicsJSON)
-		}
-
-		args = append(args,
-			u.ID, u.Lng, u.Lat, u.Heading, u.SpeedKnots, u.Course, u.Altitude,
-			platformArg, kinematicsArg, u.TrackEnvironment, u.CircularError,
-		)
-	}
-
-	query := fmt.Sprintf(`
-		UPDATE sentinel.entities AS e
-		SET position = ST_SetSRID(ST_MakePoint(b.lng, b.lat), 4326),
-			heading = b.heading,
-			"speedKnots" = b.speed_knots,
-			course = b.course,
-			altitude = b.altitude,
-			"platformData" = COALESCE(b.platform_data, e."platformData"),
-			kinematics = COALESCE(b.kinematics, e.kinematics),
-			"trackEnvironment" = COALESCE(b.track_env, e."trackEnvironment"),
-			"circularError" = COALESCE(b.circular_err, e."circularError"),
-			"lastSeenAt" = NOW(),
-			"ageoutState" = 'LIVE'
-		FROM (VALUES %s) AS b(id, lng, lat, heading, speed_knots, course, altitude, platform_data, kinematics, track_env, circular_err)
-		WHERE e.id = b.id AND e.deleted = false
-	`, strings.Join(values, ","))
-
-	_, err := s.pool.Exec(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("bulk update positions: %w", err)
-	}
-	return nil
-}
-
-// FindBySourceEntityIDs returns a map of sourceEntityId -> ExistingEntityInfo.
-func (s *EntityStore) FindBySourceEntityIDs(ctx context.Context, ids []string) (map[string]*ExistingEntityInfo, error) {
-	if len(ids) == 0 {
-		return map[string]*ExistingEntityInfo{}, nil
-	}
-
-	placeholders := make([]string, len(ids))
-	args := make([]interface{}, len(ids))
-	for i, id := range ids {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-		args[i] = id
-	}
-
-	query := fmt.Sprintf(`
-		SELECT id, name, "entityType", classification, source, metadata, "sourceEntityId", "ageoutState"
-		FROM sentinel.entities
-		WHERE deleted = false AND "sourceEntityId" IN (%s)
-	`, strings.Join(placeholders, ","))
-
-	rows, err := s.pool.Query(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("find by source entity ids: %w", err)
-	}
-	defer rows.Close()
-
-	result := map[string]*ExistingEntityInfo{}
-	for rows.Next() {
-		var info ExistingEntityInfo
-		if err := rows.Scan(&info.ID, &info.Name, &info.EntityType, &info.Classification, &info.Source, &info.Metadata, &info.SourceEntityID, &info.AgeoutState); err != nil {
-			return nil, fmt.Errorf("scan existing entity: %w", err)
-		}
-		if info.SourceEntityID != nil {
-			result[*info.SourceEntityID] = &info
-		}
-	}
-	return result, nil
 }
 
 // Create inserts one entity and returns the stored row.
@@ -574,6 +457,7 @@ func scanEntity(row pgx.Row) (*EntityRecord, error) {
 		&rec.CountryOfOrigin, &rec.CircularError,
 		&rec.Kinematics, &rec.PlatformData, &rec.LastObservationSource, &rec.SourceEntityID,
 		&rec.AgeoutState, &rec.CreatedAt, &rec.UpdatedAt, &rec.LastSeenAt, &rec.Deleted,
+		&rec.LastObservedAt, &rec.LastFeedID, &rec.PrimaryIdentityType, &rec.PrimaryIdentityValue,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan entity: %w", err)
@@ -601,6 +485,7 @@ func scanEntities(rows pgx.Rows) ([]EntityRecord, error) {
 			&rec.CountryOfOrigin, &rec.CircularError,
 			&rec.Kinematics, &rec.PlatformData, &rec.LastObservationSource, &rec.SourceEntityID,
 			&rec.AgeoutState, &rec.CreatedAt, &rec.UpdatedAt, &rec.LastSeenAt, &rec.Deleted,
+			&rec.LastObservedAt, &rec.LastFeedID, &rec.PrimaryIdentityType, &rec.PrimaryIdentityValue,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan entity row: %w", err)

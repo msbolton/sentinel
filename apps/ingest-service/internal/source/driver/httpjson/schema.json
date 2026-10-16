@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sentinel.local/schemas/httpjson.json",
+  "title": "HTTP JSON",
+  "description": "Polls any JSON HTTP API and maps the response to observations through a field map. The URL, headers and POST body may carry placeholders filled per request: {lat} {lon} {radius_nm} {radius_km} {north} {south} {east} {west} {bbox} {now_unix}.",
+  "type": "object",
+  "required": ["url", "decoder"],
+  "properties": {
+    "url": { "type": "string", "format": "uri", "minLength": 1, "title": "Request URL", "description": "Placeholders are substituted per request; area placeholders come from each box of the active area of interest, or from the whole globe without one. {bbox} expands to south,west,north,east." },
+    "method": { "type": "string", "enum": ["GET", "POST"], "default": "GET", "title": "HTTP method" },
+    "body": { "type": ["object", "string"], "title": "POST body", "description": "Sent as JSON with the same placeholders as the URL (a string is sent verbatim after substitution). Ignored for GET." },
+    "headers": { "type": "object", "additionalProperties": { "type": "string" }, "title": "Request headers", "description": "Values may use the same placeholders as the URL." },
+    "intervalSec": { "type": "integer", "minimum": 1, "maximum": 86400, "default": 30, "title": "Poll interval (s)" },
+    "minPollSpacingSec": { "type": "integer", "minimum": 0, "default": 3, "title": "Minimum spacing between polls (s)" },
+    "maxIntervalSec": { "type": "integer", "minimum": 1, "default": 60, "title": "Slowest poll interval (s)", "description": "Used when the area is large or the remote quota runs low." },
+    "maxAreaSqDeg": { "type": "number", "minimum": 0, "default": 0, "title": "Area above which polling slows (sq deg)", "description": "The interval stretches by ceil(area / maxAreaSqDeg) up to maxIntervalSec. 0 disables." },
+    "requireArea": { "type": "boolean", "default": false, "title": "Poll only the clients' viewport", "description": "true idles the feed until the API gateway pushes an active area; false polls continuously, with the pushed area when there is one and the globe otherwise." },
+    "maxRadiusNm": { "type": "integer", "minimum": 1, "default": 250, "title": "Maximum {radius_nm} (nm)" },
+    "timeoutSec": { "type": "integer", "minimum": 1, "default": 30, "title": "Request timeout (s)" },
+    "auth": {
+      "type": "object",
+      "title": "Authentication",
+      "description": "Secrets come from secretRefs: password (basic), token (bearer, header), clientSecret (oauth2_client_credentials).",
+      "properties": {
+        "kind": { "type": "string", "enum": ["none", "basic", "bearer", "header", "oauth2_client_credentials"], "default": "none", "title": "Kind" },
+        "username": { "type": "string", "title": "Username", "description": "basic: paired with the password secret." },
+        "headerName": { "type": "string", "title": "Header name", "description": "header: the request header that carries the token secret, e.g. X-API-Key." },
+        "tokenUrl": { "type": "string", "format": "uri", "title": "OAuth token URL" },
+        "clientId": { "type": "string", "title": "OAuth client id", "description": "oauth2_client_credentials; may also come from the clientId secret." },
+        "scopes": { "type": "string", "title": "OAuth scopes" }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "basic" } }, "required": ["kind"] }, "then": { "required": ["username"] } },
+        { "if": { "properties": { "kind": { "const": "header" } }, "required": ["kind"] }, "then": { "required": ["headerName"] } },
+        { "if": { "properties": { "kind": { "const": "oauth2_client_credentials" } }, "required": ["kind"] }, "then": { "required": ["tokenUrl"] } }
+      ]
+    },
+    "decoder": {
+      "type": "object",
+      "title": "Decoder",
+      "description": "Options of the json decoder: how the response maps to observations.",
+      "required": ["options"],
+      "properties": {
+        "options": {
+          "type": "object",
+          "title": "Field map",
+          "required": ["fields"],
+          "properties": {
+            "records": { "type": "string", "title": "Records path", "description": "Dotted path to the array of records; empty when the document is one record or a bare array." },
+            "identityType": { "type": "string", "title": "Identity type of the id field", "description": "ICAO24, MMSI, NORAD_ID, COT_UID, ...; empty means feed-local." },
+            "timeFormat": { "type": "string", "title": "Timestamp format", "description": "A Go layout, unix or unixms; empty accepts RFC 3339 or numeric unix." },
+            "altitudeUnit": { "type": "string", "enum": ["m", "ft"], "default": "m", "title": "Altitude unit" },
+            "speedUnit": { "type": "string", "enum": ["kt", "m/s", "km/h", "mph"], "default": "kt", "title": "Speed unit" },
+            "entityType": { "type": "string", "title": "Entity type when the record has none" },
+            "source": { "type": "string", "title": "Entity source", "description": "EntitySource name written on observations; default UNSPECIFIED." },
+            "fields": {
+              "type": "object",
+              "title": "Fields",
+              "description": "Observation field to dotted JSON path.",
+              "required": ["latitude", "longitude"],
+              "properties": {
+                "id": { "type": "string" },
+                "name": { "type": "string" },
+                "entityType": { "type": "string" },
+                "latitude": { "type": "string", "minLength": 1 },
+                "longitude": { "type": "string", "minLength": 1 },
+                "altitude": { "type": "string" },
+                "heading": { "type": "string" },
+                "speed": { "type": "string" },
+                "course": { "type": "string" },
+                "timestamp": { "type": "string" },
+                "trackEnvironment": { "type": "string" },
+                "affiliation": { "type": "string" },
+                "country": { "type": "string" },
+                "callsign": { "type": "string" },
+                "velocityNorth": { "type": "string" },
+                "velocityEast": { "type": "string" },
+                "velocityUp": { "type": "string" },
+                "circularError": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "rateLimitHeader": { "type": "string", "title": "Rate limit header", "description": "Response header carrying the remaining quota, e.g. X-RateLimit-Remaining. Below creditFloor the feed polls at the slowest interval." },
+    "creditFloor": { "type": "integer", "minimum": 0, "default": 200, "title": "Credit floor", "description": "Used with rateLimitHeader." }
+  }
+}

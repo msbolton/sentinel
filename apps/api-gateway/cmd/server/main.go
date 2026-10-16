@@ -70,7 +70,7 @@ func main() {
 		Alerts:   mustProxy(logger, "alert-service", cfg.AlertServiceURL, nil),
 		Links:    mustProxy(logger, "link-analysis-service", cfg.LinkAnalysisServiceURL, nil),
 		Search:   mustProxy(logger, "search-service", cfg.SearchServiceURL, nil),
-		Feeds:    mustProxy(logger, "ingest-service", cfg.IngestServiceURL, proxy.StripPrefix("/api/v1")),
+		Feeds:    mustProxyWithToken(logger, "ingest-service", cfg.IngestServiceURL, proxy.StripPrefix("/api/v1"), cfg.IngestServiceToken),
 	}
 
 	locStore := locations.NewPGStore(pool)
@@ -96,11 +96,12 @@ func main() {
 	bridge.Start()
 	wsHandler := stream.NewHandler(hub, cfg.CORSOrigin, logger)
 
-	// Push the area clients are looking at to ingest-service so OpenSky is
-	// polled only for that area.
+	// Push the area clients are looking at to every ingest feed that polls
+	// an area of interest.
 	var viewportSync *stream.ViewportSync
 	if cfg.ViewportSyncEnabled {
-		viewportSync = stream.NewViewportSync(hub, stream.NewIngestHTTPSink(cfg.IngestServiceURL), stream.ViewportSyncOptions{
+		directory := stream.NewHTTPFeedDirectory(cfg.IngestServiceURL, cfg.IngestServiceToken, 30*time.Second, logger)
+		viewportSync = stream.NewViewportSync(hub, stream.NewIngestHTTPSink(cfg.IngestServiceURL, cfg.IngestServiceToken), directory, stream.ViewportSyncOptions{
 			Debounce:  cfg.ViewportSyncDebounce,
 			Heartbeat: cfg.ViewportSyncHeartbeat,
 		}, logger)
@@ -163,7 +164,11 @@ func main() {
 }
 
 func mustProxy(logger *zap.Logger, name, target string, rewrite func(string) string) http.Handler {
-	h, err := proxy.New(proxy.Options{Name: name, Target: target, RewritePath: rewrite, Logger: logger})
+	return mustProxyWithToken(logger, name, target, rewrite, "")
+}
+
+func mustProxyWithToken(logger *zap.Logger, name, target string, rewrite func(string) string, token string) http.Handler {
+	h, err := proxy.New(proxy.Options{Name: name, Target: target, RewritePath: rewrite, ServiceToken: token, Logger: logger})
 	if err != nil {
 		logger.Fatal("invalid upstream", zap.String("upstream", name), zap.Error(err))
 	}

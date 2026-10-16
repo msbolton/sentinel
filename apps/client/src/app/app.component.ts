@@ -8,15 +8,16 @@ import { AuthService, UserProfile } from './core/services/auth.service';
 import { AlertService } from './core/services/alert.service';
 import { ThemeService } from './core/services/theme.service';
 import { ThemePickerComponent } from './shared/components/theme-picker.component';
-import { DataFeedsComponent } from './shared/components/data-feeds.component';
+import { LayersPillComponent } from './shared/components/layers-pill.component';
 import { UserMenuComponent } from './shared/components/user-menu.component';
+import { HasRoleDirective } from './shared/directives/has-role.directive';
 import { MapComponent } from './features/map/map.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, ThemePickerComponent, DataFeedsComponent, UserMenuComponent],
+  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, ThemePickerComponent, LayersPillComponent, UserMenuComponent, HasRoleDirective],
   template: `
     @if (isFullScreenRoute()) {
       <!-- Login page renders full-screen, no app shell -->
@@ -95,6 +96,18 @@ import { MapComponent } from './features/map/map.component';
               <circle cx="12" cy="10" r="3"/>
             </svg>
           </button>
+          <button
+            *appHasRole="['sentinel-operator', 'sentinel-admin']"
+            class="sidebar-btn"
+            routerLink="/feeds"
+            routerLinkActive="active"
+            title="Feeds">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 11a9 9 0 0 1 9 9"/>
+              <path d="M4 4a16 16 0 0 1 16 16"/>
+              <circle cx="5" cy="19" r="1"/>
+            </svg>
+          </button>
         </div>
 
         <div class="sidebar-footer">
@@ -125,7 +138,7 @@ import { MapComponent } from './features/map/map.component';
 
           <!-- Floating pills -->
           <div class="floating-pills">
-            <app-data-feeds></app-data-feeds>
+            <app-layers-pill></app-layers-pill>
             <app-theme-picker></app-theme-picker>
           </div>
 
@@ -241,7 +254,7 @@ export class AppComponent implements OnInit, OnDestroy {
     const classifyRoute = (url: string) => {
       const path = url.replace(/\?.*$/, '');
       this.isFullScreenRoute.set(['/login', '/register'].includes(path));
-      this.isPageRoute.set(path.startsWith('/admin') || path.startsWith('/settings'));
+      this.isPageRoute.set(path.startsWith('/admin') || path.startsWith('/settings') || path.startsWith('/feeds'));
     };
     classifyRoute(this.router.url);
     this.router.events.pipe(

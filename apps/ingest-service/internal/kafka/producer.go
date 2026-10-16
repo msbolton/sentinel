@@ -1,16 +1,14 @@
 package kafka
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"go.uber.org/zap"
 
 	"github.com/sentinel/ingest-service/internal/metrics"
-	"github.com/sentinel/ingest-service/internal/models"
 )
 
 // Producer wraps a confluent-kafka-go producer with delivery report
@@ -27,15 +25,15 @@ type Producer struct {
 // It starts a background goroutine to handle delivery reports.
 func NewProducer(brokers string, logger *zap.Logger, m *metrics.Metrics) (*Producer, error) {
 	p, err := kafka.NewProducer(&kafka.ConfigMap{
-		"bootstrap.servers":        brokers,
-		"acks":                     "all",
-		"retries":                  5,
-		"retry.backoff.ms":         100,
-		"linger.ms":               10,
-		"batch.num.messages":       500,
+		"bootstrap.servers":            brokers,
+		"acks":                         "all",
+		"retries":                      5,
+		"retry.backoff.ms":             100,
+		"linger.ms":                    10,
+		"batch.num.messages":           500,
 		"queue.buffering.max.messages": 100000,
-		"compression.type":        "gzip",
-		"enable.idempotence":      true,
+		"compression.type":             "gzip",
+		"enable.idempotence":           true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating kafka producer: %w", err)
@@ -61,9 +59,14 @@ func (p *Producer) handleDeliveryReports() {
 	for ev := range p.producer.Events() {
 		switch e := ev.(type) {
 		case *kafka.Message:
+			feedID, _ := e.Opaque.(string)
 			if e.TopicPartition.Error != nil {
+				if feedID != "" && p.metrics != nil {
+					p.metrics.ObservationsDeliveryFailed.WithLabelValues(feedID).Inc()
+				}
 				p.logger.Error("kafka delivery failed",
 					zap.String("topic", *e.TopicPartition.Topic),
+					zap.String("feed", feedID),
 					zap.Error(e.TopicPartition.Error),
 				)
 			}
@@ -76,50 +79,17 @@ func (p *Producer) handleDeliveryReports() {
 	}
 }
 
-// ProduceBatch sends a batch of entity positions to the specified Kafka topic.
-// Messages are keyed by entity_id to guarantee per-entity ordering within a partition.
-func (p *Producer) ProduceBatch(topic string, messages []*models.EntityPosition) error {
-	if len(messages) == 0 {
-		return nil
-	}
+// Produce enqueues one message. The returned error is librdkafka's: a
+// kafka.Error with code ErrQueueFull when the local queue is full, which
+// callers should treat as backpressure and retry.
+func (p *Producer) Produce(msg *kafka.Message) error {
+	return p.producer.Produce(msg, nil)
+}
 
-	start := time.Now()
-
-	for _, msg := range messages {
-		value, err := json.Marshal(msg)
-		if err != nil {
-			p.logger.Error("failed to marshal entity position",
-				zap.String("entity_id", msg.EntityID),
-				zap.Error(err),
-			)
-			continue
-		}
-
-		err = p.producer.Produce(&kafka.Message{
-			TopicPartition: kafka.TopicPartition{
-				Topic:     &topic,
-				Partition: kafka.PartitionAny,
-			},
-			Key:   []byte(msg.EntityID),
-			Value: value,
-			Headers: []kafka.Header{
-				{Key: "source", Value: []byte(msg.Source)},
-				{Key: "entity_type", Value: []byte(msg.EntityType)},
-				{Key: "feed_id", Value: []byte(msg.FeedID)},
-			},
-		}, nil)
-		if err != nil {
-			p.logger.Error("failed to enqueue kafka message",
-				zap.String("entity_id", msg.EntityID),
-				zap.Error(err),
-			)
-		}
-	}
-
-	p.metrics.KafkaProduceDuration.Observe(time.Since(start).Seconds())
-	p.metrics.BatchSize.Observe(float64(len(messages)))
-
-	return nil
+// IsQueueFull reports whether err is the local-queue-full condition.
+func IsQueueFull(err error) bool {
+	var kerr kafka.Error
+	return errors.As(err, &kerr) && kerr.Code() == kafka.ErrQueueFull
 }
 
 // Flush waits for all outstanding messages to be delivered, up to the given timeout.

@@ -1,125 +1,78 @@
+// Package metrics holds the ingest service's Prometheus collectors on an
+// injected registry, so tests can build as many as they like.
 package metrics
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// Metrics holds all Prometheus metric collectors for the ingest service.
+// Metrics holds every collector. Labels: feed_id and driver identify a
+// feed; reason classifies drops, skips and dead letters.
 type Metrics struct {
-	MessagesReceived    *prometheus.CounterVec
-	MessagesProcessed   *prometheus.CounterVec
-	MessagesFailed      *prometheus.CounterVec
-	ProcessingDuration  prometheus.Histogram
-	KafkaProduceDuration prometheus.Histogram
-	ActiveConnections   *prometheus.GaugeVec
-	BatchSize           prometheus.Histogram
-	PipelineQueueDepth  prometheus.Gauge
-	FeedLastSuccess     *prometheus.GaugeVec
-	FeedEntityCount     *prometheus.GaugeVec
-	FeedErrorsTotal     *prometheus.CounterVec
+	Registry *prometheus.Registry
+
+	FramesTotal        *prometheus.CounterVec // feed_id, driver
+	ObservationsTotal  *prometheus.CounterVec // feed_id, driver
+	DecodeErrorsTotal  *prometheus.CounterVec // feed_id, driver, reason (parse_error|panic)
+	SkippedTotal       *prometheus.CounterVec // feed_id, driver, reason
+	FramesDroppedTotal *prometheus.CounterVec // feed_id, reason
+	NackedTotal        *prometheus.CounterVec // feed_id
+	BlockedSeconds     *prometheus.CounterVec // feed_id
+	DuplicatesTotal    *prometheus.CounterVec // feed_id
+
+	FeedsRunning    *prometheus.GaugeVec   // driver
+	FeedLastSuccess *prometheus.GaugeVec   // feed_id
+	FeedEntityCount *prometheus.GaugeVec   // feed_id
+	FeedErrorsTotal *prometheus.CounterVec // feed_id
+	FeedRestarts    *prometheus.CounterVec // feed_id
+	LeasesLost      *prometheus.CounterVec // feed_id
+	LeaseHandovers  *prometheus.CounterVec // feed_id
+
+	ObservationsPublished      *prometheus.CounterVec // feed_id
+	ObservationsDeliveryFailed *prometheus.CounterVec // feed_id
+	DeadLetterTotal            *prometheus.CounterVec // feed_id, reason
+	DeadLetterDropped          *prometheus.CounterVec // feed_id
+	PublisherShardDepth        *prometheus.GaugeVec   // shard
+	PublisherBlockedSeconds    prometheus.Counter
 }
 
-// New creates and registers all Prometheus metrics for the ingest service.
-func New() *Metrics {
+// New registers every collector on reg (a fresh registry when nil).
+func New(reg *prometheus.Registry) *Metrics {
+	if reg == nil {
+		reg = prometheus.NewRegistry()
+	}
+	counter := func(name, help string, labels ...string) *prometheus.CounterVec {
+		c := prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "sentinel", Subsystem: "ingest", Name: name, Help: help}, labels)
+		reg.MustRegister(c)
+		return c
+	}
+	gauge := func(name, help string, labels ...string) *prometheus.GaugeVec {
+		g := prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "sentinel", Subsystem: "ingest", Name: name, Help: help}, labels)
+		reg.MustRegister(g)
+		return g
+	}
+	blocked := prometheus.NewCounter(prometheus.CounterOpts{Namespace: "sentinel", Subsystem: "ingest", Name: "publisher_blocked_seconds_total", Help: "Time publisher shards spent waiting on a full Kafka queue."})
+	reg.MustRegister(blocked)
 	return &Metrics{
-		MessagesReceived: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Namespace: "sentinel",
-				Subsystem: "ingest",
-				Name:      "messages_received_total",
-				Help:      "Total number of messages received from sensor sources.",
-			},
-			[]string{"source_type"},
-		),
-		MessagesProcessed: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Namespace: "sentinel",
-				Subsystem: "ingest",
-				Name:      "messages_processed_total",
-				Help:      "Total number of messages successfully processed and normalized.",
-			},
-			[]string{"entity_type"},
-		),
-		MessagesFailed: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Namespace: "sentinel",
-				Subsystem: "ingest",
-				Name:      "messages_failed_total",
-				Help:      "Total number of messages that failed processing.",
-			},
-			[]string{"source_type", "error_type"},
-		),
-		ProcessingDuration: promauto.NewHistogram(
-			prometheus.HistogramOpts{
-				Namespace: "sentinel",
-				Subsystem: "ingest",
-				Name:      "processing_duration_seconds",
-				Help:      "Time spent processing individual messages from receipt to normalized output.",
-				Buckets:   prometheus.ExponentialBuckets(0.0001, 2, 15),
-			},
-		),
-		KafkaProduceDuration: promauto.NewHistogram(
-			prometheus.HistogramOpts{
-				Namespace: "sentinel",
-				Subsystem: "ingest",
-				Name:      "kafka_produce_duration_seconds",
-				Help:      "Time spent producing batches to Kafka.",
-				Buckets:   prometheus.ExponentialBuckets(0.001, 2, 12),
-			},
-		),
-		ActiveConnections: promauto.NewGaugeVec(
-			prometheus.GaugeOpts{
-				Namespace: "sentinel",
-				Subsystem: "ingest",
-				Name:      "active_connections",
-				Help:      "Number of currently active source connections.",
-			},
-			[]string{"source_type"},
-		),
-		BatchSize: promauto.NewHistogram(
-			prometheus.HistogramOpts{
-				Namespace: "sentinel",
-				Subsystem: "ingest",
-				Name:      "batch_size",
-				Help:      "Number of messages per Kafka produce batch.",
-				Buckets:   prometheus.ExponentialBuckets(1, 2, 12),
-			},
-		),
-		PipelineQueueDepth: promauto.NewGauge(
-			prometheus.GaugeOpts{
-				Namespace: "sentinel",
-				Subsystem: "ingest",
-				Name:      "pipeline_queue_depth",
-				Help:      "Current number of messages waiting in the pipeline input queue.",
-			},
-		),
-		FeedLastSuccess: promauto.NewGaugeVec(
-			prometheus.GaugeOpts{
-				Namespace: "sentinel",
-				Subsystem: "ingest",
-				Name:      "feed_last_success_timestamp",
-				Help:      "Unix timestamp of the last successful poll for an external feed.",
-			},
-			[]string{"feed"},
-		),
-		FeedEntityCount: promauto.NewGaugeVec(
-			prometheus.GaugeOpts{
-				Namespace: "sentinel",
-				Subsystem: "ingest",
-				Name:      "feed_entities_count",
-				Help:      "Number of entities returned by the last successful poll.",
-			},
-			[]string{"feed"},
-		),
-		FeedErrorsTotal: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Namespace: "sentinel",
-				Subsystem: "ingest",
-				Name:      "feed_errors_total",
-				Help:      "Total number of poll errors for an external feed.",
-			},
-			[]string{"feed"},
-		),
+		Registry:                   reg,
+		FramesTotal:                counter("frames_total", "Frames received from transports or records returned by polls, per feed.", "feed_id", "driver"),
+		ObservationsTotal:          counter("observations_total", "Observations emitted by drivers after deduplication, per feed.", "feed_id", "driver"),
+		DecodeErrorsTotal:          counter("decode_errors_total", "Frames that failed to decode and were dead-lettered, per feed and reason.", "feed_id", "driver", "reason"),
+		SkippedTotal:               counter("skipped_total", "Frames that produced no observation, per feed and reason.", "feed_id", "driver", "reason"),
+		FramesDroppedTotal:         counter("frames_dropped_total", "Frames dropped by the backpressure policy, per feed and reason.", "feed_id", "reason"),
+		NackedTotal:                counter("nacked_total", "Messages negatively acknowledged to the broker under backpressure, per feed.", "feed_id"),
+		BlockedSeconds:             counter("blocked_seconds_total", "Time transports spent blocked on backpressure, per feed.", "feed_id"),
+		DuplicatesTotal:            counter("duplicates_total", "Observations suppressed as repeated fixes, per feed.", "feed_id"),
+		FeedsRunning:               gauge("feeds_running", "Feeds currently running on this replica, per driver.", "driver"),
+		FeedLastSuccess:            gauge("feed_last_success_timestamp", "Unix time of the last successful poll or received report, per feed.", "feed_id"),
+		FeedEntityCount:            gauge("feed_entities_count", "Observations produced by the last poll, per feed.", "feed_id"),
+		FeedErrorsTotal:            counter("feed_errors_total", "Poll, connection and start errors, per feed.", "feed_id"),
+		FeedRestarts:               counter("feed_restarts_total", "Driver restarts after a failure, per feed.", "feed_id"),
+		ObservationsPublished:      counter("observations_published_total", "Observations handed to the Kafka producer, per feed.", "feed_id"),
+		ObservationsDeliveryFailed: counter("observations_delivery_failed_total", "Observations Kafka reported as undelivered, per feed.", "feed_id"),
+		DeadLetterTotal:            counter("deadletter_total", "Payloads sent to the dead-letter topic, per feed and reason.", "feed_id", "reason"),
+		DeadLetterDropped:          counter("deadletter_dropped_total", "Dead letters dropped by the per-feed rate limit.", "feed_id"),
+		PublisherShardDepth:        gauge("publisher_shard_depth", "Observations waiting in each publisher shard.", "shard"),
+		PublisherBlockedSeconds:    blocked,
 	}
 }

@@ -11,6 +11,10 @@ import (
 
 	"github.com/coder/websocket"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
 	"github.com/sentinel/go-common/kafka"
 )
@@ -189,14 +193,38 @@ func newTestBridge(t *testing.T) (*Bridge, *Client) {
 	return &Bridge{hub: hub, batcher: NewBatcher(hub, time.Hour), logger: zap.NewNop()}, c
 }
 
-func TestBridge_EntityEventsFromBothShapes(t *testing.T) {
+func protoBytes(t *testing.T, m proto.Message) []byte {
+	t.Helper()
+	b, err := proto.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func sampleEntity() *sentinelv1.Entity {
+	alt, spd := 9000.0, 400.0
+	return &sentinelv1.Entity{
+		Id: "e1", EntityType: sentinelv1.EntityType_ENTITY_TYPE_AIRCRAFT, Name: "UAL1", Source: sentinelv1.EntitySource_ENTITY_SOURCE_ADSB_LOL,
+		Classification: sentinelv1.Classification_CLASSIFICATION_UNCLASSIFIED, FeedId: "adsb-lol", AgeoutState: sentinelv1.AgeoutState_AGEOUT_STATE_LIVE,
+		Position: &sentinelv1.Coordinate{Latitude: 1.5, Longitude: 2.5, AltitudeMeters: &alt}, SpeedKnots: &spd,
+		Kinematics: &sentinelv1.KinematicState{Velocity: &sentinelv1.GeodeticVelocity{North: 100.5, East: -20}},
+		Identities: []*sentinelv1.Identity{{Type: sentinelv1.IdentityType_IDENTITY_TYPE_ICAO24, Value: "A1B2C3"}},
+		Platforms:  map[string]*sentinelv1.PlatformDetail{"adsb": {Detail: &sentinelv1.PlatformDetail_Adsb{Adsb: &sentinelv1.AdsbDetail{IcaoHex: "A1B2C3", Squawk: "1200"}}}},
+		CreatedAt:  timestamppb.New(time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)), LastSeenAt: timestamppb.New(time.Date(2026, 10, 14, 0, 0, 5, 0, time.UTC)),
+		LastObservedAt: timestamppb.New(time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)),
+	}
+}
+
+func TestBridge_EntityEventsFromProto(t *testing.T) {
 	b, c := newTestBridge(t)
-	// NestJS-era position event.
-	b.Handle(kafka.TopicEntityPosition, []byte(`{"entity_id":"e1","entity_type":"AIRCRAFT","latitude":1.5,"longitude":2.5,"altitude_meters":9000,"heading":90,"speed_knots":400,"classification":"UNCLASSIFIED","source":"ADS_B","timestamp":"2026-10-14T00:00:00Z"}`))
-	// Go entity-service created event (id + altitude).
-	b.Handle(kafka.TopicEntityCreated, []byte(`{"id":"e2","entity_type":"VESSEL","name":"Boat","latitude":3,"longitude":4,"altitude":0,"created_at":"2026-10-14T01:00:00Z"}`))
+	b.Handle(kafka.TopicEntityEvents, protoBytes(t, &sentinelv1.EntityEvent{EntityId: "e1", EventTime: timestamppb.Now(),
+		Event: &sentinelv1.EntityEvent_Position{Position: &sentinelv1.EntityPosition{Entity: sampleEntity()}}}))
+	boat := &sentinelv1.Entity{Id: "e2", EntityType: sentinelv1.EntityType_ENTITY_TYPE_VESSEL, Name: "Boat", Position: &sentinelv1.Coordinate{Latitude: 3, Longitude: 4},
+		CreatedAt: timestamppb.New(time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC))}
+	b.Handle(kafka.TopicEntityEvents, protoBytes(t, &sentinelv1.EntityEvent{EntityId: "e2", Event: &sentinelv1.EntityEvent_Created{Created: &sentinelv1.EntityCreated{Entity: boat}}}))
 	// Missing position is dropped.
-	b.Handle(kafka.TopicEntityUpdated, []byte(`{"entity_id":"e3"}`))
+	b.Handle(kafka.TopicEntityEvents, protoBytes(t, &sentinelv1.EntityEvent{EntityId: "e3", Event: &sentinelv1.EntityEvent_Updated{Updated: &sentinelv1.EntityUpdated{Entity: &sentinelv1.Entity{Id: "e3"}}}}))
 	b.batcher.Flush()
 
 	env := decodeFrame(t, c)
@@ -206,81 +234,99 @@ func TestBridge_EntityEventsFromBothShapes(t *testing.T) {
 		t.Fatalf("events = %+v", events)
 	}
 	e1, e2 := events[0], events[1]
-	if e1.Type != "updated" || e1.Entity.ID != "e1" || e1.Entity.Position.Latitude != 1.5 || *e1.Entity.Position.Altitude != 9000 || *e1.Entity.SpeedKnots != 400 || e1.Timestamp != "2026-10-14T00:00:00Z" {
+	if e1.Type != "updated" || e1.Entity.ID != "e1" || e1.Entity.EntityType != "AIRCRAFT" || e1.Entity.Source != "ADSB_LOL" || e1.Entity.Classification != "UNCLASSIFIED" || e1.Entity.Position.Latitude != 1.5 || *e1.Entity.Position.Altitude != 9000 || *e1.Entity.SpeedKnots != 400 || e1.Entity.Heading != nil {
 		t.Errorf("e1 = %+v", e1)
 	}
-	if e2.Type != "created" || e2.Entity.ID != "e2" || e2.Entity.Name != "Boat" || *e2.Entity.Position.Altitude != 0 || e2.Entity.CreatedAt != "2026-10-14T01:00:00Z" {
+	if e1.Timestamp != "2026-10-14T00:00:00Z" || e1.Entity.LastSeenAt != "2026-10-14T00:00:05Z" || e1.Entity.CreatedAt != "2026-10-14T01:00:00Z" {
+		t.Errorf("e1 timestamps = %s %s %s", e1.Timestamp, e1.Entity.LastSeenAt, e1.Entity.CreatedAt)
+	}
+	velocity, _ := e1.Entity.Kinematics["velocity"].(map[string]interface{})
+	if velocity == nil || velocity["north"] != 100.5 || velocity["east"] != -20.0 {
+		t.Errorf("kinematics = %v", e1.Entity.Kinematics)
+	}
+	adsb, _ := e1.Entity.PlatformData["adsb"].(map[string]interface{})
+	if adsb == nil || adsb["icaoHex"] != "A1B2C3" || adsb["squawk"] != "1200" {
+		t.Errorf("platformData = %v", e1.Entity.PlatformData)
+	}
+	if e1.Entity.FeedID != "adsb-lol" || e1.Entity.AgeoutState != "LIVE" || len(e1.Entity.Identities) != 1 || e1.Entity.Identities[0].Value != "A1B2C3" {
+		t.Errorf("provenance = %+v", e1.Entity)
+	}
+	if e2.Type != "created" || e2.Entity.Name != "Boat" || e2.Entity.Position.Altitude != nil || e2.Entity.CreatedAt != "2026-10-14T01:00:00Z" || e2.Entity.Kinematics != nil {
 		t.Errorf("e2 = %+v", e2)
 	}
 	if e2.Entity.Metadata == nil || e2.Entity.Affiliations == nil {
 		t.Error("metadata and affiliations must serialise as {} and [] not null")
 	}
-	// Without velocity fields the kinematics object is omitted; lastSeenAt
-	// falls back to the event timestamp.
-	if e1.Entity.Kinematics != nil || e1.Entity.LastSeenAt != "2026-10-14T00:00:00Z" {
-		t.Errorf("e1 kinematics/lastSeenAt = %v / %s", e1.Entity.Kinematics, e1.Entity.LastSeenAt)
-	}
 }
 
-func TestBridge_VelocityAndLastSeenPassThrough(t *testing.T) {
+func TestBridge_DeletedAgeoutRestoredAndAlerts(t *testing.T) {
 	b, c := newTestBridge(t)
-	b.Handle(kafka.TopicEntityPosition, []byte(`{"entity_id":"e1","entity_type":"AIRCRAFT","latitude":1,"longitude":2,"altitude":9000,"velocity_north":100.5,"velocity_east":-20,"velocity_up":null,"timestamp":"2026-10-14T00:00:00Z","last_seen_at":"2026-10-14T00:00:05Z"}`))
-	b.batcher.Flush()
-
-	env := decodeFrame(t, c)
-	var events []EntityEvent
-	_ = json.Unmarshal(env.Data, &events)
-	if len(events) != 1 {
-		t.Fatalf("events = %+v", events)
-	}
-	e := events[0].Entity
-	if e.LastSeenAt != "2026-10-14T00:00:05Z" {
-		t.Errorf("lastSeenAt = %s", e.LastSeenAt)
-	}
-	velocity, _ := e.Kinematics["velocity"].(map[string]interface{})
-	if velocity == nil || velocity["north"] != 100.5 || velocity["east"] != -20.0 {
-		t.Errorf("kinematics = %v", e.Kinematics)
-	}
-	if _, present := velocity["up"]; present {
-		t.Error("a null velocity component must be omitted")
-	}
-}
-
-func TestBridge_DeletedAgeoutAndAlerts(t *testing.T) {
-	b, c := newTestBridge(t)
-	b.Handle(kafka.TopicEntityDeleted, []byte(`{"bulk":true,"count":42,"timestamp":"2026-10-14T00:00:00Z"}`))
+	b.Handle(kafka.TopicEntityEvents, protoBytes(t, &sentinelv1.EntityEvent{EventTime: timestamppb.New(time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)),
+		Event: &sentinelv1.EntityEvent_Deleted{Deleted: &sentinelv1.EntityDeleted{Bulk: true, Count: 42}}}))
 	env := decodeFrame(t, c)
 	var del EntityEvent
 	_ = json.Unmarshal(env.Data, &del)
-	if env.Type != MsgEntityDeleted || del.Type != "deleted" || !del.Bulk || del.Count != 42 {
+	if env.Type != MsgEntityDeleted || del.Type != "deleted" || !del.Bulk || del.Count != 42 || del.Timestamp != "2026-10-14T00:00:00Z" {
 		t.Errorf("deleted = %s %+v", env.Type, del)
 	}
+	b.Handle(kafka.TopicEntityEvents, protoBytes(t, &sentinelv1.EntityEvent{EntityId: "e7", Event: &sentinelv1.EntityEvent_Deleted{Deleted: &sentinelv1.EntityDeleted{}}}))
+	env = decodeFrame(t, c)
+	var single EntityEvent
+	_ = json.Unmarshal(env.Data, &single)
+	if single.Entity.ID != "e7" || single.Bulk {
+		t.Errorf("single delete = %+v", single)
+	}
 
-	// Ageout events are coalesced into one array frame per type per flush:
-	// the ageout service emits up to a thousand per cycle.
-	b.Handle(kafka.TopicEntityStale, []byte(`{"entity_id":"e9","ageout_state":"STALE"}`))
-	b.Handle(kafka.TopicEntityStale, []byte(`{"entity_id":"e10","ageout_state":"STALE"}`))
-	b.Handle(kafka.TopicEntityAgedOut, []byte(`{"entity_id":"e11","ageout_state":"AGED_OUT"}`))
-	b.Handle(kafka.TopicEntityAgedOut, []byte(`not json`))
+	// Ageout events are coalesced into one array frame per type per flush.
+	stale := func(id string) []byte {
+		return protoBytes(t, &sentinelv1.EntityEvent{EntityId: id, Event: &sentinelv1.EntityEvent_Stale{Stale: &sentinelv1.EntityAgeout{EntityType: sentinelv1.EntityType_ENTITY_TYPE_AIRCRAFT, FeedId: "opensky", ThresholdMs: 60000}}})
+	}
+	b.Handle(kafka.TopicEntityEvents, stale("e9"))
+	b.Handle(kafka.TopicEntityEvents, stale("e10"))
+	b.Handle(kafka.TopicEntityEvents, protoBytes(t, &sentinelv1.EntityEvent{EntityId: "e11", Event: &sentinelv1.EntityEvent_AgedOut{AgedOut: &sentinelv1.EntityAgeout{}}}))
+	b.Handle(kafka.TopicEntityEvents, []byte("not proto at all \xff\xff"))
 	noFrame(t, c)
 	b.batcher.Flush()
 	env = decodeFrame(t, c)
-	if env.Type != MsgEntityStale || string(env.Data) != `[{"entity_id":"e9","ageout_state":"STALE"},{"entity_id":"e10","ageout_state":"STALE"}]` {
+	var staleBatch []map[string]interface{}
+	_ = json.Unmarshal(env.Data, &staleBatch)
+	if env.Type != MsgEntityStale || len(staleBatch) != 2 || staleBatch[0]["entity_id"] != "e9" || staleBatch[0]["ageout_state"] != "STALE" || staleBatch[0]["feed_id"] != "opensky" || staleBatch[0]["entity_type"] != "AIRCRAFT" {
 		t.Errorf("stale batch = %s %s", env.Type, env.Data)
 	}
 	env = decodeFrame(t, c)
-	if env.Type != MsgEntityAgedOut || string(env.Data) != `[{"entity_id":"e11","ageout_state":"AGED_OUT"}]` {
+	var aged []map[string]interface{}
+	_ = json.Unmarshal(env.Data, &aged)
+	if env.Type != MsgEntityAgedOut || len(aged) != 1 || aged[0]["entity_id"] != "e11" || aged[0]["ageout_state"] != "AGED_OUT" {
 		t.Errorf("agedout batch = %s %s", env.Type, env.Data)
 	}
 	noFrame(t, c)
-	b.batcher.Flush() // nothing pending: no empty frames
-	noFrame(t, c)
 
-	b.Handle(kafka.TopicAlertGeofence, []byte(`{"alertId":"a1","alertType":"GEOFENCE_BREACH","severity":"HIGH","title":"Breach","description":"Entered zone","entityId":"e1","position":{"lat":1,"lon":2},"createdAt":"2026-10-14T00:00:00Z"}`))
+	// Restored: an ageout frame plus the entity itself in the batch.
+	b.Handle(kafka.TopicEntityEvents, protoBytes(t, &sentinelv1.EntityEvent{EntityId: "e1", Event: &sentinelv1.EntityEvent_Restored{Restored: &sentinelv1.EntityRestored{Entity: sampleEntity(), PreviousState: sentinelv1.AgeoutState_AGEOUT_STATE_STALE}}}))
+	b.batcher.Flush()
+	frames := map[string]json.RawMessage{}
+	for i := 0; i < 2; i++ {
+		env = decodeFrame(t, c)
+		frames[env.Type] = env.Data
+	}
+	var restored []map[string]interface{}
+	_ = json.Unmarshal(frames[MsgEntityRestored], &restored)
+	if len(restored) != 1 || restored[0]["entity_id"] != "e1" || restored[0]["previous_state"] != "STALE" || restored[0]["latitude"] != 1.5 {
+		t.Errorf("restored = %s", frames[MsgEntityRestored])
+	}
+	var batch []EntityEvent
+	_ = json.Unmarshal(frames[MsgEntityBatch], &batch)
+	if len(batch) != 1 || batch[0].Entity.ID != "e1" {
+		t.Errorf("restored entity batch = %s", frames[MsgEntityBatch])
+	}
+
+	b.Handle(kafka.TopicAlertEvents, protoBytes(t, &sentinelv1.AlertEvent{Producer: "analytics-service", AnomalyType: "speed", Alert: &sentinelv1.Alert{
+		AlertId: "a1", AlertType: sentinelv1.AlertType_ALERT_TYPE_GEOFENCE_ENTRY, Severity: sentinelv1.AlertSeverity_ALERT_SEVERITY_HIGH, Title: "Breach", Description: "Entered zone",
+		EntityId: "e1", Position: &sentinelv1.Coordinate{Latitude: 1, Longitude: 2}, CreatedAt: timestamppb.New(time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC))}}))
 	env = decodeFrame(t, c)
 	var alert ClientAlert
 	_ = json.Unmarshal(env.Data, &alert)
-	if env.Type != MsgAlertNew || alert.ID != "a1" || alert.Message != "Entered zone" || alert.Position.Longitude != 2 || alert.Acknowledged || alert.UpdatedAt != alert.CreatedAt {
+	if env.Type != MsgAlertNew || alert.ID != "a1" || alert.AlertType != "GEOFENCE_ENTRY" || alert.Severity != "HIGH" || alert.Message != "Entered zone" || alert.Position.Longitude != 2 || alert.Acknowledged || alert.UpdatedAt != alert.CreatedAt || alert.Metadata["anomalyType"] != "speed" {
 		t.Errorf("alert = %s %+v", env.Type, alert)
 	}
 	b.Handle("some.other.topic", []byte(`{}`))

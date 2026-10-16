@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -47,8 +48,10 @@ type AlertRuleRecord struct {
 	UpdatedAt            string                 `json:"updatedAt"`
 }
 
-// CreateAlertParams holds parameters for creating an alert.
+// CreateAlertParams holds parameters for creating an alert. ID is set only
+// for alerts raised elsewhere (analytics), so a redelivered event is a no-op.
 type CreateAlertParams struct {
+	ID               string
 	AlertType        string
 	Severity         string
 	Title            string
@@ -134,18 +137,31 @@ func (s *AlertStore) CreateAlert(ctx context.Context, p CreateAlertParams) (*Ale
 		positionExpr = "NULL"
 	}
 
+	idColumn, idValue, conflict := "", "", ""
+	if p.ID != "" {
+		args = append(args, p.ID)
+		idColumn = ", id"
+		idValue = fmt.Sprintf(", $%d::uuid", len(args))
+		conflict = "ON CONFLICT (id) DO NOTHING"
+	}
+
 	query := fmt.Sprintf(`
 		INSERT INTO sentinel.alerts
-			("alertType", severity, title, description, "entityId", "relatedEntityIds", position, "ruleId", metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, %s, $7, $8)
+			("alertType", severity, title, description, "entityId", "relatedEntityIds", position, "ruleId", metadata%s)
+		VALUES ($1, $2, $3, $4, $5, $6, %s, $7, $8%s)
+		%s
 		RETURNING id, "alertType", severity, title, description, "entityId", "relatedEntityIds",
 			ST_Y(position::geometry) as lat, ST_X(position::geometry) as lng,
 			"ruleId", metadata, "createdAt"::text,
 			"acknowledgedAt"::text, "acknowledgedBy", "resolvedAt"::text
-	`, positionExpr)
+	`, idColumn, positionExpr, idValue, conflict)
 
 	row := s.pool.QueryRow(ctx, query, args...)
-	return scanAlert(row)
+	rec, err := scanAlert(row)
+	if err != nil && p.ID != "" && errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil // already stored under this id
+	}
+	return rec, err
 }
 
 // GetAlerts queries alerts with filters and pagination.
