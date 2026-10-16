@@ -50,21 +50,15 @@ kafka:
     replicaCount: 1
   provisioning:
     topics:
-      - name: events.entity.position
-        partitions: 3
+      - name: observations.raw
+        partitions: 6
         replicationFactor: 1
-      - name: events.entity.created
-        partitions: 3
-        replicationFactor: 1
-      - name: events.entity.updated
-        partitions: 3
-        replicationFactor: 1
-      - name: events.track.point
-        partitions: 3
-        replicationFactor: 1
-      - name: alerts.geofence
+      - name: observations.dlq
         partitions: 1
         replicationFactor: 1
-      - name: alerts.anomaly
+      - name: entities.events
+        partitions: 3
+        replicationFactor: 1
+      - name: alerts.events
         partitions: 1
         replicationFactor: 1

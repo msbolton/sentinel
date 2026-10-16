@@ -44,9 +44,41 @@ check GET "/api/v1/search?q=test" 200
 check GET /api/v1/search/facets 200
 check GET "/api/v1/tracks/timeline?buckets=4" 200
 check GET /api/v1/feeds 200
+check GET /api/v1/feeds/opensky 200
+check GET /api/v1/feeds/opensky/status 200
+check GET /api/v1/feeds/opensky/area 200
+check GET /api/v1/drivers 200
+check GET /api/v1/drivers/stream 200
+check GET /api/v1/drivers/nope 404
 check GET /api/v1/locations 200
 check POST /api/v1/entities 400 '{}'
 check GET /api/v1/locations/not-a-uuid 400
+
+echo "== observations"
+eid=$(curl -s ${auth[@]+"${auth[@]}"} "$GW/api/v1/entities?pageSize=1" | sed -nE 's/.*"id":"([0-9a-f-]{36})".*/\1/p' | head -1)
+if [ -n "$eid" ]; then
+  check GET "/api/v1/entities/observations/$eid?limit=5" 200
+else
+  echo "  skip GET    /api/v1/entities/observations/{id} (no entities)"
+fi
+
+echo "== feeds"
+check POST /api/v1/feeds 422 '{"name":"Smoke bad feed","driver":"stream","config":{"decoder":{"name":"sbs"}}}'
+check DELETE /api/v1/feeds/opensky 403
+if [ -n "${SENTINEL_VIEWER_TOKEN:-}" ]; then
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $SENTINEL_VIEWER_TOKEN" "$GW/api/v1/feeds/opensky/enable" 2>/dev/null)
+  [ "$code" = "403" ] && echo "  ok   POST   /api/v1/feeds/opensky/enable as viewer      403" || { echo "  FAIL POST   /api/v1/feeds/opensky/enable as viewer -> $code (want 403)"; fail=1; }
+else
+  echo "  skip viewer 403 on feed toggle (set SENTINEL_VIEWER_TOKEN)"
+fi
+
+if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx sentinel-kafka; then
+  echo "== kafka topics"
+  topics=$(docker exec sentinel-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list 2>/dev/null)
+  for t in observations.raw observations.dlq entities.events alerts.events; do
+    if printf '%s\n' "$topics" | grep -qx "$t"; then echo "  ok   topic  $t"; else echo "  FAIL topic  $t missing"; fail=1; fi
+  done
+fi
 
 echo "== location round trip"
 new=$(curl -s ${auth[@]+"${auth[@]}"} -X POST -H 'Content-Type: application/json' -d '{"name":"Smoke Test","latitude":1,"longitude":2}' "$GW/api/v1/locations")

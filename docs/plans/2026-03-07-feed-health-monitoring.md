@@ -1,3 +1,5 @@
+> **Superseded (2026-10-16).** The feed registry, driver model, per-replica leases, status reporting and the operator feeds page described in `docs/feeds.md` replaced this design. Kept for history.
+
 # SEN-60: Feed Health Monitoring — Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.

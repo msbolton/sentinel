@@ -18,7 +18,7 @@ npm install
 # 2. Copy environment file
 cp .env.example .env
 
-# 3. Start infrastructure (PostgreSQL, Redis, Kafka, etc.)
+# 3. Start infrastructure (PostgreSQL, Kafka, OpenSearch, Keycloak, etc.)
 make docker-infra
 
 # 4. Wait ~15 seconds for services to be healthy, then create the schema and seed it
@@ -29,7 +29,7 @@ make db-seed
 make dev
 ```
 
-The entity-service warms its Redis geo cache from PostgreSQL on startup, so seeded entities are immediately queryable through the gateway.
+Seeded entities are queryable through the gateway as soon as the entity-service is up; it reads PostgreSQL directly (PostGIS index for spatial queries).
 
 ## Makefile Targets
 
@@ -117,7 +117,6 @@ npm run docker:down  # Stop everything
 | Ingest Service | 4000 | HTTP |
 | Analytics Service | 5000 | HTTP |
 | PostgreSQL | 5432 | TCP |
-| Redis | 6379 | TCP |
 | Kafka (external) | 9092 | TCP |
 | Kafka (internal) | 9093 | TCP |
 | OpenSearch | 9200 | HTTP |
@@ -188,15 +187,13 @@ See `docs/architecture.md` (OpenSky viewport-driven polling) for the contract, t
 
 1. Check infrastructure is running: `docker ps`
 2. Verify PostgreSQL is accessible: `psql -h localhost -U sentinel -d sentinel`
-3. Check Redis: `redis-cli ping`
 4. Check Kafka: `docker logs sentinel-kafka`
 
 ### Entities endpoint returns empty `[]`
 
-The gateway proxies `/api/v1/entities` to the entity-service, which reads its Redis geo cache first and falls back to PostgreSQL. If the list is empty:
+The gateway proxies `/api/v1/entities` to the entity-service, which reads PostgreSQL. If the list is empty:
 
 1. Run `make db-schema` then `make db-seed` to populate PostgreSQL
-2. Restart the entity-service so it re-warms its Redis cache, or just hit the endpoint and let the DB fallback do it
 3. Check `curl localhost:3001/api/v1/entities` directly to rule out the gateway
 
 ### WebSocket not connecting

@@ -23,7 +23,7 @@ npm install
 make docker-infra
 ```
 
-This starts PostgreSQL (PostGIS), Redis, Kafka, OpenSearch, Keycloak, GeoServer, and MinIO.
+This starts PostgreSQL (PostGIS), Kafka, OpenSearch, Keycloak, GeoServer, and MinIO.
 
 ### 3. Seed the database
 
@@ -75,7 +75,7 @@ Entity Track   Search   Alert   Link Analysis
 
 **9 services**: API Gateway (Go :3000), Entity Service (Go :3001), Track Service (Go :3002), Search Service (Go :3003), Link Analysis Service (Go :3004), Alert Service (Go :3005), Ingest Service (Go :4000), Analytics Service (Python :5000), Web UI (Angular :4200)
 
-**Infrastructure**: PostgreSQL 16 + PostGIS + TimescaleDB, Redis 7, Kafka 3.7 (KRaft), OpenSearch 2.17, Keycloak 24, GeoServer 2.25, MinIO
+**Infrastructure**: PostgreSQL 16 + PostGIS + TimescaleDB, Kafka 3.7 (KRaft), OpenSearch 2.17, Keycloak 24, GeoServer 2.25, MinIO
 
 ## Project Structure
 
@@ -132,7 +132,7 @@ sentinel/
 
 - **Frontend**: Angular 19, CesiumJS 1.120, vis-network
 - **Backend**: Go 1.24 (net/http, pgx, confluent-kafka-go, golang-jwt), native WebSocket
-- **Data**: PostgreSQL 16 + PostGIS, Redis 7, Kafka 3.7, OpenSearch 2.17
+- **Data**: PostgreSQL 16 + PostGIS + TimescaleDB, Kafka 3.7, OpenSearch 2.17
 - **Auth**: Keycloak 24 (OIDC/JWT), RBAC + classification-based access
 - **Analytics**: Python 3.12, FastAPI
 - **DevOps**: Docker Compose, Kubernetes, Nx monorepo

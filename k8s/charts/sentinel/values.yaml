@@ -26,7 +26,6 @@ apiGateway:
       memory: 1Gi
   env:
     DB_HOST: "{{ .Release.Name }}-postgresql"
-    REDIS_HOST: "{{ .Release.Name }}-redis-master"
     KAFKA_BROKERS: "{{ .Release.Name }}-kafka:9092"
     KEYCLOAK_URL: "http://{{ .Release.Name }}-keycloak"
 
@@ -201,19 +200,6 @@ postgresql:
     persistence:
       size: 50Gi
 
-redis:
-  enabled: true
-  architecture: standalone
-  auth:
-    enabled: false
-  master:
-    resources:
-      requests:
-        cpu: 100m
-        memory: 128Mi
-      limits:
-        cpu: 500m
-        memory: 512Mi
 
 kafka:
   enabled: true
