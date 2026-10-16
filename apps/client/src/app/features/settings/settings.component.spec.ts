@@ -25,7 +25,7 @@ describe('SettingsComponent', () => {
   let httpMock: HttpTestingController;
   let profileSubject: BehaviorSubject<any>;
 
-  function setup(profile = mockProfile) {
+  function setup(profile = mockProfile, apiKeys: 'ok' | 'missing' = 'ok') {
     profileSubject = new BehaviorSubject(profile);
 
     TestBed.configureTestingModule({
@@ -37,6 +37,7 @@ describe('SettingsComponent', () => {
           provide: AuthService,
           useValue: {
             userProfile$: profileSubject.asObservable(),
+            getClassificationLevel: () => profile.classificationLevel,
           },
         },
       ],
@@ -45,6 +46,12 @@ describe('SettingsComponent', () => {
     fixture = TestBed.createComponent(SettingsComponent);
     component = fixture.componentInstance;
     httpMock = TestBed.inject(HttpTestingController);
+    const keys = httpMock.expectOne('/api/v1/auth/api-keys');
+    if (apiKeys === 'ok') {
+      keys.flush([]);
+    } else {
+      keys.flush('not found', { status: 404, statusText: 'Not Found' });
+    }
   }
 
   afterEach(() => {
@@ -73,8 +80,9 @@ describe('SettingsComponent', () => {
     it('should show User Management tab for admin users', () => {
       fixture.detectChanges();
       const tabs = fixture.nativeElement.querySelectorAll('.tab-btn');
-      expect(tabs.length).toBe(2);
+      expect(tabs.length).toBe(3);
       expect(tabs[1].textContent).toContain('User Management');
+      expect(tabs[2].textContent).toContain('API keys');
     });
 
     it('should load pending and active users when switching to management tab', () => {
@@ -196,9 +204,31 @@ describe('SettingsComponent', () => {
 
     it('should NOT show User Management tab for non-admin', () => {
       fixture.detectChanges();
-      const tabs = fixture.nativeElement.querySelectorAll('.tab-btn');
-      expect(tabs.length).toBe(1);
-      expect(tabs[0].textContent).toContain('Profile');
+      const tabs = Array.from(fixture.nativeElement.querySelectorAll('.tab-btn')).map((t: any) => t.textContent.trim());
+      expect(tabs).toEqual(['Profile', 'API keys']);
+    });
+  });
+
+  describe('API keys tab', () => {
+    it('renders the keys tab when switched to', () => {
+      setup(mockNonAdminProfile);
+      fixture.detectChanges();
+      component.switchTab('api-keys');
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('app-api-keys-tab')).toBeTruthy();
+      expect(fixture.nativeElement.textContent).toContain('Create key');
+
+      component.switchTab('profile');
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('app-api-keys-tab')).toBeNull();
+    });
+
+    it('hides the tab when the gateway has no API keys', () => {
+      setup(mockProfile, 'missing');
+      fixture.detectChanges();
+      const tabs = Array.from(fixture.nativeElement.querySelectorAll('.tab-btn')).map((t: any) => t.textContent.trim());
+      expect(tabs).toEqual(['Profile', 'User Management']);
     });
   });
 });

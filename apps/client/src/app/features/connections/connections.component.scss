@@ -197,6 +197,39 @@
   letter-spacing: 0.04em;
 }
 
+.col-policy {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.76rem;
+}
+
+.direction-badge {
+  padding: 2px 8px;
+  border-radius: 100px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-size: 0.64rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+
+  &.direction-out {
+    color: var(--accent-purple);
+    border-color: rgba(139, 92, 246, 0.5);
+    background: rgba(139, 92, 246, 0.1);
+  }
+
+  &.direction-both {
+    color: var(--accent-cyan);
+    border-color: rgba(6, 182, 212, 0.5);
+    background: rgba(6, 182, 212, 0.1);
+  }
+}
+
 // --- state ---
 .state-line {
   display: flex;

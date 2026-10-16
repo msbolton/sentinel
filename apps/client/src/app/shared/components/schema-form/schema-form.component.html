@@ -134,7 +134,7 @@
       <button type="button" class="sf-section-toggle" (click)="toggleAdvanced()" [attr.aria-expanded]="advancedOpen()">
         <span class="sf-chevron" aria-hidden="true">{{ advancedOpen() ? '▾' : '▸' }}</span>
         Advanced
-        <span class="sf-section-sub">staleness, backpressure, replica pinning, raw payload</span>
+        <span class="sf-section-sub">staleness, backpressure, replica pinning, raw payload, delivery tuning</span>
       </button>
       @if (advancedOpen()) {
         <div class="sf-section-body">

@@ -1,0 +1,153 @@
+<div class="policy-editor" [class.is-disabled]="disabled()" [formGroup]="form">
+  <p class="pe-intro">
+    What this connection may send. Leave a section empty to allow everything in it.
+  </p>
+
+  @if (unmatchedProblems().length > 0) {
+    <ul class="pe-problems" role="alert">
+      @for (p of unmatchedProblems(); track p.path + p.message) {
+        <li><code>{{ p.path }}</code> {{ p.message }}</li>
+      }
+    </ul>
+  }
+
+  <!-- Entity types -->
+  <section class="pe-section" data-pointer="/config/policy/entityTypes">
+    <h4 class="pe-title">Entity types <span class="pe-sub">empty = all types</span></h4>
+    <div class="pe-grid">
+      @for (type of entityTypes; track type) {
+        <label class="pe-check">
+          <input type="checkbox" name="entityType" [value]="type" [checked]="hasType(type)" [disabled]="disabled()" (change)="toggleType(type)" />
+          <span>{{ type }}</span>
+        </label>
+      }
+    </div>
+    @for (msg of sectionProblems('entityTypes'); track msg) {
+      <p class="pe-error pe-error-server">{{ msg }}</p>
+    }
+  </section>
+
+  <!-- Feeds -->
+  <section class="pe-section" data-pointer="/config/policy/feeds">
+    <h4 class="pe-title">Feeds <span class="pe-sub">empty = every feed</span></h4>
+    @if (feedOptions().length === 0) {
+      <p class="pe-help">No feeds to choose from yet.</p>
+    } @else {
+      <div class="pe-list">
+        @for (f of feedOptions(); track f.id) {
+          <label class="pe-check" [class.missing]="f.missing">
+            <input type="checkbox" name="policyFeed" [value]="f.id" [checked]="hasFeed(f.id)" [disabled]="disabled()" (change)="toggleFeed(f.id)" />
+            <span>{{ f.name }}</span>
+            <span class="pe-mono">{{ f.id }}</span>
+            @if (f.missing) {
+              <span class="pe-mono pe-missing">no longer exists</span>
+            }
+          </label>
+        }
+      </div>
+    }
+    @for (msg of sectionProblems('feeds'); track msg) {
+      <p class="pe-error pe-error-server">{{ msg }}</p>
+    }
+  </section>
+
+  <!-- Areas -->
+  <section class="pe-section" data-pointer="/config/policy/boxes">
+    <h4 class="pe-title">Areas <span class="pe-sub">empty = everywhere · west greater than east crosses the antimeridian</span></h4>
+    <div formArrayName="boxes" class="pe-boxes">
+      @for (box of boxes.controls; track box; let i = $index) {
+        <div class="pe-box" [formGroupName]="i" [attr.data-pointer]="boxPointer(i)" [class.has-issue]="boxErrors(i).length > 0 || boxProblems(i).length > 0">
+          <span class="pe-box-index">{{ i + 1 }}</span>
+          @for (field of boxFields; track field) {
+            <label class="pe-box-field" [attr.data-pointer]="boxPointer(i, field)" [class.has-issue]="boxFieldHasIssue(i, field)">
+              <span>{{ field }}</span>
+              <input type="number" step="any" [formControlName]="field" [attr.name]="'box-' + i + '-' + field" (blur)="touch()" />
+            </label>
+          }
+          <button type="button" class="pe-btn pe-btn-ghost" (click)="removeBox(i)" [disabled]="disabled()" [attr.aria-label]="'Remove area ' + (i + 1)">Remove</button>
+          @if (boxErrors(i).length > 0 || boxProblems(i).length > 0) {
+            <div class="pe-box-messages">
+              @for (msg of boxErrors(i); track msg) {
+                <p class="pe-error">{{ msg }}</p>
+              }
+              @for (msg of boxProblems(i); track msg) {
+                <p class="pe-error pe-error-server">{{ msg }}</p>
+              }
+            </div>
+          }
+        </div>
+      }
+    </div>
+    <div class="pe-actions">
+      <button type="button" class="pe-btn" (click)="addBox()" [disabled]="!canAddBox()">Add area</button>
+      <span [title]="lastMapView() ? 'Add the area the map last showed' : 'Open the map first; the last view is remembered here'">
+        <button type="button" class="pe-btn" (click)="useLastMapView()" [disabled]="!canAddBox() || !lastMapView()">Use last map view</button>
+      </span>
+      <span class="pe-sub">{{ boxCount() }} of {{ maxBoxes }}</span>
+    </div>
+    @if (boxesError(); as msg) {
+      <p class="pe-error">{{ msg }}</p>
+    }
+    @for (msg of sectionProblems('boxes'); track msg) {
+      <p class="pe-error pe-error-server">{{ msg }}</p>
+    }
+  </section>
+
+  <!-- Ceiling & re-export -->
+  <section class="pe-section pe-row-2">
+    <div class="pe-field" data-pointer="/config/policy/classificationCeiling">
+      <label for="pe-ceiling">Classification ceiling</label>
+      <select id="pe-ceiling" name="classificationCeiling" formControlName="classificationCeiling" (blur)="touch()">
+        <option value="">Default (UNCLASSIFIED)</option>
+        @for (level of ceilingOptions(); track level) {
+          <option [value]="level">{{ level }}</option>
+        }
+        @if (ceilingAboveClearance(); as above) {
+          <option [value]="above" disabled>{{ above }}</option>
+        }
+      </select>
+      @if (ceilingAboveClearance()) {
+        <p class="pe-help">Set above your clearance. It stays unless you pick a lower level.</p>
+      } @else {
+        <p class="pe-help">Entities above this level never leave. Capped at your clearance.</p>
+      }
+      @for (msg of sectionProblems('classificationCeiling'); track msg) {
+        <p class="pe-error pe-error-server">{{ msg }}</p>
+      }
+    </div>
+
+    <div class="pe-field" data-pointer="/config/policy/reexport">
+      <label class="pe-check pe-check-block">
+        <input type="checkbox" name="reexport" formControlName="reexport" />
+        <span>Re-export</span>
+      </label>
+      <p class="pe-help">Also send entities that arrived from another connection.</p>
+      @for (msg of sectionProblems('reexport'); track msg) {
+        <p class="pe-error pe-error-server">{{ msg }}</p>
+      }
+    </div>
+  </section>
+
+  <!-- Alerts -->
+  <section class="pe-section pe-row-2" data-pointer="/config/policy/alerts">
+    <div class="pe-field">
+      <label class="pe-check pe-check-block">
+        <input type="checkbox" name="alertsEnabled" formControlName="alertsEnabled" />
+        <span>Send alerts</span>
+      </label>
+      <p class="pe-help">Alerts raised on entities this policy allows go out too.</p>
+    </div>
+    <div class="pe-field">
+      <label for="pe-alert-severity">Minimum severity</label>
+      <select id="pe-alert-severity" name="alertsMinSeverity" formControlName="alertsMinSeverity" (blur)="touch()">
+        <option value="">Any</option>
+        @for (sev of severities; track sev) {
+          <option [value]="sev">{{ sev }}</option>
+        }
+      </select>
+    </div>
+    @for (msg of sectionProblems('alerts'); track msg) {
+      <p class="pe-error pe-error-server pe-span">{{ msg }}</p>
+    }
+  </section>
+</div>

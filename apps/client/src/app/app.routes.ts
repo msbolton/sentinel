@@ -50,10 +50,14 @@ export const routes: Routes = [
       ),
   },
   {
-    path: 'feeds',
+    path: 'connections',
     canActivate: [roleGuard('sentinel-operator', 'sentinel-admin')],
     loadComponent: () =>
-      import('./features/feeds/feeds.component').then((m) => m.FeedsComponent),
+      import('./features/connections/connections.component').then((m) => m.ConnectionsComponent),
+  },
+  {
+    path: 'feeds',
+    redirectTo: 'connections',
   },
   {
     path: 'login',

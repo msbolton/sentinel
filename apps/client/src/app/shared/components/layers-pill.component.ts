@@ -15,7 +15,7 @@ import { map, throttleTime } from 'rxjs';
 import { FeedService } from '../../core/services/feed.service';
 import { LayerVisibilityService } from '../../core/services/layer-visibility.service';
 import { EntityService } from '../../core/services/entity.service';
-import { Feed, layerKeyOf } from '../../shared/models/feed.model';
+import { Feed, directionOf, layerKeyOf } from '../../shared/models/feed.model';
 import { HasRoleDirective } from '../directives/has-role.directive';
 
 type Freshness = 'green' | 'yellow' | 'red' | 'gray' | 'none';
@@ -36,7 +36,8 @@ interface LayerRow {
  * The "DATA LAYERS" pill on the map: one row per feed (built-ins first) and
  * one per extra layer key present on the map. The eye toggle is this user's
  * own visibility (LayerVisibilityService); feed health and counts are read
- * only. Enabling, editing and deleting feeds live on the /feeds page.
+ * only. Enabling, editing and deleting feeds live on the /connections page.
+ * Connections that only send (`out`) produce no entities and get no row.
  */
 @Component({
   selector: 'app-layers-pill',
@@ -106,8 +107,8 @@ interface LayerRow {
           <a
             *appHasRole="['sentinel-operator', 'sentinel-admin']"
             class="manage-link"
-            routerLink="/feeds"
-            (click)="collapse()">MANAGE FEEDS →</a>
+            routerLink="/connections"
+            (click)="collapse()">MANAGE CONNECTIONS →</a>
         </div>
       }
     </div>
@@ -377,7 +378,7 @@ export class LayersPillComponent implements OnInit, OnDestroy {
   );
 
   readonly layers = computed<LayerRow[]>(() => {
-    const feeds = this.feedService.feeds();
+    const feeds = this.feedService.feeds().filter((feed) => directionOf(feed) !== 'out');
     const counts = this.countsByKey();
     const hidden = this.layerVisibility.hidden();
 

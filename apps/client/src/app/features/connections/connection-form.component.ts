@@ -14,14 +14,30 @@ import {
 import { toSignal } from '@angular/core/rxjs-interop';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { map } from 'rxjs';
+import { AuthService } from '../../core/services/auth.service';
 import { FeedService, problemsOf } from '../../core/services/feed.service';
-import { CreateFeedRequest, Feed, FeedProblem, ReplaceFeedRequest } from '../../shared/models/feed.model';
+import { ClassificationLevel, levelsUpTo, normalizeClearance, rank } from '../../shared/models/classification';
+import {
+  ConnectionPolicy,
+  CreateFeedRequest,
+  Feed,
+  FeedDirection,
+  FeedProblem,
+  ReplaceFeedRequest,
+} from '../../shared/models/feed.model';
 import { SchemaFormChange, SchemaFormComponent } from '../../shared/components/schema-form/schema-form.component';
+import { PolicyChange, PolicyEditorComponent } from './policy-editor.component';
 
 export const FEED_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 const EMPTY_CONFIG: Record<string, unknown> = {};
 const EMPTY_SECRETS: Record<string, string> = {};
+const EMPTY_POLICY: ConnectionPolicy = {};
+
+/** Config keys the form owns itself; the schema form never builds or emits them. */
+const OWN_CONFIG_KEYS = ['classification', 'direction', 'policy'];
+/** Config keys that only mean something for a connection that sends. */
+const SENDING_ONLY_KEYS = ['outbound'];
 
 /** The slug the server would derive from a name when no id is given. */
 export function slugify(name: string): string {
@@ -34,20 +50,22 @@ export function slugify(name: string): string {
 }
 
 /**
- * Right-side drawer that creates a feed (pick a driver, then fill its
- * options) or edits an existing one (driver fixed). Server validation
+ * Right-side drawer that creates a connection (pick a driver, then fill its
+ * options) or edits an existing one (driver fixed). Every connection gets a
+ * classification; one that sends gets a policy editor. Server validation
  * problems are routed to the field they name.
  */
 @Component({
-  selector: 'app-feed-form',
+  selector: 'app-connection-form',
   standalone: true,
-  imports: [ReactiveFormsModule, SchemaFormComponent],
+  imports: [ReactiveFormsModule, SchemaFormComponent, PolicyEditorComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  templateUrl: './feed-form.component.html',
-  styleUrl: './feed-form.component.scss',
+  templateUrl: './connection-form.component.html',
+  styleUrl: './connection-form.component.scss',
 })
-export class FeedFormComponent {
+export class ConnectionFormComponent {
   private readonly feedService = inject(FeedService);
+  private readonly authService = inject(AuthService);
 
   readonly mode = input.required<'create' | 'edit'>();
   readonly feed = input<Feed | null>(null);
@@ -56,6 +74,11 @@ export class FeedFormComponent {
   readonly saved = output<Feed>();
 
   readonly schemaForm = viewChild(SchemaFormComponent);
+  readonly policyEditor = viewChild(PolicyEditorComponent);
+
+  /** The operator's clearance, normalised to the gateway spelling. */
+  readonly clearance = signal<ClassificationLevel>(normalizeClearance(this.authService.getClassificationLevel()));
+  readonly classificationOptions = computed(() => levelsUpTo(this.clearance()));
 
   readonly drivers = this.feedService.drivers;
   readonly selectedDriverId = signal<string | null>(null);
@@ -75,6 +98,9 @@ export class FeedFormComponent {
     id: new FormControl('', { nonNullable: true, validators: [Validators.pattern(FEED_ID_PATTERN)] }),
     description: new FormControl('', { nonNullable: true, validators: [Validators.maxLength(500)] }),
     enabled: new FormControl(true, { nonNullable: true }),
+    classification: new FormControl<string>('UNCLASSIFIED', { nonNullable: true, validators: [Validators.required] }),
+    /** Narrows a driver that can do both; empty keeps the driver's own. */
+    direction: new FormControl<'' | FeedDirection>('', { nonNullable: true }),
   });
 
   private readonly formValue = toSignal(this.form.valueChanges.pipe(map(() => this.form.getRawValue())), {
@@ -83,6 +109,32 @@ export class FeedFormComponent {
   private readonly formStatus = toSignal(this.form.statusChanges, { initialValue: this.form.status });
 
   private readonly schemaState = signal<SchemaFormChange>({ config: {}, secretRefs: {}, valid: true });
+  private readonly policyState = signal<PolicyChange>({ value: {}, valid: true });
+
+  /** The driver's direction, narrowed by the form's own choice for a `both` driver. */
+  readonly effectiveDirection = computed<FeedDirection>(() => {
+    const driverDirection = this.driver()?.direction ?? 'in';
+    if (driverDirection !== 'both') {
+      return driverDirection;
+    }
+    const chosen = this.formValue().direction;
+    return chosen === '' ? 'both' : chosen;
+  });
+  /** Whether the connection sends entities out, and so carries a policy. */
+  readonly sending = computed(() => {
+    const d = this.effectiveDirection();
+    return d === 'out' || d === 'both';
+  });
+  readonly driverCanNarrow = computed(() => this.driver()?.direction === 'both');
+
+  /** Keys the schema form must leave alone. */
+  readonly externalKeys = computed(() => (this.sending() ? OWN_CONFIG_KEYS : [...OWN_CONFIG_KEYS, ...SENDING_ONLY_KEYS]));
+
+  /** A stored classification above the operator's clearance: kept, shown, not selectable. */
+  readonly classificationAboveClearance = computed(() => {
+    const current = this.formValue().classification;
+    return rank(current) > rank(this.clearance()) ? current : null;
+  });
 
   readonly idPreview = computed(() => {
     const v = this.formValue();
@@ -91,12 +143,23 @@ export class FeedFormComponent {
   });
 
   readonly canSubmit = computed(
-    () => this.formStatus() === 'VALID' && this.schemaState().valid && !this.saving() && !!this.driver(),
+    () =>
+      this.formStatus() === 'VALID' &&
+      this.schemaState().valid &&
+      (!this.sending() || this.policyState().valid) &&
+      !this.saving() &&
+      !!this.driver(),
   );
 
-  /** Problems the schema form owns. */
+  /** Problems the policy editor owns. */
+  readonly policyProblems = computed(() => this.problems().filter((p) => isUnder(p.path, '/config/policy')));
+  /** Problems the schema form owns: config and secrets, minus the keys this form handles itself. */
   readonly schemaProblems = computed(() =>
-    this.problems().filter((p) => p.path.startsWith('/config') || p.path.startsWith('/secretRefs')),
+    this.problems().filter(
+      (p) =>
+        (p.path.startsWith('/config') || p.path.startsWith('/secretRefs')) &&
+        !OWN_CONFIG_KEYS.some((key) => isUnder(p.path, `/config/${key}`)),
+    ),
   );
   /** Problems that name neither a top-level field nor the config. */
   readonly otherProblems = computed(() =>
@@ -108,12 +171,16 @@ export class FeedFormComponent {
   /** The config the schema form starts from: the feed's own, or nothing. */
   readonly initialConfig = computed(() => this.feed()?.config ?? EMPTY_CONFIG);
   readonly initialSecretRefs = computed(() => this.feed()?.secretRefs ?? EMPTY_SECRETS);
+  readonly initialPolicy = computed(() => {
+    const policy = this.feed()?.config?.['policy'];
+    return policy && typeof policy === 'object' ? (policy as ConnectionPolicy) : EMPTY_POLICY;
+  });
 
   readonly title = computed(() => {
     if (this.mode() === 'edit') {
-      return `Edit ${this.feed()?.name ?? 'feed'}`;
+      return `Edit ${this.feed()?.name ?? 'connection'}`;
     }
-    return this.step() === 1 ? 'Add feed: choose a driver' : `Add feed: ${this.driver()?.name ?? ''}`;
+    return this.step() === 1 ? 'Add connection: choose a driver' : `Add connection: ${this.driver()?.name ?? ''}`;
   });
 
   constructor() {
@@ -152,8 +219,12 @@ export class FeedFormComponent {
     this.schemaState.set(change);
   }
 
+  onPolicyChange(change: PolicyChange): void {
+    this.policyState.set(change);
+  }
+
   /** Whether to show a top-level field's client-side error. */
-  showError(field: 'name' | 'id' | 'description'): boolean {
+  showError(field: 'name' | 'id' | 'description' | 'classification'): boolean {
     this.formStatus();
     const control = this.form.controls[field];
     return control.invalid && (control.touched || control.dirty || this.submitted());
@@ -170,6 +241,13 @@ export class FeedFormComponent {
       .map((p) => p.message);
   }
 
+  /** Server messages for a config key this form owns (classification, direction). */
+  configProblemsFor(key: 'classification' | 'direction'): string[] {
+    return this.problems()
+      .filter((p) => isUnder(p.path, `/config/${key}`))
+      .map((p) => p.message);
+  }
+
   submit(): void {
     this.submitted.set(true);
     this.error.set(null);
@@ -181,12 +259,20 @@ export class FeedFormComponent {
     if (!this.canSubmit()) {
       this.form.markAllAsTouched();
       this.schemaForm()?.markAllTouched();
+      this.policyEditor()?.markAllTouched();
       this.error.set('Fix the highlighted fields before saving.');
       return;
     }
 
     const v = this.form.getRawValue();
-    const { config, secretRefs } = this.schemaState();
+    const { config: schemaConfig, secretRefs } = this.schemaState();
+    const config: Record<string, unknown> = { ...schemaConfig, classification: v.classification };
+    if (this.driverCanNarrow() && v.direction !== '') {
+      config['direction'] = v.direction;
+    }
+    if (this.sending()) {
+      config['policy'] = this.policyState().value;
+    }
     this.saving.set(true);
     this.problems.set([]);
 
@@ -221,15 +307,16 @@ export class FeedFormComponent {
         this.problems.set(problems);
         const status = (err as { status?: number })?.status;
         if (status === 409) {
-          this.error.set(`A feed with id "${this.idPreview()}" already exists. ${message}`.trim());
+          this.error.set(`A connection with id "${this.idPreview()}" already exists. ${message}`.trim());
         } else if (status === 403) {
-          this.error.set('You do not have permission to change feeds.');
+          this.error.set('You do not have permission to change connections.');
         } else if (status === 422 && problems.length > 0) {
           this.error.set(`${message}: check the highlighted fields.`);
         } else {
-          this.error.set(message || 'The feed could not be saved.');
+          this.error.set(message || 'The connection could not be saved.');
         }
         this.schemaForm()?.markAllTouched();
+        this.policyEditor()?.markAllTouched();
       },
     });
   }
@@ -239,18 +326,34 @@ export class FeedFormComponent {
     this.error.set(null);
     this.saving.set(false);
     this.submitted.set(false);
+    this.clearance.set(normalizeClearance(this.authService.getClassificationLevel()));
+    this.policyState.set({ value: {}, valid: true });
     if (mode === 'edit' && feed) {
       this.selectedDriverId.set(feed.driver);
       this.step.set(2);
-      this.form.reset({ name: feed.name, id: feed.id, description: feed.description ?? '', enabled: feed.enabled });
+      const stored = feed.config?.['classification'];
+      const direction = feed.config?.['direction'];
+      this.form.reset({
+        name: feed.name,
+        id: feed.id,
+        description: feed.description ?? '',
+        enabled: feed.enabled,
+        classification: typeof stored === 'string' && stored !== '' ? stored : 'UNCLASSIFIED',
+        direction: direction === 'in' || direction === 'out' || direction === 'both' ? direction : '',
+      });
       this.form.controls.id.disable();
     } else {
       this.selectedDriverId.set(null);
       this.step.set(1);
-      this.form.reset({ name: '', id: '', description: '', enabled: true });
+      this.form.reset({ name: '', id: '', description: '', enabled: true, classification: 'UNCLASSIFIED', direction: '' });
       this.form.controls.id.enable();
     }
   }
 }
 
 const TOP_LEVEL_FIELDS = new Set(['/name', '/id', '/description', '/enabled', '/driver']);
+
+/** True when `path` is `prefix` or sits below it. */
+function isUnder(path: string, prefix: string): boolean {
+  return path === prefix || path.startsWith(prefix + '/');
+}

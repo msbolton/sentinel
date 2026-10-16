@@ -332,6 +332,28 @@ describe('SchemaFormComponent', () => {
     expect(el.querySelector<HTMLInputElement>('input[name="intervalSec"]')?.disabled).toBe(false);
   });
 
+  it('leaves the keys the parent owns out of the form and the emitted config', () => {
+    fixture.componentRef.setInput('externalKeys', ['classification', 'policy', 'pinnedReplica']);
+    render(
+      {
+        type: 'object',
+        properties: {
+          intervalSec: { type: 'integer' },
+          classification: { type: 'string', enum: ['UNCLASSIFIED', 'SECRET'] },
+        },
+      },
+      { value: { intervalSec: 5, classification: 'SECRET', policy: { entityTypes: ['AIRCRAFT'] }, pinnedReplica: 'ingest-0' } },
+    );
+
+    expect(el.querySelector('input[name="intervalSec"]')).toBeTruthy();
+    expect(el.querySelector('select[name="classification"]')).toBeNull();
+    expect(el.querySelector('[data-pointer="/config/policy"]')).toBeNull();
+    expect(el.querySelector('input[name="pinnedReplica"]')).toBeNull();
+    expect(component.advancedOpen()).toBe(false);
+    expect(last().config).toEqual({ intervalSec: 5 });
+    expect(component.control('/config/classification')).toBeNull();
+  });
+
   it('rebuilds when the schema changes', () => {
     render(streamLikeSchema);
     render({ type: 'object', properties: { only: { type: 'string' } } });

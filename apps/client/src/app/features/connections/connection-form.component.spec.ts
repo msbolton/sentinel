@@ -1,8 +1,10 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { FeedFormComponent, slugify } from './feed-form.component';
+import { ConnectionFormComponent, slugify } from './connection-form.component';
+import { AuthService } from '../../core/services/auth.service';
 import { FeedService } from '../../core/services/feed.service';
+import { MapViewportService } from '../../core/services/map-viewport.service';
 import { Feed, FeedDriver } from '../../shared/models/feed.model';
 
 const drivers: FeedDriver[] = [
@@ -36,6 +38,30 @@ const drivers: FeedDriver[] = [
     },
     secretFields: ['password'],
   },
+  {
+    id: 'tak',
+    name: 'TAK Server',
+    description: 'Cursor on Target over TLS',
+    source: 'COT',
+    direction: 'both',
+    capabilities: ['send'],
+    configSchema: {
+      type: 'object',
+      required: ['host'],
+      properties: { host: { type: 'string', minLength: 1 }, port: { type: 'integer', default: 8089 } },
+    },
+    secretFields: ['clientCert'],
+  },
+  {
+    id: 'kml-push',
+    name: 'KML push',
+    description: 'Sends KML to a URL',
+    source: 'KML',
+    direction: 'out',
+    capabilities: ['send'],
+    configSchema: { type: 'object', properties: { url: { type: 'string', format: 'uri' } } },
+    secretFields: [],
+  },
 ];
 
 const existing: Feed = {
@@ -67,13 +93,14 @@ const existing: Feed = {
   },
 };
 
-describe('FeedFormComponent', () => {
-  let fixture: ComponentFixture<FeedFormComponent>;
-  let component: FeedFormComponent;
+describe('ConnectionFormComponent', () => {
+  let fixture: ComponentFixture<ConnectionFormComponent>;
+  let component: ConnectionFormComponent;
   let el: HTMLElement;
   let httpMock: HttpTestingController;
   let closed: number;
   let saved: Feed[];
+  let clearance: string;
 
   function type(selector: string, value: string): void {
     const input = el.querySelector<HTMLInputElement>(selector)!;
@@ -89,15 +116,20 @@ describe('FeedFormComponent', () => {
   }
 
   beforeEach(async () => {
+    clearance = 'SECRET';
     await TestBed.configureTestingModule({
-      imports: [FeedFormComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      imports: [ConnectionFormComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: AuthService, useValue: { getClassificationLevel: () => clearance } },
+      ],
     }).compileComponents();
     httpMock = TestBed.inject(HttpTestingController);
     TestBed.inject(FeedService).loadDrivers().subscribe();
     httpMock.expectOne('/api/v1/drivers').flush(drivers);
 
-    fixture = TestBed.createComponent(FeedFormComponent);
+    fixture = TestBed.createComponent(ConnectionFormComponent);
     component = fixture.componentInstance;
     el = fixture.nativeElement as HTMLElement;
     closed = 0;
@@ -120,7 +152,7 @@ describe('FeedFormComponent', () => {
     open('create');
 
     const cards = el.querySelectorAll('.driver-card');
-    expect(cards.length).toBe(2);
+    expect(cards.length).toBe(4);
     expect(cards[0].querySelector('.driver-name')?.textContent?.trim()).toBe('OpenSky Network');
     expect(cards[0].querySelectorAll('.chip').length).toBe(2);
     expect(el.querySelector('form')).toBeNull();
@@ -134,6 +166,8 @@ describe('FeedFormComponent', () => {
     expect(el.querySelector('app-schema-form input[name="intervalSec"]')).toBeTruthy();
     expect(el.querySelector('app-schema-form input[name="clientSecret"]')).toBeTruthy();
     expect(el.querySelector<HTMLInputElement>('#feed-id')?.disabled).toBe(false);
+    expect(el.querySelector('app-policy-editor')).toBeNull();
+    expect(el.querySelector('#feed-direction')).toBeNull();
 
     type('#feed-name', 'OpenSky Europe');
     expect(el.querySelector('.help code')?.textContent).toBe('opensky-europe');
@@ -163,7 +197,7 @@ describe('FeedFormComponent', () => {
       name: 'OpenSky Europe',
       description: undefined,
       driver: 'opensky',
-      config: { intervalSec: 5 },
+      config: { intervalSec: 5, classification: 'UNCLASSIFIED' },
       secretRefs: { clientSecret: 'env:OPENSKY_CLIENT_SECRET' },
       enabled: true,
     });
@@ -213,7 +247,7 @@ describe('FeedFormComponent', () => {
     httpMock.expectOne('/api/v1/feeds').flush({ error: 'feed already exists' }, { status: 409, statusText: 'Conflict' });
     fixture.detectChanges();
 
-    expect(el.querySelector('.form-error')?.textContent).toContain('A feed with id "dup" already exists');
+    expect(el.querySelector('.form-error')?.textContent).toContain('A connection with id "dup" already exists');
   });
 
   it('refuses to submit while invalid and surfaces every error', () => {
@@ -244,6 +278,7 @@ describe('FeedFormComponent', () => {
     expect(el.querySelector<HTMLInputElement>('app-schema-form input[name="intervalSec"]')?.value).toBe('30');
     expect(el.querySelector<HTMLInputElement>('app-schema-form input[name="clientSecret"]')?.value).toBe('env:OPENSKY_CLIENT_SECRET');
     expect(el.querySelector<HTMLInputElement>('app-schema-form input[name="pinnedReplica"]')?.value).toBe('ingest-1');
+    expect(el.querySelector<HTMLSelectElement>('#feed-classification')?.value).toBe('UNCLASSIFIED');
 
     type('#feed-name', 'OpenSky EU');
     component.submit();
@@ -253,7 +288,7 @@ describe('FeedFormComponent', () => {
     expect(req.request.body).toEqual({
       name: 'OpenSky EU',
       description: 'Europe only',
-      config: { intervalSec: 30, pinnedReplica: 'ingest-1' },
+      config: { intervalSec: 30, pinnedReplica: 'ingest-1', classification: 'UNCLASSIFIED' },
       secretRefs: { clientSecret: 'env:OPENSKY_CLIENT_SECRET' },
       enabled: false,
     });
@@ -262,6 +297,146 @@ describe('FeedFormComponent', () => {
 
     expect(saved[0]?.version).toBe(4);
     expect(closed).toBe(1);
+  });
+
+  it('offers classifications up to the clearance and keeps a stored level above it', () => {
+    open('create');
+    component.selectDriver('opensky');
+    fixture.detectChanges();
+
+    const options = () => Array.from(el.querySelectorAll<HTMLOptionElement>('#feed-classification option'));
+    expect(options().map((o) => o.value)).toEqual(['UNCLASSIFIED', 'CONFIDENTIAL', 'SECRET']);
+    expect(options().every((o) => !o.disabled)).toBe(true);
+
+    el.querySelector<HTMLSelectElement>('#feed-classification')!.value = 'CONFIDENTIAL';
+    el.querySelector<HTMLSelectElement>('#feed-classification')!.dispatchEvent(new Event('change'));
+    type('#feed-name', 'Confidential feed');
+    component.submit();
+    expect(httpMock.expectOne('/api/v1/feeds').request.body.config).toEqual({ classification: 'CONFIDENTIAL' });
+
+    open('edit', { ...existing, config: { ...existing.config, classification: 'TOP_SECRET' } });
+    expect(el.querySelector<HTMLSelectElement>('#feed-classification')?.value).toBe('TOP_SECRET');
+    expect(options().find((o) => o.value === 'TOP_SECRET')?.disabled).toBe(true);
+    expect(el.textContent).toContain('Set above your clearance');
+    expect(component.canSubmit()).toBe(true);
+  });
+
+  it('shows the policy editor for a sending driver and saves its policy with the config', () => {
+    open('create');
+    component.selectDriver('kml-push');
+    fixture.detectChanges();
+
+    const editor = el.querySelector('app-policy-editor');
+    expect(editor).toBeTruthy();
+    expect(el.querySelector('#feed-direction')).toBeNull();
+    // a sink keeps delivery tuning in Advanced; a source never sees it
+    expect(component.externalKeys()).toEqual(['classification', 'direction', 'policy']);
+
+    type('#feed-name', 'KML to the ops room');
+    editor!.querySelector<HTMLInputElement>('input[name="entityType"][value="AIRCRAFT"]')!.click();
+    TestBed.inject(MapViewportService).set({ north: 10, south: 0, east: 10, west: 0 });
+    fixture.detectChanges();
+    Array.from(editor!.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.trim() === 'Use last map view')!.click();
+    fixture.detectChanges();
+    expect(component.canSubmit()).toBe(true);
+
+    component.submit();
+    const req = httpMock.expectOne('/api/v1/feeds');
+    expect(req.request.body.driver).toBe('kml-push');
+    expect(req.request.body.config).toEqual({
+      classification: 'UNCLASSIFIED',
+      policy: { entityTypes: ['AIRCRAFT'], boxes: [{ north: 10, south: 0, east: 10, west: 0 }] },
+    });
+    req.flush({
+      error: 'validation failed',
+      details: [
+        { path: '/config/policy/boxes/0/south', message: 'outside the allowed area' },
+        { path: '/config/classification', message: 'above your clearance' },
+      ],
+    }, { status: 422, statusText: 'Unprocessable Entity' });
+    fixture.detectChanges();
+
+    expect(component.policyProblems()).toEqual([{ path: '/config/policy/boxes/0/south', message: 'outside the allowed area' }]);
+    expect(component.schemaProblems()).toEqual([]);
+    expect(el.querySelector('app-policy-editor [data-pointer="/config/policy/boxes/0/south"]')?.classList.contains('has-issue')).toBe(true);
+    expect(el.querySelector('app-policy-editor [data-pointer="/config/policy/boxes/0"] .pe-error-server')?.textContent).toContain('outside the allowed area');
+    expect(el.querySelector('[data-pointer="/config/classification"] .error')?.textContent).toContain('above your clearance');
+    expect(el.querySelector('app-schema-form .sf-unmatched')).toBeNull();
+  });
+
+  it('refuses to submit while the policy is invalid', () => {
+    open('create');
+    component.selectDriver('kml-push');
+    fixture.detectChanges();
+    type('#feed-name', 'KML');
+
+    Array.from(el.querySelectorAll<HTMLButtonElement>('app-policy-editor button')).find((b) => b.textContent?.trim() === 'Add area')!.click();
+    fixture.detectChanges();
+    expect(component.canSubmit()).toBe(false);
+
+    component.submit();
+    fixture.detectChanges();
+    httpMock.expectNone('/api/v1/feeds');
+    expect(el.querySelector('.form-error')?.textContent).toContain('Fix the highlighted fields');
+    expect(el.querySelector('app-policy-editor .pe-error')?.textContent).toContain('is required');
+  });
+
+  it('lets a both-way driver be narrowed, hiding the policy when it only receives', () => {
+    open('create');
+    component.selectDriver('tak');
+    fixture.detectChanges();
+
+    expect(el.querySelector('#feed-direction')).toBeTruthy();
+    expect(el.querySelector('app-policy-editor')).toBeTruthy();
+    expect(component.effectiveDirection()).toBe('both');
+
+    component.form.controls.direction.setValue('in');
+    fixture.detectChanges();
+    expect(component.effectiveDirection()).toBe('in');
+    expect(el.querySelector('app-policy-editor')).toBeNull();
+    expect(component.externalKeys()).toContain('outbound');
+
+    type('#feed-name', 'TAK HQ');
+    type('app-schema-form input[name="host"]', 'tak.example.org');
+    component.submit();
+    const body = httpMock.expectOne('/api/v1/feeds').request.body;
+    expect(body.config).toEqual({ host: 'tak.example.org', classification: 'UNCLASSIFIED', direction: 'in' });
+    expect('policy' in body.config).toBe(false);
+  });
+
+  it('edit: prefills the policy and direction of a sending connection', () => {
+    const sink: Feed = {
+      ...existing,
+      id: 'tak-hq',
+      driver: 'tak',
+      direction: 'out',
+      config: {
+        host: 'tak.example.org',
+        classification: 'SECRET',
+        direction: 'out',
+        policy: { entityTypes: ['VESSEL'], classificationCeiling: 'CONFIDENTIAL', reexport: true },
+      },
+      secretRefs: {},
+    };
+    open('edit', sink);
+
+    expect(el.querySelector<HTMLSelectElement>('#feed-direction')?.value).toBe('out');
+    expect(el.querySelector<HTMLSelectElement>('#feed-classification')?.value).toBe('SECRET');
+    const editor = el.querySelector('app-policy-editor')!;
+    expect(editor.querySelector<HTMLInputElement>('input[name="entityType"][value="VESSEL"]')?.checked).toBe(true);
+    expect(editor.querySelector<HTMLSelectElement>('#pe-ceiling')?.value).toBe('CONFIDENTIAL');
+    expect(editor.querySelector<HTMLInputElement>('input[name="reexport"]')?.checked).toBe(true);
+    expect(el.querySelector('app-schema-form select[name="direction"]')).toBeNull();
+
+    component.submit();
+    const req = httpMock.expectOne('/api/v1/feeds/tak-hq');
+    expect(req.request.method).toBe('PUT');
+    expect(req.request.body.config).toEqual({
+      host: 'tak.example.org',
+      classification: 'SECRET',
+      direction: 'out',
+      policy: { entityTypes: ['VESSEL'], classificationCeiling: 'CONFIDENTIAL', reexport: true },
+    });
   });
 
   it('closes on Escape, backdrop click and Cancel, but not while saving', () => {
