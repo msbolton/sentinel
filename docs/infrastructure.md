@@ -16,7 +16,8 @@ SENTINEL uses two Compose files:
 | OpenSearch | `opensearchproject/opensearch:2.17.1` | 9200 | 9200 | Full-text + geospatial search |
 | Keycloak | `quay.io/keycloak/keycloak:24.0` | 8080 | 8080 | Identity provider (OIDC/JWT) |
 | Keycloak DB | `postgres:16-alpine` | — | 5432 | Dedicated Keycloak database |
-| GeoServer | `kartoza/geoserver:2.25.2` | 8600 | 8600 | OGC WMS/WFS geospatial services |
+| GeoServer | `kartoza/geoserver:2.25.2` | 8600 | 8600 | OGC WMS/WFS layers over the PostGIS views `entities_live_{u,c,s,ts}` and `locations_geo`, provisioned by the one-shot `geoserver-init` job (`config/geoserver/provision.sh`); accounts `gis-u` … `gis-ts` per clearance level |
+| TAK Server (dev, profile `tak`) | `freetakteam/freetakserver` | 8087, 8089, 19023 | same | Cursor on Target endpoint for testing TAK connections; `docker compose --profile tak up` |
 | MinIO | `minio/minio:latest` | 9000, 9001 | 9000, 9001 | S3-compatible object storage |
 
 ### Application Services (full compose only)
@@ -61,6 +62,7 @@ Internal service discovery uses Docker Compose service names as hostnames:
 - **Initialization**: `config/postgres/init-extensions.sql` runs on first start to enable extensions
 - **Credentials**: `sentinel` / `sentinel_dev` (database: `sentinel`)
 - **Schema**: `sentinel`, applied from `db/schema/*.sql` by the `db-schema` compose job (or `make db-schema`); see `docs/data-model.md`
+- **GIS role**: `sentinel_gis` (password `sentinel_gis_dev` in development, `GIS_DB_PASSWORD` for the provisioning job) may read only the GeoServer views, never the entity tables
 
 ## Kafka Configuration
 
