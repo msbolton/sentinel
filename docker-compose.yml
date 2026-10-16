@@ -761,7 +761,7 @@ services:
       KAFKA_BROKERS: kafka:9093
       OPENSEARCH_URL: http://opensearch:9200
     ports:
-      - "5000:5000"
+      - "${ANALYTICS_SERVICE_PORT:-5000}:5000"
     depends_on:
       postgres:
         condition: service_healthy
