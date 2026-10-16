@@ -192,16 +192,26 @@ func (p *Processor) ProcessBatch(ctx context.Context, observations []*sentinelv1
 		announced[id] = true
 		entity := events.EntityProto(result.Record, identitiesProto(r), []*sentinelv1.SourceContribution{contribution(r)})
 		ref := observationRef(r)
+		// A feed raised the entity's classification: say so explicitly, so
+		// consumers that apply a ceiling see the crossing, not just a fix.
+		raised := result.PreviousClassification != "" && result.Record.Classification != result.PreviousClassification
 		switch {
 		case res.Created[r.Key]:
 			p.events.Created(entity, ref)
 		case isStatic:
-			p.events.Updated(entity, []string{"platforms"})
+			changed := []string{"platforms"}
+			if raised {
+				changed = append(changed, "classification")
+			}
+			p.events.Updated(entity, changed)
 			stats.Static++
 		default:
 			if result.PreviousState == "STALE" || result.PreviousState == "AGED_OUT" {
 				p.events.Restored(entity, result.PreviousState)
 				stats.Restored++
+			}
+			if raised {
+				p.events.Updated(entity, []string{"classification"})
 			}
 			p.events.Position(entity, ref)
 		}
@@ -218,6 +228,7 @@ func fusedUpdate(id string, r *Report) store.FusedUpdate {
 		Heading: o.Heading, SpeedKnots: o.SpeedKnots, Course: o.Course,
 		TrackEnvironment: enumOrEmpty(o.TrackEnvironment), CountryOfOrigin: o.CountryOfOrigin,
 		Platform: platformJSON(o), Kinematics: kinematicsJSON(o),
+		Classification: enumOrEmpty(o.Classification),
 	}
 	if o.Uncertainty != nil && o.Uncertainty.CircularError != 0 {
 		ce := o.Uncertainty.CircularError
@@ -228,7 +239,7 @@ func fusedUpdate(id string, r *Report) store.FusedUpdate {
 
 func staticUpdate(id string, r *Report) store.StaticUpdate {
 	o := r.Obs
-	return store.StaticUpdate{EntityID: id, FeedID: o.FeedId, Source: pbjson.EnumName(o.Source), SourceEntityID: o.SourceEntityId, Name: o.DisplayName, CountryOfOrigin: o.CountryOfOrigin, Platform: platformJSON(o)}
+	return store.StaticUpdate{EntityID: id, FeedID: o.FeedId, Source: pbjson.EnumName(o.Source), SourceEntityID: o.SourceEntityId, Name: o.DisplayName, CountryOfOrigin: o.CountryOfOrigin, Platform: platformJSON(o), Classification: enumOrEmpty(o.Classification)}
 }
 
 func observationRow(id string, r *Report) store.ObservationRow {
