@@ -95,7 +95,7 @@ sentinel/
 │   ├── common-go/            # Shared Go: config, Kafka, health, auth headers, models
 │   └── proto-gen/            # Protobuf generated code (TS for the client, Go, Python)
 ├── proto/                    # Protobuf definitions
-├── db/                       # SQL migrations (golang-migrate) and seed data
+├── db/                       # SQL schema (db/schema, one file per area) and seed data
 ├── config/                   # Docker init scripts, Kafka topics, Keycloak realm
 ├── k8s/                      # Kubernetes manifests
 ├── docs/                     # Detailed documentation
@@ -121,7 +121,7 @@ sentinel/
 |---------|-------------|
 | `make dev` | Start infra + api-gateway + client |
 | `make docker-infra` | Start infrastructure only |
-| `make db-migrate` | Apply SQL migrations |
+| `make db-schema` | Apply the SQL schema (idempotent) |
 | `make db-seed` | Seed database with sample data |
 | `make build` | Build all applications |
 | `make test` | Run all tests |

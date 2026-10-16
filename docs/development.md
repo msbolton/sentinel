@@ -22,7 +22,7 @@ cp .env.example .env
 make docker-infra
 
 # 4. Wait ~15 seconds for services to be healthy, then create the schema and seed it
-make db-migrate
+make db-schema
 make db-seed
 
 # 5. Start the API gateway and web UI
@@ -78,9 +78,7 @@ The entity-service warms its Redis geo cache from PostgreSQL on startup, so seed
 
 | Target | Description |
 |--------|-------------|
-| `make db-migrate` | Apply SQL migrations from `db/migrations` (golang-migrate) |
-| `make db-migrate-down` | Roll back the most recent migration |
-| `make db-migrate-version` | Show the applied migration version |
+| `make db-schema` | Apply `db/schema/*.sql` in name order to the running database; idempotent, re-run after editing a file |
 | `make db-seed` | Load `db/seed/seed.sql`: 13 entities, a geofence rule, 10 locations |
 
 ### Protobuf
@@ -168,7 +166,7 @@ See `docs/architecture.md` (OpenSky viewport-driven polling) for the contract, t
 
 The gateway proxies `/api/v1/entities` to the entity-service, which reads its Redis geo cache first and falls back to PostgreSQL. If the list is empty:
 
-1. Run `make db-migrate` then `make db-seed` to populate PostgreSQL
+1. Run `make db-schema` then `make db-seed` to populate PostgreSQL
 2. Restart the entity-service so it re-warms its Redis cache, or just hit the endpoint and let the DB fallback do it
 3. Check `curl localhost:3001/api/v1/entities` directly to rule out the gateway
 

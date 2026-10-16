@@ -1,4 +1,4 @@
-.PHONY: help proto proto-check proto-test build test lint docker-up docker-down docker-infra clean db-migrate db-migrate-down db-migrate-version db-seed
+.PHONY: help proto proto-check proto-test build test lint docker-up docker-down docker-infra clean db-schema db-seed
 
 SHELL := /bin/bash
 
@@ -211,17 +211,8 @@ lint-fix: ## Fix linting issues
 # Database
 # ----------------------------------------------------------------------------
 
-MIGRATE_IMAGE := migrate/migrate:v4.18.1
-DB_URL ?= postgres://sentinel:sentinel_dev@postgres:5432/sentinel?sslmode=disable
-
-db-migrate: ## Apply SQL migrations in db/migrations (requires the infra stack network)
-	docker run --rm --network sentinel-network -v "$(PWD)/db/migrations:/migrations:ro" $(MIGRATE_IMAGE) -path=/migrations -database "$(DB_URL)" up
-
-db-migrate-down: ## Roll back the most recent migration
-	docker run --rm --network sentinel-network -v "$(PWD)/db/migrations:/migrations:ro" $(MIGRATE_IMAGE) -path=/migrations -database "$(DB_URL)" down 1
-
-db-migrate-version: ## Show the current migration version
-	docker run --rm --network sentinel-network -v "$(PWD)/db/migrations:/migrations:ro" $(MIGRATE_IMAGE) -path=/migrations -database "$(DB_URL)" version
+db-schema: ## Apply db/schema/*.sql in name order to the running postgres container (idempotent; re-run after edits)
+	@for f in db/schema/*.sql; do echo "== $$f"; docker exec -i sentinel-postgres psql -U sentinel -d sentinel -v ON_ERROR_STOP=1 -q < "$$f" || exit 1; done
 
 db-seed: ## Seed database with sample entities, a geofence rule, and locations
 	docker exec -i sentinel-postgres psql -U sentinel -d sentinel -v ON_ERROR_STOP=1 < db/seed/seed.sql
