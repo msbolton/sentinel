@@ -132,23 +132,28 @@ publish locations_geo    "Locations"                     ""
 # --- roles, accounts and access rules ----------------------------------------
 role() {
   r="$1"
-  code=$(status GET "/rest/security/roles/role/$r")
-  # The roles endpoint answers 200 with a list for GET /roles; a single role is
-  # created idempotently with POST (409/500 when it exists on some versions).
+  # There is no GET for a single role: the list is the existence check, and
+  # POST on an existing role answers 404 "already exists".
+  code=$(status GET "/rest/security/roles")
+  if [ "$code" = 200 ] && grep -q "\"$r\"" /tmp/gs-body; then log "exists role $r"; return; fi
   code=$(status POST "/rest/security/roles/role/$r")
-  case "$code" in 2*) log "created role $r";; 409|500) log "exists role $r";; *) log "FAILED role $r ($code): $(cat /tmp/gs-body)"; exit 1;; esac
+  case "$code" in 2*) log "created role $r";; *) log "FAILED role $r ($code): $(cat /tmp/gs-body)"; exit 1;; esac
 }
 account() {
   u="$1"; pw="$2"; r="$3"
-  body="{\"user\":{\"userName\":\"$u\",\"password\":\"$pw\",\"enabled\":true}}"
-  code=$(status POST "/rest/security/usergroup/users" "application/json" "$body")
-  case "$code" in
-    2*) log "created user $u";;
-    *)  code=$(status POST "/rest/security/usergroup/user/$u" "application/json" "{\"user\":{\"password\":\"$pw\",\"enabled\":true}}")
-        case "$code" in 2*) log "updated user $u";; *) log "WARN user $u ($code): $(cat /tmp/gs-body)";; esac;;
-  esac
+  # Creating an existing user answers 404 "already exists"; the list decides.
+  code=$(status GET "/rest/security/usergroup/users")
+  if [ "$code" = 200 ] && grep -q "\"userName\":\"$u\"" /tmp/gs-body; then
+    code=$(status POST "/rest/security/usergroup/user/$u" "application/json" "{\"user\":{\"password\":\"$pw\",\"enabled\":true}}")
+    case "$code" in 2*) log "updated user $u";; *) log "FAILED user $u ($code): $(cat /tmp/gs-body)"; exit 1;; esac
+  else
+    body="{\"user\":{\"userName\":\"$u\",\"password\":\"$pw\",\"enabled\":true}}"
+    code=$(status POST "/rest/security/usergroup/users" "application/json" "$body")
+    case "$code" in 2*) log "created user $u";; *) log "FAILED user $u ($code): $(cat /tmp/gs-body)"; exit 1;; esac
+  fi
+  # Associating is idempotent (200 when already a member).
   code=$(status POST "/rest/security/roles/role/$r/user/$u")
-  case "$code" in 2*|409|500) ;; *) log "WARN associate $u with $r ($code)";; esac
+  case "$code" in 2*) ;; *) log "FAILED associate $u with $r ($code): $(cat /tmp/gs-body)"; exit 1;; esac
 }
 role ROLE_CLASS_U;  role ROLE_CLASS_C;  role ROLE_CLASS_S;  role ROLE_CLASS_TS
 account gis-u  "$PW_U"  ROLE_CLASS_U
