@@ -3,16 +3,19 @@ module github.com/sentinel/ingest-service
 go 1.24.0
 
 require (
+	github.com/BertoldVdb/go-ais v0.4.0
 	github.com/confluentinc/confluent-kafka-go/v2 v2.5.0
 	github.com/eclipse/paho.mqtt.golang v1.4.3
 	github.com/go-stomp/stomp/v3 v3.1.0
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/joshuaferrara/go-satellite v0.0.0-20220611180459-512638c64e5b
 	github.com/prometheus/client_golang v1.19.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/sentinel/go-common v0.0.0
 	github.com/sentinel/proto-gen v0.0.0
+	github.com/twuillemin/modes v0.7.0
 	go.uber.org/zap v1.27.0
 	golang.org/x/text v0.29.0
 	golang.org/x/time v0.5.0
@@ -22,7 +25,6 @@ require (
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
-	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect

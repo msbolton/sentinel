@@ -147,6 +147,35 @@ OpenSky is polled only for the area connected map clients can see, so nothing is
 5. Aircraft glide between fixes (dead reckoning on the client). Pan a little and nothing is pushed; pan far or zoom in by half and one push plus an immediate poll follows. Zoom out to the globe and the interval stretches to 60 s.
 6. Close the tab: the gateway pushes `active: false` and the ingest service idles. Kill and restart the ingest service: polling resumes within the 30 s heartbeat.
 
+### Local receivers and other sources
+
+Every source is a feed created through `POST /api/v1/feeds` (or the Feeds page). The built-in drivers are `opensky`, `adsblol`, `celestrak`, `httpjson` (any JSON API, field-mapped) and `stream` (a transport, a framer and a decoder). Pull from site receivers rather than opening ports: a feed that listens (`tcpserver`, `udp`) must be pinned to one replica.
+
+```jsonc
+// readsb / dump1090 SBS (port 30003): the simplest receiver feed
+{"id":"roof-sbs","name":"Roof receiver (SBS)","driver":"stream","enabled":true,
+ "config":{"transport":{"kind":"tcpclient","address":"readsb.local:30003"},"framing":"line","decoder":{"name":"sbs"}}}
+
+// readsb Beast (port 30005): raw Mode S with CPR position decoding
+{"id":"roof-beast","name":"Roof receiver (Beast)","driver":"stream","enabled":true,
+ "config":{"transport":{"kind":"tcpclient","address":"readsb.local:30005"},"framing":"beast","decoder":{"name":"beast"}}}
+
+// AIS-catcher sending NMEA over UDP to this replica (AIS-catcher -u <ingest-host> 10110)
+{"id":"pier-ais","name":"Pier AIS","driver":"stream","enabled":true,
+ "config":{"transport":{"kind":"udp","address":":10110"},"decoder":{"name":"nmea-ais"},"pinnedReplica":"<REPLICA_ID>"}}
+
+// TAK server CoT stream over TLS (port 8089, client certificate)
+{"id":"tak","name":"TAK server","driver":"stream","enabled":true,
+ "config":{"transport":{"kind":"tcpclient","address":"tak.example.org:8089","tls":{"enabled":true,"certFile":"/etc/sentinel/tak.crt","keyFile":"/etc/sentinel/tak.key","caFile":"/etc/sentinel/tak-ca.crt"}},
+           "framing":"xmlevent","decoder":{"name":"cot"}}}
+
+// Any JSON API, polled for the clients' viewport, fields mapped onto observations
+{"id":"adsb-fi","name":"adsb.fi","driver":"httpjson","enabled":true,
+ "config":{"url":"https://opendata.adsb.fi/api/v2/lat/{lat}/lon/{lon}/dist/{radius_nm}","intervalSec":15,"requireArea":true,
+           "decoder":{"options":{"records":"ac","identityType":"ICAO24","entityType":"aircraft","source":"ADS_B","altitudeUnit":"ft",
+                      "fields":{"id":"hex","latitude":"lat","longitude":"lon","altitude":"alt_baro","speed":"gs","heading":"track","callsign":"flight"}}}}}
+```
+
 ### Several ingest replicas
 
 Every enabled feed runs on exactly one replica: replicas heartbeat `sentinel.ingest_replicas`, a feed's preferred owner is chosen by rendezvous hashing over the live replicas (or `config.pinnedReplica`), and the owner holds a `sentinel.feed_leases` row it renews every `LEASE_TICK_SEC` (2 s) with a `LEASE_TTL_SEC` (15 s) expiry. `docker compose up -d --scale ingest-service=3` starts three; `GET /api/v1/feeds` shows each feed's `status.owner`, a replica that stops reporting renders its feeds as `unassigned` until another one takes them (within one TTL), and every observation carries the lease's fencing token in the `x-fence` header. Feeds whose transport binds a port (`tcpserver`, `udp`) must set `pinnedReplica`. `LEASE_ENABLED=false` runs every feed on one replica (local development with a single process).

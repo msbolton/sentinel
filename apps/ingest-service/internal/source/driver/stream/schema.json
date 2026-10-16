@@ -50,7 +50,7 @@
       "title": "Decoder",
       "required": ["name"],
       "properties": {
-        "name": { "type": "string", "enum": ["json", "nmea-gps", "nmea-ais", "cot", "sbs", "link16"], "title": "Format" },
+        "name": { "type": "string", "enum": ["json", "nmea-gps", "nmea-ais", "cot", "sbs", "beast", "link16"], "title": "Format" },
         "options": { "type": "object", "title": "Decoder options" }
       }
     }

@@ -46,7 +46,7 @@ type Response struct {
 	Body   []byte
 }
 
-// Client issues authenticated GET requests with a bounded body.
+// Client issues authenticated requests with a bounded response body.
 type Client struct {
 	HTTP      *http.Client
 	Auth      Auth
@@ -96,21 +96,28 @@ func (a Auth) Validate() error {
 	return nil
 }
 
-// Get performs one request.
+// Get performs one GET request.
 func (c *Client) Get(ctx context.Context, rawURL string) (*Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	if c.UserAgent != "" {
+	return c.Do(req)
+}
+
+// Do performs a prepared request (any method, headers and body) with the
+// user agent and authentication applied, reading a bounded body. The
+// request's context drives the token fetch for OAuth2.
+func (c *Client) Do(req *http.Request) (*Response, error) {
+	if c.UserAgent != "" && req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", c.UserAgent)
 	}
-	if err := c.authorize(ctx, req); err != nil {
+	if err := c.authorize(req.Context(), req); err != nil {
 		return nil, err
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http get: %w", err)
+		return nil, fmt.Errorf("http %s: %w", strings.ToLower(req.Method), err)
 	}
 	defer resp.Body.Close()
 	max := c.MaxBody
@@ -133,9 +140,18 @@ type StatusError struct {
 
 func (e *StatusError) Error() string { return fmt.Sprintf("remote returned %d: %s", e.Status, e.Body) }
 
-// GetOK performs one request and fails on a non-2xx status.
+// GetOK performs one GET request and fails on a non-2xx status.
 func (c *Client) GetOK(ctx context.Context, rawURL string) (*Response, error) {
-	resp, err := c.Get(ctx, rawURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	return c.DoOK(req)
+}
+
+// DoOK performs a prepared request and fails on a non-2xx status.
+func (c *Client) DoOK(req *http.Request) (*Response, error) {
+	resp, err := c.Do(req)
 	if err != nil {
 		return nil, err
 	}
