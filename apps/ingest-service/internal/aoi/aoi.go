@@ -47,6 +47,15 @@ func (b BBox) IsGlobal() bool {
 	return b.North-b.South >= 162 && b.East-b.West >= 324
 }
 
+// Contains reports whether a position lies in the box (edges included); a
+// global box takes everything, whatever its nominal span.
+func (b BBox) Contains(lat, lon float64) bool {
+	if b.IsGlobal() {
+		return true
+	}
+	return lat >= b.South && lat <= b.North && lon >= b.West && lon <= b.East
+}
+
 // Center returns the box centre.
 func (b BBox) Center() (lat, lon float64) {
 	return (b.North + b.South) / 2, (b.East + b.West) / 2

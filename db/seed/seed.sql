@@ -108,7 +108,7 @@ SELECT v.feed, v.src, v.stale, v.ageout
 FROM (VALUES
   ('opensky',   'OPENSKY',   60000,  300000),
   ('adsb-lol',  'ADSB_LOL',  60000,  300000),
-  ('celestrak', 'CELESTRAK', 900000, 3600000)
+  ('celestrak', 'CELESTRAK', 600000, 7200000)
 ) AS v(feed, src, stale, ageout)
 WHERE NOT EXISTS (
   SELECT 1 FROM sentinel.feed_ageout_config c WHERE c."feedId" = v.feed AND c."sourceType" = v.src

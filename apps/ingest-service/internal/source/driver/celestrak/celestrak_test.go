@@ -16,7 +16,9 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/sentinel/ingest-service/internal/aoi"
 	"github.com/sentinel/ingest-service/internal/obs"
+	"github.com/sentinel/ingest-service/internal/source/decoder/tlesgp4"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 )
 
@@ -95,6 +97,11 @@ func newDriver(t *testing.T, srvURL, config string) *Driver {
 	return drv
 }
 
+// worldView makes every satellite visible, for tests not about the area.
+func worldView(drv *Driver) {
+	drv.SetAreaOfInterest(aoi.Area{Active: true, Clients: 1, Boxes: []aoi.BBox{{North: 90, South: -90, East: 180, West: -180}}})
+}
+
 func run(t *testing.T, drv *Driver, sink driver.Sink) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -119,6 +126,7 @@ func TestFetchesJSONThenPropagates(t *testing.T) {
 	}))
 	defer srv.Close()
 	drv := newDriver(t, srv.URL, `{"groups":["stations"]}`)
+	worldView(drv)
 	sink := &memSink{}
 	defer run(t, drv, sink)()
 
@@ -210,6 +218,7 @@ func TestSelectionsBuildRequests(t *testing.T) {
 	}))
 	defer srv.Close()
 	drv := newDriver(t, srv.URL, `{"groups":["stations"],"catalogNumbers":[25544],"designators":["1998-067"],"names":["ISS (ZARYA)"],"special":["gpz"],"supplemental":["iss"]}`)
+	worldView(drv)
 	sink := &memSink{}
 	defer run(t, drv, sink)()
 
@@ -244,6 +253,7 @@ func TestBadRecordsAreDeadLetteredAndSixDigitIdsKept(t *testing.T) {
 	}))
 	defer srv.Close()
 	drv := newDriver(t, srv.URL, `{"groups":["active"]}`)
+	worldView(drv)
 	sink := &memSink{}
 	defer run(t, drv, sink)()
 
@@ -319,5 +329,113 @@ func TestRefreshFloorAndAlias(t *testing.T) {
 	}
 	if got := parseRetryAfter("", time.Now()); got != 0 {
 		t.Errorf("empty retry-after = %v", got)
+	}
+}
+
+// positionNow propagates a fixture object at the driver's clock, so a test
+// can draw a box around it.
+func positionNow(t *testing.T, drv *Driver, norad int) (lat, lon float64) {
+	t.Helper()
+	drv.mu.Lock()
+	c, ok := drv.objects[norad]
+	drv.mu.Unlock()
+	if !ok {
+		t.Fatalf("object %d not cached", norad)
+	}
+	o := tlesgp4.Propagate(c.tle, drv.now())
+	if o == nil {
+		t.Fatalf("object %d did not propagate", norad)
+	}
+	return o.Latitude, o.Longitude
+}
+
+func TestEmitsOnlyInsideTheArea(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(fixture(t, "stations.json"))
+	}))
+	defer srv.Close()
+	drv := newDriver(t, srv.URL, `{"groups":["stations"]}`)
+	drv.step = time.Hour // only explicit wakes propagate
+	sink := &memSink{}
+	defer run(t, drv, sink)()
+
+	// With no viewport nothing is emitted and the feed is idle.
+	if !waitFor(func() bool { return drv.Health().Detail["satellites"] == 2 }, 5*time.Second) {
+		t.Fatal("elements not fetched")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if sink.count() != 0 || !drv.Health().Idle || !drv.AreaStatus().Idle {
+		t.Fatalf("emitted %d with no viewport; idle=%v", sink.count(), drv.Health().Idle)
+	}
+
+	// A box around GOES: only GOES is emitted, and the change wakes a tick.
+	sink.mu.Lock()
+	skippedBefore := sink.skipped["out_of_area"]
+	sink.mu.Unlock()
+	lat, lon := positionNow(t, drv, 41866)
+	st := drv.SetAreaOfInterest(aoi.Area{Active: true, Clients: 1, Boxes: []aoi.BBox{{North: lat + 5, South: lat - 5, East: lon + 5, West: lon - 5}}})
+	if st.Idle || !st.Active {
+		t.Errorf("status after push = %+v", st)
+	}
+	if !waitFor(func() bool { return sink.count() >= 1 }, 2*time.Second) {
+		t.Fatal("no emission after the viewport arrived")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if ids := sink.ids(); ids["SAT-41866"] != 1 || ids["SAT-25544"] != 0 {
+		t.Errorf("emitted %v, want only GOES", ids)
+	}
+	sink.mu.Lock()
+	skipped := sink.skipped["out_of_area"]
+	sink.mu.Unlock()
+	if skipped != skippedBefore+1 {
+		t.Errorf("out_of_area skips = %d, want %d (the ISS once)", skipped, skippedBefore+1)
+	}
+
+	// No clients: back to nothing.
+	drv.SetAreaOfInterest(aoi.Area{Active: false})
+	time.Sleep(50 * time.Millisecond)
+	before := sink.count()
+	drv.SetAreaOfInterest(aoi.Area{Active: false}) // unchanged: no wake
+	time.Sleep(50 * time.Millisecond)
+	if sink.count() != before {
+		t.Error("an unchanged inactive area triggered emission")
+	}
+	if !drv.Health().Idle {
+		t.Error("not idle with no clients")
+	}
+
+	// An expired lease counts as nobody looking.
+	drv.SetAreaOfInterest(aoi.Area{Active: true, Clients: 1, Boxes: []aoi.BBox{{North: 90, South: -90, East: 180, West: -180}}, ExpiresAt: time.Now().Add(-time.Minute)})
+	time.Sleep(50 * time.Millisecond)
+	if sink.count() != before {
+		t.Error("an expired area emitted")
+	}
+}
+
+func TestPinnedObjectsAreAlwaysEmitted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.RawQuery, "CATNR=") {
+			_, _ = w.Write(fixture(t, "iss_only.json"))
+			return
+		}
+		_, _ = w.Write(fixture(t, "stations.json"))
+	}))
+	defer srv.Close()
+	drv := newDriver(t, srv.URL, `{"groups":["stations"],"catalogNumbers":[25544]}`)
+	sink := &memSink{}
+	defer run(t, drv, sink)()
+
+	if !waitFor(func() bool { return sink.count() >= 2 }, 5*time.Second) {
+		t.Fatal("pinned object not emitted without a viewport")
+	}
+	if ids := sink.ids(); ids["SAT-41866"] != 0 || ids["SAT-25544"] < 2 {
+		t.Errorf("emitted %v, want only the pinned ISS", ids)
+	}
+	h := drv.Health()
+	if h.Idle || h.Detail["pinned"] != 1 || h.Detail["emitted"] != 1 {
+		t.Errorf("health = %+v", h)
+	}
+	if drv.AreaStatus().Idle {
+		t.Error("idle with a pinned object")
 	}
 }
