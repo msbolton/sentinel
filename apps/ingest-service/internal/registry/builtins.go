@@ -24,8 +24,8 @@ var Builtins = []Feed{
 	},
 	{
 		ID: "celestrak", Name: "CelesTrak satellites", Driver: "celestrak", Builtin: true,
-		Description: "Satellite positions propagated with SGP4 from CelesTrak two-line elements.",
-		Config:      json.RawMessage(`{"groups": ["active"], "tleRefreshHours": 6, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}`),
+		Description: "Satellite positions propagated with SGP4 from CelesTrak orbital elements.",
+		Config:      json.RawMessage(`{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}`),
 		SecretRefs:  map[string]string{},
 	},
 }

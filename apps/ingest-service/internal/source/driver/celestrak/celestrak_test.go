@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,12 +20,20 @@ import (
 	"github.com/sentinel/ingest-service/internal/source/driver"
 )
 
-const tleBlock = "ISS (ZARYA)\n1 25544U 98067A   26063.86671769  .00009014  00000+0  17477-3 0  9999\n2 25544  51.6315  96.2009 0008177 157.5272 202.6076 15.48447334555585\n" +
-	"GOES 16\n1 41866U 16071A   26063.50000000  .00000100  00000+0  00000+0 0  9995\n2 41866   0.0569 271.4567 0000345 123.4567 236.7890  1.00271400 34567\n"
+func fixture(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
 
 type memSink struct {
 	mu      sync.Mutex
 	obs     []*obs.Observation
+	dead    []string
+	skipped map[string]int
 	success int
 }
 
@@ -31,11 +43,31 @@ func (s *memSink) Emit(_ context.Context, o *obs.Observation) error {
 	s.obs = append(s.obs, o)
 	return nil
 }
-func (s *memSink) DeadLetter([]byte, string, error) {}
-func (s *memSink) Skipped(string)                   {}
-func (s *memSink) Succeeded(int)                    { s.mu.Lock(); s.success++; s.mu.Unlock() }
-func (s *memSink) Blocked(time.Duration)            {}
-func (s *memSink) count() int                       { s.mu.Lock(); defer s.mu.Unlock(); return len(s.obs) }
+func (s *memSink) DeadLetter(_ []byte, reason string, _ error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dead = append(s.dead, reason)
+}
+func (s *memSink) Skipped(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.skipped == nil {
+		s.skipped = map[string]int{}
+	}
+	s.skipped[reason]++
+}
+func (s *memSink) Succeeded(int)         { s.mu.Lock(); s.success++; s.mu.Unlock() }
+func (s *memSink) Blocked(time.Duration) {}
+func (s *memSink) count() int            { s.mu.Lock(); defer s.mu.Unlock(); return len(s.obs) }
+func (s *memSink) ids() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]int{}
+	for _, o := range s.obs {
+		out[o.SourceEntityID]++
+	}
+	return out
+}
 
 func waitFor(cond func() bool, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
@@ -48,32 +80,47 @@ func waitFor(cond func() bool, timeout time.Duration) bool {
 	return cond()
 }
 
-func TestFetchesThenPropagates(t *testing.T) {
-	var hits atomic.Int32
-	var groups []string
-	var mu sync.Mutex
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		groups = append(groups, r.URL.Query().Get("GROUP"))
-		mu.Unlock()
-		if hits.Add(1) == 1 {
-			w.WriteHeader(http.StatusServiceUnavailable) // first fetch fails: retried with backoff
-			return
-		}
-		_, _ = w.Write([]byte(tleBlock))
-	}))
-	defer srv.Close()
-	d, err := New(driver.Spec{FeedID: "celestrak", Config: json.RawMessage(`{"groups":["stations"],"propagationIntervalSec":1,"baseUrl":"` + srv.URL + `"}`)}, driver.Deps{Logger: zap.NewNop()})
+// newDriver builds a driver against a test server with fast timers.
+func newDriver(t *testing.T, srvURL, config string) *Driver {
+	t.Helper()
+	cfg := strings.TrimSuffix(strings.TrimSpace(config), "}")
+	cfg += `, "propagationIntervalSec": 1, "baseUrl": "` + srvURL + `/gp.php", "supplementalUrl": "` + srvURL + `/sup-gp.php"}`
+	d, err := New(driver.Spec{FeedID: "celestrak", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	drv := d.(*Driver)
 	drv.step = 30 * time.Millisecond
-	sink := &memSink{}
+	drv.jitter = func() time.Duration { return 0 }
+	return drv
+}
+
+func run(t *testing.T, drv *Driver, sink driver.Sink) func() {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); _ = drv.Run(ctx, sink) }()
-	defer func() { cancel(); <-done }()
+	return func() { cancel(); <-done }
+}
+
+func TestFetchesJSONThenPropagates(t *testing.T) {
+	var hits atomic.Int32
+	var queries []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		queries = append(queries, r.URL.RawQuery)
+		mu.Unlock()
+		if hits.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable) // first fetch fails: retried with backoff
+			return
+		}
+		_, _ = w.Write(fixture(t, "stations.json"))
+	}))
+	defer srv.Close()
+	drv := newDriver(t, srv.URL, `{"groups":["stations"]}`)
+	sink := &memSink{}
+	defer run(t, drv, sink)()
 
 	if !waitFor(func() bool { return sink.count() >= 4 }, 5*time.Second) {
 		t.Fatalf("expected two propagation rounds of two satellites, got %d (fetch hits %d)", sink.count(), hits.Load())
@@ -82,17 +129,195 @@ func TestFetchesThenPropagates(t *testing.T) {
 		t.Errorf("fetch should have been retried after the 503: %d", hits.Load())
 	}
 	mu.Lock()
-	g := groups[0]
+	q := queries[0]
 	mu.Unlock()
-	if g != "stations" {
-		t.Errorf("group = %q", g)
+	if q != "GROUP=stations&FORMAT=json" {
+		t.Errorf("query = %q", q)
 	}
 	o := sink.obs[0]
 	if o.Source != "CELESTRAK" || o.Decoder != "tle-sgp4" || o.EntityType != obs.EntitySatellite || !o.HasPosition || o.TLE == nil {
 		t.Errorf("observation = %+v", o)
 	}
+	if o.TLE.Epoch == "" {
+		t.Error("epoch missing from the elements")
+	}
 	h := drv.Health()
-	if !h.Connected || h.Detail["satellites"] != 2 || h.LastError != "" {
+	if !h.Connected || h.Detail["satellites"] != 2 || h.Detail["pinned"] != 0 || h.LastError != "" || h.Detail["fetchedAt"] == nil || h.Detail["nextFetchAt"] == nil {
 		t.Errorf("health = %+v", h)
+	}
+}
+
+func TestConditionalRequestsAndPrune(t *testing.T) {
+	var hits atomic.Int32
+	var headers []http.Header
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		headers = append(headers, r.Header.Clone())
+		mu.Unlock()
+		switch hits.Add(1) {
+		case 1:
+			w.Header().Set("ETag", `"v1"`)
+			w.Header().Set("Last-Modified", "Wed, 04 Mar 2026 20:00:00 GMT")
+			_, _ = w.Write(fixture(t, "stations.json"))
+		case 2:
+			w.WriteHeader(http.StatusNotModified)
+		default:
+			w.Header().Set("ETag", `"v2"`)
+			_, _ = w.Write(fixture(t, "iss_only.json")) // GOES has left the group
+		}
+	}))
+	defer srv.Close()
+	drv := newDriver(t, srv.URL, `{"groups":["stations"]}`)
+	drv.refresh = 40 * time.Millisecond
+	sink := &memSink{}
+	defer run(t, drv, sink)()
+
+	if !waitFor(func() bool { return hits.Load() >= 3 }, 5*time.Second) {
+		t.Fatalf("expected three fetches, got %d", hits.Load())
+	}
+	mu.Lock()
+	second := headers[1]
+	mu.Unlock()
+	if second.Get("If-None-Match") != `"v1"` || second.Get("If-Modified-Since") != "Wed, 04 Mar 2026 20:00:00 GMT" {
+		t.Errorf("second request lacked conditional headers: %v", second)
+	}
+	// After the third fetch only the ISS remains cached.
+	if !waitFor(func() bool { return drv.Health().Detail["satellites"] == 1 }, 2*time.Second) {
+		t.Errorf("GOES not pruned: %+v", drv.Health())
+	}
+	if h := drv.Health(); h.LastError != "" || !h.Connected {
+		t.Errorf("health after a 304 = %+v", h)
+	}
+}
+
+func TestSelectionsBuildRequests(t *testing.T) {
+	var paths []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path+"?"+r.URL.RawQuery)
+		mu.Unlock()
+		// Pinned queries (catalog number, designator, name) and the ISS
+		// supplemental file name the ISS alone; the group and special list
+		// return both satellites.
+		q := r.URL.RawQuery
+		if strings.HasPrefix(q, "CATNR=") || strings.HasPrefix(q, "INTDES=") || strings.HasPrefix(q, "NAME=") || strings.HasPrefix(q, "FILE=") {
+			_, _ = w.Write(fixture(t, "iss_only.json"))
+			return
+		}
+		_, _ = w.Write(fixture(t, "stations.json"))
+	}))
+	defer srv.Close()
+	drv := newDriver(t, srv.URL, `{"groups":["stations"],"catalogNumbers":[25544],"designators":["1998-067"],"names":["ISS (ZARYA)"],"special":["gpz"],"supplemental":["iss"]}`)
+	sink := &memSink{}
+	defer run(t, drv, sink)()
+
+	if !waitFor(func() bool { mu.Lock(); defer mu.Unlock(); return len(paths) >= 6 }, 5*time.Second) {
+		t.Fatalf("expected six requests, got %v", paths)
+	}
+	mu.Lock()
+	got := append([]string(nil), paths[:6]...)
+	mu.Unlock()
+	sort.Strings(got)
+	want := []string{
+		"/gp.php?CATNR=25544&FORMAT=json",
+		"/gp.php?GROUP=stations&FORMAT=json",
+		"/gp.php?INTDES=1998-067&FORMAT=json",
+		"/gp.php?NAME=ISS+%28ZARYA%29&FORMAT=json",
+		"/gp.php?SPECIAL=GPZ&FORMAT=json",
+		"/sup-gp.php?FILE=iss&FORMAT=json",
+	}
+	sort.Strings(want)
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("requests:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// The ISS came through pinned selections; GOES only through the group.
+	if !waitFor(func() bool { return drv.Health().Detail["pinned"] == 1 && drv.Health().Detail["satellites"] == 2 }, 2*time.Second) {
+		t.Errorf("health = %+v", drv.Health())
+	}
+}
+
+func TestBadRecordsAreDeadLetteredAndSixDigitIdsKept(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(fixture(t, "bad_record.json"))
+	}))
+	defer srv.Close()
+	drv := newDriver(t, srv.URL, `{"groups":["active"]}`)
+	sink := &memSink{}
+	defer run(t, drv, sink)()
+
+	if !waitFor(func() bool { return sink.count() >= 1 }, 5*time.Second) {
+		t.Fatal("nothing emitted")
+	}
+	sink.mu.Lock()
+	dead := append([]string(nil), sink.dead...)
+	first := sink.obs[0]
+	sink.mu.Unlock()
+	if len(dead) != 1 || dead[0] != "bad_elements" {
+		t.Errorf("dead letters = %v", dead)
+	}
+	if first.SourceEntityID != "SAT-270001" || first.TLE.NoradID != 270001 || first.TLE.Line1[2:7] != "70001" {
+		t.Errorf("six-digit id: %s %+v", first.SourceEntityID, first.TLE)
+	}
+}
+
+func TestHealthRecordsErrorsAndRetryAfter(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("one download per update"))
+	}))
+	defer srv.Close()
+	drv := newDriver(t, srv.URL, `{"groups":["active"]}`)
+	sink := &memSink{}
+	defer run(t, drv, sink)()
+
+	if !waitFor(func() bool { return drv.Health().LastError != "" }, 2*time.Second) {
+		t.Fatal("error never recorded")
+	}
+	h := drv.Health()
+	if !strings.Contains(h.LastError, "403") || !strings.Contains(h.LastError, "one download per update") || h.Connected {
+		t.Errorf("health = %+v", h)
+	}
+	if errs, ok := h.Detail["errors"].(map[string]string); !ok || errs["group:active"] == "" {
+		t.Errorf("per-selection errors = %v", h.Detail["errors"])
+	}
+	if h.Detail["lastStatus"] != 403 {
+		t.Errorf("lastStatus = %v", h.Detail["lastStatus"])
+	}
+	// Retry-After: 1 means the second attempt waits a second, not the 1 s→60 s backoff's first step.
+	time.Sleep(600 * time.Millisecond)
+	if hits.Load() != 1 {
+		t.Errorf("retried before Retry-After elapsed: %d hits", hits.Load())
+	}
+	if !waitFor(func() bool { return hits.Load() >= 2 }, 2*time.Second) {
+		t.Error("no retry after Retry-After")
+	}
+}
+
+func TestRefreshFloorAndAlias(t *testing.T) {
+	d, err := New(driver.Spec{FeedID: "x", Config: json.RawMessage(`{"tleRefreshHours": 6}`)}, driver.Deps{Logger: zap.NewNop()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.(*Driver).refresh; got != 6*time.Hour {
+		t.Errorf("alias refresh = %v", got)
+	}
+	d, _ = New(driver.Spec{FeedID: "x", Config: json.RawMessage(`{}`)}, driver.Deps{Logger: zap.NewNop()})
+	drv := d.(*Driver)
+	if drv.refresh != 2*time.Hour || len(drv.sels) != 1 || drv.sels[0].Value != "active" {
+		t.Errorf("defaults: refresh %v selections %+v", drv.refresh, drv.sels)
+	}
+	if got := parseRetryAfter("120", time.Now()); got != 2*time.Minute {
+		t.Errorf("retry-after seconds = %v", got)
+	}
+	if got := parseRetryAfter("999999", time.Now()); got != maxRetryAfter {
+		t.Errorf("retry-after cap = %v", got)
+	}
+	if got := parseRetryAfter("", time.Now()); got != 0 {
+		t.Errorf("empty retry-after = %v", got)
 	}
 }

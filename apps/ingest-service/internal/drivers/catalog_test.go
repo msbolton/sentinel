@@ -39,7 +39,8 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 	cases := map[string]string{
 		"opensky":   `{"intervalSec": 10, "viewportTtlSec": 90, "minPollSpacingSec": 3, "maxAreaSqDeg": 400, "maxIntervalSec": 60, "creditFloor": 200, "staleWarnSec": 120, "staleCriticalSec": 300}`,
 		"adsblol":   `{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}`,
-		"celestrak": `{"groups": ["active"], "tleRefreshHours": 6, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}`,
+		"celestrak": `{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}`,
+		"celestrak2": `{"catalogNumbers": [25544], "designators": ["1998-067"], "names": ["ISS (ZARYA)"], "special": ["GPZ"], "supplemental": ["iss"], "tleRefreshHours": 6}`,
 		"stream":    `{"transport": {"kind": "mqtt", "brokerUrl": "tcp://broker:1883", "topics": ["a/#"]}, "decoder": {"name": "json"}}`,
 		"stream2":   `{"transport": {"kind": "tcpclient", "address": "readsb:30003"}, "framing": "line", "decoder": {"name": "sbs"}, "backpressure": "drop"}`,
 		"stream3":   `{"transport": {"kind": "websocket", "url": "wss://x/y"}, "decoder": {"name": "json", "options": {"records": "ac"}}}`,
@@ -56,6 +57,8 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 			d = "adsblol"
 		case "stream2", "stream3", "stream4", "stream5":
 			d = "stream"
+		case "celestrak2":
+			d = "celestrak"
 		}
 		if problems := c.Validate(d, json.RawMessage(cfg)); len(problems) != 0 {
 			t.Errorf("%s: unexpected problems %+v", driver, problems)
@@ -72,6 +75,9 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		{"opensky", `{"bbox": "nope"}`, "/config/bbox"},
 		{"opensky", `{"staleWarnSec": -1}`, "/config/staleWarnSec"},
 		{"celestrak", `{"groups": []}`, "/config/groups"},
+		{"celestrak", `{"refreshHours": 1}`, "/config/refreshHours"},
+		{"celestrak", `{"special": ["nope"]}`, "/config/special"},
+		{"celestrak", `{"catalogNumbers": [0]}`, "/config/catalogNumbers"},
 		{"adsblol", `{"scope": "all"}`, "/config/scope"},
 		{"stream", `{"transport": {"kind": "mqtt"}, "decoder": {"name": "json"}}`, "/config/transport"},
 		{"stream", `{"transport": {"kind": "tcpserver", "address": ":4001"}, "decoder": {"name": "xml"}}`, "/config/decoder/name"},

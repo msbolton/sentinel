@@ -1,5 +1,5 @@
-// Package tlesgp4 parses CelesTrak TLE text and propagates satellites with
-// SGP4 into observations.
+// Package tlesgp4 parses CelesTrak element sets, as 3-line TLE text or as
+// OMM JSON, and propagates satellites with SGP4 into observations.
 package tlesgp4
 
 import (
@@ -24,7 +24,8 @@ type TLE struct {
 	Name    string
 	Line1   string
 	Line2   string
-	NoradID int
+	NoradID int       // the real catalog number, which may exceed the line's five columns
+	Epoch   time.Time // zero when unknown
 	sat     satellite.Satellite
 }
 
@@ -43,7 +44,14 @@ func Parse(body string) ([]TLE, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, TLE{Name: name, Line1: l1, Line2: l2, NoradID: norad, sat: satellite.TLEToSat(l1, l2, satellite.GravityWGS84)})
+		// The library aborts the process on a field it cannot parse, so a
+		// malformed set from a remote is skipped rather than handed to it.
+		if err := ValidateLines(l1, l2); err != nil {
+			continue
+		}
+		t := TLE{Name: name, Line1: l1, Line2: l2, NoradID: norad, sat: satellite.TLEToSat(l1, l2, satellite.GravityWGS84)}
+		t.Epoch, _ = epochFromLine1(l1)
+		out = append(out, t)
 	}
 	if len(out) == 0 && strings.TrimSpace(body) != "" {
 		return nil, fmt.Errorf("no TLE entries found")
@@ -111,6 +119,9 @@ func elements(tle TLE) *obs.TLEData {
 	}
 	if len(tle.Line1) >= 17 {
 		d.IntlDesignator = strings.TrimSpace(tle.Line1[9:17])
+	}
+	if !tle.Epoch.IsZero() {
+		d.Epoch = tle.Epoch.UTC().Format(time.RFC3339Nano)
 	}
 	return d
 }
