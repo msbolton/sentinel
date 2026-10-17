@@ -8,6 +8,7 @@ import {
   effect,
   NgZone,
   ChangeDetectionStrategy,
+  untracked,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
@@ -44,9 +45,12 @@ import {
 import { CircularBuffer, decimateTrail, TrailPoint } from './trail-utils';
 import { isGlobalBounds, rectangleToBounds } from './viewport-bounds';
 import { DeadReckoningTracker } from './dead-reckoning';
+import { SatelliteTracker } from './satellite-tracker';
 
 /** Dead-reckoning frame cap: ~30 fps is plenty for gliding markers. */
 const DR_FRAME_INTERVAL_MS = 33;
+/** All satellites are re-propagated this often; the selected one every frame. */
+const SAT_STEP_INTERVAL_MS = 250;
 import { environment } from '../../../environments/environment';
 
 // Configure Cesium before imports
@@ -155,6 +159,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private currentCameraAltitude = DEFAULT_CAMERA_POSITION.height;
   /** Moving aircraft are advanced between fixes; see dead-reckoning.ts. */
   private readonly deadReckoning = new DeadReckoningTracker();
+  /** Satellites are propagated from their elements; see satellite-tracker.ts. */
+  private readonly satellites = new SatelliteTracker();
+  private satLastStepMs = 0;
   private drFrame: number | null = null;
   private drLastTickMs = 0;
   private drScratch: any = null;
@@ -240,6 +247,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.drFrame = null;
     }
     this.deadReckoning.clear();
+        this.satellites.clear();
     this.subscriptions.unsubscribe();
     if (this.viewer && !this.viewer.isDestroyed()) {
       this.viewer.destroy();
@@ -574,10 +582,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // position and blends this fix in instead of jumping to it.
     const now = this.wsService.serverNow();
     const tracked = this.deadReckoning.upsert(entity, now);
+    const satTracked = this.satellites.upsert(entity);
     const shownPosition = tracked ? this.deadReckoning.positionOf(entity.id, now) : null;
+    const satPosition = satTracked ? this.satellites.positionOf(entity.id, now) : null;
     const displayPosition = shownPosition
       ? Cesium.Cartesian3.fromDegrees(shownPosition.lon, shownPosition.lat, shownPosition.alt)
-      : position;
+      : satPosition
+        ? Cesium.Cartesian3.fromDegrees(satPosition.lon, satPosition.lat, satPosition.height)
+        : position;
 
     if (existing) {
       // Update existing entity
@@ -670,7 +682,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.entityMap.set(entity.id, cesiumEntity);
     }
 
-    if (tracked) {
+    if (tracked || satTracked) {
       this.ensureDeadReckoningLoop();
     }
     this.scheduleRender();
@@ -682,11 +694,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
    * nothing is tracked so an idle map renders nothing.
    */
   private ensureDeadReckoningLoop(): void {
-    if (this.drFrame !== null || this.deadReckoning.size === 0) return;
+    if (this.drFrame !== null || (this.deadReckoning.size === 0 && this.satellites.size === 0)) return;
     this.ngZone.runOutsideAngular(() => {
       const tick = () => {
         this.drFrame = null;
-        if (!this.viewer || this.viewer.isDestroyed() || this.deadReckoning.size === 0) return;
+        if (!this.viewer || this.viewer.isDestroyed() || (this.deadReckoning.size === 0 && this.satellites.size === 0)) return;
         const now = this.wsService.serverNow();
         if (now - this.drLastTickMs >= DR_FRAME_INTERVAL_MS) {
           this.drLastTickMs = now;
@@ -714,13 +726,45 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       );
       moved++;
     }
+    moved += this.applySatelliteMotion(now);
     if (moved > 0) {
       this.viewer.scene.requestRender();
     }
   }
 
+  /**
+   * Satellites are propagated every SAT_STEP_INTERVAL_MS; the selected one
+   * every frame so it never visibly jumps while it is being watched.
+   */
+  private applySatelliteMotion(now: number): number {
+    if (this.satellites.size === 0) return 0;
+    const Cesium = this.Cesium;
+    const selectedId = untracked(() => this.selectedEntity())?.id;
+    const stepAll = now - this.satLastStepMs >= SAT_STEP_INTERVAL_MS;
+    if (stepAll) this.satLastStepMs = now;
+    let moved = 0;
+    const place = (id: string, pos: { lat: number; lon: number; height: number }) => {
+      const cesiumEntity = this.entityMap.get(id);
+      if (!cesiumEntity?._posProp) {
+        if (!cesiumEntity) this.satellites.remove(id);
+        return;
+      }
+      if (cesiumEntity.show === false) return;
+      cesiumEntity._posProp.setValue(Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.height, undefined, this.drScratch));
+      moved++;
+    };
+    if (stepAll) {
+      for (const [id, pos] of this.satellites.step(now)) place(id, pos);
+    } else if (selectedId && this.satellites.has(selectedId)) {
+      const pos = this.satellites.positionOf(selectedId, now);
+      if (pos) place(selectedId, pos);
+    }
+    return moved;
+  }
+
   private removeCesiumEntity(entityId: string): void {
     this.deadReckoning.remove(entityId);
+    this.satellites.remove(entityId);
     const cesiumEntity = this.entityMap.get(entityId);
     if (cesiumEntity && this.viewer) {
       this.viewer.entities.remove(cesiumEntity);
@@ -859,6 +903,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         this.entityMap.clear();
         this.trackTrails.clear();
         this.deadReckoning.clear();
+        this.satellites.clear();
         this.selectedEntity.set(null);
       },
       error: (err) => {
