@@ -21,9 +21,11 @@ import (
 	"github.com/sentinel/go-common/kafka"
 	"github.com/sentinel/go-common/middleware"
 
+	"github.com/sentinel/analytics-service/internal/baseline"
 	"github.com/sentinel/analytics-service/internal/config"
 	"github.com/sentinel/analytics-service/internal/consumer"
 	"github.com/sentinel/analytics-service/internal/handler"
+	"github.com/sentinel/analytics-service/internal/job"
 	"github.com/sentinel/analytics-service/internal/stats"
 	"github.com/sentinel/analytics-service/internal/store"
 )
@@ -65,6 +67,39 @@ func main() {
 	counters := stats.New()
 	coverageStore := store.NewCoverageStore(pool)
 	entityStore := store.NewEntityStore(pool)
+	baselineStore := store.NewBaselineStore(pool)
+	baselines := baseline.NewCache(baselineStore, cfg.Baseline.CacheTTL)
+
+	// Baselines are recomputed on a schedule; the first pass runs shortly
+	// after start so a fresh deployment has something to judge against.
+	baselineJob := job.New(pool, entityStore, baselineStore, baselines, counters, job.Options{
+		Window:       cfg.Baseline.Window,
+		Interval:     cfg.Baseline.Interval,
+		ActiveWindow: cfg.Baseline.ActiveWindow,
+		Thin:         cfg.Baseline.ThinInterval,
+		Workers:      cfg.Baseline.Workers,
+		Builder: baseline.Config{
+			WindowDays:    int(cfg.Baseline.Window.Hours() / 24),
+			ThinSec:       int(cfg.Baseline.ThinInterval.Seconds()),
+			SlowKnots:     cfg.Baseline.SlowKnots.For("DEFAULT"),
+			EpsM:          cfg.Baseline.DBSCANEpsM,
+			MinPts:        cfg.Baseline.DBSCANMinPts,
+			MaxSlowPoints: cfg.Baseline.MaxSlowPoints,
+			MinPoints:     cfg.Baseline.MinPoints,
+			MinDays:       cfg.Baseline.MinDays,
+			MaxPlaces:     20,
+		},
+		SlowKnots: cfg.Baseline.SlowKnots,
+	}, logger)
+	baselineJob.After = append(baselineJob.After, func(ctx context.Context) error {
+		n, err := coverageStore.Prune(ctx, time.Now().Add(-cfg.Detectors.CoverageTTL))
+		if n > 0 {
+			logger.Info("coverage cells pruned", zap.Int64("rows", n))
+		}
+		return err
+	})
+	jobCtx, stopJob := context.WithCancel(context.Background())
+	go baselineJob.Run(jobCtx)
 
 	posConsumer, err := consumer.NewPositionConsumer(cfg.KafkaBrokers, consumer.NopSink{}, coverageStore,
 		cfg.Detectors.CoverageCellDeg, counters, logger)
@@ -79,7 +114,7 @@ func main() {
 	})
 	healthHandler.RegisterRoutes(mux)
 
-	api := handler.NewAnalyticsHandler(counters, coverageStore, logger)
+	api := handler.NewAnalyticsHandler(counters, coverageStore, baselineStore, entityStore, logger)
 	api.RegisterRoutes(mux)
 
 	httpServer := &http.Server{
@@ -103,6 +138,7 @@ func main() {
 	sig := <-sigCh
 	logger.Info("shutdown signal received", zap.String("signal", sig.String()))
 
+	stopJob()
 	posConsumer.Stop()
 	producer.Flush(5000)
 
