@@ -15,3 +15,7 @@
 -- full every time, so the bookkeeping table is removed wherever it is.
 DROP TABLE IF EXISTS sentinel.schema_migrations;
 DROP TABLE IF EXISTS public.schema_migrations;
+
+-- The Python analytics service wrote anomalies; the Go service keeps
+-- baselines and findings instead (60_behavior.sql).
+DROP TABLE IF EXISTS sentinel.anomalies;
