@@ -51,7 +51,7 @@ import { SatelliteTracker, periodMinutes, type SatPosition } from './satellite-t
 import { footprintRadiusM, sampleOrbit, splitAtAntimeridian } from './orbit-geometry';
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 import { CLUSTER_CONFIG, CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, drawClusterDisc, syncLabelGlyphClusterShow } from './entity-clusters';
-import { DROP_LINE_CONFIG, dropLinePoints, type GeoPoint } from './satellite-drop-line';
+import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine, type GeoPoint } from './drop-line';
 import { formatAltitude } from '../../shared/geo-format';
 
 /** Dead-reckoning frame cap: ~30 fps is plenty for gliding markers. */
@@ -184,7 +184,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private clusterSources = new Map<string, any>();
   private clusterImageCache = new Map<string, string>();
   private clusterCanvas: HTMLCanvasElement | null = null;
-  /** The line from the selected satellite down to the ground; see satellite-drop-line.ts. */
+  /** The line from the selected aircraft, drone or satellite down to the ground; see drop-line.ts. */
   private dropLine: { forId: string | null; line: any; label: any; positions: any[]; labelText: string } =
     { forId: null, line: null, label: null, positions: [], labelText: '' };
   private drFrame: number | null = null;
@@ -225,7 +225,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.ngZone.runOutsideAngular(() => untracked(() => this.syncOrbitOverlay(selected, flags)));
     });
 
-    // The selected satellite shows how high it sits: a line to the ground.
+    // A selected aircraft, drone or satellite shows how high it flies: a line to the ground.
     effect(() => {
       const selected = this.selectedEntity();
       this.ngZone.runOutsideAngular(() => untracked(() => this.syncDropLine(selected)));
@@ -744,6 +744,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.entityMap.set(entity.id, cesiumEntity);
     }
 
+    if (entity.id === this.dropLine.forId) {
+      const shownGeo = this.displayedGeoPoint(entity, now);
+      if (shownGeo) this.moveDropLine(shownGeo);
+    }
+
     if (tracked || satTracked) {
       this.ensureDeadReckoningLoop();
     }
@@ -786,6 +791,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       cesiumEntity._posProp.setValue(
         Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.alt, undefined, this.drScratch),
       );
+      if (id === this.dropLine.forId) this.moveDropLine({ lat: pos.lat, lon: pos.lon, height: pos.alt });
       moved++;
     }
     moved += this.applySatelliteMotion(now);
@@ -1061,18 +1067,28 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     return `${name} · ${formatAltitude(heightM)}`;
   }
 
-  /** Show the drop line under the selected satellite, or none. */
+  /** Show the drop line under the selected aircraft, drone or satellite, or none. */
   private syncDropLine(selected: Entity | null): void {
     if (!this.viewer || !this.Cesium) return;
-    if (!selected || !this.satellites.has(selected.id)) {
+    if (!selected || !showsDropLine(selected)) {
       this.clearDropLine();
       return;
     }
     if (this.dropLine.forId === selected.id) return;
     this.clearDropLine();
     this.dropLine.forId = selected.id;
-    const pos = this.satellites.positionOf(selected.id, this.wsService.serverNow());
+    const pos = this.displayedGeoPoint(selected, this.wsService.serverNow());
     if (pos) this.moveDropLine(pos);
+  }
+
+  /** Where an entity is drawn right now: propagated, dead-reckoned, or its last fix. */
+  private displayedGeoPoint(entity: Entity, now: number): GeoPoint | null {
+    const sat = this.satellites.has(entity.id) ? this.satellites.positionOf(entity.id, now) : null;
+    if (sat) return sat;
+    const dr = this.deadReckoning.positionOf(entity.id, now);
+    if (dr) return { lat: dr.lat, lon: dr.lon, height: dr.alt };
+    const p = entity.position;
+    return p ? { lat: p.latitude, lon: p.longitude, height: p.altitude ?? 0 } : null;
   }
 
   private moveDropLine(pos: GeoPoint): void {
@@ -1084,7 +1100,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     ];
     const mid = Cesium.Cartesian3.fromDegrees(geometry.mid.lon, geometry.mid.lat, geometry.mid.height);
     if (!this.dropLine.line) {
-      const color = this.getCesiumColor(EntityType.SATELLITE);
+      const color = Cesium.Color.fromCssColorString(DROP_LINE_CONFIG.color);
       this.dropLine.line = this.viewer.entities.add({
         polyline: {
           positions: new Cesium.CallbackProperty(() => this.dropLine.positions, false),
