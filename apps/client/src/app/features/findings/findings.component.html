@@ -1,0 +1,122 @@
+<div class="panel findings-panel">
+  <div class="panel-header">
+    <div class="header-left">
+      <h2>Findings</h2>
+      @if (openCount(); as n) {
+        <span class="open-badge">{{ n }}</span>
+      }
+    </div>
+    <button class="btn btn-ghost btn-sm" (click)="load()">&#8635; Refresh</button>
+  </div>
+
+  <div class="finding-filters">
+    <div class="filter-row">
+      <span class="filter-label">Status</span>
+      <div class="chip-row">
+        <button class="filter-chip" [class.active]="status() === null" (click)="filterByStatus(null)">All</button>
+        @for (s of statuses; track s) {
+          <button class="filter-chip" [class.active]="status() === s" (click)="filterByStatus(s)">{{ s }}</button>
+        }
+      </div>
+    </div>
+    <div class="filter-row">
+      <span class="filter-label">Kind</span>
+      <div class="chip-row">
+        <button class="filter-chip" [class.active]="kind() === null" (click)="filterByKind(null)">All</button>
+        @for (k of kinds; track k) {
+          <button class="filter-chip" [class.active]="kind() === k" (click)="filterByKind(k)">{{ kindLabel(k) }}</button>
+        }
+      </div>
+    </div>
+    <div class="filter-row">
+      <span class="filter-label">Severity</span>
+      <div class="chip-row">
+        <button class="filter-chip" [class.active]="severity() === null" (click)="filterBySeverity(null)">All</button>
+        @for (s of severities; track s) {
+          <button class="filter-chip" [class.active]="severity() === s" [ngClass]="severityClass(s)" (click)="filterBySeverity(s)">{{ s }}</button>
+        }
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-content finding-list">
+    @if (loading()) {
+      <div class="loading-indicator">
+        <div class="loading-spinner"></div>
+        <span>Loading findings...</span>
+      </div>
+    }
+    @if (error(); as msg) {
+      <div class="error-banner">{{ msg }}</div>
+    }
+    @if (!loading() && !error() && findings().length === 0) {
+      <div class="empty-state">
+        <span class="empty-icon">&#128269;</span>
+        <p>No findings</p>
+        <p class="text-xs text-muted">Entities behaving as they usually do produce none. Baselines need a few days of history before departures are judged.</p>
+      </div>
+    }
+
+    @for (f of findings(); track f.id) {
+      <div class="finding-card" [ngClass]="severityClass(f.severity)" [class.reviewed]="f.status !== 'OPEN'" (click)="toggle(f.id)">
+        <div class="severity-bar"></div>
+        <div class="finding-content">
+          <div class="finding-header">
+            <span class="kind-chip">{{ kindLabel(f.kind) }}</span>
+            <span class="severity-chip" [ngClass]="severityClass(f.severity)">{{ f.severity }}</span>
+            <span class="status-chip mono">{{ f.status }}</span>
+            <span class="finding-time mono">{{ timeAgo(f.lastAt) }}</span>
+          </div>
+          <p class="finding-summary">{{ f.summary }}</p>
+          <div class="finding-meta mono">
+            <span title="Entity id">{{ f.entityId.slice(0, 8) }}</span>
+            <span class="meta-dot"></span>
+            <span>{{ f.hits }} {{ f.hits === 1 ? 'hit' : 'hits' }}</span>
+            @if (f.alertId) {
+              <span class="meta-dot"></span>
+              <span class="alerted">alerted</span>
+            }
+            @if (f.classification !== 'UNCLASSIFIED') {
+              <span class="meta-dot"></span>
+              <span>{{ f.classification }}</span>
+            }
+          </div>
+
+          @if (isExpanded(f.id)) {
+            <div class="evidence" (click)="$event.stopPropagation()">
+              <div class="evidence-col">
+                <h5>Expected</h5>
+                @for (p of expectedPairs(f); track p.label) {
+                  <div class="evidence-row"><span class="evidence-label">{{ p.label }}</span><span class="evidence-value mono">{{ p.value }}</span></div>
+                }
+              </div>
+              <div class="evidence-col">
+                <h5>Seen</h5>
+                @for (p of actualPairs(f); track p.label) {
+                  <div class="evidence-row"><span class="evidence-label">{{ p.label }}</span><span class="evidence-value mono">{{ p.value }}</span></div>
+                }
+              </div>
+              @if (baselineNote(f); as note) {
+                <p class="baseline-note">{{ note }}</p>
+              }
+              <p class="evidence-window mono">Evidence {{ f.evidenceStart | date:'MMM d HH:mm' }} – {{ f.evidenceEnd | date:'MMM d HH:mm' }}</p>
+              @if (f.reviewedBy) {
+                <p class="reviewed-note mono">{{ f.status | lowercase }} by {{ f.reviewedBy }}</p>
+              }
+            </div>
+          }
+
+          <div class="finding-actions">
+            @if (canReview() && f.status === 'OPEN') {
+              <button class="btn btn-secondary btn-sm" (click)="review(f, 'CONFIRMED', $event)" title="Confirm: raise an alert">Confirm</button>
+              <button class="btn btn-ghost btn-sm" (click)="review(f, 'DISMISSED', $event)">Dismiss</button>
+            }
+            @if (f.position) {
+              <button class="btn btn-ghost btn-sm" (click)="showOnMap(f, $event)">&#127758; Show on map</button>
+            }
+          </div>
+        </div>
+      </div>
+    }
+  </div>
+</div>

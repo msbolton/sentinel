@@ -6,6 +6,7 @@ import { filter } from 'rxjs';
 import { WebSocketService, ConnectionStatus } from './core/services/websocket.service';
 import { AuthService, UserProfile } from './core/services/auth.service';
 import { AlertService } from './core/services/alert.service';
+import { AnalyticsService } from './core/services/analytics.service';
 import { ThemeService } from './core/services/theme.service';
 import { ThemePickerComponent } from './shared/components/theme-picker.component';
 import { LayersPillComponent } from './shared/components/layers-pill.component';
@@ -60,6 +61,18 @@ import { MapComponent } from './features/map/map.component';
             </svg>
             @if (unacknowledgedAlertCount() > 0) {
               <span class="badge">{{ unacknowledgedAlertCount() > 99 ? '99+' : unacknowledgedAlertCount() }}</span>
+            }
+          </button>
+          <button
+            class="sidebar-btn"
+            routerLink="/findings"
+            routerLinkActive="active"
+            title="Findings">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+            @if (openFindingCount(); as n) {
+              <span class="badge">{{ n > 99 ? '99+' : n }}</span>
             }
           </button>
           <button
@@ -235,6 +248,7 @@ export class AppComponent implements OnInit, OnDestroy {
   connectionStatus = signal<ConnectionStatus>('disconnected');
   entityCount = signal<number>(0);
   unacknowledgedAlertCount = signal<number>(0);
+  openFindingCount = inject(AnalyticsService).openCount;
   userProfile = signal<UserProfile | null>(null);
   isAdmin = computed(() => this.userProfile()?.roles?.includes('sentinel-admin') ?? false);
   currentTime = signal<string>('');

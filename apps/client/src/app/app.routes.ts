@@ -26,6 +26,12 @@ export const routes: Routes = [
       import('./features/alerts/alerts.component').then((m) => m.AlertsComponent),
   },
   {
+    path: 'findings',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./features/findings/findings.component').then((m) => m.FindingsComponent),
+  },
+  {
     path: 'link-graph',
     canActivate: [roleGuard('sentinel-analyst', 'sentinel-admin')],
     loadComponent: () =>

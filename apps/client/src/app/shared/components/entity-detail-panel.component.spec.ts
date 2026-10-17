@@ -1,7 +1,13 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { signal } from '@angular/core';
+import { of } from 'rxjs';
 import { EntityDetailPanelComponent } from './entity-detail-panel.component';
+import { AnalyticsService } from '../../core/services/analytics.service';
+import { AuthService } from '../../core/services/auth.service';
+import { LocationService } from '../../core/services/location.service';
+import { EntityBaseline, Finding } from '../models/finding.model';
 import { Classification, Entity, EntitySource, EntityType } from '../models/entity.model';
 import { Feed } from '../models/feed.model';
 
@@ -65,10 +71,34 @@ describe('EntityDetailPanelComponent', () => {
     return out;
   }
 
+  const analytics = {
+    baseline: null as EntityBaseline | null,
+    findings: [] as Finding[],
+    getBaseline: jest.fn(),
+    getEntityFindings: jest.fn(),
+    reviewFinding: jest.fn(),
+    openCount: signal<number | null>(0),
+  };
+  const auth = { hasAnyRole: jest.fn().mockReturnValue(false) };
+  const locations = { flyTo: jest.fn() };
+
   beforeEach(async () => {
+    analytics.baseline = null;
+    analytics.findings = [];
+    analytics.getBaseline.mockImplementation(() => of(analytics.baseline));
+    analytics.getEntityFindings.mockImplementation(() => of({ data: analytics.findings, total: analytics.findings.length, page: 1, pageSize: 10 }));
+    analytics.reviewFinding.mockImplementation((id: string, status: string) => of({ id, status }));
+    auth.hasAnyRole.mockReturnValue(false);
+    locations.flyTo.mockClear();
     await TestBed.configureTestingModule({
       imports: [EntityDetailPanelComponent],
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: AnalyticsService, useValue: analytics },
+        { provide: AuthService, useValue: auth },
+        { provide: LocationService, useValue: locations },
+      ],
     }).compileComponents();
     httpMock = TestBed.inject(HttpTestingController);
     fixture = TestBed.createComponent(EntityDetailPanelComponent);
@@ -141,5 +171,86 @@ describe('EntityDetailPanelComponent', () => {
     expect(r['TAK uid']).toBeUndefined();
     expect(r['Callsign']).toBeUndefined();
     httpMock.expectNone('/api/v1/feeds');
+  });
+
+  describe('behaviour section', () => {
+    function makeBaseline(over: Partial<EntityBaseline> = {}): EntityBaseline {
+      const hours = new Array(168).fill(0);
+      hours[1 * 24 + 8] = 40;
+      hours[1 * 24 + 9] = 20;
+      return {
+        entityId: 'e1',
+        entityType: 'VEHICLE',
+        computedAt: '2026-10-17T12:00:00Z',
+        windowStart: '2026-09-17T12:00:00Z',
+        windowEnd: '2026-10-17T12:00:00Z',
+        pointCount: 3360,
+        days: 10,
+        mature: true,
+        stats: {
+          range: { p50M: 0, p95M: 3400 },
+          speed: { mean: 4, stddev: 8, p95: 21, max: 22, n: 3360 },
+          altitude: { mean: 10, stddev: 0, p95: 10, max: 10, n: 3360 },
+          gap: { p50Sec: 300, p95Sec: 300 },
+          params: { solarOffsetHours: -5, windowDays: 30 },
+        },
+        hours,
+        places: [
+          { clusterIndex: 0, name: 'Depot', lat: 40, lon: -74, radiusM: 40, visits: 11, medianDwellSec: 6 * 3600, pointShare: 0.6, firstSeen: '2026-10-07T00:00:00Z', lastSeen: '2026-10-17T00:00:00Z' },
+          { clusterIndex: 1, lat: 40.05, lon: -74.05, radiusM: 35, visits: 10, medianDwellSec: 8.5 * 3600, pointShare: 0.3, firstSeen: '2026-10-07T00:00:00Z', lastSeen: '2026-10-17T00:00:00Z' },
+        ],
+        ...over,
+      };
+    }
+
+    function makeFinding(over: Partial<Finding> = {}): Finding {
+      return {
+        id: 'f1', entityId: 'e1', kind: 'UNUSUAL_PLACE', severity: 'MEDIUM', score: 2, summary: '3.3 km from Depot',
+        expected: {}, actual: {}, thresholds: {}, evidenceStart: '2026-10-17T12:00:00Z', evidenceEnd: '2026-10-17T12:10:00Z',
+        status: 'OPEN', classification: 'UNCLASSIFIED', hits: 3, firstAt: '2026-10-17T12:00:00Z', lastAt: '2026-10-17T12:10:00Z',
+        ...over,
+      };
+    }
+
+    it('says so when there is no baseline yet', () => {
+      fixture.componentRef.setInput('entity', makeEntity());
+      fixture.detectChanges();
+      expect(analytics.getBaseline).toHaveBeenCalledWith('e1');
+      expect(el.querySelector('.behaviour-section .behaviour-note')?.textContent).toContain('No baseline yet');
+      expect(el.querySelector('.place-list')).toBeNull();
+    });
+
+    it('shows the baseline, named places, the hour grid and open findings', () => {
+      analytics.baseline = makeBaseline();
+      analytics.findings = [makeFinding()];
+      fixture.componentRef.setInput('entity', makeEntity());
+      fixture.detectChanges();
+      const section = el.querySelector('.behaviour-section')!;
+      expect(section.textContent).toContain('3360 fixes');
+      expect(section.textContent).toContain('10 d');
+      expect(section.textContent).toContain('0 m / 3.4 km');
+      const places = Array.from(section.querySelectorAll('.place-item .place-name')).map((n) => n.textContent?.trim());
+      expect(places).toEqual(['Depot', 'Place 2']);
+      expect(section.querySelectorAll('.hour-cell').length).toBe(168);
+      expect(section.querySelector('.finding-item')?.textContent).toContain('Unusual place');
+      expect(section.querySelector('.finding-item')?.textContent).toContain('3.3 km from Depot');
+      // a viewer gets no review buttons
+      expect(section.querySelector('.finding-actions')).toBeNull();
+      (section.querySelector('.place-item') as HTMLElement).click();
+      expect(locations.flyTo).toHaveBeenCalledWith(expect.objectContaining({ name: 'Depot', latitude: 40, longitude: -74 }));
+    });
+
+    it('lets an analyst dismiss a finding, which removes it from the list', () => {
+      auth.hasAnyRole.mockReturnValue(true);
+      analytics.baseline = makeBaseline();
+      analytics.findings = [makeFinding()];
+      fixture.componentRef.setInput('entity', makeEntity());
+      fixture.detectChanges();
+      const dismiss = Array.from(el.querySelectorAll('.finding-actions .btn')).find((b) => b.textContent?.includes('Dismiss')) as HTMLButtonElement;
+      dismiss.click();
+      fixture.detectChanges();
+      expect(analytics.reviewFinding).toHaveBeenCalledWith('f1', 'DISMISSED');
+      expect(el.querySelector('.finding-item')).toBeNull();
+    });
   });
 });
