@@ -147,3 +147,17 @@ export const TRACK_TRAIL_CONFIG = {
     LOW_ALT_STRIDE: 1,
   },
 };
+
+/** Overlays drawn for the selected satellite. */
+export const ORBIT_OVERLAY_CONFIG = {
+  samples: 120,          // positions per revolution for the path and ground track
+  rebuildMs: 60_000,     // the path is re-sampled this often (and when the elements change)
+  pathWidth: 2,
+  groundWidth: 1.5,
+  pathColor: '#9ca3af',
+  groundColor: '#9ca3af',
+  groundAlpha: 0.6,
+  footprintColor: '#9ca3af',
+  footprintAlpha: 0.12,
+  footprintOutlineAlpha: 0.5,
+};
