@@ -794,7 +794,6 @@ services:
       KAFKA_BROKERS: kafka:9093
       CORS_ORIGIN: "*"
     ports:
-      # macOS Control Center listens on 5000: set ANALYTICS_SERVICE_PORT=5001 in .env
       - "${ANALYTICS_SERVICE_PORT:-5000}:5000"
     depends_on:
       postgres:

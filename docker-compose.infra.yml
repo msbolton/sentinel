@@ -128,8 +128,11 @@ services:
       KAFKA_ADVERTISED_LISTENERS: "EXTERNAL://localhost:9092,INTERNAL://kafka:9093"
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"
       KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
-      # Cluster and storage settings
-      CLUSTER_ID: "sentinel-kafka-cluster-001"
+      # Cluster and storage settings: must match docker-compose.yml, which shares
+      # the sentinel-kafka-data volume; a different id makes every connected
+      # client refuse the broker ("reports different ClusterId").
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
       # Performance tuning
       KAFKA_NUM_PARTITIONS: "6"
       KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
@@ -145,6 +148,8 @@ services:
     ports:
       - "9092:9092"
       - "9093:9093"
+    volumes:
+      - kafka-data:/var/lib/kafka
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9093 > /dev/null 2>&1"]
       interval: 15s
@@ -408,6 +413,9 @@ volumes:
   postgres-data:
     driver: local
     name: sentinel-postgres-data
+  kafka-data:
+    driver: local
+    name: sentinel-kafka-data
   keycloak-db-data:
     driver: local
     name: sentinel-keycloak-db-data
