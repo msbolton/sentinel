@@ -72,12 +72,13 @@ func main() {
 
 	// Upstream proxies.
 	up := server.Upstreams{
-		Entities: mustProxy(logger, "entity-service", cfg.EntityServiceURL, nil),
-		Tracks:   mustProxy(logger, "track-service", cfg.TrackServiceURL, nil),
-		Alerts:   mustProxy(logger, "alert-service", cfg.AlertServiceURL, nil),
-		Links:    mustProxy(logger, "link-analysis-service", cfg.LinkAnalysisServiceURL, nil),
-		Search:   mustProxy(logger, "search-service", cfg.SearchServiceURL, nil),
-		Feeds:    mustProxyWithToken(logger, "ingest-service", cfg.IngestServiceURL, proxy.StripPrefix("/api/v1"), cfg.IngestServiceToken),
+		Entities:  mustProxy(logger, "entity-service", cfg.EntityServiceURL, nil),
+		Tracks:    mustProxy(logger, "track-service", cfg.TrackServiceURL, nil),
+		Alerts:    mustProxy(logger, "alert-service", cfg.AlertServiceURL, nil),
+		Links:     mustProxy(logger, "link-analysis-service", cfg.LinkAnalysisServiceURL, nil),
+		Search:    mustProxy(logger, "search-service", cfg.SearchServiceURL, nil),
+		Feeds:     mustProxyWithToken(logger, "ingest-service", cfg.IngestServiceURL, proxy.StripPrefix("/api/v1"), cfg.IngestServiceToken),
+		Analytics: mustProxy(logger, "analytics-service", cfg.AnalyticsServiceURL, nil),
 	}
 
 	locStore := locations.NewPGStore(pool)

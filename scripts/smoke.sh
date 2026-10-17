@@ -39,6 +39,7 @@ check GET /api/v1/entities/counts 200
 check GET /api/v1/entities/ageout-config 200
 check GET "/api/v1/alerts?pageSize=1" 200
 check GET /api/v1/alerts/rules 200
+check GET /api/v1/analytics/stats 200
 check GET "/api/v1/links/graph?centerId=00000000-0000-4000-8000-000000000000" 200
 check GET "/api/v1/search?q=test" 200
 check GET /api/v1/search/facets 200

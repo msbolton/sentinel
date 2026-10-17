@@ -99,7 +99,7 @@ Every message on Kafka is a protobuf from `proto/sentinel/v1` with `content-type
 | **Search Service** | Go | 3003 | Full-text and geospatial search via OpenSearch, index kept current from entity events |
 | **Link Analysis Service** | Go | 3004 | Entity relationship graph (SQL traversal), link scoring |
 | **Alert Service** | Go | 3005 | Geofence and rule evaluation on typed snapshots, alert persistence for every producer |
-| **Analytics Service** | Python | 5000 | Pattern detection, anomaly alerts |
+| **Analytics Service** | Go | 5000 | Behavioural baselines per entity, detectors for unusual place, time, movement and going dark, findings with evidence that become alerts when confirmed or severe |
 | **GeoServer** | Java (image) | 8600 | WMS/WFS layers over per-clearance PostGIS views, provisioned by a one-shot job |
 | **Web UI** | TypeScript/Angular | 4200 | CesiumJS 3D map, per-user layer visibility, connections management, alerts, search, timeline, link graph, settings |
 
@@ -134,7 +134,7 @@ sequenceDiagram
 4. **Runner.** Stamps provenance (feed id, driver, receive time, lease token) and the feed's classification (a decoder may only raise it), guarantees an identity, bounds the raw payload, suppresses repeated fixes, computes a deterministic observation id and publishes to `observations.raw` keyed by identity. Undecodable payloads go to `observations.dlq` with the reason in headers.
 5. **Area of interest.** Drivers with the `area` capability poll only what connected map clients can see. The gateway aggregates client viewports and pushes them to every such feed with a 90 s lease, so polling stops when nobody is looking or the gateway dies.
 6. **Fusion.** The entity service resolves the observation's identities to an entity (creating one when needed), applies the newest-fix-wins rule across feeds, replicas and out-of-order delivery, keeps the highest classification any feed reported, records the contributing feed in `entity_sources`, and emits one typed event per change on `entities.events`.
-7. **Consumers.** The track service stores every accepted fix with provenance; the alert service evaluates geofences and rules; the search service updates its index; analytics looks for anomalies; the gateway bridge streams to browsers; outbound connections forward to their remote.
+7. **Consumers.** The track service stores every accepted fix with provenance; the alert service evaluates geofences and rules; the search service updates its index; the analytics service judges the fix against the entity's baseline; the gateway bridge streams to browsers; outbound connections forward to their remote.
 
 ### Outbound connections
 
@@ -288,7 +288,7 @@ sentinel/
 | `search-service` | Go | OpenSearch front |
 | `link-analysis-service` | Go | relationship graph |
 | `alert-service` | Go | rules, geofences, alerts |
-| `analytics-service` | Python | FastAPI, anomaly detection |
+| `analytics-service` | Go | baselines, detectors, findings |
 | `client` | Angular 19 | CesiumJS map and management UI |
 
 #### The common Go service layout
@@ -396,15 +396,18 @@ Standalone components, zoneless change detection, hash routing; `docs/frontend.m
 
 #### analytics-service
 
-```
-sentinel_analytics/
-├── main.py            FastAPI app; starts the Kafka consumer in its lifespan
-├── config.py, db.py
-├── routers/           HTTP endpoints
-├── services/          detection logic
-└── models/            Pydantic models
-tests/
-```
+Same shape as the other Go services, with these packages beyond the common four:
+
+| Package | Role |
+|---------|------|
+| `model` | `Fix`, the position report reduced from an entity event |
+| `geo` | great-circle distance, the coverage grid cell, local solar hour offset |
+| `consumer` | `entities.events` batch handler: fixes to the detector engine, coverage cells to the store |
+| `baseline` | what is normal for an entity: dwell clustering, hour-of-week histogram, movement and gap statistics, in-memory cache |
+| `job` | the hourly baseline recomputation under a Postgres advisory lock |
+| `detect` | the pure detectors and the engine that turns hits into findings |
+| `alerts` | publishes a finding as an `AlertEvent` with the finding's id |
+| `stats` | counters for `/metrics` and `/api/v1/analytics/stats` |
 
 ## Testing and tooling
 
