@@ -1,8 +1,13 @@
 import { Component, computed, CUSTOM_ELEMENTS_SCHEMA, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { CommonModule } from '@angular/common';
+import { AnalyticsService } from '../../core/services/analytics.service';
+import { AuthService } from '../../core/services/auth.service';
 import { FeedService } from '../../core/services/feed.service';
+import { LocationService } from '../../core/services/location.service';
 import { Entity } from '../models/entity.model';
+import { EntityBaseline, EntityPlace, Finding, findingKindLabel, formatDuration, formatMetres } from '../models/finding.model';
+import { Location } from '../models/location.model';
 
 @Component({
   selector: 'app-entity-detail-panel',
@@ -144,6 +149,78 @@ import { Entity } from '../models/entity.model';
               }
             </section>
           }
+
+          <!-- Behaviour: what is normal for this entity and where it departs from it -->
+          <section class="section behaviour-section">
+            <h4 class="section-label">Behaviour</h4>
+            @if (baseline(); as b) {
+              <div class="field-row">
+                <span class="field-label">Baseline</span>
+                <span class="field-value mono">{{ b.pointCount }} fixes &middot; {{ b.days }} d{{ b.mature ? '' : ' &middot; immature' }}</span>
+              </div>
+              @if (b.places.length > 0) {
+                <div class="field-row">
+                  <span class="field-label">Range</span>
+                  <span class="field-value mono" title="Distance beyond the nearest usual place: median / 95th percentile">{{ fmtM(b.stats.range.p50M) }} / {{ fmtM(b.stats.range.p95M) }}</span>
+                </div>
+              }
+              @if (b.stats.speed.n > 0) {
+                <div class="field-row">
+                  <span class="field-label">Speed</span>
+                  <span class="field-value mono">{{ b.stats.speed.mean | number:'1.0-0' }} &plusmn; {{ b.stats.speed.stddev | number:'1.0-0' }} kts, p95 {{ b.stats.speed.p95 | number:'1.0-0' }}</span>
+                </div>
+              }
+              @if (b.stats.gap.p95Sec > 0) {
+                <div class="field-row">
+                  <span class="field-label">Reports every</span>
+                  <span class="field-value mono">{{ fmtSec(b.stats.gap.p50Sec) }} (p95 {{ fmtSec(b.stats.gap.p95Sec) }})</span>
+                </div>
+              }
+              @if (b.places.length > 0) {
+                <div class="field-row-stack">
+                  <span class="field-label">Usual places</span>
+                  <ul class="place-list">
+                    @for (place of topPlaces(b); track place.clusterIndex) {
+                      <li class="place-item" (click)="flyToPlace(place)" title="Show on map">
+                        <span class="place-name">{{ placeName(place) }}</span>
+                        <span class="place-meta mono">{{ place.visits }} visits &middot; {{ fmtSec(place.medianDwellSec) }} &middot; {{ (place.pointShare * 100) | number:'1.0-0' }}%</span>
+                      </li>
+                    }
+                  </ul>
+                </div>
+              }
+              <div class="field-row-stack">
+                <span class="field-label">Active hours <span class="text-muted">(local, Sun&ndash;Sat)</span></span>
+                <div class="hour-grid" role="img" aria-label="Activity by hour of week">
+                  @for (cell of hourCells(b); track $index) {
+                    <div class="hour-cell" [style.opacity]="cell.opacity" [title]="cell.title"></div>
+                  }
+                </div>
+              </div>
+            } @else if (baseline() === null) {
+              <p class="behaviour-note">No baseline yet. Departures are judged once a few days of history exist.</p>
+            }
+            @if (findings().length > 0) {
+              <ul class="finding-list">
+                @for (f of findings(); track f.id) {
+                  <li class="finding-item" [ngClass]="f.severity.toLowerCase()">
+                    <div class="finding-head">
+                      <span class="chip chip-severity" [ngClass]="f.severity.toLowerCase()">{{ f.severity }}</span>
+                      <span class="finding-kind">{{ kindLabel(f.kind) }}</span>
+                      <span class="finding-hits mono">{{ f.hits }}&times;</span>
+                    </div>
+                    <p class="finding-summary">{{ f.summary }}</p>
+                    @if (canReview()) {
+                      <div class="finding-actions">
+                        <button class="btn btn-secondary btn-sm" (click)="review(f, 'CONFIRMED')">Confirm</button>
+                        <button class="btn btn-ghost btn-sm" (click)="review(f, 'DISMISSED')">Dismiss</button>
+                      </div>
+                    }
+                  </li>
+                }
+              </ul>
+            }
+          </section>
 
           <!-- Operational Status -->
           @if (e.operationalStatus && e.operationalStatus !== 'UNKNOWN') {
@@ -617,6 +694,125 @@ import { Entity } from '../models/entity.model';
       }
     }
 
+    .behaviour-note {
+      margin: 0;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+
+    .place-list {
+      list-style: none;
+      margin: 4px 0 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .place-item {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 3px 6px;
+      border-radius: 4px;
+      font-size: 0.78rem;
+      cursor: pointer;
+
+      &:hover {
+        background: var(--bg-primary);
+      }
+    }
+
+    .place-name {
+      color: var(--text-secondary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .place-meta {
+      color: var(--text-muted);
+      font-size: 0.72rem;
+      flex-shrink: 0;
+    }
+
+    .hour-grid {
+      display: grid;
+      grid-template-columns: repeat(24, 1fr);
+      gap: 1px;
+      margin-top: 4px;
+    }
+
+    .hour-cell {
+      aspect-ratio: 1;
+      min-height: 6px;
+      border-radius: 1px;
+      background: var(--accent-blue);
+    }
+
+    .finding-list {
+      list-style: none;
+      margin: 8px 0 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .finding-item {
+      padding: 6px 8px;
+      border-left: 3px solid var(--text-muted);
+      border-radius: 4px;
+      background: var(--bg-primary);
+
+      &.critical { border-left-color: var(--accent-red); }
+      &.high { border-left-color: var(--accent-orange); }
+      &.medium { border-left-color: var(--accent-yellow); }
+      &.low { border-left-color: var(--accent-blue); }
+    }
+
+    .finding-head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .chip-severity {
+      font-size: 0.64rem;
+      background: rgba(107, 114, 128, 0.2);
+      color: var(--text-muted);
+
+      &.critical { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
+      &.high { background: rgba(249, 115, 22, 0.2); color: var(--accent-orange); }
+      &.medium { background: rgba(245, 158, 11, 0.2); color: var(--accent-yellow); }
+      &.low { background: rgba(59, 130, 246, 0.2); color: var(--accent-blue); }
+    }
+
+    .finding-kind {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .finding-hits {
+      margin-left: auto;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    .finding-summary {
+      margin: 4px 0 0;
+      font-size: 0.76rem;
+      color: var(--text-secondary);
+      line-height: 1.35;
+    }
+
+    .finding-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
     .chip-list {
       display: flex;
       flex-wrap: wrap;
@@ -790,7 +986,16 @@ export class EntityDetailPanelComponent {
 
   private sanitizer = inject(DomSanitizer);
   private readonly feedService = inject(FeedService);
+  private readonly analytics = inject(AnalyticsService);
+  private readonly auth = inject(AuthService);
+  private readonly locations = inject(LocationService);
   private feedsRequested = false;
+  private behaviourRequest = 0;
+
+  /** undefined while loading, null when the service has no baseline yet. */
+  protected baseline = signal<EntityBaseline | null | undefined>(undefined);
+  protected findings = signal<Finding[]>([]);
+  protected canReview = computed(() => this.auth.hasAnyRole('sentinel-analyst', 'sentinel-admin'));
 
   entity = input<Entity | null>(null);
   close = output<void>();
@@ -801,6 +1006,25 @@ export class EntityDetailPanelComponent {
       this.entity();
       this.expandedSections.set({ platformDetails: false, signalQuality: false });
     });
+    // Behaviour: the baseline and open findings of the shown entity. A
+    // request counter drops answers for an entity that is no longer shown.
+    effect(() => {
+      const id = this.entity()?.id;
+      const request = ++this.behaviourRequest;
+      this.baseline.set(undefined);
+      this.findings.set([]);
+      if (!id) return;
+      untracked(() => {
+        this.analytics.getBaseline(id).subscribe({
+          next: (b) => { if (request === this.behaviourRequest) this.baseline.set(b); },
+          error: () => { if (request === this.behaviourRequest) this.baseline.set(null); },
+        });
+        this.analytics.getEntityFindings(id, { status: 'OPEN', pageSize: 10 }).subscribe({
+          next: (res) => { if (request === this.behaviourRequest) this.findings.set(res.data ?? []); },
+          error: () => undefined,
+        });
+      });
+    });
     // The connection name comes from the feed list; fetch it once, the
     // first time an entity with a feed id is shown.
     effect(() => {
@@ -809,6 +1033,61 @@ export class EntityDetailPanelComponent {
         this.feedsRequested = true;
         untracked(() => this.feedService.load().subscribe({ error: () => undefined }));
       }
+    });
+  }
+
+  protected fmtM(m: number): string {
+    return formatMetres(m);
+  }
+
+  protected fmtSec(sec: number): string {
+    return formatDuration(sec);
+  }
+
+  protected kindLabel(kind: string): string {
+    return findingKindLabel(kind);
+  }
+
+  protected topPlaces(b: EntityBaseline): EntityPlace[] {
+    return b.places.slice(0, 5);
+  }
+
+  protected placeName(place: EntityPlace): string {
+    return place.name ?? `Place ${place.clusterIndex + 1}`;
+  }
+
+  /** The 168 hour-of-week slots as cells shaded by their share of activity. */
+  protected hourCells(b: EntityBaseline): { opacity: number; title: string }[] {
+    const hours = b.hours ?? [];
+    const max = Math.max(1, ...hours);
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return hours.map((count, slot) => ({
+      opacity: count > 0 ? 0.15 + 0.85 * (count / max) : 0.04,
+      title: `${days[Math.floor(slot / 24)]} ${String(slot % 24).padStart(2, '0')}:00 — ${count} fixes`,
+    }));
+  }
+
+  protected flyToPlace(place: EntityPlace): void {
+    this.locations.flyTo({
+      id: `place-${place.clusterIndex}`,
+      name: this.placeName(place),
+      latitude: place.lat,
+      longitude: place.lon,
+      altitude: Math.max(1500, place.radiusM * 20),
+      heading: 0,
+      pitch: -60,
+      range: Math.max(2000, place.radiusM * 30),
+      has3dTiles: false,
+      category: 'CUSTOM',
+      createdAt: place.firstSeen,
+      updatedAt: place.lastSeen,
+    } as Location);
+  }
+
+  protected review(f: Finding, status: 'CONFIRMED' | 'DISMISSED'): void {
+    this.analytics.reviewFinding(f.id, status).subscribe({
+      next: () => this.findings.set(this.findings().filter((x) => x.id !== f.id)),
+      error: () => undefined,
     });
   }
 
