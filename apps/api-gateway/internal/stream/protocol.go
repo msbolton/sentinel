@@ -92,6 +92,15 @@ type Entity struct {
 	AgeoutState    string           `json:"ageoutState,omitempty"`
 	Identities     []EntityIdentity `json:"identities,omitempty"`
 	LastObservedAt string           `json:"lastObservedAt,omitempty"`
+	// Sources lists every feed that contributed to the fused entity.
+	Sources []EntitySourceRef `json:"sources,omitempty"`
+}
+
+// EntitySourceRef is one feed's contribution to a fused entity.
+type EntitySourceRef struct {
+	FeedID         string `json:"feedId"`
+	Source         string `json:"source,omitempty"`
+	LastObservedAt string `json:"lastObservedAt,omitempty"`
 }
 
 // EntityEvent is what the client receives for created, updated, and deleted entities.

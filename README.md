@@ -1,6 +1,6 @@
 # SENTINEL
 
-Geospatial intelligence platform for real-time entity tracking, link analysis, and alerting. Built as an Nx monorepo with Go microservices behind a Go API gateway, an Angular 19 frontend with CesiumJS 3D mapping, and a Python analytics service.
+Geospatial intelligence platform for real-time entity tracking, link analysis, and alerting. Built as an Nx monorepo with Go microservices behind a Go API gateway, and an Angular 19 frontend with CesiumJS 3D mapping.
 
 ## Quickstart
 
@@ -73,7 +73,7 @@ Entity Track   Search   Alert   Link Analysis
    PostgreSQL/PostGIS ──────── OpenSearch
 ```
 
-**9 services**: API Gateway (Go :3000), Entity Service (Go :3001), Track Service (Go :3002), Search Service (Go :3003), Link Analysis Service (Go :3004), Alert Service (Go :3005), Ingest Service (Go :4000), Analytics Service (Python :5000), Web UI (Angular :4200)
+**9 services**: API Gateway (Go :3000), Entity Service (Go :3001), Track Service (Go :3002), Search Service (Go :3003), Link Analysis Service (Go :3004), Alert Service (Go :3005), Ingest Service (Go :4000), Analytics Service (Go :5000), Web UI (Angular :4200)
 
 **Infrastructure**: PostgreSQL 16 + PostGIS + TimescaleDB, Kafka 3.7 (KRaft), OpenSearch 2.17, Keycloak 24, GeoServer 2.25, MinIO
 
@@ -90,7 +90,7 @@ sentinel/
 │   ├── link-analysis-service/# Link/graph analysis (:3004)
 │   ├── alert-service/        # Alerting engine (:3005)
 │   ├── ingest-service/       # Go data ingest (:4000)
-│   └── analytics-service/    # Python analytics (:5000)
+│   └── analytics-service/    # Go behavioural analysis (:5000)
 ├── libs/
 │   ├── common-go/            # Shared Go: config, Kafka, health, auth headers, models
 │   └── proto-gen/            # Protobuf generated code (TS for the client, Go, Python)
@@ -134,5 +134,4 @@ sentinel/
 - **Backend**: Go 1.24 (net/http, pgx, confluent-kafka-go, golang-jwt), native WebSocket
 - **Data**: PostgreSQL 16 + PostGIS + TimescaleDB, Kafka 3.7, OpenSearch 2.17
 - **Auth**: Keycloak 24 (OIDC/JWT), RBAC + classification-based access
-- **Analytics**: Python 3.12, FastAPI
 - **DevOps**: Docker Compose, Kubernetes, Nx monorepo

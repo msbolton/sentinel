@@ -16,6 +16,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/dedupe"
 	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/obs"
+	"github.com/sentinel/ingest-service/internal/outbound"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 )
 
@@ -43,9 +44,14 @@ type RunnerOptions struct {
 	// Classification is the feed's default level (bare Classification
 	// name). Observations below it are raised to it; "" means UNCLASSIFIED.
 	Classification string
+	// Pump is the outbound half of a connection (nil for a plain source).
+	// It runs beside the driver; when either stops with an error the other
+	// is cancelled and the supervisor restarts the connection.
+	Pump *outbound.Pump
 }
 
-// Stats is what a runner has counted so far.
+// Stats is what a runner has counted so far. The Outbound fields are zero
+// for a plain source.
 type Stats struct {
 	FramesTotal   int64
 	Observations  int64
@@ -53,6 +59,8 @@ type Stats struct {
 	LastSuccessAt time.Time
 	EntitiesLast  int
 	LastError     string
+
+	Outbound *outbound.Counters
 }
 
 // Runner runs one driver and is its sink.
@@ -90,7 +98,36 @@ func NewRunner(feedID, driverID string, drv driver.Driver, pub Publisher, m *met
 
 // Run runs the driver until ctx ends. A panic inside the driver is
 // recovered and returned as an error so the supervisor can restart it.
-func (r *Runner) Run(ctx context.Context) (err error) {
+func (r *Runner) Run(ctx context.Context) error {
+	if r.opts.Pump == nil {
+		return r.runDriver(ctx)
+	}
+	// A connection: the driver (its inbound side and the session itself)
+	// and the pump run together; the first to fail stops the other.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errs := make(chan error, 2)
+	go func() { errs <- r.runDriver(runCtx) }()
+	go func() {
+		err := r.opts.Pump.Run(runCtx)
+		if err != nil && runCtx.Err() == nil {
+			r.logger.Error("outbound pump stopped", zap.String("feed", r.feedID), zap.Error(err))
+		}
+		errs <- err
+	}()
+	first := <-errs
+	cancel()
+	second := <-errs
+	if first != nil && ctx.Err() == nil {
+		return first
+	}
+	if second != nil && ctx.Err() == nil {
+		return second
+	}
+	return nil
+}
+
+func (r *Runner) runDriver(ctx context.Context) (err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			err = fmt.Errorf("driver panic: %v", rec)
@@ -103,11 +140,17 @@ func (r *Runner) Run(ctx context.Context) (err error) {
 // Driver returns the wrapped driver (for area pushes and health).
 func (r *Runner) Driver() driver.Driver { return r.drv }
 
-// Stats returns a copy of the counters.
+// Stats returns a copy of the counters, with the outbound pump's when the
+// runner is a connection.
 func (r *Runner) Stats() Stats {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.stats
+	s := r.stats
+	r.mu.Unlock()
+	if r.opts.Pump != nil {
+		c := r.opts.Pump.Stats()
+		s.Outbound = &c
+	}
+	return s
 }
 
 // Emit stamps provenance, drops repeated fixes and publishes.

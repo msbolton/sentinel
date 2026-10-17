@@ -14,6 +14,8 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
+	commonkafka "github.com/sentinel/go-common/kafka"
+
 	"github.com/sentinel/ingest-service/internal/config"
 	"github.com/sentinel/ingest-service/internal/drivers"
 	"github.com/sentinel/ingest-service/internal/feed"
@@ -22,6 +24,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/lease"
 	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/mgmt"
+	"github.com/sentinel/ingest-service/internal/outbound"
 	"github.com/sentinel/ingest-service/internal/publish"
 	"github.com/sentinel/ingest-service/internal/registry"
 	_ "github.com/sentinel/ingest-service/internal/source/all" // registers transports, decoders and drivers
@@ -101,6 +104,10 @@ func main() {
 		RawMax:         cfg.RawPayloadMaxBytes,
 		LeaseTick:      cfg.LeaseTick,
 		RebalanceAfter: cfg.LeaseRebalance,
+		Shapes: outbound.NewShapeStore(reg.Pool()),
+		ConsumerFactory: func(groupID, clientID string) (outbound.Consumer, error) {
+			return commonkafka.NewBatchConsumer(cfg.KafkaBrokers, groupID, clientID, "latest", commonkafka.BatchOptions{MaxMessages: 200, MaxWait: 200 * time.Millisecond, MaxRetries: 1}, logger.With(zap.String("group", groupID)))
+		},
 	}
 	if cfg.LeaseEnabled {
 		supOpts.Leaser = lease.New(reg.Pool(), cfg.ReplicaID, lease.Options{TTL: cfg.LeaseTTL})

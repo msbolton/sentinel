@@ -13,7 +13,9 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
+	"github.com/sentinel/api-gateway/internal/apikeys"
 	"github.com/sentinel/api-gateway/internal/auth"
+	"github.com/sentinel/api-gateway/internal/export"
 	"github.com/sentinel/api-gateway/internal/config"
 	"github.com/sentinel/api-gateway/internal/locations"
 	"github.com/sentinel/api-gateway/internal/proxy"
@@ -62,15 +64,21 @@ func main() {
 		ClientID: cfg.KeycloakClientID,
 	})
 	authMw := auth.NewMiddleware(verifier, cfg.AuthDevBypass, logger)
+	// Per-user read-only API keys for GIS tools and KML network links.
+	keyStore := apikeys.NewPGStore(pool)
+	authMw.UseAPIKeys(apikeys.NewResolver(keyStore))
+	keyHandler := apikeys.NewHandler(keyStore, logger)
+	exportHandler := export.NewHandler(export.NewHTTPSource(cfg.EntityServiceURL, &http.Client{Timeout: 30 * time.Second}), logger)
 
 	// Upstream proxies.
 	up := server.Upstreams{
-		Entities: mustProxy(logger, "entity-service", cfg.EntityServiceURL, nil),
-		Tracks:   mustProxy(logger, "track-service", cfg.TrackServiceURL, nil),
-		Alerts:   mustProxy(logger, "alert-service", cfg.AlertServiceURL, nil),
-		Links:    mustProxy(logger, "link-analysis-service", cfg.LinkAnalysisServiceURL, nil),
-		Search:   mustProxy(logger, "search-service", cfg.SearchServiceURL, nil),
-		Feeds:    mustProxyWithToken(logger, "ingest-service", cfg.IngestServiceURL, proxy.StripPrefix("/api/v1"), cfg.IngestServiceToken),
+		Entities:  mustProxy(logger, "entity-service", cfg.EntityServiceURL, nil),
+		Tracks:    mustProxy(logger, "track-service", cfg.TrackServiceURL, nil),
+		Alerts:    mustProxy(logger, "alert-service", cfg.AlertServiceURL, nil),
+		Links:     mustProxy(logger, "link-analysis-service", cfg.LinkAnalysisServiceURL, nil),
+		Search:    mustProxy(logger, "search-service", cfg.SearchServiceURL, nil),
+		Feeds:     mustProxyWithToken(logger, "ingest-service", cfg.IngestServiceURL, proxy.StripPrefix("/api/v1"), cfg.IngestServiceToken),
+		Analytics: mustProxy(logger, "analytics-service", cfg.AnalyticsServiceURL, nil),
 	}
 
 	locStore := locations.NewPGStore(pool)
@@ -117,7 +125,7 @@ func main() {
 		Upstreams:  up,
 		Locations:  locations.NewHandler(locStore, logger),
 		Public:     []func(*http.ServeMux){regHandler.RegisterPublicRoutes},
-		Protected:  []func(*http.ServeMux){regHandler.RegisterAdminRoutes},
+		Protected:  []func(*http.ServeMux){regHandler.RegisterAdminRoutes, keyHandler.RegisterRoutes, exportHandler.RegisterRoutes},
 		Root: []func(*http.ServeMux){func(mux *http.ServeMux) {
 			mux.Handle("GET /ws/entities", authMw.RequireAuth(wsHandler))
 		}},

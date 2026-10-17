@@ -53,7 +53,7 @@ export interface FieldDef {
   children?: FieldDef[];
 }
 
-export const SECRET_REF_PATTERN = /^env:[A-Z0-9_]+$/;
+export const SECRET_REF_PATTERN = /^(env:[A-Z0-9_]+|file:\/\S+)$/;
 
 /**
  * Builds a reactive form from a driver's JSON Schema. Driver options and
@@ -76,6 +76,12 @@ export class SchemaFormComponent {
   readonly secretRefs = input<Record<string, string>>({});
   readonly disabled = input(false);
   readonly problems = input<FeedProblem[]>([]);
+  /**
+   * Config keys the parent owns (classification, policy…): no control is
+   * built for them and they never appear in the emitted config, whatever
+   * the schema or the initial value says.
+   */
+  readonly externalKeys = input<string[]>([]);
 
   readonly changed = output<SchemaFormChange>();
 
@@ -145,7 +151,8 @@ export class SchemaFormComponent {
       const secretFields = this.secretFields();
       const value = this.value();
       const secretRefs = this.secretRefs();
-      untracked(() => this.build(schema ?? {}, secretFields, value ?? {}, secretRefs ?? {}));
+      const externalKeys = this.externalKeys();
+      untracked(() => this.build(schema ?? {}, secretFields, value ?? {}, secretRefs ?? {}, externalKeys ?? []));
     });
     effect(() => {
       const disabled = this.disabled();
@@ -239,6 +246,7 @@ export class SchemaFormComponent {
     secretFields: string[],
     value: Record<string, unknown>,
     secretRefs: Record<string, string>,
+    externalKeys: string[] = [],
   ): void {
     this.changeSub?.unsubscribe();
     for (const key of Object.keys(this.configGroup.controls)) {
@@ -249,6 +257,7 @@ export class SchemaFormComponent {
     }
     this.showAll.set(false);
 
+    const external = new Set(externalKeys);
     const properties = schema.properties ?? {};
     const required = new Set(schema.required ?? []);
     const secretKeys = new Set<string>(secretFields);
@@ -260,7 +269,7 @@ export class SchemaFormComponent {
 
     const driverDefs: FieldDef[] = [];
     for (const [key, prop] of Object.entries(properties)) {
-      if (secretKeys.has(key)) {
+      if (secretKeys.has(key) || external.has(key)) {
         continue;
       }
       driverDefs.push(this.buildField(key, prop, required.has(key), value[key], this.configGroup, '/config', 'sf'));
@@ -269,8 +278,8 @@ export class SchemaFormComponent {
     const advancedDefs: FieldDef[] = [];
     const commonProps = COMMON_OPTIONS_SCHEMA.properties ?? {};
     for (const [key, prop] of Object.entries(commonProps)) {
-      if (key in properties) {
-        continue; // the driver's own definition wins
+      if (key in properties || external.has(key)) {
+        continue; // the driver's own definition wins; the parent's keys are not ours
       }
       advancedDefs.push(this.buildField(key, prop, false, value[key], this.configGroup, '/config', 'sf-adv'));
     }
@@ -608,7 +617,7 @@ function describeErrors(errors: ValidationErrors): string[] {
       case 'pattern':
         out.push(
           detail.requiredPattern === SECRET_REF_PATTERN.toString()
-            ? 'Use an environment reference like env:MY_SECRET.'
+            ? 'Use a reference like env:MY_SECRET or file:/etc/sentinel/secret, never the value.'
             : 'Does not match the required format.',
         );
         break;

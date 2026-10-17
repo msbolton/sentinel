@@ -152,6 +152,7 @@ export interface Link16Data {
 export interface CoTData {
   uid: string;
   cotType: string;
+  callsign?: string;
   how?: string;
   ce?: number;
   le?: number;

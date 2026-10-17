@@ -69,6 +69,16 @@ export interface Entity {
   feedId?: string;
   identities?: EntityIdentity[];
   lastObservedAt?: string;
+  /** Every feed that has contributed an observation; more than one after fusion. */
+  sources?: EntitySourceRef[];
+  /** Per-protocol extras some servers send beside platformData (e.g. platforms.cot.callsign). */
+  platforms?: Record<string, Record<string, unknown> | undefined>;
+}
+
+export interface EntitySourceRef {
+  feedId: string;
+  source: string;
+  lastObservedAt?: string;
 }
 
 export interface EntityIdentity {

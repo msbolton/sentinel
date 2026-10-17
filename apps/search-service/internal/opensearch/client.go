@@ -457,6 +457,11 @@ func (c *Client) SearchNearby(ctx context.Context, q NearbyQuery) (*SearchResult
 			},
 		},
 	})
+	if len(q.Classifications) > 0 {
+		filter = append(filter, map[string]interface{}{
+			"terms": map[string]interface{}{"classification": q.Classifications},
+		})
+	}
 
 	if len(must) == 0 {
 		must = append(must, map[string]interface{}{"match_all": map[string]interface{}{}})
@@ -517,14 +522,20 @@ func (c *Client) SearchNearby(ctx context.Context, q NearbyQuery) (*SearchResult
 }
 
 // Suggest returns autocomplete suggestions for a prefix.
-func (c *Client) Suggest(ctx context.Context, prefix string) ([]SuggestResult, error) {
+// Suggest completes names, limited to the given classification levels.
+func (c *Client) Suggest(ctx context.Context, prefix string, classifications []string) ([]SuggestResult, error) {
 	query := map[string]interface{}{
 		"query": map[string]interface{}{
-			"match": map[string]interface{}{
-				"name.autocomplete": map[string]interface{}{
-					"query":    prefix,
-					"operator": "and",
-				},
+			"bool": map[string]interface{}{
+				"must": []interface{}{map[string]interface{}{
+					"match": map[string]interface{}{
+						"name.autocomplete": map[string]interface{}{
+							"query":    prefix,
+							"operator": "and",
+						},
+					},
+				}},
+				"filter": classificationFilter(classifications),
 			},
 		},
 		"size": 10,
@@ -569,9 +580,14 @@ func (c *Client) Suggest(ctx context.Context, prefix string) ([]SuggestResult, e
 }
 
 // GetFacets returns only aggregation counts without documents.
-func (c *Client) GetFacets(ctx context.Context) (*Facets, error) {
+// GetFacets counts documents per type, source and level, limited to the
+// given classification levels.
+func (c *Client) GetFacets(ctx context.Context, classifications []string) (*Facets, error) {
 	query := map[string]interface{}{
 		"size": 0,
+		"query": map[string]interface{}{
+			"bool": map[string]interface{}{"filter": classificationFilter(classifications)},
+		},
 		"aggs": map[string]interface{}{
 			"entityTypes": map[string]interface{}{
 				"terms": map[string]interface{}{"field": "entityType", "size": 100},
@@ -691,4 +707,15 @@ func parseFacets(aggs map[string]json.RawMessage) *Facets {
 	facets.Classifications = parseBuckets("classifications")
 
 	return facets
+}
+
+// classificationFilter is the bool filter clause for a set of levels; an
+// empty set matches everything.
+func classificationFilter(levels []string) []interface{} {
+	if len(levels) == 0 {
+		return []interface{}{}
+	}
+	return []interface{}{map[string]interface{}{
+		"terms": map[string]interface{}{"classification": levels},
+	}}
 }

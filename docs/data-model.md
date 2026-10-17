@@ -15,7 +15,7 @@ All tables live under the `sentinel` schema. PostGIS provides the `geometry` typ
 
 ### sentinel.entities
 
-The fused track: one row per object the platform knows about. Feeds update it through observations; operators own `name` (once set through the REST API), `classification`, `affiliations`, `description` and the symbol, which feeds never overwrite.
+The fused track: one row per object the platform knows about. Feeds update it through observations; operators own `name` (once set through the REST API), `affiliations`, `description` and the symbol, which feeds never overwrite. `classification` is a high-water mark: a new entity takes the level of the observation that created it (each feed stamps its configured `classification` on every observation), a later report can only raise it (`sentinel.classification_max`), and an operator may raise or lower it through `PATCH /api/v1/entities/{id}` until a higher-configured feed reports again. Alerts copy the entity's level when they fire. `db/schema/05_classification.sql` defines the ordering (`UNCLASSIFIED < CONFIDENTIAL < SECRET < TOP_SECRET`) every read path uses as the caller's ceiling.
 
 | Column | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -99,9 +99,32 @@ Stale and age-out thresholds in milliseconds, per feed (`"feedId"`), per source 
 
 Entity relationships for graph analysis: `"sourceEntityId"`, `"targetEntityId"`, `"linkType"`, `confidence`, `description`, `evidence`, `"firstObserved"`, `"lastObserved"`, `metadata`, `"createdAt"`.
 
-### sentinel.locations and sentinel.anomalies
+### sentinel.locations
 
-`locations` holds the saved camera positions the gateway serves (`name`, `latitude`, `longitude`, `altitude`, `heading`, `pitch`, `"range"`, `"has3dTiles"`, `category`). `anomalies` is the analytics service's log of detections (`entity_id`, `anomaly_type`, `severity`, `score`, expected and actual values, `position`, `detected_at`).
+`locations` holds the saved camera positions the gateway serves (`name`, `latitude`, `longitude`, `altitude`, `heading`, `pitch`, `"range"`, `"has3dTiles"`, `category`).
+
+### Behavioural baselines and findings (`db/schema/60_behavior.sql`)
+
+What the analytics service has learned about each entity and where it departs from it.
+
+| Table | Columns | Notes |
+|-------|---------|-------|
+| `entity_baselines` | `"entityId"` (PK), `"entityType"`, `"computedAt"`, `"windowStart"`, `"windowEnd"`, `"pointCount"`, `days`, `mature`, `stats` JSONB, `hours` SMALLINT[168] | One row per entity, recomputed hourly from the last 30 days of `track_points`. `stats` holds range, speed, altitude and reporting-gap statistics; `hours` is the hour-of-week activity histogram in local solar time; `mature` is the gate the detectors wait for |
+| `entity_places` | `id`, `"entityId"`, `"clusterIndex"`, `name`, `"locationId"`, `centroid`, `"radiusM"`, `visits`, `"medianDwellSec"`, `"pointShare"`, `"firstSeen"`, `"lastSeen"` | The baseline's dwell clusters, replaced on each recomputation; `name` comes from a nearby `locations` row |
+| `findings` | `id`, `"entityId"`, `kind`, `severity`, `score`, `summary`, `expected` JSONB, `actual` JSONB, `thresholds` JSONB, `position`, `"evidenceStart"`, `"evidenceEnd"`, `status`, `"reviewedBy"`, `"reviewedAt"`, `"alertId"`, `classification`, `hits`, `"firstAt"`, `"lastAt"`, `"closedAt"` | A departure from the baseline. Kinds: `UNUSUAL_PLACE`, `UNUSUAL_TIME`, `UNUSUAL_MOVEMENT`, `WENT_DARK`, `REAPPEARED`. Status `OPEN` → `CLOSED` when evidence stops, or `CONFIRMED` / `DISMISSED` by an analyst; a partial unique index keeps one open finding per entity and kind so repeat evidence is absorbed (`hits`). A finding that reaches HIGH or is confirmed is published as an alert with the same id (`"alertId"`). `classification` is inherited from the entity |
+| `coverage_cells` | `cell`, `"feedId"`, `"lastObservedAt"` | When each feed last reported in a grid cell, so an entity going dark can be told from a feed going away |
+
+### GIS views (`db/schema/90_gis_views.sql`)
+
+`sentinel.entities_live` presents live, non-deleted entities with a position in snake_case for GeoServer (`entity_type`, `classification`, `classification_rank`, `feed_id`, `last_feed_id`, `source`, `affiliation`, `track_environment`, `heading`, `speed_knots`, `course`, `altitude`, `sidc`, `ageout_state`, `last_observed_at`, `last_seen_at`, `lat`, `lon`, `geom`). `entities_live_u`, `_c`, `_s` and `_ts` filter it by rank; `locations_geo` adds a `geom` point to locations. `gt_pk_metadata` tells GeoTools the views' primary key. The role `sentinel_gis` may read the views only, never `entities`. `09_gis_views_drop.sql` drops the views at the start of an apply so column changes on the tables go through; the views are recreated at the end.
+
+### sentinel.api_keys
+
+Per-user, read-only API keys for GIS tools and KML network links: `id`, `"userId"`, `username`, `name`, `prefix` (the first characters of the secret, for lists), `"keyHash"` (SHA-256 of the secret, unique), `roles` (viewer only), `classification` (capped at the issuer's clearance when issued), `"createdAt"`, `"expiresAt"`, `"lastUsedAt"`, `"revokedAt"`. The secret itself is never stored.
+
+### Connections in `sentinel.feeds`
+
+A feed whose driver sends (`out` or `both`, narrowable with `config.direction`) is a connection. `config.policy` holds the sharing policy, `config.outbound` the delivery tuning, `config.classification` the default level stamped on its observations; `feed_status.detail.outbound` carries the delivery counters. No new columns: `docs/feeds.md` lists the keys.
 
 ## Enums and the string convention
 

@@ -8,8 +8,10 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/sentinel/go-common/classification"
 	"github.com/sentinel/go-common/httputil"
 	"github.com/sentinel/go-common/ids"
+	"github.com/sentinel/go-common/middleware"
 
 	"github.com/sentinel/entity-service/internal/events"
 	"github.com/sentinel/entity-service/internal/store"
@@ -91,9 +93,20 @@ func (h *EntityHandler) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if feeds := q["feedIds"]; len(feeds) > 0 {
+		for _, f := range feeds {
+			for _, part := range strings.Split(f, ",") {
+				if trimmed := strings.TrimSpace(part); trimmed != "" {
+					params.FeedIDs = append(params.FeedIDs, trimmed)
+				}
+			}
+		}
+	}
+
 	if v := q.Get("classification"); v != "" {
 		params.Classification = &v
 	}
+	params.Ceiling = ceilingOf(r)
 
 	result, err := h.store.FindWithinBoundingBox(r.Context(), params)
 	if err != nil {
@@ -126,7 +139,7 @@ func (h *EntityHandler) handleNearby(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	results, err := h.store.FindNearby(r.Context(), lat, lng, radius)
+	results, err := h.store.FindNearby(r.Context(), lat, lng, radius, ceilingOf(r))
 	if err != nil {
 		h.logger.Error("nearby query failed", zap.Error(err))
 		httputil.Error(w, http.StatusInternalServerError, "Failed to find nearby entities")
@@ -137,7 +150,7 @@ func (h *EntityHandler) handleNearby(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EntityHandler) handleCounts(w http.ResponseWriter, r *http.Request) {
-	counts, err := h.store.GetEntityCounts(r.Context())
+	counts, err := h.store.GetEntityCounts(r.Context(), ceilingOf(r))
 	if err != nil {
 		h.logger.Error("get counts failed", zap.Error(err))
 		httputil.Error(w, http.StatusInternalServerError, "Failed to get entity counts")
@@ -147,19 +160,37 @@ func (h *EntityHandler) handleCounts(w http.ResponseWriter, r *http.Request) {
 	httputil.JSON(w, http.StatusOK, counts)
 }
 
-func (h *EntityHandler) handleGetByID(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+// ceilingOf is the caller's clearance as propagated by the gateway; a
+// missing header fails closed to UNCLASSIFIED.
+func ceilingOf(r *http.Request) string {
+	return classification.Normalize(middleware.Classification(r.Context()))
+}
+
+// findVisible fetches an entity the caller is cleared to see. Entities above
+// the caller's clearance do not exist for them, so both cases are "not found".
+func (h *EntityHandler) findVisible(w http.ResponseWriter, r *http.Request, id string) (*store.EntityRecord, bool) {
 	entity, err := h.store.FindByID(r.Context(), id)
 	if err != nil {
 		if strings.Contains(err.Error(), "no rows") {
 			httputil.Error(w, http.StatusNotFound, "Entity not found")
-			return
+			return nil, false
 		}
 		h.logger.Error("get entity failed", zap.Error(err))
 		httputil.Error(w, http.StatusInternalServerError, "Failed to get entity")
+		return nil, false
+	}
+	if classification.Rank(entity.Classification) > classification.Rank(ceilingOf(r)) {
+		httputil.Error(w, http.StatusNotFound, "Entity not found")
+		return nil, false
+	}
+	return entity, true
+}
+
+func (h *EntityHandler) handleGetByID(w http.ResponseWriter, r *http.Request) {
+	entity, ok := h.findVisible(w, r, r.PathValue("id"))
+	if !ok {
 		return
 	}
-
 	httputil.JSON(w, http.StatusOK, entity)
 }
 
@@ -231,10 +262,91 @@ func (h *EntityHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	httputil.JSON(w, http.StatusCreated, entity)
 }
 
+// updateEntityRequest carries the operator-owned fields. Feeds never write
+// these, so an operator's edit sticks until the next operator edit; the one
+// exception is classification, which a feed configured at a higher level
+// raises again on its next report.
+type updateEntityRequest struct {
+	Name              *string  `json:"name"`
+	Description       *string  `json:"description"`
+	Classification    *string  `json:"classification"`
+	Affiliations      []string `json:"affiliations"`
+	MilStd2525dSymbol *string  `json:"milStd2525dSymbol"`
+}
+
+// validateUpdate normalises the request and lists the fields it changes.
+func validateUpdate(req *updateEntityRequest) ([]string, string) {
+	var changed []string
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return nil, "name must not be empty"
+		}
+		req.Name = &name
+		changed = append(changed, "name")
+	}
+	if req.Description != nil {
+		changed = append(changed, "description")
+	}
+	if req.Classification != nil {
+		level := strings.ToUpper(strings.TrimSpace(*req.Classification))
+		if !store.ValidClassification(level) {
+			return nil, "classification must be one of UNCLASSIFIED, CONFIDENTIAL, SECRET, TOP_SECRET"
+		}
+		req.Classification = &level
+		changed = append(changed, "classification")
+	}
+	if req.Affiliations != nil {
+		changed = append(changed, "affiliations")
+	}
+	if req.MilStd2525dSymbol != nil {
+		changed = append(changed, "milStd2525dSymbol")
+	}
+	if len(changed) == 0 {
+		return nil, "no updatable field given (name, description, classification, affiliations, milStd2525dSymbol)"
+	}
+	return changed, ""
+}
+
 func (h *EntityHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
-	// For simplicity, update is handled as a full re-fetch after position update.
-	// Full PATCH support would require dynamic SQL building similar to alert-service UpdateRule.
-	httputil.Error(w, http.StatusNotImplemented, "Full update not yet implemented - use position update endpoint")
+	id := r.PathValue("id")
+	var req updateEntityRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.Error(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	changed, problem := validateUpdate(&req)
+	if problem != "" {
+		httputil.Error(w, http.StatusBadRequest, problem)
+		return
+	}
+
+	// The caller's clearance is a ceiling: entities above it do not exist
+	// for them, and they cannot mark anything above it.
+	if req.Classification != nil && classification.Rank(*req.Classification) > classification.Rank(ceilingOf(r)) {
+		httputil.Error(w, http.StatusForbidden, "classification exceeds your clearance")
+		return
+	}
+	if _, ok := h.findVisible(w, r, id); !ok {
+		return
+	}
+
+	entity, err := h.store.UpdateOperatorFields(r.Context(), id, store.OperatorUpdate{
+		Name: req.Name, Description: req.Description, Classification: req.Classification,
+		Affiliations: req.Affiliations, MilStd2525dSymbol: req.MilStd2525dSymbol,
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "no rows") {
+			httputil.Error(w, http.StatusNotFound, "Entity not found")
+			return
+		}
+		h.logger.Error("update entity failed", zap.Error(err))
+		httputil.Error(w, http.StatusInternalServerError, "Failed to update entity")
+		return
+	}
+
+	h.events.Updated(events.EntityProto(entity, nil, nil), changed)
+	httputil.JSON(w, http.StatusOK, entity)
 }
 
 func (h *EntityHandler) handleUpdatePosition(w http.ResponseWriter, r *http.Request) {
@@ -297,13 +409,7 @@ func (h *EntityHandler) handleDeleteAll(w http.ResponseWriter, r *http.Request) 
 // including the ones that did not move it (duplicates, stale fixes).
 func (h *EntityHandler) handleObservations(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.store.FindByID(r.Context(), id); err != nil {
-		if strings.Contains(err.Error(), "no rows") {
-			httputil.Error(w, http.StatusNotFound, "Entity not found")
-			return
-		}
-		h.logger.Error("get entity failed", zap.Error(err))
-		httputil.Error(w, http.StatusInternalServerError, "Failed to get entity")
+	if _, ok := h.findVisible(w, r, id); !ok {
 		return
 	}
 	limit := parseIntDefault(r.URL.Query().Get("limit"), 100)

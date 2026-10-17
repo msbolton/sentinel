@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
+
+	"github.com/sentinel/go-common/classification"
 )
 
 // EntityRecord represents an entity row from the database.
@@ -83,7 +85,9 @@ type QueryParams struct {
 	West           *float64
 	Types          []string
 	Sources        []string
-	Classification *string
+	FeedIDs        []string // match feedId or lastFeedId
+	Classification *string  // requested ceiling, never above Ceiling
+	Ceiling        string   // caller's clearance; "" = UNCLASSIFIED
 	Page           int
 	PageSize       int
 }
@@ -170,21 +174,21 @@ func (s *EntityStore) FindWithinBoundingBox(ctx context.Context, p QueryParams) 
 		where = append(where, fmt.Sprintf(`e.source IN (%s)`, strings.Join(placeholders, ",")))
 	}
 
-	if p.Classification != nil {
-		classOrder := map[string]int{"UNCLASSIFIED": 0, "CONFIDENTIAL": 1, "SECRET": 2, "TOP_SECRET": 3}
-		ceiling, ok := classOrder[*p.Classification]
-		if ok {
-			allowed := []string{}
-			for c, rank := range classOrder {
-				if rank <= ceiling {
-					allowed = append(allowed, fmt.Sprintf("$%d", argIdx))
-					args = append(args, c)
-					argIdx++
-				}
-			}
-			where = append(where, fmt.Sprintf(`e.classification IN (%s)`, strings.Join(allowed, ",")))
-		}
+	if len(p.FeedIDs) > 0 {
+		where = append(where, fmt.Sprintf(`(e."feedId" = ANY($%d::text[]) OR e."lastFeedId" = ANY($%d::text[]))`, argIdx, argIdx))
+		args = append(args, p.FeedIDs)
+		argIdx++
 	}
+
+	// The caller's clearance is always a ceiling; a requested level can only
+	// narrow it further.
+	ceiling := classification.Normalize(p.Ceiling)
+	if p.Classification != nil {
+		ceiling = classification.Min(*p.Classification, ceiling)
+	}
+	where = append(where, fmt.Sprintf(`sentinel.classification_rank(e.classification) <= $%d`, argIdx))
+	args = append(args, classification.Rank(ceiling))
+	argIdx++
 
 	whereClause := strings.Join(where, " AND ")
 
@@ -232,7 +236,7 @@ func (s *EntityStore) FindWithinBoundingBox(ctx context.Context, p QueryParams) 
 }
 
 // FindNearby returns entities near a point, ordered by distance.
-func (s *EntityStore) FindNearby(ctx context.Context, lat, lng, radiusMeters float64) ([]EntityWithDistance, error) {
+func (s *EntityStore) FindNearby(ctx context.Context, lat, lng, radiusMeters float64, ceiling string) ([]EntityWithDistance, error) {
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 		SELECT %s,
 			ST_Distance(
@@ -248,8 +252,9 @@ func (s *EntityStore) FindNearby(ctx context.Context, lat, lng, radiusMeters flo
 				ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
 				$3
 			)
+			AND sentinel.classification_rank(e.classification) <= $4
 		ORDER BY distance ASC
-	`, entitySelectColumns), lng, lat, radiusMeters)
+	`, entitySelectColumns), lng, lat, radiusMeters, classification.Rank(ceiling))
 	if err != nil {
 		return nil, fmt.Errorf("find nearby: %w", err)
 	}
@@ -397,13 +402,13 @@ func (s *EntityStore) SoftDeleteAll(ctx context.Context) (int64, error) {
 }
 
 // GetEntityCounts returns entity counts grouped by type and classification.
-func (s *EntityStore) GetEntityCounts(ctx context.Context) ([]EntityCount, error) {
+func (s *EntityStore) GetEntityCounts(ctx context.Context, ceiling string) ([]EntityCount, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT "entityType", classification, COUNT(*)
 		FROM sentinel.entities
-		WHERE deleted = false
+		WHERE deleted = false AND sentinel.classification_rank(classification) <= $1
 		GROUP BY "entityType", classification
-	`)
+	`, classification.Rank(ceiling))
 	if err != nil {
 		return nil, fmt.Errorf("get entity counts: %w", err)
 	}
@@ -436,6 +441,40 @@ func (s *EntityStore) UpdatePosition(ctx context.Context, id string, lat, lng fl
 	`, entitySelectColumns), id, lng, lat, heading, speedKnots, course, altitude)
 	return scanEntity(row)
 }
+
+// OperatorUpdate carries the operator-owned fields PATCH may change. Nil
+// means "leave as is"; feeds never write these fields.
+type OperatorUpdate struct {
+	Name              *string
+	Description       *string
+	Classification    *string
+	Affiliations      []string
+	MilStd2525dSymbol *string
+}
+
+// UpdateOperatorFields applies an operator's edits and returns the entity,
+// or pgx.ErrNoRows when it does not exist or is deleted.
+func (s *EntityStore) UpdateOperatorFields(ctx context.Context, id string, u OperatorUpdate) (*EntityRecord, error) {
+	row := s.pool.QueryRow(ctx, fmt.Sprintf(`
+		UPDATE sentinel.entities
+		SET name = COALESCE($2, name),
+			description = COALESCE($3, description),
+			classification = COALESCE($4, classification),
+			affiliations = COALESCE($5, affiliations),
+			"milStd2525dSymbol" = COALESCE($6, "milStd2525dSymbol"),
+			"updatedAt" = NOW()
+		WHERE id = $1 AND deleted = false
+		RETURNING %s
+	`, entitySelectColumns), id, u.Name, u.Description, u.Classification, u.Affiliations, u.MilStd2525dSymbol)
+	return scanEntity(row)
+}
+
+// ClassificationRank orders classification levels the way
+// sentinel.classification_rank does: unknown or empty ranks lowest.
+func ClassificationRank(level string) int { return classification.Rank(level) }
+
+// ValidClassification reports whether level is a stored Classification name.
+func ValidClassification(level string) bool { return classification.Valid(level) }
 
 // Ping checks database connectivity.
 func (s *EntityStore) Ping(ctx context.Context) error {

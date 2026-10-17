@@ -66,8 +66,24 @@ Everything below requires a bearer token (or the dev bypass). The gateway forwar
 | `/api/v1/search/**` | search-service | read only |
 | `/api/v1/feeds/**` → `/feeds/**` | ingest-service | POST/PUT/PATCH/DELETE: `sentinel-operator`, `sentinel-admin` (see `docs/feeds.md`) |
 | `/api/v1/drivers/**` → `/drivers/**` | ingest-service | read only: the driver catalog with config schemas |
+| `/api/v1/analytics/**` | analytics-service | PATCH findings (confirm/dismiss): `sentinel-analyst`, `sentinel-admin` |
 
 The role table lives in `internal/server/policy.go`. Note that `GET /api/v1/links/communities` returns an empty list: the Apache AGE community detection was not carried over to Go.
+
+### Behavioural analysis (analytics-service)
+
+Every read applies the caller's clearance as a ceiling: an entity or finding above it does not exist for them.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/analytics/findings` | Findings, newest evidence first. Filters `status` (OPEN, CONFIRMED, DISMISSED, CLOSED), `kinds` (comma-separated: UNUSUAL_PLACE, UNUSUAL_TIME, UNUSUAL_MOVEMENT, WENT_DARK, REAPPEARED), `severity`, `entityId`, `since` (RFC 3339), `page`, `pageSize` |
+| GET | `/api/v1/analytics/findings/{id}` | One finding with its expected and actual values, thresholds, evidence window, hits and review |
+| PATCH | `/api/v1/analytics/findings/{id}` | `{"status": "CONFIRMED" \| "DISMISSED"}`; confirming publishes the finding as an alert if it has not been. 400 for another status, 409 when the finding is already closed or dismissed |
+| GET | `/api/v1/analytics/entities/{id}/baseline` | What is normal for the entity: fixes and days, maturity, places, range, speed and altitude statistics, reporting gaps, the 168-slot hour-of-week histogram in local solar time. 404 while there is none |
+| GET | `/api/v1/analytics/entities/{id}/findings` | The entity's findings, same filters as the list |
+| GET | `/api/v1/analytics/stats` | Counters: positions judged, findings opened, alerts published, baselines, open findings by severity and kind |
+
+A finding that reaches HIGH, or is confirmed, becomes an alert on `alerts.events` with the finding's id as the alert id and `metadata.findingId`, `kind`, `score`, `hits`; it then appears in `/api/v1/alerts`, on the `alert:new` WebSocket frame and on outbound connections like any other alert.
 
 ### Locations (owned by the gateway)
 
@@ -90,7 +106,7 @@ Unknown body fields are rejected with 400, matching the former NestJS validation
 | POST | `/api/v1/auth/approve-registration/:userId` | `sentinel-admin` | Body `{ classificationLevel? }` (default `classification-u`). Enables the user, assigns `sentinel-viewer` plus the clearance role, clears `registrationDate`, triggers the verification email. If role assignment fails the user is re-disabled and stays pending |
 | POST | `/api/v1/auth/reject-registration/:userId` | `sentinel-admin` | Deletes the user and emails them; a mail failure is logged, not surfaced |
 | GET | `/api/v1/auth/users` | `sentinel-admin` | Enabled users (service accounts excluded) with roles and highest clearance |
-| PUT | `/api/v1/auth/users/:userId/classification` | `sentinel-admin` | Body `{ classificationLevel }` in `classification-u`, `classification-s`, `classification-ts` |
+| PUT | `/api/v1/auth/users/:userId/classification` | `sentinel-admin` | Body `{ classificationLevel }` in `classification-u`, `classification-c`, `classification-s`, `classification-ts` |
 
 ## WebSocket
 
@@ -143,6 +159,20 @@ Failed pushes retry with a 1 s doubling to 30 s backoff. `GET /api/v1/feeds/{id}
 Tokens are RS256 JWTs validated against `{KEYCLOAK_URL}/realms/{realm}/protocol/openid-connect/certs`. The JWKS is fetched lazily on first use and cached, so the gateway starts before Keycloak is reachable. Checks: signature, `exp` (30 s leeway), `iss` in `KEYCLOAK_ISSUERS`, `aud` equal to `KEYCLOAK_AUDIENCE`, non-empty `sub`.
 
 The authenticated user carries realm roles plus the `sentinel-api` client roles, and a clearance level. Clearance comes from the `classification_level` claim when present, otherwise from the highest `classification-*` realm role (`classification-ts` → TOP_SECRET, `-s` → SECRET, `-c` → CONFIDENTIAL, `-u` → UNCLASSIFIED). Roles are checked by name as Keycloak issues them: `sentinel-admin`, `sentinel-analyst`, `sentinel-operator`, `sentinel-viewer`.
+
+### Export for GIS consumers and API keys
+
+| Method | Path | Roles | Notes |
+|--------|------|-------|-------|
+| GET | `/api/v1/export/entities.geojson` | any | FeatureCollection of live entities with a position (`[lon, lat, alt]` points; properties `name`, `entityType`, `classification`, `feedId`, `lastFeedId`, `source`, `heading`, `speedKnots`, `course`, `altitude`, `sidc`, `affiliation`, `trackEnvironment`, `countryOfOrigin`, `ageoutState`, `lastObservedAt`). Query `bbox=west,south,east,north`, `types=`, `feeds=`, `page` (1), `limit` (1000, max 5000). `X-Total-Count` header. Reads through the entity service with the caller's identity, so the clearance ceiling applies |
+| GET | `/api/v1/export/entities.kml` | any | The same as KML Placemarks (ExtendedData, `TimeStamp`, absolute altitude). With `link=1&refresh=30` it returns a `NetworkLink` document that reopens the plain URL every `refresh` seconds (min 5) and after the view stops, passing the view as `bbox`; every other parameter, including `api_key`, is kept in the link |
+| GET | `/api/v1/auth/api-keys` | any user token | The caller's live keys (`id`, `name`, `prefix`, `classification`, `createdAt`, `expiresAt`, `lastUsedAt`) |
+| POST | `/api/v1/auth/api-keys` | any user token | Body `{ name, classification?, expiresInDays? }`. 201 with the key plus `secret` (`sk_…`, shown once). A key carries the viewer role only and `classification = min(requested, caller's clearance)` |
+| DELETE | `/api/v1/auth/api-keys/{id}` | owner or admin | Revokes; 404 when not the caller's |
+
+Google Earth and other KML or GIS tools cannot send an `Authorization` header, so an API key may be presented as the bearer token or, on `/api/v1/export/*` only, as `?api_key=sk_…`. The middleware tells a key from a JWT by the `sk_` prefix, resolves it through `sentinel.api_keys` (SHA-256 at rest, revoked and expired keys refused, `lastUsedAt` stamped) and runs the request as the owner with viewer rights and the key's classification. A principal that authenticated with a key cannot list, make or revoke keys. With `AUTH_DEV_BYPASS` every request is the dev user and keys are never consulted.
+
+Clearance is a ceiling on every read. The services apply `x-sentinel-classification` themselves (`libs/common-go/classification` gives them one ordering): entity lists, nearby, counts, by-id and observations; alerts; search, nearby search, suggestions and facets; track history, latest, segments and the timeline. An entity or alert above the caller's clearance answers 404, a list simply omits it, and a missing header fails closed to UNCLASSIFIED (so a service called directly, without the gateway, serves only unclassified rows). The WebSocket stream filters the same way: entity frames and `alert:new` are sent only to clients cleared to at least the row's level; id-only frames (`entity:deleted`, ageout) are not filtered. `PATCH /api/v1/entities/{id}` refuses to mark an entity above the caller's clearance (403).
 
 Denials are logged as structured audit events (`ACCESS_DENIED`, `ROLE_CHECK_FAILED`, `CLASSIFICATION_CHECK_FAILED`) with the user, method, path, and client IP.
 

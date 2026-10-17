@@ -1,0 +1,194 @@
+<div class="drawer-backdrop" (click)="close()"></div>
+
+<aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="feed-form-title">
+  <header class="drawer-header">
+    @if (mode() === 'create' && step() === 2) {
+      <button type="button" class="icon-btn" (click)="back()" aria-label="Back to driver list" [disabled]="saving()">←</button>
+    }
+    <h2 id="feed-form-title">{{ title() }}</h2>
+    <button type="button" class="icon-btn" (click)="close()" aria-label="Close" [disabled]="saving()">×</button>
+  </header>
+
+  <div class="drawer-body">
+    @if (step() === 1) {
+      <p class="intro">Each driver speaks one protocol. Pick the one that matches where the data comes from, or where it should go.</p>
+      @if (drivers().length === 0) {
+        <p class="muted">No drivers available. The ingest service may still be starting.</p>
+      } @else {
+        <div class="driver-list">
+          @for (d of drivers(); track d.id) {
+            <button type="button" class="driver-card" (click)="selectDriver(d.id)">
+              <span class="driver-head">
+                <span class="driver-name">{{ d.name }}</span>
+                <span class="direction-badge" [class]="'direction-badge direction-' + (d.direction ?? 'in')">{{ d.direction ?? 'in' }}</span>
+              </span>
+              <span class="driver-meta mono">{{ d.id }} · {{ d.source }}</span>
+              @if (d.description) {
+                <span class="driver-description">{{ d.description }}</span>
+              }
+              @if (d.capabilities.length > 0) {
+                <span class="chips">
+                  @for (cap of d.capabilities; track cap) {
+                    <span class="chip">{{ cap }}</span>
+                  }
+                </span>
+              }
+            </button>
+          }
+        </div>
+      }
+    } @else {
+      @if (error(); as err) {
+        <div class="form-error" role="alert">{{ err }}</div>
+      }
+      @if (otherProblems().length > 0) {
+        <ul class="form-error problem-list" role="alert">
+          @for (p of otherProblems(); track p.path + p.message) {
+            <li><code>{{ p.path }}</code> {{ p.message }}</li>
+          }
+        </ul>
+      }
+
+      <form [formGroup]="form" (ngSubmit)="submit()" novalidate id="feed-form">
+        @if (driver(); as d) {
+          <div class="driver-summary">
+            <span class="label">Driver</span>
+            <span class="driver-head">
+              <span class="driver-name">{{ d.name }}</span>
+              <span class="direction-badge" [class]="'direction-badge direction-' + effectiveDirection()">{{ effectiveDirection() }}</span>
+            </span>
+            <span class="driver-meta mono">{{ d.id }} · {{ d.source }}</span>
+            @if (d.description) {
+              <span class="driver-description">{{ d.description }}</span>
+            }
+          </div>
+        }
+
+        <section class="section">
+          <div class="field">
+            <label for="feed-name">Name<span class="required" aria-hidden="true">*</span></label>
+            <input id="feed-name" type="text" formControlName="name" placeholder="e.g. OpenSky Europe" (blur)="touch()" autocomplete="off" />
+            @if (showError('name')) {
+              <p class="error">Name is required.</p>
+            }
+            @for (msg of problemsFor('name'); track msg) {
+              <p class="error">Server: {{ msg }}</p>
+            }
+          </div>
+
+          <div class="field">
+            <label for="feed-id">Id</label>
+            <input
+              id="feed-id"
+              type="text"
+              class="mono"
+              formControlName="id"
+              [attr.placeholder]="mode() === 'create' ? 'optional, derived from the name' : null"
+              (blur)="touch()"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            @if (mode() === 'create') {
+              <p class="help">Will be <code>{{ idPreview() }}</code>. Lowercase letters, digits and dashes; cannot change later.</p>
+            } @else {
+              <p class="help">Ids cannot change.</p>
+            }
+            @if (showError('id')) {
+              <p class="error">Use lowercase letters, digits and dashes, starting with a letter or digit (max 63).</p>
+            }
+            @for (msg of problemsFor('id'); track msg) {
+              <p class="error">Server: {{ msg }}</p>
+            }
+          </div>
+
+          <div class="field">
+            <label for="feed-description">Description</label>
+            <input id="feed-description" type="text" formControlName="description" placeholder="What this feed carries" (blur)="touch()" />
+            @for (msg of problemsFor('description'); track msg) {
+              <p class="error">Server: {{ msg }}</p>
+            }
+          </div>
+
+          <div class="field" data-pointer="/config/classification">
+            <label for="feed-classification">Classification<span class="required" aria-hidden="true">*</span></label>
+            <select id="feed-classification" formControlName="classification" (blur)="touch()">
+              @for (level of classificationOptions(); track level) {
+                <option [value]="level">{{ level }}</option>
+              }
+              @if (classificationAboveClearance(); as above) {
+                <option [value]="above" disabled>{{ above }}</option>
+              }
+            </select>
+            @if (classificationAboveClearance()) {
+              <p class="help">Set above your clearance. It stays unless you pick a lower level.</p>
+            } @else {
+              <p class="help">Stamped on everything this connection brings in. Capped at your clearance.</p>
+            }
+            @for (msg of configProblemsFor('classification'); track msg) {
+              <p class="error">Server: {{ msg }}</p>
+            }
+          </div>
+
+          @if (driverCanNarrow()) {
+            <div class="field" data-pointer="/config/direction">
+              <label for="feed-direction">Direction</label>
+              <select id="feed-direction" formControlName="direction" (blur)="touch()">
+                <option value="">Both (receive and send)</option>
+                <option value="in">Receive only</option>
+                <option value="out">Send only</option>
+              </select>
+              <p class="help">This driver can do both; narrow it here if the connection should only go one way.</p>
+              @for (msg of configProblemsFor('direction'); track msg) {
+                <p class="error">Server: {{ msg }}</p>
+              }
+            </div>
+          }
+
+          <label class="check">
+            <input type="checkbox" formControlName="enabled" />
+            <span>Enabled</span>
+            <span class="help-inline">Disabled connections keep their configuration but do not run.</span>
+          </label>
+        </section>
+
+        @if (sending()) {
+          <section class="section">
+            <h3 class="section-title">Sending policy</h3>
+            <app-policy-editor
+              [value]="initialPolicy()"
+              [disabled]="saving()"
+              [problems]="policyProblems()"
+              [clearance]="clearance()"
+              (changed)="onPolicyChange($event)"
+            ></app-policy-editor>
+          </section>
+        }
+
+        <section class="section">
+          <h3 class="section-title">Options</h3>
+          @if (driver(); as d) {
+            <app-schema-form
+              [schema]="d.configSchema"
+              [secretFields]="d.secretFields"
+              [value]="initialConfig()"
+              [secretRefs]="initialSecretRefs()"
+              [externalKeys]="externalKeys()"
+              [disabled]="saving()"
+              [problems]="schemaProblems()"
+              (changed)="onSchemaChange($event)"
+            ></app-schema-form>
+          }
+        </section>
+      </form>
+    }
+  </div>
+
+  @if (step() === 2) {
+    <footer class="drawer-footer">
+      <button type="button" class="btn btn-ghost" (click)="close()" [disabled]="saving()">Cancel</button>
+      <button type="submit" form="feed-form" class="btn btn-primary" [disabled]="saving() || !driver()">
+        {{ saving() ? 'Saving…' : mode() === 'edit' ? 'Save changes' : 'Create connection' }}
+      </button>
+    </footer>
+  }
+</aside>

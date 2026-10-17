@@ -46,6 +46,7 @@ type Config struct {
 	SearchServiceURL       string
 	LinkAnalysisServiceURL string
 	AlertServiceURL        string
+	AnalyticsServiceURL    string
 	IngestServiceURL       string
 	// IngestServiceToken is presented to ingest-service, which is reachable
 	// only through the gateway.
@@ -105,6 +106,7 @@ func Load() Config {
 		SearchServiceURL:       commonCfg.EnvOrDefault("SEARCH_SERVICE_URL", "http://localhost:3003"),
 		LinkAnalysisServiceURL: commonCfg.EnvOrDefault("LINK_ANALYSIS_SERVICE_URL", "http://localhost:3004"),
 		AlertServiceURL:        commonCfg.EnvOrDefault("ALERT_SERVICE_URL", "http://localhost:3005"),
+		AnalyticsServiceURL:    commonCfg.EnvOrDefault("ANALYTICS_SERVICE_URL", "http://localhost:5000"),
 		IngestServiceURL:       commonCfg.EnvOrDefault("INGEST_SERVICE_URL", "http://localhost:4000"),
 		IngestServiceToken:     commonCfg.EnvOrDefault("INGEST_SERVICE_TOKEN", ""),
 	}

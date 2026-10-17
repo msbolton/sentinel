@@ -72,3 +72,14 @@ ALTER TABLE sentinel.track_points
 -- Legacy repair: feedId was a UUID under TypeORM; feed ids are slugs.
 ALTER TABLE sentinel.track_points
   ALTER COLUMN "feedId" TYPE VARCHAR(255) USING "feedId"::text;
+
+-- Baselines are built from the last 30 days of points, so the table needs
+-- no more than a quarter of history; without TimescaleDB it keeps growing.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
+    PERFORM add_retention_policy('sentinel.track_points', INTERVAL '90 days', if_not_exists => TRUE);
+    RAISE NOTICE 'sentinel.track_points: chunks older than 90 days are dropped.';
+  END IF;
+END
+$$;

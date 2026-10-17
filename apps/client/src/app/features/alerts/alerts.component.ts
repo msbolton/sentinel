@@ -1,6 +1,7 @@
 import { Component, OnInit, OnDestroy, signal, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { IconComponent, IconName } from '../../shared/components/icon.component';
 import { Subscription } from 'rxjs';
 import { Alert, AlertSeverity, AlertType } from '../../shared/models/alert.model';
 import { AlertService } from '../../core/services/alert.service';
@@ -9,7 +10,7 @@ import { AlertService } from '../../core/services/alert.service';
   selector: 'app-alerts',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, IconComponent],
   templateUrl: './alerts.component.html',
   styleUrls: ['./alerts.component.scss'],
 })
@@ -106,14 +107,14 @@ export class AlertsComponent implements OnInit, OnDestroy {
     }
   }
 
-  getSeverityIcon(severity: AlertSeverity): string {
+  getSeverityIcon(severity: AlertSeverity): IconName {
     switch (severity) {
-      case AlertSeverity.CRITICAL: return '!!';
-      case AlertSeverity.HIGH: return '!';
-      case AlertSeverity.MEDIUM: return '\u{26A0}';
-      case AlertSeverity.LOW: return 'i';
-      case AlertSeverity.INFO: return '\u{2139}';
-      default: return '?';
+      case AlertSeverity.CRITICAL: return 'alert-octagon';
+      case AlertSeverity.HIGH: return 'alert-triangle';
+      case AlertSeverity.MEDIUM: return 'alert-circle';
+      case AlertSeverity.LOW: return 'info';
+      case AlertSeverity.INFO: return 'info';
+      default: return 'alert-circle';
     }
   }
 

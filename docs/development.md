@@ -6,7 +6,6 @@
 - **npm** (comes with Node.js)
 - **Docker** & **Docker Compose** (for infrastructure services)
 - **Go 1.25+** (API gateway and all backend services)
-- **Python 3.12+** (for analytics-service, optional)
 
 ## First-Time Setup
 
@@ -41,7 +40,7 @@ Seeded entities are queryable through the gateway as soon as the entity-service 
 | `make dev-client` | `npx nx serve client` | Angular dev server on `:4200` |
 | `make dev-api` | `npx nx serve api-gateway` | Go API gateway on `:3000` (auth bypass on) |
 | `make dev-ingest` | `go run ./cmd/server` | Go ingest service on `:4000` |
-| `make dev-analytics` | `uvicorn ... --reload` | Python analytics on `:5000` |
+| `make dev-analytics` | `nx serve analytics-service` | Go analytics on `:5000` |
 
 ### Build
 
@@ -146,6 +145,19 @@ OpenSky is polled only for the area connected map clients can see, so nothing is
 5. Aircraft glide between fixes (dead reckoning on the client). Pan a little and nothing is pushed; pan far or zoom in by half and one push plus an immediate poll follows. Zoom out to the globe and the interval stretches to 60 s.
 6. Close the tab: the gateway pushes `active: false` and the ingest service idles. Kill and restart the ingest service: polling resumes within the 30 s heartbeat.
 
+### Satellites (CelesTrak)
+
+The built-in `celestrak` feed is seeded disabled. Watch the space stations first (a dozen objects, no policy risk), or pin the ISS by catalog number:
+
+```bash
+curl -s -X PATCH http://localhost:3000/api/v1/feeds/celestrak -H 'content-type: application/json' \
+  -d '{"config": {"groups": ["stations"], "catalogNumbers": [25544], "refreshHours": 2, "propagationIntervalSec": 60}}'
+curl -s -X POST http://localhost:3000/api/v1/feeds/celestrak/enable
+curl -s http://localhost:3000/api/v1/feeds/celestrak | jq '.status.state, .status.detail'
+```
+
+`detail` shows `satellites`, `pinned`, `fetchedAt` and `nextFetchAt`. The state is `idle` until a map client is connected: satellites are emitted only over the clients' viewports, except pinned objects, which are emitted always. Open the map, pan to the Atlantic, and the ISS moves smoothly (the client propagates it between the server's once-a-minute fixes); click it for its orbit path, ground track and footprint. CelesTrak needs no key but enforces a usage policy; keep `refreshHours` at 2 and prefer a group over many catalog numbers (`docs/feeds.md`).
+
 ### Local receivers and other sources
 
 Every source is a feed created through `POST /api/v1/feeds` (or the Feeds page). The built-in drivers are `opensky`, `adsblol`, `celestrak`, `httpjson` (any JSON API, field-mapped) and `stream` (a transport, a framer and a decoder). Pull from site receivers rather than opening ports: a feed that listens (`tcpserver`, `udp`) must be pinned to one replica.
@@ -174,6 +186,51 @@ Every source is a feed created through `POST /api/v1/feeds` (or the Feeds page).
            "decoder":{"options":{"records":"ac","identityType":"ICAO24","entityType":"aircraft","source":"ADS_B","altitudeUnit":"ft",
                       "fields":{"id":"hex","latitude":"lat","longitude":"lon","altitude":"alt_baro","speed":"gs","heading":"track","callsign":"flight"}}}}}
 ```
+
+### TAK connection
+
+A TAK connection needs a server that speaks Cursor on Target on a streaming port: a TAK Server (`tak.gov`, needs an account), FreeTAKServer (`ghcr.io/freetakteam/freetakserver`), or OpenTAKServer. None is bundled with the stack, and the `tak` driver has not yet been exercised against a live server; treat it as implemented but unverified until it has been.
+
+Create the connection through the Connections page or the API. Against a plain TCP port no certificates are needed:
+
+```bash
+curl -s -X POST http://localhost:3000/api/v1/feeds -H 'content-type: application/json' -d '{
+  "id": "tak-dev", "name": "Dev TAK", "driver": "tak", "enabled": true,
+  "config": {
+    "address": "host.docker.internal:8087", "siteId": "dev",
+    "policy": { "entityTypes": ["AIRCRAFT"], "feeds": ["opensky"],
+                "boxes": [{"north": 42.5, "south": 41.5, "east": -87, "west": -88.5}],
+                "classificationCeiling": "UNCLASSIFIED" }
+  }
+}'
+```
+
+With OpenSky enabled and the map open over that box, `GET /api/v1/feeds/tak-dev` shows `detail.outbound.delivered` rising and `detail.remotePeer`. Point ATAK, WinTAK or iTAK at the same server to see the aircraft as air tracks with callsigns; drop a marker on the device and it appears on the Sentinel map under the connection's layer. For a TLS port set `tls.enabled` and give the enrolment certificate as `file:` secret refs mounted under `./secrets/tak` (gitignored, mounted read-only at `/etc/sentinel/tak` in the ingest container):
+
+```bash
+openssl pkcs12 -in client.p12 -nodes -nocerts -out secrets/tak/client.key
+openssl pkcs12 -in client.p12 -nokeys -clcerts -out secrets/tak/client.pem
+openssl pkcs12 -in truststore.p12 -nokeys -cacerts -out secrets/tak/ca.pem
+```
+
+and `"secretRefs": {"clientCert": "file:/etc/sentinel/tak/client.pem", "clientKey": "file:/etc/sentinel/tak/client.key", "caCert": "file:/etc/sentinel/tak/ca.pem"}`.
+
+### Behavioural analysis
+
+The analytics service judges every fix against the entity's baseline. Baselines need a few days of history, but the impossible-move detector does not, so the quickest check is a teleport:
+
+```bash
+ID=$(curl -s -X POST http://localhost:3000/api/v1/entities -H 'content-type: application/json' \
+  -d '{"entityType":"VEHICLE","name":"teleport","source":"MANUAL","position":{"lat":40,"lng":-74}}' | jq -r .id)
+curl -s -o /dev/null -X PATCH http://localhost:3000/api/v1/entities/$ID/position -H 'content-type: application/json' -d '{"lat":40,"lng":-74}'
+sleep 6   # updates closer than ANALYTICS_MOVE_MIN_GAP_SEC (5) are not judged
+curl -s -o /dev/null -X PATCH http://localhost:3000/api/v1/entities/$ID/position -H 'content-type: application/json' -d '{"lat":40.9,"lng":-74}'
+sleep 3
+curl -s http://localhost:3000/api/v1/analytics/entities/$ID/findings | jq '.data[] | {kind, severity, status, alertId}'
+curl -s "http://localhost:3000/api/v1/alerts?entityId=$ID" | jq '.data[] | {alertId, alertType, severity}'
+```
+
+The finding appears in the Findings panel and in the entity's Behaviour section; confirm or dismiss it there, or with `PATCH /api/v1/analytics/findings/{id} {"status":"DISMISSED"}`. Thresholds are `ANALYTICS_*` environment variables (see `apps/analytics-service/internal/config/config.go`); `GET /api/v1/analytics/stats` shows what the service has judged. Baselines are recomputed hourly for entities seen in the last day (`ANALYTICS_BASELINE_INTERVAL_MIN`); `GET /api/v1/analytics/entities/{id}/baseline` returns one once it exists.
 
 ### Several ingest replicas
 

@@ -16,12 +16,13 @@ import (
 
 // Upstreams holds the reverse-proxy handlers for each domain service.
 type Upstreams struct {
-	Entities http.Handler
-	Tracks   http.Handler
-	Alerts   http.Handler
-	Links    http.Handler
-	Search   http.Handler
-	Feeds    http.Handler
+	Entities  http.Handler
+	Tracks    http.Handler
+	Alerts    http.Handler
+	Links     http.Handler
+	Search    http.Handler
+	Feeds     http.Handler
+	Analytics http.Handler
 }
 
 // Deps are the collaborators the router needs.
@@ -63,6 +64,7 @@ func New(d Deps) http.Handler {
 	mountProxy(api, "/api/v1/search", d.Upstreams.Search)
 	mountProxy(api, "/api/v1/feeds", d.Upstreams.Feeds)
 	mountProxy(api, "/api/v1/drivers", d.Upstreams.Feeds)
+	mountProxy(api, "/api/v1/analytics", d.Upstreams.Analytics)
 	if d.Locations != nil {
 		d.Locations.RegisterRoutes(api)
 	}

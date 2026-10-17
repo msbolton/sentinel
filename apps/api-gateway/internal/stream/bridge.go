@@ -14,6 +14,8 @@ import (
 
 	"github.com/sentinel/go-common/kafka"
 	"github.com/sentinel/proto-gen/pbjson"
+
+	"github.com/sentinel/api-gateway/internal/auth"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 )
 
@@ -101,7 +103,7 @@ func (b *Bridge) Handle(topic string, value []byte) {
 			b.logger.Debug("bad alert event", zap.Error(err))
 			return
 		}
-		b.hub.BroadcastAll(MsgAlertNew, alertFromProto(&ev))
+		b.hub.BroadcastRanked(MsgAlertNew, alertFromProto(&ev), auth.ClassificationRank(enumOrEmpty(ev.Alert.Classification)))
 	default:
 		b.logger.Warn("unhandled topic", zap.String("topic", topic))
 	}
@@ -158,6 +160,7 @@ func (b *Bridge) enqueueEntity(en *sentinelv1.Entity, eventType, ts string) {
 	b.batcher.Add(PositionedEvent{
 		Lat:   en.Position.Latitude,
 		Lng:   en.Position.Longitude,
+		Rank:  auth.ClassificationRank(enumOrEmpty(en.Classification)),
 		Event: EntityEvent{Type: eventType, Entity: entity, Timestamp: firstNonEmpty(entity.LastObservedAt, ts)},
 	})
 }
@@ -224,6 +227,12 @@ func EntityFromProto(en *sentinelv1.Entity) Entity {
 		v := en.Kinematics.Velocity
 		e.Kinematics = map[string]interface{}{"velocity": map[string]interface{}{"north": v.North, "east": v.East, "up": v.Up}}
 	}
+	for _, s := range en.Sources {
+		if s == nil || s.FeedId == "" {
+			continue
+		}
+		e.Sources = append(e.Sources, EntitySourceRef{FeedID: s.FeedId, Source: enumOrEmpty(s.Source), LastObservedAt: tsString(s.LastObservedAt)})
+	}
 	if len(en.Platforms) > 0 {
 		e.PlatformData = map[string]interface{}{}
 		for kind, d := range en.Platforms {
@@ -260,7 +269,8 @@ func alertFromProto(ev *sentinelv1.AlertEvent) ClientAlert {
 	a := ClientAlert{
 		ID: al.AlertId, Title: al.Title, Message: al.Description, Severity: pbjson.EnumName(al.Severity), AlertType: pbjson.EnumName(al.AlertType),
 		EntityID: al.EntityId, RuleID: al.RuleId, Metadata: al.Metadata, CreatedAt: orNow(tsString(al.CreatedAt)),
-		Acknowledged: al.AcknowledgedAt != nil,
+		Acknowledged:   al.AcknowledgedAt != nil,
+		Classification: enumOrEmpty(al.Classification),
 	}
 	a.UpdatedAt = a.CreatedAt
 	if a.Metadata == nil {
@@ -289,6 +299,9 @@ type ClientAlert struct {
 	Metadata     map[string]string `json:"metadata"`
 	CreatedAt    string            `json:"createdAt"`
 	UpdatedAt    string            `json:"updatedAt"`
+	// Classification inherited from the entity when the alert fired; empty
+	// when the producer did not set it.
+	Classification string `json:"classification,omitempty"`
 }
 
 func enumOrEmpty(e protoreflect.Enum) string {

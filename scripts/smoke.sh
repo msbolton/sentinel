@@ -39,6 +39,7 @@ check GET /api/v1/entities/counts 200
 check GET /api/v1/entities/ageout-config 200
 check GET "/api/v1/alerts?pageSize=1" 200
 check GET /api/v1/alerts/rules 200
+check GET /api/v1/analytics/stats 200
 check GET "/api/v1/links/graph?centerId=00000000-0000-4000-8000-000000000000" 200
 check GET "/api/v1/search?q=test" 200
 check GET /api/v1/search/facets 200
@@ -50,6 +51,8 @@ check GET /api/v1/feeds/opensky/area 200
 check GET /api/v1/drivers 200
 check GET /api/v1/drivers/stream 200
 check GET /api/v1/drivers/nope 404
+check GET /api/v1/drivers/celestrak 200
+grep -q '"catalogNumbers"' /tmp/smoke-body && echo "  ok   celestrak schema lists catalogNumbers" || { echo "  FAIL celestrak schema: $(head -c 120 /tmp/smoke-body)"; fail=1; }
 check GET /api/v1/locations 200
 check POST /api/v1/entities 400 '{}'
 check GET /api/v1/locations/not-a-uuid 400
@@ -70,6 +73,39 @@ if [ -n "${SENTINEL_VIEWER_TOKEN:-}" ]; then
   [ "$code" = "403" ] && echo "  ok   POST   /api/v1/feeds/opensky/enable as viewer      403" || { echo "  FAIL POST   /api/v1/feeds/opensky/enable as viewer -> $code (want 403)"; fail=1; }
 else
   echo "  skip viewer 403 on feed toggle (set SENTINEL_VIEWER_TOKEN)"
+fi
+
+echo "== connections"
+check GET /api/v1/drivers/tak 200
+grep -q '"direction":"both"' /tmp/smoke-body && echo "  ok   tak driver direction both" || { echo "  FAIL tak driver direction missing"; fail=1; }
+check POST /api/v1/feeds 422 '{"name":"Smoke bad policy","driver":"tak","config":{"address":"x:8089","policy":{"boxes":[{"north":10,"south":20,"east":0,"west":0}]}}}'
+check POST /api/v1/feeds 422 '{"name":"Smoke bad ceiling","driver":"tak","config":{"address":"x:8089","policy":{"classificationCeiling":"ULTRA"}}}'
+check POST /api/v1/feeds 422 '{"name":"Smoke policy on a source","driver":"opensky","config":{"policy":{"entityTypes":["AIRCRAFT"]}}}'
+check GET "/api/v1/feeds?direction=out" 200
+
+echo "== export"
+check GET "/api/v1/export/entities.geojson?limit=1" 200
+grep -q '"type":"FeatureCollection"' /tmp/smoke-body && echo "  ok   geojson FeatureCollection" || { echo "  FAIL geojson body: $(head -c 120 /tmp/smoke-body)"; fail=1; }
+check GET "/api/v1/export/entities.kml?limit=1" 200
+grep -q '<kml' /tmp/smoke-body && echo "  ok   kml document" || { echo "  FAIL kml body: $(head -c 120 /tmp/smoke-body)"; fail=1; }
+check GET "/api/v1/export/entities.kml?link=1&refresh=30" 200
+grep -q '<NetworkLink>' /tmp/smoke-body && echo "  ok   kml NetworkLink" || { echo "  FAIL kml network link: $(head -c 120 /tmp/smoke-body)"; fail=1; }
+check GET "/api/v1/export/entities.geojson?bbox=1,2,3" 400
+check GET /api/v1/auth/api-keys 200
+
+echo "== analytics"
+check GET "/api/v1/analytics/findings?status=OPEN&pageSize=1" 200
+grep -q '"data"' /tmp/smoke-body && echo "  ok   findings page" || { echo "  FAIL findings body: $(head -c 120 /tmp/smoke-body)"; fail=1; }
+check GET /api/v1/analytics/entities/00000000-0000-4000-8000-000000000000/baseline 404
+check GET /api/v1/analytics/findings/00000000-0000-4000-8000-000000000000 404
+check GET /api/v1/analytics/stats 200
+
+if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx sentinel-geoserver; then
+  echo "== geoserver"
+  caps=$(curl -s -u "${GIS_USER:-gis-ts}:${GIS_PASSWORD:-gis-ts-dev}" "http://localhost:8600/geoserver/sentinel/wfs?service=WFS&version=2.0.0&request=GetCapabilities" 2>/dev/null)
+  for layer in entities_live_u locations_geo; do
+    if printf '%s' "$caps" | grep -q "sentinel:$layer"; then echo "  ok   wfs    sentinel:$layer"; else echo "  FAIL wfs    sentinel:$layer missing (run docker compose up geoserver-init)"; fail=1; fi
+  done
 fi
 
 if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx sentinel-kafka; then

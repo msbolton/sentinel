@@ -186,13 +186,17 @@ func TestListAndFilters(t *testing.T) {
 		}
 	}
 	_, body = do(t, srv, "GET", "/feeds?capability=area", "", reqOpts{})
-	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 2 {
+	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 3 {
 		t.Fatalf("area filter = %s", body)
 	}
 	for _, f := range feeds {
-		if f.ID != "opensky" && f.ID != "adsb-lol" {
+		if f.ID != "opensky" && f.ID != "adsb-lol" && f.ID != "celestrak" {
 			t.Errorf("unexpected area feed %s", f.ID)
 		}
+	}
+	_, body = do(t, srv, "GET", "/feeds?capability=listen", "", reqOpts{})
+	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 0 {
+		t.Fatalf("listen filter = %s", body)
 	}
 	_, body = do(t, srv, "GET", "/feeds?capability=poll&driver=celestrak", "", reqOpts{})
 	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 1 || feeds[0].ID != "celestrak" {
@@ -201,6 +205,18 @@ func TestListAndFilters(t *testing.T) {
 	_, body = do(t, srv, "GET", "/feeds?enabled=true", "", reqOpts{})
 	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 0 {
 		t.Fatalf("enabled filter = %s", body)
+	}
+	// Every built-in feed is a source: direction=in lists all, out none.
+	_, body = do(t, srv, "GET", "/feeds?direction=in", "", reqOpts{})
+	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 3 || feeds[0].Direction != "in" {
+		t.Fatalf("direction=in filter = %s", body)
+	}
+	_, body = do(t, srv, "GET", "/feeds?direction=out", "", reqOpts{})
+	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 0 {
+		t.Fatalf("direction=out filter = %s", body)
+	}
+	if !matchesDirection("both", "in") || !matchesDirection("both", "out") || matchesDirection("in", "both") || matchesDirection("out", "in") {
+		t.Error("matchesDirection")
 	}
 }
 
@@ -346,7 +362,12 @@ func TestAreaEndpoints(t *testing.T) {
 			t.Errorf("%s: status %d want %d", body, resp.StatusCode, want)
 		}
 	}
-	if resp, _ := do(t, srv, "PUT", "/feeds/celestrak/area", body, reqOpts{}); resp.StatusCode != 409 {
+	// A stream feed has no area capability.
+	resp, out = do(t, srv, "POST", "/feeds", `{"name":"Site MQTT","driver":"stream","config":{"transport":{"kind":"mqtt","brokerUrl":"tcp://b:1883","topics":["x/#"]},"decoder":{"name":"json"}}}`, operator)
+	if resp.StatusCode != 201 {
+		t.Fatalf("create stream feed status %d: %s", resp.StatusCode, out)
+	}
+	if resp, _ := do(t, srv, "PUT", "/feeds/site-mqtt/area", body, reqOpts{}); resp.StatusCode != 409 {
 		t.Fatalf("unsupported driver status %d", resp.StatusCode)
 	}
 	if resp, _ := do(t, srv, "PUT", "/feeds/nope/area", body, reqOpts{}); resp.StatusCode != 404 {
@@ -363,7 +384,7 @@ func TestDrivers(t *testing.T) {
 	}
 	resp, out = do(t, srv, "GET", "/drivers/opensky", "", reqOpts{})
 	var info drivers.Info
-	if resp.StatusCode != 200 || json.Unmarshal(out, &info) != nil || len(info.ConfigSchema) == 0 || len(info.SecretFields) != 2 {
+	if resp.StatusCode != 200 || json.Unmarshal(out, &info) != nil || len(info.ConfigSchema) == 0 || len(info.SecretFields) != 2 || info.Direction != "in" {
 		t.Fatalf("driver = %d %s", resp.StatusCode, out)
 	}
 	if resp, _ := do(t, srv, "GET", "/drivers/nope", "", reqOpts{}); resp.StatusCode != 404 {

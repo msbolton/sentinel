@@ -26,6 +26,12 @@ export const routes: Routes = [
       import('./features/alerts/alerts.component').then((m) => m.AlertsComponent),
   },
   {
+    path: 'findings',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./features/findings/findings.component').then((m) => m.FindingsComponent),
+  },
+  {
     path: 'link-graph',
     canActivate: [roleGuard('sentinel-analyst', 'sentinel-admin')],
     loadComponent: () =>
@@ -50,10 +56,14 @@ export const routes: Routes = [
       ),
   },
   {
-    path: 'feeds',
+    path: 'connections',
     canActivate: [roleGuard('sentinel-operator', 'sentinel-admin')],
     loadComponent: () =>
-      import('./features/feeds/feeds.component').then((m) => m.FeedsComponent),
+      import('./features/connections/connections.component').then((m) => m.ConnectionsComponent),
+  },
+  {
+    path: 'feeds',
+    redirectTo: 'connections',
   },
   {
     path: 'login',

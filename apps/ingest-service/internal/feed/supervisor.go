@@ -13,6 +13,8 @@ import (
 
 	"github.com/sentinel/ingest-service/internal/aoi"
 	"github.com/sentinel/ingest-service/internal/metrics"
+	"github.com/sentinel/ingest-service/internal/outbound"
+	"github.com/sentinel/ingest-service/internal/policy"
 	"github.com/sentinel/ingest-service/internal/registry"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 )
@@ -65,6 +67,12 @@ type Options struct {
 	Preferred      Preferred
 	LeaseTick      time.Duration
 	RebalanceAfter time.Duration
+	// ConsumerFactory builds the Kafka consumer group of an outbound
+	// connection; nil disables the outbound side (tests, or a replica
+	// without Kafka consume access).
+	ConsumerFactory outbound.ConsumerFactory
+	// Shapes lets exporting drivers read geofences and locations.
+	Shapes driver.ShapeSource
 }
 
 func (o Options) withDefaults() Options {
@@ -160,6 +168,79 @@ type Supervisor struct {
 	// owner had a lease TTL to claim it.
 	waitingSince map[string]time.Time
 	live         []string
+	// connections is the set of feed ids that send (direction out or both),
+	// from the last listing; outbound policies use it to avoid re-exporting
+	// one connection's contributions on another.
+	connections map[string]bool
+}
+
+// driverDirection is the registered driver's direction, or in when the
+// driver is unknown (tests with ad-hoc factories).
+func driverDirection(id string) driver.Direction {
+	if d, ok := driver.Lookup(id); ok {
+		return d.Direction.Normalize()
+	}
+	return driver.DirectionIn
+}
+
+// outboundTuning mirrors config.outbound.
+type outboundTuning struct {
+	QueueMax           int     `json:"queueMax"`
+	PerEntityMinSec    float64 `json:"perEntityMinSec"`
+	MaxEventsPerSec    int     `json:"maxEventsPerSec"`
+	MaxLagSec          int     `json:"maxLagSec"`
+	PolicyExitGraceSec *int    `json:"policyExitGraceSec"`
+}
+
+// buildPump creates the outbound half of a connection, or nil when the
+// feed does not send or the driver cannot consume.
+func (s *Supervisor) buildPump(spec registry.Feed, common registry.CommonOptions, drv driver.Driver, logger *zap.Logger) (*outbound.Pump, error) {
+	consumer, ok := drv.(driver.Consumer)
+	if !ok || s.opts.ConsumerFactory == nil || !spec.Direction(driverDirection(spec.Driver)).Outbound() {
+		return nil, nil
+	}
+	pol, err := policy.Parse(common.Policy)
+	if err != nil {
+		return nil, err
+	}
+	var tune outboundTuning
+	if len(common.Outbound) > 0 {
+		if err := json.Unmarshal(common.Outbound, &tune); err != nil {
+			return nil, fmt.Errorf("outbound: %w", err)
+		}
+	}
+	s.mu.Lock()
+	conns := make(map[string]bool, len(s.connections)+1)
+	for id := range s.connections {
+		conns[id] = true
+	}
+	s.mu.Unlock()
+	conns[spec.ID] = true
+	o := outbound.Options{
+		FeedID: spec.ID, ReplicaID: s.opts.ReplicaID, Policy: pol,
+		Context:         policy.Context{SelfFeedID: spec.ID, ConnectionFeedIDs: conns},
+		QueueMax:        tune.QueueMax,
+		PerEntityMin:    time.Duration(tune.PerEntityMinSec * float64(time.Second)),
+		MaxEventsPerSec: tune.MaxEventsPerSec,
+		MaxLag:          time.Duration(tune.MaxLagSec) * time.Second,
+		ExitGrace:       30 * time.Second,
+	}
+	if tune.PerEntityMinSec == 0 && !bytesHas(common.Outbound, "perEntityMinSec") {
+		o.PerEntityMin = 5 * time.Second
+	}
+	if tune.PolicyExitGraceSec != nil {
+		o.ExitGrace = time.Duration(*tune.PolicyExitGraceSec) * time.Second
+	}
+	return outbound.New(o, consumer, s.opts.ConsumerFactory, s.metrics, logger), nil
+}
+
+func bytesHas(raw json.RawMessage, key string) bool {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return false
+	}
+	_, ok := m[key]
+	return ok
 }
 
 // New creates a supervisor; call Run to start reconciling.
@@ -318,11 +399,18 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 		return
 	}
 	desired := map[string]registry.Feed{}
+	connections := map[string]bool{}
 	for _, f := range feeds {
 		if f.Enabled {
 			desired[f.ID] = f
 		}
+		if f.Direction(driverDirection(f.Driver)).Outbound() {
+			connections[f.ID] = true
+		}
 	}
+	s.mu.Lock()
+	s.connections = connections
+	s.mu.Unlock()
 	now := time.Now()
 	if s.opts.Leaser != nil {
 		s.renewLeases(ctx)
@@ -470,12 +558,17 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 	}
 	common := spec.Common()
 	logger := s.logger.With(zap.String("feed", spec.ID), zap.String("driver", spec.Driver))
-	drv, err := s.opts.Factory(driver.Spec{FeedID: spec.ID, Driver: spec.Driver, Config: spec.Config, Secrets: secrets, Backpressure: common.Backpressure}, driver.Deps{Logger: logger})
+	drv, err := s.opts.Factory(driver.Spec{FeedID: spec.ID, Driver: spec.Driver, Config: spec.Config, Secrets: secrets, Backpressure: common.Backpressure}, driver.Deps{Logger: logger, Shapes: s.opts.Shapes})
 	if err != nil {
 		fail(fmt.Errorf("building driver: %w", err))
 		return
 	}
-	runner := NewRunner(spec.ID, spec.Driver, drv, s.pub, s.metrics, logger, RunnerOptions{RawPolicy: common.RawPayload, RawMax: s.opts.RawMax, FencingToken: inst.token, Classification: common.Classification})
+	pump, err := s.buildPump(spec, common, drv, logger)
+	if err != nil {
+		fail(fmt.Errorf("building outbound pump: %w", err))
+		return
+	}
+	runner := NewRunner(spec.ID, spec.Driver, drv, s.pub, s.metrics, logger, RunnerOptions{RawPolicy: common.RawPayload, RawMax: s.opts.RawMax, FencingToken: inst.token, Classification: common.Classification, Pump: pump})
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -637,8 +730,20 @@ func (s *Supervisor) statusOf(inst *instance, now time.Time) registry.Status {
 	if st.LastError == "" {
 		st.LastError = stats.LastError
 	}
-	if !stats.LastSuccessAt.IsZero() {
-		t := stats.LastSuccessAt
+	lastSuccess := stats.LastSuccessAt
+	if ob := stats.Outbound; ob != nil {
+		st.MessagesTotal += ob.Delivered
+		st.ErrorsTotal += ob.DeliveryErrors
+		if st.LastError == "" {
+			st.LastError = ob.LastError
+		}
+		if ob.LastDeliveredAt.After(lastSuccess) {
+			lastSuccess = ob.LastDeliveredAt
+		}
+		stats.LastSuccessAt = lastSuccess
+	}
+	if !lastSuccess.IsZero() {
+		t := lastSuccess
 		st.LastSuccessAt = &t
 		st.LastMessageAt = &t
 	}
@@ -691,6 +796,18 @@ func (s *Supervisor) statusOf(inst *instance, now time.Time) registry.Status {
 	}
 	if inst.token > 0 {
 		detail["leaseToken"] = inst.token
+	}
+	detail["direction"] = string(inst.spec.Direction(driverDirection(inst.spec.Driver)))
+	if ob := stats.Outbound; ob != nil {
+		out := map[string]any{
+			"delivered": ob.Delivered, "deliveryErrors": ob.DeliveryErrors, "denied": ob.Denied,
+			"coalesced": ob.Coalesced, "dropped": ob.Dropped, "queueDepth": ob.QueueDepth, "tracked": ob.Tracked,
+			"consumerGroup": outbound.GroupID(inst.spec.ID),
+		}
+		if !ob.LastDeliveredAt.IsZero() {
+			out["lastDeliveredAt"] = ob.LastDeliveredAt.UTC().Format(time.RFC3339)
+		}
+		detail["outbound"] = out
 	}
 	if b, err := json.Marshal(detail); err == nil {
 		st.Detail = b

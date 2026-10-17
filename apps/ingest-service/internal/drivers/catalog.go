@@ -36,6 +36,7 @@ type Info struct {
 	Name         string          `json:"name"`
 	Description  string          `json:"description"`
 	Source       string          `json:"source"` // EntitySource label written on observations ("" when the decoder decides)
+	Direction    string          `json:"direction"` // in | out | both
 	Capabilities []string        `json:"capabilities"`
 	ConfigSchema json.RawMessage `json:"configSchema"`
 	// SecretFields are secret_refs keys the driver expects; they must never
@@ -44,6 +45,9 @@ type Info struct {
 	// AreaTTL is how long a pushed area stays valid without a refresh.
 	AreaTTL time.Duration `json:"-"`
 }
+
+// Dir is the driver's direction as a typed value.
+func (i Info) Dir() driver.Direction { return driver.Direction(i.Direction).Normalize() }
 
 // HasCapability reports whether the driver advertises cap.
 func (i Info) HasCapability(cap string) bool {
@@ -118,7 +122,7 @@ func Build(defs []driver.Definition) (*Catalog, error) {
 		if err != nil {
 			return nil, fmt.Errorf("compiling %s schema: %w", d.ID, err)
 		}
-		info := Info{ID: d.ID, Name: d.Name, Description: d.Description, Source: d.Source, Capabilities: d.Capabilities, ConfigSchema: raw, SecretFields: d.SecretFields, AreaTTL: d.AreaTTL}
+		info := Info{ID: d.ID, Name: d.Name, Description: d.Description, Source: d.Source, Direction: string(d.Direction.Normalize()), Capabilities: d.Capabilities, ConfigSchema: raw, SecretFields: d.SecretFields, AreaTTL: d.AreaTTL}
 		if info.Capabilities == nil {
 			info.Capabilities = []string{}
 		}

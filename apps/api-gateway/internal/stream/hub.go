@@ -11,6 +11,9 @@ type PositionedEvent struct {
 	Event EntityEvent
 	Lat   float64
 	Lng   float64
+	// Rank is the entity's classification rank; a client sees the event only
+	// when its clearance rank is at least this.
+	Rank int
 }
 
 // Hub tracks connected clients and fans out messages.
@@ -124,6 +127,20 @@ func (h *Hub) BroadcastAll(msgType string, data interface{}) {
 	}
 	for _, c := range h.snapshot() {
 		c.trySend(frame)
+	}
+}
+
+// BroadcastRanked sends a frame only to clients cleared to at least rank.
+func (h *Hub) BroadcastRanked(msgType string, data interface{}, rank int) {
+	frame, err := Encode(msgType, data)
+	if err != nil {
+		h.logger.Error("encode broadcast failed", zap.String("type", msgType), zap.Error(err))
+		return
+	}
+	for _, c := range h.snapshot() {
+		if c.clearance >= rank {
+			c.trySend(frame)
+		}
 	}
 }
 

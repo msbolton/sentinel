@@ -64,8 +64,10 @@ type NearbyQuery struct {
 	Lng      float64
 	RadiusKm float64
 	Q        string
-	Page     int
-	PageSize int
+	// Classifications restricts hits to these levels (the caller's ceiling).
+	Classifications []string
+	Page            int
+	PageSize        int
 }
 
 // SearchResult represents the search response.

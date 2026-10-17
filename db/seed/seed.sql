@@ -95,9 +95,9 @@ VALUES
    '{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}'::jsonb,
    '{}'::jsonb,
    FALSE, TRUE),
-  ('celestrak', 'CelesTrak satellites', 'Satellite positions propagated with SGP4 from CelesTrak two-line elements.',
+  ('celestrak', 'CelesTrak satellites', 'Satellite positions propagated with SGP4 from CelesTrak orbital elements.',
    'celestrak',
-   '{"groups": ["active"], "tleRefreshHours": 6, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}'::jsonb,
+   '{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}'::jsonb,
    '{}'::jsonb,
    FALSE, TRUE)
 ON CONFLICT (id) DO NOTHING;
@@ -108,7 +108,7 @@ SELECT v.feed, v.src, v.stale, v.ageout
 FROM (VALUES
   ('opensky',   'OPENSKY',   60000,  300000),
   ('adsb-lol',  'ADSB_LOL',  60000,  300000),
-  ('celestrak', 'CELESTRAK', 900000, 3600000)
+  ('celestrak', 'CELESTRAK', 600000, 7200000)
 ) AS v(feed, src, stale, ageout)
 WHERE NOT EXISTS (
   SELECT 1 FROM sentinel.feed_ageout_config c WHERE c."feedId" = v.feed AND c."sourceType" = v.src

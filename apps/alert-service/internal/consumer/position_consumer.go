@@ -79,7 +79,7 @@ func (c *PositionConsumer) handle(ctx context.Context, msgs []*ckafka.Message) e
 				continue
 			}
 			e := pos.Entity
-			c.evaluator.EvaluatePosition(ctx, e.Id, e.Position.Latitude, e.Position.Longitude, pbjson.EnumName(e.EntityType), e.SpeedKnots)
+			c.evaluator.EvaluatePosition(ctx, e.Id, e.Position.Latitude, e.Position.Longitude, pbjson.EnumName(e.EntityType), e.SpeedKnots, pbjson.EnumName(e.Classification))
 		case kafka.TopicAlertEvents:
 			if header(m, kafka.HeaderProducer) == evaluator.ProducerName {
 				continue

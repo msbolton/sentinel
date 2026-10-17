@@ -23,6 +23,9 @@ type User struct {
 	RealmRoles          []string `json:"realmRoles"`
 	ClientRoles         []string `json:"clientRoles"`
 	ClassificationLevel string   `json:"classificationLevel"`
+	// ViaAPIKey marks a principal that authenticated with an API key rather
+	// than a user token; such a principal may read but never manage keys.
+	ViaAPIKey bool `json:"-"`
 }
 
 var classificationHierarchy = map[string]int{

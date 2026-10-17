@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, DestroyRef, inject, signal, computed, ChangeDetectionStrategy } from '@angular/core';
+import { Component, OnInit, OnDestroy, DestroyRef, HostListener, inject, signal, computed, ChangeDetectionStrategy } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { CommonModule } from '@angular/common';
 import { Router, RouterOutlet, RouterLink, RouterLinkActive, NavigationEnd } from '@angular/router';
@@ -6,7 +6,10 @@ import { filter } from 'rxjs';
 import { WebSocketService, ConnectionStatus } from './core/services/websocket.service';
 import { AuthService, UserProfile } from './core/services/auth.service';
 import { AlertService } from './core/services/alert.service';
+import { AnalyticsService } from './core/services/analytics.service';
 import { ThemeService } from './core/services/theme.service';
+import { NAV_GROUPS, NavItem, NavRailService, routeForShortcut } from './core/services/nav-rail.service';
+import { IconComponent } from './shared/components/icon.component';
 import { ThemePickerComponent } from './shared/components/theme-picker.component';
 import { LayersPillComponent } from './shared/components/layers-pill.component';
 import { UserMenuComponent } from './shared/components/user-menu.component';
@@ -17,113 +20,77 @@ import { MapComponent } from './features/map/map.component';
   selector: 'app-root',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, ThemePickerComponent, LayersPillComponent, UserMenuComponent, HasRoleDirective],
+  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, ThemePickerComponent, LayersPillComponent, UserMenuComponent, HasRoleDirective, IconComponent],
   template: `
     @if (isFullScreenRoute()) {
       <!-- Login page renders full-screen, no app shell -->
       <router-outlet></router-outlet>
     } @else {
-      <!-- Sidebar Navigation -->
-      <nav class="sidebar">
-        <div class="sidebar-logo" title="SENTINEL">S</div>
+      <!-- Navigation rail: labelled when expanded, flyout labels when collapsed -->
+      <nav class="sidebar" [class.collapsed]="!rail.expanded()" aria-label="Primary">
+        <div class="sidebar-brand">
+          <span class="sidebar-logo" aria-hidden="true">S</span>
+          <span class="sidebar-wordmark">SENTINEL</span>
+        </div>
 
         <div class="sidebar-nav">
-          <button
-            class="sidebar-btn"
-            routerLink="/map"
-            routerLinkActive="active"
-            title="Map View">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M2 12h20"/>
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-            </svg>
-          </button>
-          <button
-            class="sidebar-btn"
-            routerLink="/search"
-            routerLinkActive="active"
-            title="Search Entities">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="11" cy="11" r="8"/>
-              <path d="M21 21l-4.35-4.35"/>
-            </svg>
-          </button>
-          <button
-            class="sidebar-btn"
-            routerLink="/alerts"
-            routerLinkActive="active"
-            title="Alerts">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-              <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-            </svg>
-            @if (unacknowledgedAlertCount() > 0) {
-              <span class="badge">{{ unacknowledgedAlertCount() > 99 ? '99+' : unacknowledgedAlertCount() }}</span>
-            }
-          </button>
-          <button
-            class="sidebar-btn"
-            routerLink="/link-graph"
-            routerLinkActive="active"
-            title="Link Analysis">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="5" cy="6" r="3"/>
-              <circle cx="19" cy="6" r="3"/>
-              <circle cx="12" cy="19" r="3"/>
-              <path d="M7.5 8l4 8.5"/>
-              <path d="M16.5 8l-4 8.5"/>
-              <path d="M8 6h8"/>
-            </svg>
-          </button>
-          <button
-            class="sidebar-btn"
-            routerLink="/timeline"
-            routerLinkActive="active"
-            title="Timeline">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <polyline points="12 6 12 12 16 14"/>
-            </svg>
-          </button>
-          <button
-            class="sidebar-btn"
-            routerLink="/locations"
-            routerLinkActive="active"
-            title="Locations">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
-              <circle cx="12" cy="10" r="3"/>
-            </svg>
-          </button>
-          <button
-            *appHasRole="['sentinel-operator', 'sentinel-admin']"
-            class="sidebar-btn"
-            routerLink="/feeds"
-            routerLinkActive="active"
-            title="Feeds">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M4 11a9 9 0 0 1 9 9"/>
-              <path d="M4 4a16 16 0 0 1 16 16"/>
-              <circle cx="5" cy="19" r="1"/>
-            </svg>
-          </button>
+          @for (group of navGroups; track group.label) {
+            <div class="sidebar-group">
+              <div class="sidebar-group-label">{{ group.label }}</div>
+              @for (item of group.items; track item.path) {
+                @if (item.roles) {
+                  <ng-container *appHasRole="item.roles">
+                    <ng-container *ngTemplateOutlet="navItem; context: { $implicit: item }" />
+                  </ng-container>
+                } @else {
+                  <ng-container *ngTemplateOutlet="navItem; context: { $implicit: item }" />
+                }
+              }
+            </div>
+          }
         </div>
 
         <div class="sidebar-footer">
           <button
-            class="sidebar-btn"
-            routerLink="/settings"
-            routerLinkActive="active"
-            title="Settings">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="3"/>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-            </svg>
+            type="button"
+            class="sidebar-collapse"
+            (click)="rail.toggle()"
+            [attr.aria-expanded]="rail.expanded()"
+            [attr.aria-label]="rail.expanded() ? 'Collapse navigation' : 'Expand navigation'"
+            [title]="rail.expanded() ? 'Collapse navigation' : 'Expand navigation'">
+            <app-icon [name]="rail.expanded() ? 'chevron-left' : 'chevron-right'" />
+            <span class="sidebar-item-label">Collapse</span>
           </button>
-          <app-user-menu></app-user-menu>
+          <ng-container *ngTemplateOutlet="navItem; context: { $implicit: settingsItem }" />
+          <app-user-menu [expanded]="rail.expanded()"></app-user-menu>
         </div>
       </nav>
+
+      <ng-template #navItem let-item>
+        <a
+          class="sidebar-item"
+          [routerLink]="item.path"
+          routerLinkActive="active"
+          [attr.aria-label]="item.label"
+          [attr.data-key]="item.key || null">
+          <app-icon [name]="item.icon" [size]="20" />
+          <span class="sidebar-item-label">{{ item.label }}</span>
+          @if (badgeCount(item); as n) {
+            <span class="badge" [class.badge-findings]="item.badge === 'findings'">{{ n > 99 ? '99+' : n }}</span>
+          } @else if (item.key) {
+            <kbd class="sidebar-key">{{ item.key | uppercase }}</kbd>
+          }
+          <span class="sidebar-flyout" role="tooltip">
+            {{ item.label }}
+            @if (badgeCount(item); as n) {
+              <span class="flyout-count">{{ n }} open</span>
+            }
+            @if (item.key) {
+              <kbd>{{ item.key | uppercase }}</kbd>
+            }
+          </span>
+        </a>
+      </ng-template>
 
       <!-- Main Content Area -->
       <main class="main-content">
@@ -230,11 +197,15 @@ import { MapComponent } from './features/map/map.component';
   `],
 })
 export class AppComponent implements OnInit, OnDestroy {
+  readonly rail = inject(NavRailService);
+  readonly navGroups = NAV_GROUPS;
+  readonly settingsItem: NavItem = { path: '/settings', label: 'Settings', icon: 'settings', key: '' };
   isFullScreenRoute = signal<boolean>(false);
   isPageRoute = signal<boolean>(false);
   connectionStatus = signal<ConnectionStatus>('disconnected');
   entityCount = signal<number>(0);
   unacknowledgedAlertCount = signal<number>(0);
+  openFindingCount = inject(AnalyticsService).openCount;
   userProfile = signal<UserProfile | null>(null);
   isAdmin = computed(() => this.userProfile()?.roles?.includes('sentinel-admin') ?? false);
   currentTime = signal<string>('');
@@ -254,7 +225,7 @@ export class AppComponent implements OnInit, OnDestroy {
     const classifyRoute = (url: string) => {
       const path = url.replace(/\?.*$/, '');
       this.isFullScreenRoute.set(['/login', '/register'].includes(path));
-      this.isPageRoute.set(path.startsWith('/admin') || path.startsWith('/settings') || path.startsWith('/feeds'));
+      this.isPageRoute.set(path.startsWith('/admin') || path.startsWith('/settings') || path.startsWith('/connections') || path.startsWith('/feeds'));
     };
     classifyRoute(this.router.url);
     this.router.events.pipe(
@@ -295,6 +266,26 @@ export class AppComponent implements OnInit, OnDestroy {
     // Update clock
     this.updateTime();
     this.timeInterval = setInterval(() => this.updateTime(), 1000);
+  }
+
+  /** The live count an item carries on its badge, or 0 for none. */
+  badgeCount(item: NavItem): number {
+    switch (item.badge) {
+      case 'alerts': return this.unacknowledgedAlertCount();
+      case 'findings': return this.openFindingCount() ?? 0;
+      default: return 0;
+    }
+  }
+
+  /** Single-key navigation shortcuts, listed on each rail item. */
+  @HostListener('document:keydown', ['$event'])
+  onKeydown(event: KeyboardEvent): void {
+    if (this.isFullScreenRoute()) return;
+    const path = routeForShortcut(event);
+    if (path) {
+      event.preventDefault();
+      this.router.navigateByUrl(path);
+    }
   }
 
   ngOnDestroy(): void {

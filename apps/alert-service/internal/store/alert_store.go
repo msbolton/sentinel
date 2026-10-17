@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
+
+	"github.com/sentinel/go-common/classification"
 )
 
 // AlertRecord represents an alert row from the database.
@@ -27,6 +29,7 @@ type AlertRecord struct {
 	AcknowledgedAt   *string           `json:"acknowledgedAt,omitempty"`
 	AcknowledgedBy   *string           `json:"acknowledgedBy,omitempty"`
 	ResolvedAt       *string           `json:"resolvedAt,omitempty"`
+	Classification   string            `json:"classification"`
 }
 
 // GeoPoint represents a geographic point.
@@ -62,6 +65,7 @@ type CreateAlertParams struct {
 	Lng              *float64
 	RuleID           *string
 	Metadata         map[string]string
+	Classification   string // bare Classification name; "" = UNCLASSIFIED
 }
 
 // CreateRuleParams holds parameters for creating a rule.
@@ -90,6 +94,7 @@ type AlertQueryParams struct {
 	Types        []string
 	EntityID     *string
 	Acknowledged *bool
+	Ceiling      string // caller's clearance; "" = UNCLASSIFIED
 	Page         int
 	PageSize     int
 }
@@ -127,11 +132,11 @@ func (s *AlertStore) CreateAlert(ctx context.Context, p CreateAlertParams) (*Ale
 	var positionExpr string
 	args := []interface{}{
 		p.AlertType, p.Severity, p.Title, p.Description, p.EntityID,
-		relatedIDs, p.RuleID, metadata,
+		relatedIDs, p.RuleID, metadata, p.Classification,
 	}
 
 	if p.Lat != nil && p.Lng != nil {
-		positionExpr = `ST_SetSRID(ST_MakePoint($9, $10), 4326)`
+		positionExpr = `ST_SetSRID(ST_MakePoint($10, $11), 4326)`
 		args = append(args, *p.Lng, *p.Lat)
 	} else {
 		positionExpr = "NULL"
@@ -147,13 +152,13 @@ func (s *AlertStore) CreateAlert(ctx context.Context, p CreateAlertParams) (*Ale
 
 	query := fmt.Sprintf(`
 		INSERT INTO sentinel.alerts
-			("alertType", severity, title, description, "entityId", "relatedEntityIds", position, "ruleId", metadata%s)
-		VALUES ($1, $2, $3, $4, $5, $6, %s, $7, $8%s)
+			("alertType", severity, title, description, "entityId", "relatedEntityIds", position, "ruleId", metadata, classification%s)
+		VALUES ($1, $2, $3, $4, $5, $6, %s, $7, $8, COALESCE(NULLIF(upper($9), ''), 'UNCLASSIFIED')%s)
 		%s
 		RETURNING id, "alertType", severity, title, description, "entityId", "relatedEntityIds",
 			ST_Y(position::geometry) as lat, ST_X(position::geometry) as lng,
 			"ruleId", metadata, "createdAt"::text,
-			"acknowledgedAt"::text, "acknowledgedBy", "resolvedAt"::text
+			"acknowledgedAt"::text, "acknowledgedBy", "resolvedAt"::text, classification
 	`, idColumn, positionExpr, idValue, conflict)
 
 	row := s.pool.QueryRow(ctx, query, args...)
@@ -162,6 +167,17 @@ func (s *AlertStore) CreateAlert(ctx context.Context, p CreateAlertParams) (*Ale
 		return nil, nil // already stored under this id
 	}
 	return rec, err
+}
+
+// EntityClassification returns the stored classification of an entity, for
+// alerts whose producer did not classify them.
+func (s *AlertStore) EntityClassification(ctx context.Context, entityID string) (string, error) {
+	var level string
+	err := s.pool.QueryRow(ctx, `SELECT classification FROM sentinel.entities WHERE id = $1`, entityID).Scan(&level)
+	if err != nil {
+		return "", fmt.Errorf("entity classification: %w", err)
+	}
+	return level, nil
 }
 
 // GetAlerts queries alerts with filters and pagination.
@@ -200,6 +216,10 @@ func (s *AlertStore) GetAlerts(ctx context.Context, p AlertQueryParams) (*AlertQ
 		}
 	}
 
+	where = append(where, fmt.Sprintf(`sentinel.classification_rank(classification) <= $%d`, argIdx))
+	args = append(args, classification.Rank(p.Ceiling))
+	argIdx++
+
 	whereClause := ""
 	if len(where) > 0 {
 		whereClause = "WHERE " + strings.Join(where, " AND ")
@@ -229,7 +249,7 @@ func (s *AlertStore) GetAlerts(ctx context.Context, p AlertQueryParams) (*AlertQ
 		SELECT id, "alertType", severity, title, description, "entityId", "relatedEntityIds",
 			ST_Y(position::geometry) as lat, ST_X(position::geometry) as lng,
 			"ruleId", metadata, "createdAt"::text,
-			"acknowledgedAt"::text, "acknowledgedBy", "resolvedAt"::text
+			"acknowledgedAt"::text, "acknowledgedBy", "resolvedAt"::text, classification
 		FROM sentinel.alerts
 		%s
 		ORDER BY "createdAt" DESC
@@ -266,7 +286,7 @@ func (s *AlertStore) GetAlert(ctx context.Context, id string) (*AlertRecord, err
 		SELECT id, "alertType", severity, title, description, "entityId", "relatedEntityIds",
 			ST_Y(position::geometry) as lat, ST_X(position::geometry) as lng,
 			"ruleId", metadata, "createdAt"::text,
-			"acknowledgedAt"::text, "acknowledgedBy", "resolvedAt"::text
+			"acknowledgedAt"::text, "acknowledgedBy", "resolvedAt"::text, classification
 		FROM sentinel.alerts
 		WHERE id = $1
 	`, id)
@@ -452,7 +472,7 @@ func scanAlert(row pgx.Row) (*AlertRecord, error) {
 		&rec.EntityID, &rec.RelatedEntityIDs,
 		&lat, &lng,
 		&rec.RuleID, &rec.Metadata, &rec.CreatedAt,
-		&rec.AcknowledgedAt, &rec.AcknowledgedBy, &rec.ResolvedAt,
+		&rec.AcknowledgedAt, &rec.AcknowledgedBy, &rec.ResolvedAt, &rec.Classification,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan alert: %w", err)
@@ -471,7 +491,7 @@ func scanAlertRow(rows pgx.Rows) (*AlertRecord, error) {
 		&rec.EntityID, &rec.RelatedEntityIDs,
 		&lat, &lng,
 		&rec.RuleID, &rec.Metadata, &rec.CreatedAt,
-		&rec.AcknowledgedAt, &rec.AcknowledgedBy, &rec.ResolvedAt,
+		&rec.AcknowledgedAt, &rec.AcknowledgedBy, &rec.ResolvedAt, &rec.Classification,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan alert row: %w", err)
