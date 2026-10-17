@@ -147,6 +147,9 @@ ingestService:
     enabled: false
     interval: 30s
 
+# Go behavioural-analysis service. One replica: detector state is in process
+# and the hourly baseline job takes a Postgres advisory lock, so a second
+# replica would be harmless but is not planned for.
 analyticsService:
   replicaCount: 1
   image:
@@ -156,11 +159,13 @@ analyticsService:
     port: 5000
   resources:
     requests:
-      cpu: 500m
-      memory: 1Gi
+      cpu: 100m
+      memory: 128Mi
     limits:
-      cpu: 2000m
-      memory: 4Gi
+      cpu: 1000m
+      memory: 512Mi
+  # Extra environment (ANALYTICS_* thresholds; see apps/analytics-service/internal/config)
+  env: {}
 
 web:
   replicaCount: 2

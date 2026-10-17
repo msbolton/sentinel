@@ -30,7 +30,7 @@ SENTINEL uses two Compose files:
 | Link Analysis | 3004 | Go |
 | Alert Service | 3005 | Go |
 | Ingest Service | 4000 (not published; reached through the gateway) | Go, `--scale ingest-service=N` |
-| Analytics Service | 5000 | Python |
+| Analytics Service | 5000 | Go |
 | Web UI | 4200 | Angular |
 
 ## Volumes

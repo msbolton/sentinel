@@ -3,7 +3,7 @@
 SHELL := /bin/bash
 
 # Go services
-GO_SERVICES := api-gateway ingest-service entity-service track-service search-service link-analysis-service alert-service
+GO_SERVICES := api-gateway ingest-service entity-service track-service search-service link-analysis-service alert-service analytics-service
 
 # ============================================================================
 # SENTINEL - Geospatial Intelligence Platform
@@ -58,7 +58,6 @@ install: ## Install all dependencies
 		cd apps/$$svc && go mod tidy && cd ../..; \
 	done
 	cd libs/common-go && go mod tidy
-	cd apps/analytics-service && pip install -e ".[dev]"
 
 build: ## Build all applications
 	npx nx run-many --target=build --all --parallel=5
@@ -93,8 +92,8 @@ build-alerts: ## Build Go alert service
 build-ingest: ## Build Go ingest service
 	npx nx build ingest-service
 
-build-analytics: ## Build Python analytics service (no-op, interpreted)
-	@echo "Python analytics service requires no build step"
+build-analytics: ## Build Go analytics service
+	npx nx build analytics-service
 
 # ----------------------------------------------------------------------------
 # Development
@@ -132,8 +131,8 @@ dev-alerts: ## Start Go alert service
 dev-ingest: ## Start Go ingest service
 	npx nx serve ingest-service
 
-dev-analytics: ## Start Python analytics service
-	cd apps/analytics-service && uvicorn sentinel_analytics.main:app --reload --port 5000
+dev-analytics: ## Start Go analytics service
+	npx nx serve analytics-service
 
 # ----------------------------------------------------------------------------
 # Docker
@@ -194,8 +193,8 @@ test-alerts: ## Run alert service tests
 test-ingest: ## Run ingest service tests
 	npx nx test ingest-service
 
-test-analytics: ## Run Python tests
-	cd apps/analytics-service && pytest
+test-analytics: ## Run analytics service tests
+	npx nx test analytics-service
 
 # ----------------------------------------------------------------------------
 # Linting

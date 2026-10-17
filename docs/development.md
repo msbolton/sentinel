@@ -6,7 +6,6 @@
 - **npm** (comes with Node.js)
 - **Docker** & **Docker Compose** (for infrastructure services)
 - **Go 1.25+** (API gateway and all backend services)
-- **Python 3.12+** (for analytics-service, optional)
 
 ## First-Time Setup
 
@@ -41,7 +40,7 @@ Seeded entities are queryable through the gateway as soon as the entity-service 
 | `make dev-client` | `npx nx serve client` | Angular dev server on `:4200` |
 | `make dev-api` | `npx nx serve api-gateway` | Go API gateway on `:3000` (auth bypass on) |
 | `make dev-ingest` | `go run ./cmd/server` | Go ingest service on `:4000` |
-| `make dev-analytics` | `uvicorn ... --reload` | Python analytics on `:5000` |
+| `make dev-analytics` | `nx serve analytics-service` | Go analytics on `:5000` |
 
 ### Build
 

@@ -1,0 +1,33 @@
+{
+  "name": "analytics-service",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/analytics-service",
+  "projectType": "application",
+  "tags": ["scope:analytics-service", "type:microservice"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/dist/apps/analytics-service"],
+      "options": {
+        "commands": [
+          "cd apps/analytics-service && CGO_ENABLED=1 go build -o ../../dist/apps/analytics-service/server ./cmd/server"
+        ],
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": ["cd apps/analytics-service && go run ./cmd/server"],
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": ["cd apps/analytics-service && go test -v -race ./..."],
+        "cwd": "{workspaceRoot}"
+      }
+    }
+  }
+}

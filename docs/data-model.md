@@ -99,9 +99,20 @@ Stale and age-out thresholds in milliseconds, per feed (`"feedId"`), per source 
 
 Entity relationships for graph analysis: `"sourceEntityId"`, `"targetEntityId"`, `"linkType"`, `confidence`, `description`, `evidence`, `"firstObserved"`, `"lastObserved"`, `metadata`, `"createdAt"`.
 
-### sentinel.locations and sentinel.anomalies
+### sentinel.locations
 
-`locations` holds the saved camera positions the gateway serves (`name`, `latitude`, `longitude`, `altitude`, `heading`, `pitch`, `"range"`, `"has3dTiles"`, `category`). `anomalies` is the analytics service's log of detections (`entity_id`, `anomaly_type`, `severity`, `score`, expected and actual values, `position`, `detected_at`).
+`locations` holds the saved camera positions the gateway serves (`name`, `latitude`, `longitude`, `altitude`, `heading`, `pitch`, `"range"`, `"has3dTiles"`, `category`).
+
+### Behavioural baselines and findings (`db/schema/60_behavior.sql`)
+
+What the analytics service has learned about each entity and where it departs from it.
+
+| Table | Columns | Notes |
+|-------|---------|-------|
+| `entity_baselines` | `"entityId"` (PK), `"entityType"`, `"computedAt"`, `"windowStart"`, `"windowEnd"`, `"pointCount"`, `days`, `mature`, `stats` JSONB, `hours` SMALLINT[168] | One row per entity, recomputed hourly from the last 30 days of `track_points`. `stats` holds range, speed, altitude and reporting-gap statistics; `hours` is the hour-of-week activity histogram in local solar time; `mature` is the gate the detectors wait for |
+| `entity_places` | `id`, `"entityId"`, `"clusterIndex"`, `name`, `"locationId"`, `centroid`, `"radiusM"`, `visits`, `"medianDwellSec"`, `"pointShare"`, `"firstSeen"`, `"lastSeen"` | The baseline's dwell clusters, replaced on each recomputation; `name` comes from a nearby `locations` row |
+| `findings` | `id`, `"entityId"`, `kind`, `severity`, `score`, `summary`, `expected` JSONB, `actual` JSONB, `thresholds` JSONB, `position`, `"evidenceStart"`, `"evidenceEnd"`, `status`, `"reviewedBy"`, `"reviewedAt"`, `"alertId"`, `classification`, `hits`, `"firstAt"`, `"lastAt"`, `"closedAt"` | A departure from the baseline. Kinds: `UNUSUAL_PLACE`, `UNUSUAL_TIME`, `UNUSUAL_MOVEMENT`, `WENT_DARK`, `REAPPEARED`. Status `OPEN` → `CLOSED` when evidence stops, or `CONFIRMED` / `DISMISSED` by an analyst; a partial unique index keeps one open finding per entity and kind so repeat evidence is absorbed (`hits`). A finding that reaches HIGH or is confirmed is published as an alert with the same id (`"alertId"`). `classification` is inherited from the entity |
+| `coverage_cells` | `cell`, `"feedId"`, `"lastObservedAt"` | When each feed last reported in a grid cell, so an entity going dark can be told from a feed going away |
 
 ### GIS views (`db/schema/90_gis_views.sql`)
 

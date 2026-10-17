@@ -456,6 +456,7 @@ services:
       SEARCH_SERVICE_URL: http://search-service:3003
       LINK_ANALYSIS_SERVICE_URL: http://link-analysis-service:3004
       ALERT_SERVICE_URL: http://alert-service:3005
+      ANALYTICS_SERVICE_URL: http://analytics-service:5000
       INGEST_SERVICE_URL: http://ingest-service:4000
       INGEST_SERVICE_TOKEN: ${INGEST_SERVICE_TOKEN:-dev-ingest-token}
       # Push the area connected map clients see to every ingest feed that polls an area
@@ -772,7 +773,7 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # Analytics Service (Python)
+  # Analytics Service (Go): behavioural baselines and findings
   # ===========================================================================
   analytics-service:
     build:
@@ -783,17 +784,18 @@ services:
     hostname: analytics-service
     restart: unless-stopped
     environment:
-      APP_ENV: development
       PORT: "5000"
+      LOG_LEVEL: info
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_DATABASE: sentinel
       DB_USERNAME: sentinel
       DB_PASSWORD: sentinel_dev
       KAFKA_BROKERS: kafka:9093
-      OPENSEARCH_URL: http://opensearch:9200
+      CORS_ORIGIN: "*"
     ports:
-      - "5000:5000"
+      # macOS Control Center listens on 5000: set ANALYTICS_SERVICE_PORT=5001 in .env
+      - "${ANALYTICS_SERVICE_PORT:-5000}:5000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -801,22 +803,20 @@ services:
         condition: service_completed_successfully
       kafka:
         condition: service_healthy
-      opensearch:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/health')\" 2>/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 45s
+      start_period: 20s
     deploy:
       resources:
         limits:
-          memory: 2g
-          cpus: "2.0"
+          memory: 512m
+          cpus: "1.0"
         reservations:
-          memory: 256m
-          cpus: "0.25"
+          memory: 64m
+          cpus: "0.1"
     networks:
       - sentinel-network
 
