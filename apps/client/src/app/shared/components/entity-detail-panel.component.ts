@@ -5,6 +5,7 @@ import { AnalyticsService } from '../../core/services/analytics.service';
 import { AuthService } from '../../core/services/auth.service';
 import { FeedService } from '../../core/services/feed.service';
 import { LocationService } from '../../core/services/location.service';
+import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 import { Entity } from '../models/entity.model';
 import { EntityBaseline, EntityPlace, Finding, findingKindLabel, formatDuration, formatMetres } from '../models/finding.model';
 import { Location } from '../models/location.model';
@@ -360,6 +361,11 @@ import { Location } from '../models/location.model';
                     }
                     @case ('tle') {
                       @if (e.platformData?.tle; as tle) {
+                        <div class="orbit-toggles" role="group" aria-label="Orbit overlays">
+                          <label class="orbit-toggle"><input type="checkbox" [checked]="orbit.showPath()" (change)="orbit.toggle('path')" /> Orbit path</label>
+                          <label class="orbit-toggle"><input type="checkbox" [checked]="orbit.showGroundTrack()" (change)="orbit.toggle('groundTrack')" /> Ground track</label>
+                          <label class="orbit-toggle"><input type="checkbox" [checked]="orbit.showFootprint()" (change)="orbit.toggle('footprint')" /> Footprint</label>
+                        </div>
                         @if (tle.intlDesignator) {
                           <div class="field-row"><span class="field-label">Intl Desig</span><span class="field-value mono">{{ tle.intlDesignator }}</span></div>
                         }
@@ -398,6 +404,13 @@ import { Location } from '../models/location.model';
                         }
                         @if (tle.launchDate) {
                           <div class="field-row"><span class="field-label">Launched</span><span class="field-value mono">{{ tle.launchDate | date:'mediumDate' }}</span></div>
+                        }
+                        @if (tle.line1 && tle.line2) {
+                          <div class="field-row-stack">
+                            <span class="field-label">Elements <span class="text-muted">(derived from CelesTrak OMM)</span></span>
+                            <pre class="tle-lines mono">{{ tle.line1 }}
+{{ tle.line2 }}</pre>
+                          </div>
                         }
                       }
                     }
@@ -692,6 +705,34 @@ import { Location } from '../models/location.model';
       &.mono {
         font-family: var(--font-mono);
       }
+    }
+
+    .orbit-toggles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 0 0 8px;
+    }
+
+    .orbit-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      cursor: pointer;
+    }
+
+    .tle-lines {
+      margin: 4px 0 0;
+      padding: 6px 8px;
+      border-radius: 4px;
+      background: var(--bg-primary);
+      font-size: 0.66rem;
+      line-height: 1.4;
+      white-space: pre;
+      overflow-x: auto;
+      color: var(--text-secondary);
     }
 
     .behaviour-note {
@@ -989,6 +1030,7 @@ export class EntityDetailPanelComponent {
   private readonly analytics = inject(AnalyticsService);
   private readonly auth = inject(AuthService);
   private readonly locations = inject(LocationService);
+  protected readonly orbit = inject(OrbitOverlayService);
   private feedsRequested = false;
   private behaviourRequest = 0;
 
@@ -1003,8 +1045,9 @@ export class EntityDetailPanelComponent {
 
   constructor() {
     effect(() => {
-      this.entity();
-      this.expandedSections.set({ platformDetails: false, signalQuality: false });
+      const e = this.entity();
+      // A satellite's platform section holds the orbit toggles: open it.
+      this.expandedSections.set({ platformDetails: !!e?.platformData?.tle, signalQuality: false });
     });
     // Behaviour: the baseline and open findings of the shown entity. A
     // request counter drops answers for an entity that is no longer shown.

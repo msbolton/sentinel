@@ -8,6 +8,7 @@ import { AnalyticsService } from '../../core/services/analytics.service';
 import { AuthService } from '../../core/services/auth.service';
 import { LocationService } from '../../core/services/location.service';
 import { EntityBaseline, Finding } from '../models/finding.model';
+import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 import { Classification, Entity, EntitySource, EntityType } from '../models/entity.model';
 import { Feed } from '../models/feed.model';
 
@@ -251,6 +252,41 @@ describe('EntityDetailPanelComponent', () => {
       fixture.detectChanges();
       expect(analytics.reviewFinding).toHaveBeenCalledWith('f1', 'DISMISSED');
       expect(el.querySelector('.finding-item')).toBeNull();
+    });
+  });
+
+  describe('satellite orbit section', () => {
+    const line1 = '1 25544U 98067A   26063.86671769  .00009014  00000+0  17477-3 0  9999';
+    const line2 = '2 25544  51.6315  96.2009 0008177 157.5272 202.6076 15.48447334555585';
+
+    it('shows the overlay toggles, the epoch and the elements for a satellite, opened by default', () => {
+      fixture.componentRef.setInput(
+        'entity',
+        makeEntity({
+          entityType: EntityType.SATELLITE,
+          name: 'ISS (ZARYA)',
+          platformData: { tle: { noradId: 25544, line1, line2, epoch: '2026-03-04T20:48:04.408416Z', inclination: 51.6315 } },
+        }),
+      );
+      fixture.detectChanges();
+      const boxes = Array.from(el.querySelectorAll('.orbit-toggle input')) as HTMLInputElement[];
+      expect(boxes.length).toBe(3);
+      expect(boxes.every((b) => b.checked)).toBe(true);
+      const orbit = TestBed.inject(OrbitOverlayService);
+      boxes[1].click();
+      fixture.detectChanges();
+      expect(orbit.showGroundTrack()).toBe(false);
+      expect(boxes[1].checked).toBe(false);
+      orbit.toggle('groundTrack'); // restore for other tests
+      expect(el.querySelector('.tle-lines')?.textContent).toContain(line2);
+      expect(el.textContent).toContain('TLE Epoch');
+    });
+
+    it('shows no orbit controls for an entity without elements', () => {
+      fixture.componentRef.setInput('entity', makeEntity());
+      fixture.detectChanges();
+      expect(el.querySelector('.orbit-toggle')).toBeNull();
+      expect(el.querySelector('.tle-lines')).toBeNull();
     });
   });
 });

@@ -41,11 +41,14 @@ import {
   svgToDataUrl,
   DEFAULT_CAMERA_POSITION,
   TRACK_TRAIL_CONFIG,
+  ORBIT_OVERLAY_CONFIG,
 } from './cesium-config';
 import { CircularBuffer, decimateTrail, TrailPoint } from './trail-utils';
 import { isGlobalBounds, rectangleToBounds } from './viewport-bounds';
 import { DeadReckoningTracker } from './dead-reckoning';
-import { SatelliteTracker } from './satellite-tracker';
+import { SatelliteTracker, periodMinutes, type SatPosition } from './satellite-tracker';
+import { footprintRadiusM, sampleOrbit, splitAtAntimeridian } from './orbit-geometry';
+import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 
 /** Dead-reckoning frame cap: ~30 fps is plenty for gliding markers. */
 const DR_FRAME_INTERVAL_MS = 33;
@@ -162,6 +165,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   /** Satellites are propagated from their elements; see satellite-tracker.ts. */
   private readonly satellites = new SatelliteTracker();
   private satLastStepMs = 0;
+  /** Overlays for the selected satellite; see orbit-geometry.ts. */
+  private orbit: { forId: string | null; path: any | null; ground: any[]; footprint: any | null; builtAtMs: number; line1: string } =
+    { forId: null, path: null, ground: [], footprint: null, builtAtMs: 0, line1: '' };
   private drFrame: number | null = null;
   private drLastTickMs = 0;
   private drScratch: any = null;
@@ -181,6 +187,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     readonly buildingsService: BuildingsService,
     private readonly http: HttpClient,
     private readonly layerVisibility: LayerVisibilityService,
+    private readonly orbitOverlay: OrbitOverlayService,
     private readonly mapViewport: MapViewportService,
   ) {
     // Entities stay in the viewer when their layer is hidden (show=false) so
@@ -189,6 +196,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       this.layerVisibility.hidden();
       this.ngZone.runOutsideAngular(() => this.applyLayerVisibility());
+    });
+
+    // The selected satellite gets its orbit path, ground track and
+    // footprint; the detail panel's toggles decide which are shown.
+    effect(() => {
+      const selected = this.selectedEntity();
+      const flags = { path: this.orbitOverlay.showPath(), ground: this.orbitOverlay.showGroundTrack(), footprint: this.orbitOverlay.showFootprint() };
+      this.ngZone.runOutsideAngular(() => untracked(() => this.syncOrbitOverlay(selected, flags)));
     });
 
     // Track whether a panel route is active (anything other than /map or /)
@@ -241,6 +256,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.clearOrbitOverlay();
     if (this.ageoutConfigTimer) clearInterval(this.ageoutConfigTimer);
     if (this.drFrame !== null) {
       cancelAnimationFrame(this.drFrame);
@@ -328,6 +344,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     handler.setInputAction((click: any) => {
       const pickedObject = this.viewer.scene.pick(click.position);
 
+      if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelOrbit) {
+        return; // a click on the selected satellite's own overlay keeps the selection
+      }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelEntity) {
         this.ngZone.run(() => {
           this.selectedEntity.set(pickedObject.id._sentinelEntity);
@@ -583,6 +602,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const now = this.wsService.serverNow();
     const tracked = this.deadReckoning.upsert(entity, now);
     const satTracked = this.satellites.upsert(entity);
+    if (satTracked && entity.id === this.orbit.forId) {
+      const line1 = (entity.platformData?.['tle'] as { line1?: string } | undefined)?.line1 ?? '';
+      if (line1 !== this.orbit.line1) this.orbit.builtAtMs = 0; // elements changed: re-sample on the next frame
+    }
     const shownPosition = tracked ? this.deadReckoning.positionOf(entity.id, now) : null;
     const satPosition = satTracked ? this.satellites.positionOf(entity.id, now) : null;
     const displayPosition = shownPosition
@@ -752,6 +775,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       if (cesiumEntity.show === false) return;
       cesiumEntity._posProp.setValue(Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.height, undefined, this.drScratch));
       moved++;
+      if (id === this.orbit.forId) this.updateOrbitOverlay(id, pos, now);
     };
     if (stepAll) {
       for (const [id, pos] of this.satellites.step(now)) place(id, pos);
@@ -762,9 +786,137 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     return moved;
   }
 
+  /** Build, show/hide or clear the overlays to match the selection and the toggles. */
+  private syncOrbitOverlay(selected: Entity | null, flags: { path: boolean; ground: boolean; footprint: boolean }): void {
+    if (!this.viewer || this.viewer.isDestroyed()) return;
+    if (!selected || selected.entityType !== EntityType.SATELLITE || !this.satellites.has(selected.id)) {
+      this.clearOrbitOverlay();
+      return;
+    }
+    if (this.orbit.forId !== selected.id) {
+      this.clearOrbitOverlay();
+      this.orbit.forId = selected.id;
+      this.orbit.line1 = (selected.platformData?.['tle'] as { line1?: string } | undefined)?.line1 ?? '';
+      const now = this.wsService.serverNow();
+      const pos = this.satellites.positionOf(selected.id, now);
+      if (pos) this.buildOrbitOverlay(selected.id, pos, now);
+      this.ensureDeadReckoningLoop();
+    }
+    if (this.orbit.path) this.orbit.path.show = flags.path;
+    for (const g of this.orbit.ground) g.show = flags.ground;
+    if (this.orbit.footprint) this.orbit.footprint.show = flags.footprint;
+    this.scheduleRender();
+  }
+
+  private buildOrbitOverlay(id: string, pos: SatPosition, now: number): void {
+    const Cesium = this.Cesium;
+    const satrec = this.satellites.satrecOf(id);
+    if (!satrec) return;
+    const cfg = ORBIT_OVERLAY_CONFIG;
+    const samples = sampleOrbit(satrec, now, periodMinutes(satrec), cfg.samples);
+    const color = Cesium.Color.fromCssColorString(cfg.pathColor);
+    if (samples.length >= 2) {
+      const flat: number[] = [];
+      for (const s of samples) flat.push(s.lon, s.lat, s.height);
+      this.orbit.path = this.viewer.entities.add({
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArrayHeights(flat),
+          width: cfg.pathWidth,
+          material: color,
+          arcType: Cesium.ArcType.NONE,
+        },
+        show: this.orbitOverlay.showPath(),
+      });
+      this.orbit.path._sentinelOrbit = true;
+      const groundColor = Cesium.Color.fromCssColorString(cfg.groundColor).withAlpha(cfg.groundAlpha);
+      for (const run of splitAtAntimeridian(samples)) {
+        const ground: number[] = [];
+        for (const s of run) ground.push(s.lon, s.lat);
+        const g = this.viewer.entities.add({
+          polyline: {
+            positions: Cesium.Cartesian3.fromDegreesArray(ground),
+            width: cfg.groundWidth,
+            material: groundColor,
+            clampToGround: true,
+          },
+          show: this.orbitOverlay.showGroundTrack(),
+        });
+        g._sentinelOrbit = true;
+        this.orbit.ground.push(g);
+      }
+    }
+    const radius = footprintRadiusM(pos.height);
+    if (radius > 0) {
+      const footprintPos = new Cesium.ConstantPositionProperty(Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, 0));
+      this.orbit.footprint = this.viewer.entities.add({
+        position: footprintPos,
+        ellipse: {
+          semiMajorAxis: radius,
+          semiMinorAxis: radius,
+          height: 0,
+          material: Cesium.Color.fromCssColorString(cfg.footprintColor).withAlpha(cfg.footprintAlpha),
+          outline: true,
+          outlineColor: Cesium.Color.fromCssColorString(cfg.footprintColor).withAlpha(cfg.footprintOutlineAlpha),
+          granularity: radius > 2_000_000 ? Cesium.Math.toRadians(0.5) : Cesium.Math.RADIANS_PER_DEGREE,
+        },
+        show: this.orbitOverlay.showFootprint(),
+      });
+      this.orbit.footprint._sentinelOrbit = true;
+      this.orbit.footprint._posProp = footprintPos;
+    }
+    this.orbit.builtAtMs = now;
+  }
+
+  /** Move the footprint with the satellite; re-sample the path when it is stale. */
+  private updateOrbitOverlay(id: string, pos: SatPosition, now: number): void {
+    const Cesium = this.Cesium;
+    if (this.orbit.footprint?._posProp) {
+      this.orbit.footprint._posProp.setValue(Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, 0));
+      const radius = footprintRadiusM(pos.height);
+      if (radius > 0 && this.orbit.footprint.ellipse) {
+        this.orbit.footprint.ellipse.semiMajorAxis = radius;
+        this.orbit.footprint.ellipse.semiMinorAxis = radius;
+      }
+    }
+    if (now - this.orbit.builtAtMs >= ORBIT_OVERLAY_CONFIG.rebuildMs) {
+      const flags = { path: this.orbitOverlay.showPath(), ground: this.orbitOverlay.showGroundTrack(), footprint: this.orbitOverlay.showFootprint() };
+      this.removeOrbitEntities();
+      this.orbit.line1 = (this.entityMap.get(id)?._sentinelEntity?.platformData?.['tle'] as { line1?: string } | undefined)?.line1 ?? this.orbit.line1;
+      this.buildOrbitOverlay(id, pos, now);
+      if (this.orbit.path) this.orbit.path.show = flags.path;
+      for (const g of this.orbit.ground) g.show = flags.ground;
+      if (this.orbit.footprint) this.orbit.footprint.show = flags.footprint;
+    }
+  }
+
+  private removeOrbitEntities(): void {
+    if (!this.viewer || this.viewer.isDestroyed()) {
+      this.orbit.path = null;
+      this.orbit.ground = [];
+      this.orbit.footprint = null;
+      return;
+    }
+    if (this.orbit.path) this.viewer.entities.remove(this.orbit.path);
+    for (const g of this.orbit.ground) this.viewer.entities.remove(g);
+    if (this.orbit.footprint) this.viewer.entities.remove(this.orbit.footprint);
+    this.orbit.path = null;
+    this.orbit.ground = [];
+    this.orbit.footprint = null;
+  }
+
+  private clearOrbitOverlay(): void {
+    if (!this.orbit.forId && !this.orbit.path && !this.orbit.footprint && this.orbit.ground.length === 0) return;
+    this.removeOrbitEntities();
+    this.orbit.forId = null;
+    this.orbit.builtAtMs = 0;
+    this.orbit.line1 = '';
+    this.scheduleRender();
+  }
+
   private removeCesiumEntity(entityId: string): void {
     this.deadReckoning.remove(entityId);
     this.satellites.remove(entityId);
+    if (entityId === this.orbit.forId) this.clearOrbitOverlay();
     const cesiumEntity = this.entityMap.get(entityId);
     if (cesiumEntity && this.viewer) {
       this.viewer.entities.remove(cesiumEntity);
