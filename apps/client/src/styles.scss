@@ -8,7 +8,7 @@
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
-  --sidebar-width: 56px;
+  --sidebar-width: 208px;
   --panel-width: 380px;
   --status-bar-height: 28px;
   --timeline-height: 80px;
@@ -551,7 +551,9 @@ textarea {
   }
 }
 
-// --- Sidebar ---
+// --- Sidebar (navigation rail) ---
+// Width comes from --sidebar-width, which NavRailService sets to 208px
+// (labels) or 56px (icons only). Main content and the status bar key off it.
 .sidebar {
   position: fixed;
   top: 0;
@@ -562,78 +564,266 @@ textarea {
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
-  align-items: center;
   z-index: 1000;
-  padding: 8px 0;
+  padding: 8px;
+  gap: 2px;
+
+  &-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 40px;
+    padding: 0 6px;
+    margin-bottom: 10px;
+  }
 
   &-logo {
-    width: 40px;
-    height: 40px;
-    margin-bottom: 16px;
+    width: 28px;
+    height: 28px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.2rem;
+    font-size: 1.1rem;
     font-weight: 800;
     color: var(--accent-cyan);
     letter-spacing: -0.05em;
     font-family: var(--font-mono);
+    flex-shrink: 0;
+  }
+
+  &-wordmark {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
   }
 
   &-nav {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     flex: 1;
+    min-height: 0;
   }
 
-  &-btn {
-    width: 40px;
-    height: 40px;
+  &-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    & + & {
+      margin-top: 12px;
+    }
+  }
+
+  &-group-label {
+    padding: 0 12px 4px;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  &-item,
+  &-collapse {
+    position: relative;
     display: flex;
     align-items: center;
-    justify-content: center;
+    gap: 12px;
+    height: 40px;
+    padding: 0 12px;
     border-radius: var(--radius-md);
-    color: var(--text-muted);
+    color: var(--text-secondary);
     background: transparent;
-    transition: all var(--transition-fast);
-    position: relative;
-    font-size: 1.1rem;
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 500;
+    width: 100%;
+    transition: background var(--transition-fast), color var(--transition-fast);
 
     &:hover {
       background: rgba(255, 255, 255, 0.05);
       color: var(--text-primary);
     }
 
-    &.active {
-      background: rgba(59, 130, 246, 0.15);
-      color: var(--accent-blue);
+    &:focus-visible {
+      outline: 2px solid var(--accent-blue);
+      outline-offset: -2px;
     }
+  }
 
-    .badge {
+  &-item.active {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--accent-blue);
+
+    &::before {
+      content: '';
       position: absolute;
-      top: 4px;
-      right: 4px;
-      width: 16px;
-      height: 16px;
-      border-radius: 50%;
-      background: var(--accent-red);
-      color: #fff;
-      font-size: 0.6rem;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 700;
+      left: -8px;
+      top: 10px;
+      bottom: 10px;
+      width: 2px;
+      border-radius: 2px;
+      background: var(--accent-blue);
     }
+  }
+
+  &-item-label {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &-key {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0 5px;
+    line-height: 16px;
+  }
+
+  .badge {
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 10px;
+    background: var(--accent-red);
+    color: #fff;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    &.badge-findings {
+      background: var(--accent-orange);
+      color: var(--bg-primary);
+    }
+  }
+
+  &-flyout {
+    display: none;
+  }
+
+  &-collapse {
+    color: var(--text-muted);
   }
 
   &-footer {
     margin-top: auto;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     padding-top: 8px;
     border-top: 1px solid var(--border-color);
+  }
+
+  // --- Collapsed: icons only, label in a flyout on hover or focus ---
+  &.collapsed {
+    .sidebar-brand {
+      justify-content: center;
+      padding: 0;
+    }
+
+    .sidebar-wordmark,
+    .sidebar-group-label,
+    .sidebar-item-label,
+    .sidebar-key {
+      display: none;
+    }
+
+    .sidebar-group + .sidebar-group {
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px solid var(--border-color);
+    }
+
+    .sidebar-item,
+    .sidebar-collapse {
+      justify-content: center;
+      padding: 0;
+      width: 40px;
+    }
+
+    .badge {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 5px;
+      font-size: 0.65rem;
+      border: 2px solid var(--bg-secondary);
+      box-sizing: content-box;
+    }
+
+    .sidebar-item:hover .sidebar-flyout,
+    .sidebar-item:focus-visible .sidebar-flyout {
+      display: flex;
+    }
+
+    .sidebar-flyout {
+      position: absolute;
+      left: calc(100% + 10px);
+      top: 50%;
+      transform: translateY(-50%);
+      align-items: center;
+      gap: 10px;
+      height: 36px;
+      padding: 0 10px 0 12px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-lg);
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-primary);
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 1100;
+
+      &::before {
+        content: '';
+        position: absolute;
+        left: -5px;
+        top: 13px;
+        width: 8px;
+        height: 8px;
+        background: var(--bg-tertiary);
+        border-left: 1px solid var(--border-color);
+        border-bottom: 1px solid var(--border-color);
+        transform: rotate(45deg);
+      }
+
+      kbd {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        color: var(--text-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        padding: 0 5px;
+        line-height: 16px;
+      }
+
+      .flyout-count {
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        color: var(--accent-orange);
+      }
+    }
   }
 }
 

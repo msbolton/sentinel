@@ -15,6 +15,7 @@ import { HttpClient } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { Router, NavigationEnd } from '@angular/router';
 import { EntityDetailPanelComponent } from '../../shared/components/entity-detail-panel.component';
+import { IconComponent } from '../../shared/components/icon.component';
 import { Subscription, debounceTime, Subject, throttleTime, bufferTime, filter } from 'rxjs';
 import {
   Entity,
@@ -51,6 +52,7 @@ import { footprintRadiusM, sampleOrbit, splitAtAntimeridian } from './orbit-geom
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 
 /** Dead-reckoning frame cap: ~30 fps is plenty for gliding markers. */
+/** Whether a #rrggbb colour is light enough to need dark text on it. */
 const DR_FRAME_INTERVAL_MS = 33;
 /** All satellites are re-propagated this often; the selected one every frame. */
 const SAT_STEP_INTERVAL_MS = 250;
@@ -121,7 +123,7 @@ interface LayerConfig {
   selector: 'app-map',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule, EntityDetailPanelComponent],
+  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, IconComponent],
   templateUrl: './map.component.html',
   styleUrls: ['./map.component.scss'],
 })

@@ -7,7 +7,7 @@
   <!-- Search -->
   <div class="search-input-container">
     <div class="search-input-wrapper">
-      <span class="search-icon">&#128269;</span>
+      <span class="search-icon"><app-icon name="search" [size]="14" /></span>
       <input
         type="text"
         class="search-input"
@@ -16,7 +16,7 @@
         (input)="onSearchInput($any($event.target).value)"
       />
       @if (searchQuery()) {
-        <button class="search-clear" (click)="onSearchInput('')">&times;</button>
+        <button class="search-clear" (click)="onSearchInput('')" aria-label="Clear search"><app-icon name="x" [size]="12" /></button>
       }
     </div>
   </div>
@@ -41,7 +41,7 @@
     <div class="location-form">
       <div class="form-header">
         <h3>{{ editingLocation() ? 'Edit Location' : 'New Location' }}</h3>
-        <button class="btn-ghost btn-sm" (click)="cancelForm()">&times;</button>
+        <button class="btn-ghost btn-sm" (click)="cancelForm()" aria-label="Close form"><app-icon name="x" [size]="14" /></button>
       </div>
 
       <!-- Geocoding Search (add mode only) -->
@@ -175,7 +175,7 @@
       }
     } @else if (filteredLocations().length === 0) {
       <div class="empty-state">
-        <span class="empty-icon">&#128205;</span>
+        <span class="empty-icon"><app-icon name="map-pin" [size]="32" [strokeWidth]="1.5" /></span>
         <p>No locations found</p>
       </div>
     }

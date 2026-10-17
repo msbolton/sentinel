@@ -7,7 +7,7 @@
       }
     </div>
     <button class="btn btn-ghost btn-sm" (click)="loadAlerts()">
-      &#8635; Refresh
+      <app-icon name="refresh" [size]="14" /> Refresh
     </button>
   </div>
 
@@ -57,7 +57,7 @@
 
     @if (!loading() && alerts().length === 0) {
       <div class="empty-state">
-        <span class="empty-icon">&#128276;</span>
+        <span class="empty-icon"><app-icon name="bell" [size]="32" [strokeWidth]="1.5" /></span>
         <p>No alerts to display</p>
         <p class="text-xs text-muted">Alerts will appear here in real-time</p>
       </div>
@@ -73,7 +73,7 @@
         <div class="alert-content">
           <div class="alert-header">
             <span class="alert-severity-icon" [ngClass]="getSeverityClass(alert.severity)">
-              {{ getSeverityIcon(alert.severity) }}
+              <app-icon [name]="getSeverityIcon(alert.severity)" [size]="12" [strokeWidth]="2.5" />
             </span>
             <span class="alert-title">{{ alert.title }}</span>
             <span class="alert-time mono">{{ getTimeAgo(alert.createdAt) }}</span>
@@ -97,7 +97,7 @@
               </button>
             } @else {
               <span class="ack-label mono">
-                &#10003; Acknowledged
+                <app-icon name="check" [size]="12" /> Acknowledged
                 @if (alert.acknowledgedBy) {
                   by {{ alert.acknowledgedBy }}
                 }
@@ -105,7 +105,7 @@
             }
             @if (alert.position) {
               <button class="btn btn-ghost btn-sm" (click)="flyToAlert(alert)">
-                &#127758; Go to location
+                <app-icon name="navigation" [size]="14" /> Go to location
               </button>
             }
           </div>

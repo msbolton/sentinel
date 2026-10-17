@@ -3,6 +3,7 @@ import {
   ChangeDetectionStrategy,
   signal,
   inject,
+  input,
   HostListener,
   ElementRef,
 } from '@angular/core';
@@ -16,19 +17,33 @@ import { toSignal } from '@angular/core/rxjs-interop';
   imports: [CommonModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="user-menu-container" [class.expanded]="expanded()">
-      <button class="user-btn" (click)="toggle()" [title]="profile()?.username ?? 'Login'">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-          <circle cx="12" cy="7" r="4"/>
-        </svg>
-        @if (isAuthenticated()) {
-          <span class="auth-indicator"></span>
+    <div class="user-menu-container" [class.open]="open()">
+      <button
+        class="user-btn"
+        [class.wide]="expanded()"
+        (click)="toggle()"
+        [title]="profile()?.username ?? 'Login'"
+        [attr.aria-label]="'Account: ' + (profile()?.username ?? 'not signed in')"
+        [attr.aria-expanded]="open()">
+        <span class="user-glyph">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+          @if (isAuthenticated()) {
+            <span class="auth-indicator"></span>
+          }
+        </span>
+        @if (expanded()) {
+          <span class="user-row">
+            <span class="user-row-name">{{ profile()?.username ?? 'Not signed in' }}</span>
+            <span class="user-row-role">{{ formatRoles(profile()?.roles ?? []) }}</span>
+          </span>
         }
       </button>
 
-      @if (expanded()) {
+      @if (open()) {
         <div class="user-panel">
           @if (isAuthenticated()) {
             <div class="user-info">
@@ -92,17 +107,61 @@ import { toSignal } from '@angular/core/rxjs-interop';
       color: var(--text-muted);
       transition: all var(--transition-fast);
       cursor: pointer;
+      text-align: left;
 
       &:hover {
         color: var(--text-primary);
         background: color-mix(in srgb, var(--text-muted) 10%, transparent);
       }
+
+      &.wide {
+        width: 100%;
+        height: 48px;
+        justify-content: flex-start;
+        gap: 12px;
+        padding: 0 10px;
+      }
+    }
+
+    .user-glyph {
+      position: relative;
+      display: inline-flex;
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+
+    .user-row {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      line-height: 1.25;
+    }
+
+    .user-row-name {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .user-row-role {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .auth-indicator {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: -3px;
+      right: -3px;
       width: 8px;
       height: 8px;
       border-radius: 50%;
@@ -251,22 +310,24 @@ export class UserMenuComponent {
   private readonly authService = inject(AuthService);
   private readonly elementRef = inject(ElementRef);
 
-  readonly expanded = signal(false);
+  /** Whether the rail that holds this menu shows labels. */
+  readonly expanded = input(false);
+  readonly open = signal(false);
   readonly profile = toSignal(this.authService.userProfile$);
   readonly isAuthenticated = toSignal(this.authService.isAuthenticated$, { initialValue: false });
 
   toggle(): void {
-    this.expanded.update((v) => !v);
+    this.open.update((v) => !v);
   }
 
   login(): void {
     this.authService.login();
-    this.expanded.set(false);
+    this.open.set(false);
   }
 
   logout(): void {
     this.authService.logout();
-    this.expanded.set(false);
+    this.open.set(false);
   }
 
   formatRoles(roles: string[]): string {
@@ -279,7 +340,7 @@ export class UserMenuComponent {
   @HostListener('document:click', ['$event'])
   onDocumentClick(event: MouseEvent): void {
     if (!this.elementRef.nativeElement.contains(event.target)) {
-      this.expanded.set(false);
+      this.open.set(false);
     }
   }
 }

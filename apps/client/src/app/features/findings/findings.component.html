@@ -6,7 +6,7 @@
         <span class="open-badge">{{ n }}</span>
       }
     </div>
-    <button class="btn btn-ghost btn-sm" (click)="load()">&#8635; Refresh</button>
+    <button class="btn btn-ghost btn-sm" (click)="load()"><app-icon name="refresh" [size]="14" /> Refresh</button>
   </div>
 
   <div class="finding-filters">
@@ -51,7 +51,7 @@
     }
     @if (!loading() && !error() && findings().length === 0) {
       <div class="empty-state">
-        <span class="empty-icon">&#128269;</span>
+        <span class="empty-icon"><app-icon name="activity" [size]="32" [strokeWidth]="1.5" /></span>
         <p>No findings</p>
         <p class="text-xs text-muted">Entities behaving as they usually do produce none. Baselines need a few days of history before departures are judged.</p>
       </div>
@@ -112,7 +112,7 @@
               <button class="btn btn-ghost btn-sm" (click)="review(f, 'DISMISSED', $event)">Dismiss</button>
             }
             @if (f.position) {
-              <button class="btn btn-ghost btn-sm" (click)="showOnMap(f, $event)">&#127758; Show on map</button>
+              <button class="btn btn-ghost btn-sm" (click)="showOnMap(f, $event)"><app-icon name="navigation" [size]="14" /> Show on map</button>
             }
           </div>
         </div>

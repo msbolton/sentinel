@@ -11,6 +11,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { IconComponent } from '../../shared/components/icon.component';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Subscription, interval } from 'rxjs';
 import { PlaybackState, TimelineEvent } from '../../shared/models/track.model';
@@ -19,7 +20,7 @@ import { PlaybackState, TimelineEvent } from '../../shared/models/track.model';
   selector: 'app-timeline',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, IconComponent],
   templateUrl: './timeline.component.html',
   styleUrls: ['./timeline.component.scss'],
 })

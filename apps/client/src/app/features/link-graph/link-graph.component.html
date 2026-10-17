@@ -61,7 +61,7 @@
 
     @if (!graphLoaded() && !loading()) {
       <div class="graph-placeholder">
-        <span class="placeholder-icon">&#128304;</span>
+        <span class="placeholder-icon"><app-icon name="share" [size]="40" [strokeWidth]="1.5" /></span>
         <p>Enter an entity ID to visualize its link network</p>
         <p class="text-xs text-muted">Double-click nodes to expand the graph</p>
       </div>
@@ -77,10 +77,10 @@
     <!-- Graph Toolbar -->
     @if (graphLoaded()) {
       <div class="graph-toolbar">
-        <button class="tool-btn" (click)="zoomIn()" title="Zoom In">+</button>
-        <button class="tool-btn" (click)="zoomOut()" title="Zoom Out">-</button>
-        <button class="tool-btn" (click)="fitGraph()" title="Fit Graph">&#8690;</button>
-        <button class="tool-btn" (click)="togglePhysics()" title="Toggle Physics">&#9881;</button>
+        <button class="tool-btn" (click)="zoomIn()" title="Zoom In" aria-label="Zoom in"><app-icon name="zoom-in" /></button>
+        <button class="tool-btn" (click)="zoomOut()" title="Zoom Out" aria-label="Zoom out"><app-icon name="zoom-out" /></button>
+        <button class="tool-btn" (click)="fitGraph()" title="Fit Graph" aria-label="Fit graph"><app-icon name="fit" /></button>
+        <button class="tool-btn" (click)="togglePhysics()" title="Toggle Physics" aria-label="Toggle physics"><app-icon name="zap" /></button>
       </div>
     }
 
