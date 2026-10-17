@@ -95,9 +95,9 @@ VALUES
    '{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}'::jsonb,
    '{}'::jsonb,
    FALSE, TRUE),
-  ('celestrak', 'CelesTrak satellites', 'Satellite positions propagated with SGP4 from CelesTrak two-line elements.',
+  ('celestrak', 'CelesTrak satellites', 'Satellite positions propagated with SGP4 from CelesTrak orbital elements.',
    'celestrak',
-   '{"groups": ["active"], "tleRefreshHours": 6, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}'::jsonb,
+   '{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}'::jsonb,
    '{}'::jsonb,
    FALSE, TRUE)
 ON CONFLICT (id) DO NOTHING;

@@ -2,11 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sentinel.local/schemas/celestrak.json",
   "title": "CelesTrak satellites",
+  "description": "Orbital elements from CelesTrak (no API key; usage policy: elements update every two hours, each file is downloaded once per update). Objects selected by catalog number, designator or name are pinned: always emitted. Groups, special lists and supplemental files are emitted only over the map clients' viewports.",
   "type": "object",
   "properties": {
-    "groups": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "default": ["active"], "title": "CelesTrak groups" },
-    "tleRefreshHours": { "type": "integer", "minimum": 1, "default": 6, "title": "TLE refresh (h)" },
+    "groups": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "default": ["active"], "title": "Groups", "description": "CelesTrak group names, e.g. active, stations, starlink, gps-ops, weather, geo" },
+    "catalogNumbers": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "title": "Catalog numbers", "description": "NORAD catalog numbers to pin, one request each (e.g. 25544 for the ISS)" },
+    "designators": { "type": "array", "items": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{3}[A-Z]{0,3}$" }, "title": "International designators", "description": "Launch designators to pin, e.g. 1998-067 (every piece) or 1998-067A" },
+    "names": { "type": "array", "items": { "type": "string", "minLength": 2 }, "title": "Name searches", "description": "Partial satellite names to pin, e.g. ISS (ZARYA) or COSMOS 2251 DEB" },
+    "special": { "type": "array", "items": { "type": "string", "enum": ["GPZ", "GPZ-PLUS", "DECAYING"] }, "title": "Special lists", "description": "GPZ and GPZ-PLUS (geosynchronous), DECAYING (objects about to re-enter)" },
+    "supplemental": { "type": "array", "items": { "type": "string", "enum": ["starlink", "oneweb", "kuiper", "planet", "iridium", "gps", "glonass", "ses", "intelsat", "telesat", "orbcomm", "iss", "css", "cpf", "ast", "eumetsat"] }, "title": "Supplemental GP files", "description": "Operator-supplied elements, usually better than the catalog for these constellations" },
+    "refreshHours": { "type": "integer", "minimum": 2, "default": 2, "title": "Refresh (h)", "description": "How often elements are fetched; CelesTrak updates every two hours and blocks faster polling" },
+    "tleRefreshHours": { "type": "integer", "minimum": 2, "title": "Refresh (h, former name)", "description": "Renamed refreshHours; still accepted", "deprecated": true },
     "propagationIntervalSec": { "type": "integer", "minimum": 1, "default": 60, "title": "Propagation interval (s)" },
-    "baseUrl": { "type": "string", "format": "uri", "title": "API URL", "description": "Override for testing; default https://celestrak.org/NORAD/elements/gp.php" }
+    "baseUrl": { "type": "string", "format": "uri", "title": "GP URL", "description": "Override for testing; default https://celestrak.org/NORAD/elements/gp.php" },
+    "supplementalUrl": { "type": "string", "format": "uri", "title": "Supplemental GP URL", "description": "Override for testing; default https://celestrak.org/NORAD/elements/supplemental/sup-gp.php" }
   }
 }
