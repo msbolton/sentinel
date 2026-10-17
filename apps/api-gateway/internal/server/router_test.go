@@ -17,10 +17,10 @@ import (
 )
 
 var users = map[string]*auth.User{
-	"viewer":  {UserID: "v", Username: "viewer", Roles: []string{auth.RoleViewer}, ClassificationLevel: "UNCLASSIFIED"},
-	"analyst": {UserID: "a", Username: "analyst", Roles: []string{auth.RoleAnalyst}, ClassificationLevel: "CONFIDENTIAL"},
+	"viewer":   {UserID: "v", Username: "viewer", Roles: []string{auth.RoleViewer}, ClassificationLevel: "UNCLASSIFIED"},
+	"analyst":  {UserID: "a", Username: "analyst", Roles: []string{auth.RoleAnalyst}, ClassificationLevel: "CONFIDENTIAL"},
 	"lowadmin": {UserID: "l", Username: "lowadmin", Roles: []string{auth.RoleAdmin}, ClassificationLevel: "UNCLASSIFIED"},
-	"admin":   {UserID: "d", Username: "admin", Roles: []string{auth.RoleAdmin}, ClassificationLevel: "TOP_SECRET"},
+	"admin":    {UserID: "d", Username: "admin", Roles: []string{auth.RoleAdmin}, ClassificationLevel: "TOP_SECRET"},
 }
 
 var verifier = auth.VerifierFunc(func(_ context.Context, raw string) (*auth.User, error) {
@@ -61,12 +61,13 @@ func newGateway(t *testing.T, up *httptest.Server) http.Handler {
 		Auth:       auth.NewMiddleware(verifier, false, zap.NewNop()),
 		CORSOrigin: "http://localhost:4200",
 		Upstreams: Upstreams{
-			Entities: mk("entity-service", nil),
-			Tracks:   mk("track-service", nil),
-			Alerts:   mk("alert-service", nil),
-			Links:    mk("link-analysis-service", nil),
-			Search:   mk("search-service", nil),
-			Feeds:    mk("ingest-service", proxy.StripPrefix("/api/v1")),
+			Entities:  mk("entity-service", nil),
+			Tracks:    mk("track-service", nil),
+			Alerts:    mk("alert-service", nil),
+			Links:     mk("link-analysis-service", nil),
+			Search:    mk("search-service", nil),
+			Feeds:     mk("ingest-service", proxy.StripPrefix("/api/v1")),
+			Analytics: mk("analytics-service", nil),
 		},
 		Locations:   noopRoutes{},
 		ReadyChecks: map[string]func() error{"database": func() error { return nil }},
@@ -152,6 +153,9 @@ func TestRouter_RolePolicies(t *testing.T) {
 		{http.MethodPatch, "/api/v1/alerts/x/acknowledge", "viewer", 403},
 		{http.MethodPatch, "/api/v1/alerts/x/acknowledge", "analyst", 200},
 		{http.MethodPost, "/api/v1/alerts/rules", "analyst", 200},
+		{http.MethodPatch, "/api/v1/analytics/findings/x", "viewer", 403},
+		{http.MethodPatch, "/api/v1/analytics/findings/x", "analyst", 200},
+		{http.MethodGet, "/api/v1/analytics/findings", "viewer", 200},
 		{http.MethodPost, "/api/v1/links", "viewer", 403},
 		{http.MethodDelete, "/api/v1/links/x", "analyst", 200},
 		{http.MethodPut, "/api/v1/feeds/x", "analyst", 403},

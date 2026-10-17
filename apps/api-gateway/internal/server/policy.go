@@ -53,6 +53,7 @@ var DefaultPolicies = []Policy{
 	{Method: http.MethodDelete, Prefix: "/api/v1/entities", Roles: adminOnly, Classification: "SECRET"},
 	// Alerts: acknowledge, resolve, and rule management
 	{Method: http.MethodPatch, Prefix: "/api/v1/alerts", Roles: analystOrAdmin},
+	{Method: http.MethodPatch, Prefix: "/api/v1/analytics/findings", Roles: analystOrAdmin},
 	{Method: http.MethodPost, Prefix: "/api/v1/alerts/rules", Roles: analystOrAdmin},
 	{Method: http.MethodPut, Prefix: "/api/v1/alerts/rules", Roles: analystOrAdmin},
 	// Links

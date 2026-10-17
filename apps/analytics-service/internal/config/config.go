@@ -46,6 +46,9 @@ type DetectorConfig struct {
 	PlaceRangeFactor float64 // unusual place: distance > factor x range p95 ...
 	PlaceMinM        TypeMap // ... and > this many metres
 
+	// Slot shares are compared with an even spread over the 168 hour-of-week
+	// slots (0.6% each): a slot under a third of that is unusual, a slot
+	// holding twice that is one of the entity's busy times.
 	TimeMinShare   float64       // unusual time: slot share below this ...
 	TimeMinDays    int           // ... with at least this many days of history
 	TimeQuietShare float64       // absence: a slot normally above this share ...
@@ -101,9 +104,9 @@ func Load() Config {
 			SkipTypes:        envSet("ANALYTICS_SKIP_TYPES", "SATELLITE,FACILITY,SENSOR,CYBER,SIGNAL"),
 			PlaceRangeFactor: envFloat("ANALYTICS_PLACE_RANGE_FACTOR", 1.5),
 			PlaceMinM:        envTypeMap("ANALYTICS_PLACE_MIN_M", "PERSON=500,VEHICLE=2000,VESSEL=5000,AIRCRAFT=50000,DRONE=2000,DEFAULT=2000"),
-			TimeMinShare:     envFloat("ANALYTICS_TIME_MIN_SHARE", 0.02),
+			TimeMinShare:     envFloat("ANALYTICS_TIME_MIN_SHARE", 0.002),
 			TimeMinDays:      commonCfg.EnvOrDefaultInt("ANALYTICS_TIME_MIN_DAYS", 14),
-			TimeQuietShare:   envFloat("ANALYTICS_TIME_QUIET_SHARE", 0.10),
+			TimeQuietShare:   envFloat("ANALYTICS_TIME_QUIET_SHARE", 0.012),
 			TimeQuietGap:     minutes("ANALYTICS_TIME_QUIET_GAP_MIN", 60),
 			MoveZ:            envFloat("ANALYTICS_MOVE_Z", 3),
 			MoveMaxKnots:     envTypeMap("ANALYTICS_MOVE_MAX_KNOTS", "PERSON=15,VEHICLE=200,VESSEL=60,AIRCRAFT=600,DRONE=100,DEFAULT=100"),

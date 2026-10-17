@@ -21,9 +21,11 @@ import (
 	"github.com/sentinel/go-common/kafka"
 	"github.com/sentinel/go-common/middleware"
 
+	"github.com/sentinel/analytics-service/internal/alerts"
 	"github.com/sentinel/analytics-service/internal/baseline"
 	"github.com/sentinel/analytics-service/internal/config"
 	"github.com/sentinel/analytics-service/internal/consumer"
+	"github.com/sentinel/analytics-service/internal/detect"
 	"github.com/sentinel/analytics-service/internal/handler"
 	"github.com/sentinel/analytics-service/internal/job"
 	"github.com/sentinel/analytics-service/internal/stats"
@@ -98,10 +100,26 @@ func main() {
 		}
 		return err
 	})
+	// Findings: the detectors judge every fix against the cached baseline;
+	// findings that reach the alerting severity, or are confirmed, go out on
+	// alerts.events under the finding's own id.
+	findingStore := store.NewFindingStore(pool)
+	engine := detect.NewEngine(baselines, findingStore, coverageStore, alerts.NewPublisher(producer), counters, cfg.Detectors, logger)
+	if fixes, err := entityStore.LastFixes(context.Background(), time.Now().Add(-cfg.Baseline.ActiveWindow)); err != nil {
+		logger.Warn("last fixes not seeded; silence before this start is not judged", zap.Error(err))
+	} else {
+		engine.Seed(fixes)
+		logger.Info("last fixes seeded", zap.Int("entities", len(fixes)))
+	}
+	baselineJob.After = append(baselineJob.After, func(ctx context.Context) error {
+		_, err := findingStore.CloseStale(ctx, time.Now().Add(-cfg.Detectors.AbsorbWindow))
+		return err
+	})
 	jobCtx, stopJob := context.WithCancel(context.Background())
 	go baselineJob.Run(jobCtx)
+	go engine.RunTicker(jobCtx)
 
-	posConsumer, err := consumer.NewPositionConsumer(cfg.KafkaBrokers, consumer.NopSink{}, coverageStore,
+	posConsumer, err := consumer.NewPositionConsumer(cfg.KafkaBrokers, engine, coverageStore,
 		cfg.Detectors.CoverageCellDeg, counters, logger)
 	if err != nil {
 		logger.Fatal("failed to create position consumer", zap.Error(err))
@@ -114,7 +132,7 @@ func main() {
 	})
 	healthHandler.RegisterRoutes(mux)
 
-	api := handler.NewAnalyticsHandler(counters, coverageStore, baselineStore, entityStore, logger)
+	api := handler.NewAnalyticsHandler(counters, coverageStore, baselineStore, entityStore, findingStore, engine, logger)
 	api.RegisterRoutes(mux)
 
 	httpServer := &http.Server{

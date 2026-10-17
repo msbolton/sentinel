@@ -46,7 +46,9 @@ type Options struct {
 	InitialDelay time.Duration
 	Builder      baseline.Config
 	// SlowKnots overrides Builder.SlowKnots per entity type when set.
-	SlowKnots interface{ For(entityType string) float64 }
+	SlowKnots interface {
+		For(entityType string) float64
+	}
 }
 
 // Job recomputes baselines on a schedule.
