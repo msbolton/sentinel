@@ -17,7 +17,6 @@ SENTINEL uses two Compose files:
 | Keycloak | `quay.io/keycloak/keycloak:24.0` | 8080 | 8080 | Identity provider (OIDC/JWT) |
 | Keycloak DB | `postgres:16-alpine` | — | 5432 | Dedicated Keycloak database |
 | GeoServer | `kartoza/geoserver:2.25.2` | 8600 | 8600 | OGC WMS/WFS layers over the PostGIS views `entities_live_{u,c,s,ts}` and `locations_geo`, provisioned by the one-shot `geoserver-init` job (`config/geoserver/provision.sh`); accounts `gis-u` … `gis-ts` per clearance level |
-| TAK Server (dev, profile `tak`) | `freetakteam/freetakserver` | 8087, 8089, 19023 | same | Cursor on Target endpoint for testing TAK connections; `docker compose --profile tak up` |
 | MinIO | `minio/minio:latest` | 9000, 9001 | 9000, 9001 | S3-compatible object storage |
 
 ### Application Services (full compose only)
@@ -126,6 +125,6 @@ API_GATEWAY_PORT=3000
 WEB_PORT=4200
 ```
 
-GeoServer provisioning takes `GIS_DB_PASSWORD` and `GIS_USER_PASSWORD_U/_C/_S/_TS` (dev defaults in `.env.example`); `ANALYTICS_SERVICE_PORT` moves the analytics host port off 5000 (macOS AirPlay). Certificates and other files a connection's `secretRefs` name as `file:/etc/sentinel/tak/...` live in the gitignored `./secrets/tak` folder, mounted read-only into the ingest container. `docker compose --profile tak up -d` adds a development TAK Server.
+GeoServer provisioning takes `GIS_DB_PASSWORD` and `GIS_USER_PASSWORD_U/_C/_S/_TS` (dev defaults in `.env.example`); `ANALYTICS_SERVICE_PORT` moves the analytics host port off 5000 (macOS AirPlay). Certificates and other files a connection's `secretRefs` name as `file:/etc/sentinel/tak/...` live in the gitignored `./secrets/tak` folder, mounted read-only into the ingest container.
 
 Ingest replica settings (`LEASE_TTL_SEC`, `LEASE_TICK_SEC`, `LEASE_REBALANCE_SEC`, `FEED_STALE_*`, `FEED_RETRY_*`, `SHUTDOWN_TIMEOUT_SEC`, buffers) are listed in `docs/feeds.md`. When running inside Docker Compose, services use internal hostnames and the `KAFKA_BROKERS=kafka:9093` internal listener.

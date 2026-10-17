@@ -772,30 +772,6 @@ services:
       - sentinel-network
 
   # ===========================================================================
-  # TAK Server for development (profile "tak": docker compose --profile tak up)
-  # Anything that speaks Cursor on Target on a streaming port will do; this is
-  # FreeTAKServer: plain TCP 8087, TLS 8089, REST API 19023. Check the image
-  # tag and ports against the project's current release.
-  # ===========================================================================
-  tak-server:
-    image: freetakteam/freetakserver:latest
-    container_name: sentinel-tak-server
-    profiles: ["tak"]
-    restart: unless-stopped
-    ports:
-      - "8087:8087"
-      - "8089:8089"
-      - "19023:19023"
-    volumes:
-      - tak-data:/opt/fts
-    deploy:
-      resources:
-        limits:
-          memory: 512m
-    networks:
-      - sentinel-network
-
-  # ===========================================================================
   # Analytics Service (Python)
   # ===========================================================================
   analytics-service:
@@ -890,9 +866,6 @@ volumes:
   postgres-data:
     driver: local
     name: sentinel-postgres-data
-  tak-data:
-    driver: local
-    name: sentinel-tak-data
   keycloak-db-data:
     driver: local
     name: sentinel-keycloak-db-data

@@ -175,21 +175,17 @@ Every source is a feed created through `POST /api/v1/feeds` (or the Feeds page).
                       "fields":{"id":"hex","latitude":"lat","longitude":"lon","altitude":"alt_baro","speed":"gs","heading":"track","callsign":"flight"}}}}}
 ```
 
-### TAK Server (dev)
+### TAK connection
 
-A TAK connection needs something that speaks Cursor on Target on a streaming port. The `tak` compose profile runs FreeTAKServer (plain TCP on 8087, TLS on 8089, REST on 19023) beside the stack:
+A TAK connection needs a server that speaks Cursor on Target on a streaming port: a TAK Server (`tak.gov`, needs an account), FreeTAKServer (`ghcr.io/freetakteam/freetakserver`), or OpenTAKServer. None is bundled with the stack, and the `tak` driver has not yet been exercised against a live server; treat it as implemented but unverified until it has been.
 
-```bash
-docker compose --profile tak up -d
-```
-
-Then create the connection through the API (or the Connections page), using the plain port so no certificates are needed:
+Create the connection through the Connections page or the API. Against a plain TCP port no certificates are needed:
 
 ```bash
 curl -s -X POST http://localhost:3000/api/v1/feeds -H 'content-type: application/json' -d '{
   "id": "tak-dev", "name": "Dev TAK", "driver": "tak", "enabled": true,
   "config": {
-    "address": "tak-server:8087", "siteId": "dev",
+    "address": "host.docker.internal:8087", "siteId": "dev",
     "policy": { "entityTypes": ["AIRCRAFT"], "feeds": ["opensky"],
                 "boxes": [{"north": 42.5, "south": 41.5, "east": -87, "west": -88.5}],
                 "classificationCeiling": "UNCLASSIFIED" }
@@ -197,7 +193,7 @@ curl -s -X POST http://localhost:3000/api/v1/feeds -H 'content-type: application
 }'
 ```
 
-With OpenSky enabled and the map open over that box, `GET /api/v1/feeds/tak-dev` shows `detail.outbound.delivered` rising and `detail.remotePeer`. Point ATAK, WinTAK or iTAK at the host's IP on port 8087 (TCP, no certificates) to see the aircraft as air tracks with callsigns; drop a marker on the device and it appears on the Sentinel map under the connection's layer. For a real TAK Server use port 8089 with `tls.enabled` and the enrolment certificate as `file:` secret refs mounted under `./secrets/tak` (gitignored, mounted read-only at `/etc/sentinel/tak` in the ingest container):
+With OpenSky enabled and the map open over that box, `GET /api/v1/feeds/tak-dev` shows `detail.outbound.delivered` rising and `detail.remotePeer`. Point ATAK, WinTAK or iTAK at the same server to see the aircraft as air tracks with callsigns; drop a marker on the device and it appears on the Sentinel map under the connection's layer. For a TLS port set `tls.enabled` and give the enrolment certificate as `file:` secret refs mounted under `./secrets/tak` (gitignored, mounted read-only at `/etc/sentinel/tak` in the ingest container):
 
 ```bash
 openssl pkcs12 -in client.p12 -nodes -nocerts -out secrets/tak/client.key
@@ -205,7 +201,7 @@ openssl pkcs12 -in client.p12 -nokeys -clcerts -out secrets/tak/client.pem
 openssl pkcs12 -in truststore.p12 -nokeys -cacerts -out secrets/tak/ca.pem
 ```
 
-and `"secretRefs": {"clientCert": "file:/etc/sentinel/tak/client.pem", "clientKey": "file:/etc/sentinel/tak/client.key", "caCert": "file:/etc/sentinel/tak/ca.pem"}`. The FreeTAKServer image tag and ports in `docker-compose.yml` should be checked against the project's current release before relying on the TLS port.
+and `"secretRefs": {"clientCert": "file:/etc/sentinel/tak/client.pem", "clientKey": "file:/etc/sentinel/tak/client.key", "caCert": "file:/etc/sentinel/tak/ca.pem"}`.
 
 ### Several ingest replicas
 

@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel Architecture</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a fixed contents rail on the left, one reading column on the right; the rail folds into a top drawer on phones. */
+:root {
+  --bg: #f6f7f4;
+  --surface: #ffffff;
+  --fg: #16201f;
+  --muted: #5a6866;
+  --line: #d9ded9;
+  --accent: #0e7c6b;
+  --accent-soft: #e2f1ec;
+  --code-bg: #eef1ee;
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", Roboto, sans-serif;
+  --mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101514; --surface: #171d1c; --fg: #e6ebe8; --muted: #9aa8a4; --line: #2a3331;
+    --accent: #4fc3ad; --accent-soft: #163631; --code-bg: #1d2523; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101514; --surface: #171d1c; --fg: #e6ebe8; --muted: #9aa8a4; --line: #2a3331;
+  --accent: #4fc3ad; --accent-soft: #163631; --code-bg: #1d2523; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 16px; line-height: 1.6; }
+a { color: var(--accent); text-decoration: none; }
+a:hover, a:focus-visible { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100%; }
+.rail {
+  position: sticky; top: env(safe-area-inset-top, 0px); align-self: start; height: calc(100vh - env(safe-area-inset-top, 0px));
+  overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface);
+  padding-block: 28px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: 16px;
+}
+.brand { font-family: var(--display); font-weight: 700; font-size: 13px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; }
+.brand-title { font-family: var(--display); font-weight: 600; font-size: 20px; margin: 0 0 20px; letter-spacing: -.01em; }
+.rail ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.rail li a { display: block; padding: 5px 8px; border-radius: 4px; color: var(--fg); font-size: 14px; line-height: 1.35; }
+.rail li.l3 a { padding-left: 22px; color: var(--muted); font-size: 13px; }
+.rail li a:hover { background: var(--accent-soft); text-decoration: none; }
+.rail li a.current { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+.rail-toggle { display: none; }
+
+main { padding-block: 40px 96px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); min-width: 0; }
+.page { max-width: 860px; margin: 0 auto; }
+.eyebrow { font-family: var(--display); font-weight: 600; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 0 0 10px; }
+h1 { font-family: var(--display); font-weight: 700; font-size: clamp(34px, 5vw, 48px); line-height: 1.05; letter-spacing: -.02em; margin: 0 0 16px; text-wrap: balance; }
+.lede { font-size: 18px; color: var(--muted); max-width: 64ch; margin: 0 0 8px; }
+.meta { font-family: var(--mono); font-size: 12px; color: var(--muted); margin: 0 0 40px; }
+
+section { padding-block: 24px 8px; border-top: 1px solid var(--line); margin-top: 24px; }
+section:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+h2 { font-family: var(--display); font-weight: 700; font-size: 28px; letter-spacing: -.015em; line-height: 1.15; margin: 0 0 16px; text-wrap: balance; }
+h3 { font-family: var(--display); font-weight: 600; font-size: 20px; margin: 32px 0 10px; text-wrap: balance; }
+h4 { font-family: var(--display); font-weight: 600; font-size: 15px; letter-spacing: .02em; margin: 28px 0 8px; color: var(--muted); text-transform: uppercase; }
+p { max-width: 70ch; margin: 0 0 14px; }
+ul, ol { padding-left: 22px; margin: 0 0 16px; max-width: 72ch; }
+li { margin: 0 0 8px; }
+li > strong { color: var(--fg); }
+strong { font-weight: 600; }
+code { font-family: var(--mono); font-size: .88em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+th code, td code { font-size: .86em; }
+pre { margin: 0 0 18px; }
+pre.tree { background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px; padding: 16px 18px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+pre.tree code { background: none; padding: 0; font-size: inherit; }
+
+.table-wrap { overflow-x: auto; margin: 0 0 20px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+th { font-family: var(--display); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--bg); }
+tbody tr:last-child td { border-bottom: 0; }
+td:first-child { white-space: nowrap; font-weight: 500; }
+td { font-variant-numeric: tabular-nums; }
+
+figure.diagram { margin: 0 0 20px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); padding: 12px; overflow-x: auto; }
+figure.diagram pre.mermaid { margin: 0; min-width: 0; }
+
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; }
+  .rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); padding-block: 16px; padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .rail ol { display: none; }
+  .rail.open ol { display: flex; }
+  .rail-toggle { display: inline-block; font: 500 13px var(--display); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); background: none; border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; margin-top: 8px; cursor: pointer; }
+  .brand-title { margin-bottom: 0; }
+  main { padding-block: 28px 64px; }
+}
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+</head>
+<body>
+<div class="shell">
+  <nav class="rail" id="rail" aria-label="Contents">
+    <p class="brand">Sentinel</p>
+    <p class="brand-title">Architecture</p>
+    <button class="rail-toggle" id="railToggle" type="button" aria-expanded="false" aria-controls="toc">Contents</button>
+    <ol id="toc">
+<li class="l2"><a href="#principles">Principles</a></li>
+<li class="l2"><a href="#system-topology">System topology</a></li>
+<li class="l3"><a href="#service-responsibilities">Service responsibilities</a></li>
+<li class="l2"><a href="#data-flows">Data flows</a></li>
+<li class="l3"><a href="#feed-ingestion">Feed ingestion</a></li>
+<li class="l3"><a href="#outbound-connections">Outbound connections</a></li>
+<li class="l3"><a href="#entity-query-rest">Entity query (REST)</a></li>
+<li class="l3"><a href="#live-stream-to-browsers">Live stream to browsers</a></li>
+<li class="l3"><a href="#gis-consumers">GIS consumers</a></li>
+<li class="l2"><a href="#classification-and-clearance">Classification and clearance</a></li>
+<li class="l2"><a href="#authentication-and-authorization">Authentication and authorization</a></li>
+<li class="l2"><a href="#communication-patterns">Communication patterns</a></li>
+<li class="l3"><a href="#synchronous">Synchronous</a></li>
+<li class="l3"><a href="#asynchronous">Asynchronous</a></li>
+<li class="l2"><a href="#storage">Storage</a></li>
+<li class="l2"><a href="#deployment">Deployment</a></li>
+<li class="l2"><a href="#repository-layout">Repository layout</a></li>
+<li class="l3"><a href="#apps">apps/</a></li>
+<li class="l2"><a href="#testing-and-tooling">Testing and tooling</a></li>
+    </ol>
+  </nav>
+  <main>
+    <article class="page">
+      <p class="eyebrow">System design</p>
+      <h1>Sentinel Architecture</h1>
+      <p class="lede">How reports from any feed become one live picture, and how that picture reaches browsers, TAK and GIS tools under each viewer's clearance.</p>
+      <p class="meta">docs/architecture.md · Go services, Angular 19 client, PostgreSQL + PostGIS, Kafka, Keycloak</p>
+<p>SENTINEL is a geospatial intelligence platform: it takes reports about moving and fixed objects from any number of feeds, keeps every report as an observation, fuses the reports about one object into one entity, evaluates alerts, finds links between entities, streams the live picture to browsers, and shares it with external systems such as TAK and GIS tools under a per-connection policy and the viewer's clearance.</p>
+<p>This page is the map of the system: the principles, the runtime topology, every data flow, each service's internals, and the repository layout. The pages it links to hold the detail for one area.</p>
+<div class="table-wrap"><table><thead><tr><th>Topic</th><th>Page</th></tr></thead><tbody><tr><td>Feeds, connections, drivers, the ingest lifecycle</td><td><code>docs/feeds.md</code></td></tr><tr><td>Gateway REST and WebSocket API, auth, exports, API keys</td><td><code>docs/api-gateway.md</code></td></tr><tr><td>Tables, views, enums, Kafka topics and messages</td><td><code>docs/data-model.md</code></td></tr><tr><td>Compose services, ports, volumes, environment</td><td><code>docs/infrastructure.md</code></td></tr><tr><td>Angular client structure and services</td><td><code>docs/frontend.md</code></td></tr><tr><td>Local setup, recipes (TAK, GIS, OpenSky)</td><td><code>docs/development.md</code></td></tr></tbody></table></div>
+<section><h2 id="principles">Principles</h2>
+<ul><li><strong>Keep everything you were told.</strong> Every report from every feed is stored as an observation, accepted or rejected, with its provenance and a bounded copy of the raw payload. Entities are derived; observations are the record.</li><li><strong>One object, one entity.</strong> Reports that share a canonical identity (ICAO24, MMSI, NORAD id, CoT uid) update one entity whatever feed they came from. Anything without a canonical identity is keyed per feed.</li><li><strong>Typed events, one contract.</strong> Every Kafka message is a protobuf from <code>proto/sentinel/v1</code>, generated for Go, TypeScript and Python and held in step by golden fixtures. Services never share database tables; they share topics.</li><li><strong>Exactly one owner per feed.</strong> Every enabled feed or connection runs on one ingest replica chosen by a Postgres lease with a fencing token, so a replica that lost its lease cannot overwrite the new owner's work.</li><li><strong>At-least-once, idempotent.</strong> Consumers commit after their database transaction. A replayed batch is absorbed by deterministic observation ids and upserts.</li><li><strong>Classification is data, clearance is a ceiling.</strong> Every observation, entity and alert carries a level. Every read path, the WebSocket, the exports and the GIS layers hide what is above the caller's clearance, and fail closed to UNCLASSIFIED when the clearance is unknown.</li><li><strong>Feeds and connections are one thing.</strong> A connection is a feed whose driver can send. It uses the same registry, lease, supervisor, status and UI as a source, plus an outbound pump.</li></ul>
+</section><section><h2 id="system-topology">System topology</h2>
+<figure class="diagram"><pre class="mermaid">graph TB
+    subgraph Frontend
+        WEB[Angular 19 UI :4200]
+        GIS[QGIS / Google Earth / OGC clients]
+        TAK[TAK Server, ATAK, WinTAK]
+    end
+
+    subgraph API Layer
+        GW[API Gateway :3000]
+        GEO[GeoServer :8600]
+    end
+
+    subgraph Microservices
+        IS[Ingest Service :4000 ×N]
+        ES[Entity Service :3001]
+        TS[Track Service :3002]
+        SS[Search Service :3003]
+        LA[Link Analysis :3004]
+        AS[Alert Service :3005]
+        AN[Analytics Service :5000]
+    end
+
+    subgraph Data Stores
+        PG[(PostgreSQL + PostGIS + TimescaleDB)]
+        OS[(OpenSearch)]
+    end
+
+    subgraph Messaging
+        KF[Kafka]
+    end
+
+    subgraph Auth
+        KC[Keycloak]
+    end
+
+    WEB --&gt;|REST + WebSocket| GW
+    GIS --&gt;|GeoJSON / KML + API key| GW
+    GIS --&gt;|WMS / WFS| GEO
+    TAK &lt;--&gt;|CoT over TCP/TLS| IS
+    GW --&gt;|JWT validation| KC
+    GW --&gt;|feeds, drivers, areas| IS
+    GW --&gt;|entities, tracks, alerts, links, search| ES &amp; TS &amp; AS &amp; LA &amp; SS
+
+    IS --&gt;|observations.raw| KF
+    KF --&gt;|observations.raw| ES
+    ES --&gt;|entities.events| KF
+    KF --&gt;|entities.events| TS &amp; SS &amp; AS &amp; AN &amp; GW &amp; IS
+    AS --&gt;|alerts.events| KF
+    AN --&gt;|alerts.events| KF
+    KF --&gt;|alerts.events| AS &amp; GW &amp; IS
+
+    IS --&gt; PG
+    ES --&gt; PG
+    TS --&gt; PG
+    LA --&gt; PG
+    AS --&gt; PG
+    GEO --&gt;|read-only views| PG
+    SS --&gt; OS</pre></figure>
+<p>Every message on Kafka is a protobuf from <code>proto/sentinel/v1</code> with <code>content-type</code>, <code>schema</code>, <code>schema-version</code> and <code>producer</code> headers, and an <code>event-type</code> header that repeats the event oneof case so consumers can route without decoding.</p>
+<h3 id="service-responsibilities">Service responsibilities</h3>
+<div class="table-wrap"><table><thead><tr><th>Service</th><th>Language</th><th>Port</th><th>Role</th></tr></thead><tbody><tr><td><strong>API Gateway</strong></td><td>Go</td><td>3000</td><td>Auth (Keycloak JWKS, API keys), role and clearance policy, reverse proxy with identity headers, WebSocket stream, viewport aggregation and area push, locations, registration, GeoJSON/KML export</td></tr><tr><td><strong>Ingest Service</strong></td><td>Go</td><td>4000</td><td>Feed and connection registry and management API, drivers (pollers, streams, TAK), per-replica leases, observation publishing with dead-lettering, outbound pump and sharing policy</td></tr><tr><td><strong>Entity Service</strong></td><td>Go</td><td>3001</td><td>Observation store, identity resolution and fusion, entity CRUD and operator edits, per-feed ageout, typed entity events, clearance ceiling on reads</td></tr><tr><td><strong>Track Service</strong></td><td>Go</td><td>3002</td><td>Track points with provenance (TimescaleDB hypertable when available), history, timeline, replay</td></tr><tr><td><strong>Search Service</strong></td><td>Go</td><td>3003</td><td>Full-text and geospatial search via OpenSearch, index kept current from entity events</td></tr><tr><td><strong>Link Analysis Service</strong></td><td>Go</td><td>3004</td><td>Entity relationship graph (SQL traversal), link scoring</td></tr><tr><td><strong>Alert Service</strong></td><td>Go</td><td>3005</td><td>Geofence and rule evaluation on typed snapshots, alert persistence for every producer</td></tr><tr><td><strong>Analytics Service</strong></td><td>Python</td><td>5000</td><td>Pattern detection, anomaly alerts</td></tr><tr><td><strong>GeoServer</strong></td><td>Java (image)</td><td>8600</td><td>WMS/WFS layers over per-clearance PostGIS views, provisioned by a one-shot job</td></tr><tr><td><strong>Web UI</strong></td><td>TypeScript/Angular</td><td>4200</td><td>CesiumJS 3D map, per-user layer visibility, connections management, alerts, search, timeline, link graph, settings</td></tr></tbody></table></div>
+</section><section><h2 id="data-flows">Data flows</h2>
+<h3 id="feed-ingestion">Feed ingestion</h3>
+<figure class="diagram"><pre class="mermaid">sequenceDiagram
+    participant SRC as Source (API, receiver, TAK)
+    participant IS as Ingest Service (feed owner)
+    participant KF as Kafka
+    participant ES as Entity Service
+    participant PG as PostgreSQL
+    participant GW as API Gateway
+    participant WS as WebSocket Clients
+
+    SRC-&gt;&gt;IS: frames / poll responses
+    IS-&gt;&gt;IS: driver decodes, runner stamps provenance, classification, dedupes
+    IS-&gt;&gt;KF: observations.raw (key = identity, x-fence)
+    KF-&gt;&gt;ES: batch (manual commit)
+    ES-&gt;&gt;ES: resolve identities, fuse (newest fix wins, classification high-water mark)
+    ES-&gt;&gt;PG: observations, entity_identities, entity_sources, entities
+    ES-&gt;&gt;KF: entities.events (created / updated / position / deleted / stale / aged_out / restored)
+    KF-&gt;&gt;GW: entities.events, alerts.events
+    GW-&gt;&gt;WS: entity:batch, entity:deleted, ageout frames, alert:new (viewport and clearance filtered)</pre></figure>
+<ol><li><strong>Desired state</strong> is a row in <code>sentinel.feeds</code>: id, driver, validated <code>config</code>, <code>secret_refs</code>, <code>enabled</code>, <code>version</code>. The operator's Connections page and the management API write it; Postgres LISTEN/NOTIFY tells every ingest replica.</li><li><strong>Ownership.</strong> Each enabled feed runs on exactly one replica, chosen by rendezvous hashing over the live replicas (or pinned). The owner renews a <code>feed_leases</code> row; acquisition bumps a fencing token that travels on every observation and guards status writes.</li><li><strong>Driver.</strong> The supervisor builds the driver from the catalog, wraps it in a runner and starts it. Pollers (<code>opensky</code>, <code>adsblol</code>, <code>celestrak</code>, <code>httpjson</code>) call an API on a schedule; <code>stream</code> composes a transport, a framer and a decoder from config; <code>tak</code> owns one session to a TAK Server.</li><li><strong>Runner.</strong> Stamps provenance (feed id, driver, receive time, lease token) and the feed's classification (a decoder may only raise it), guarantees an identity, bounds the raw payload, suppresses repeated fixes, computes a deterministic observation id and publishes to <code>observations.raw</code> keyed by identity. Undecodable payloads go to <code>observations.dlq</code> with the reason in headers.</li><li><strong>Area of interest.</strong> Drivers with the <code>area</code> capability poll only what connected map clients can see. The gateway aggregates client viewports and pushes them to every such feed with a 90 s lease, so polling stops when nobody is looking or the gateway dies.</li><li><strong>Fusion.</strong> The entity service resolves the observation's identities to an entity (creating one when needed), applies the newest-fix-wins rule across feeds, replicas and out-of-order delivery, keeps the highest classification any feed reported, records the contributing feed in <code>entity_sources</code>, and emits one typed event per change on <code>entities.events</code>.</li><li><strong>Consumers.</strong> The track service stores every accepted fix with provenance; the alert service evaluates geofences and rules; the search service updates its index; analytics looks for anomalies; the gateway bridge streams to browsers; outbound connections forward to their remote.</li></ol>
+<h3 id="outbound-connections">Outbound connections</h3>
+<p>A connection is a feed whose driver declares direction <code>out</code> or <code>both</code>. The replica that owns it runs an outbound pump beside the driver:</p>
+<pre class="tree"><code>entities.events, alerts.events ──▶ consumer group sentinel-conn-&lt;feedId&gt;
+      │ policy: loop guard → re-export guard → classification ceiling → entity types → feeds → area boxes
+      │ per-entity coalescing (newest snapshot waits, removals never dropped)
+      │ per-entity spacing, global rate limit, lag drop, policy-exit grace
+      ▼
+driver.Consumer.HandleEntity / HandleAlert ──▶ remote (CoT over the TAK session)</code></pre>
+<ul><li>The pump's own consumer group means offsets survive restarts and lease handovers, and a slow remote never stalls another connection.</li><li>Loop prevention: an entity that came from this connection is never sent back on it; entities contributed by any sending connection are not re-exported elsewhere unless the policy says so; outbound CoT carries a <code>&lt;_sentinel site&gt;</code> marker and the CoT decoder skips events bearing this site's id.</li><li><code>deleted</code> and <code>aged_out</code> events become removals; an entity that stops passing the policy is removed after a grace period; while the driver reports it is not connected the pump pauses and keeps its queue.</li><li>Counters appear in <code>feed_status.detail.outbound</code> and on the Connections page.</li></ul>
+<h3 id="entity-query-rest">Entity query (REST)</h3>
+<figure class="diagram"><pre class="mermaid">sequenceDiagram
+    participant Client
+    participant GW as API Gateway
+    participant ES as Entity Service
+    participant PG as PostgreSQL
+
+    Client-&gt;&gt;GW: GET /api/v1/entities?north=...&amp;south=...
+    GW-&gt;&gt;ES: proxied with x-sentinel-user-id / -roles / -classification
+    ES-&gt;&gt;PG: SELECT ... WHERE position &amp;&amp; ST_MakeEnvelope AND classification_rank &lt;= ceiling
+    PG--&gt;&gt;ES: rows
+    ES--&gt;&gt;GW: paginated JSON
+    GW--&gt;&gt;Client: paginated JSON</pre></figure>
+<p>There is no cache in front of PostgreSQL: the PostGIS index answers viewport queries directly. <code>GET /api/v1/entities/observations/{id}</code> returns the observations behind an entity, accepted and rejected.</p>
+<h3 id="live-stream-to-browsers">Live stream to browsers</h3>
+<p>The gateway's bridge consumes <code>entities.events</code> and <code>alerts.events</code> and hands each event to the hub with its position and classification rank. Each WebSocket client holds a viewport and a clearance; the hub batches matching entity frames every 200 ms and broadcasts id-only frames (<code>deleted</code>, <code>stale</code>, <code>aged_out</code>, <code>restored</code>) to everyone. The same connection carries the client's viewport upstream, which the gateway aggregates for the area-of-interest push.</p>
+<h3 id="gis-consumers">GIS consumers</h3>
+<p>Two paths, both honouring clearance:</p>
+<ul><li><strong>GeoServer</strong> serves WMS/WFS from PostGIS views <code>entities_live_u</code>, <code>_c</code>, <code>_s</code>, <code>_ts</code> (each filtered to that level and below) and <code>locations_geo</code>, through a read-only database role. Layer access rules map the views to <code>ROLE_CLASS_*</code> roles with one account per level; an OIDC mapping is the planned replacement for the shared accounts.</li><li><strong>Gateway export</strong> at <code>/api/v1/export/entities.geojson</code> and <code>.kml</code> goes through the entity service with the caller's identity headers, so the same ceiling applies. A per-user read-only API key (<code>sk_...</code>) may be passed as <code>?api_key=</code> on export URLs only, which is what a KML NetworkLink needs.</li></ul>
+</section><section><h2 id="classification-and-clearance">Classification and clearance</h2>
+<div class="table-wrap"><table><thead><tr><th>Where</th><th>Behaviour</th></tr></thead><tbody><tr><td>Feed config</td><td><code>classification</code> (default UNCLASSIFIED) stamped on every observation; decoders may raise, never lower</td></tr><tr><td>Entity</td><td>High-water mark of every contributing report (<code>sentinel.classification_max</code>); an analyst or admin may raise or lower it with <code>PATCH /api/v1/entities/{id}</code> within their own clearance, and a higher-configured feed re-raises it on its next report</td></tr><tr><td>Alert</td><td>Inherits the entity's level at creation</td></tr><tr><td>Reads</td><td>Entity, alert, search and track services apply <code>x-sentinel-classification</code> as a ceiling; an entity or alert above it is a 404</td></tr><tr><td>WebSocket</td><td>Frames above the client's clearance are not sent</td></tr><tr><td>Connections</td><td><code>policy.classificationCeiling</code> bounds what leaves on each connection</td></tr><tr><td>GIS</td><td>One view per level; export endpoints inherit the REST ceiling</td></tr></tbody></table></div>
+<p>Order: UNCLASSIFIED &lt; CONFIDENTIAL &lt; SECRET &lt; TOP_SECRET. The order lives once in <code>libs/common-go/classification</code> for Go and in <code>db/schema/05_classification.sql</code> for SQL.</p>
+</section><section><h2 id="authentication-and-authorization">Authentication and authorization</h2>
+<ul><li><strong>Keycloak</strong> issues OIDC/JWT tokens for the <code>sentinel</code> realm. The gateway validates them against the realm's JWKS and sets identity headers on every proxied request; services trust those headers and nothing else.</li><li><strong>Roles</strong>: <code>sentinel-viewer</code>, <code>sentinel-analyst</code>, <code>sentinel-operator</code>, <code>sentinel-admin</code>. The policy table in <code>apps/api-gateway/internal/server/policy.go</code> maps method and path prefix to the roles that may call it: analysts edit entities, alerts, links and locations; operators manage feeds and ageout config; admins delete entities and locations and administer registrations.</li><li><strong>Clearance</strong> comes from the <code>classification-u|c|s|ts</code> realm roles.</li><li><strong>API keys</strong> are per-user, viewer-only, capped at the issuer's clearance, hashed at rest and revocable.</li><li><strong>Service token</strong>: the ingest management API additionally checks the gateway's <code>INGEST_SERVICE_TOKEN</code>.</li><li><strong>Development</strong>: <code>AUTH_DEV_BYPASS=true</code> makes the gateway treat every request as <code>dev-operator</code> with every role and TOP_SECRET clearance; refused in production.</li></ul>
+</section><section><h2 id="communication-patterns">Communication patterns</h2>
+<h3 id="synchronous">Synchronous</h3>
+<ul><li><strong>REST</strong>: client to gateway for CRUD and queries; gateway to services as a reverse proxy; gateway to ingest for feed management and area pushes.</li><li><strong>WebSocket</strong>: entity, ageout and alert frames at <code>/ws/entities</code>.</li><li><strong>Postgres LISTEN/NOTIFY</strong>: feed changes and area pushes reach the owning ingest replica without polling.</li><li><strong>CoT over TCP/TLS</strong>: the TAK driver's one session per connection, both directions.</li></ul>
+<h3 id="asynchronous">Asynchronous</h3>
+<div class="table-wrap"><table><thead><tr><th>Topic</th><th>Key</th><th>Message</th><th>Producers</th><th>Consumers</th></tr></thead><tbody><tr><td><code>observations.raw</code></td><td>identity (<code>ICAO24:ABC123</code>, <code>feed:&lt;id&gt;:&lt;sourceEntityId&gt;</code>)</td><td><code>sentinel.v1.Observation</code></td><td>ingest replicas</td><td>entity-service</td></tr><tr><td><code>observations.dlq</code></td><td>feed id</td><td>raw payload + reason headers</td><td>ingest replicas</td><td>operators</td></tr><tr><td><code>entities.events</code></td><td>entity id</td><td><code>sentinel.v1.EntityEvent</code> (full snapshot + event oneof)</td><td>entity-service</td><td>track, alert, search, analytics, gateway, outbound connections</td></tr><tr><td><code>alerts.events</code></td><td>entity id</td><td><code>sentinel.v1.AlertEvent</code></td><td>alert-service, analytics</td><td>alert-service, gateway, outbound connections</td></tr></tbody></table></div>
+<p>Partitioning by key keeps one object's reports and one entity's events in order. Consumers commit after their database transaction, so a crash replays a batch and the deterministic observation id absorbs the duplicates.</p>
+</section><section><h2 id="storage">Storage</h2>
+<ul><li><strong>PostgreSQL 16 + PostGIS</strong> is the system of record: <code>entities</code>, <code>entity_identities</code>, <code>entity_sources</code>, <code>observations</code>, <code>track_points</code> (TimescaleDB hypertable when the extension is present), <code>alerts</code>, <code>alert_rules</code>, <code>links</code>, <code>locations</code>, <code>anomalies</code>, <code>feeds</code>, <code>feed_status</code>, <code>feed_areas</code>, <code>feed_leases</code>, <code>ingest_replicas</code>, <code>feed_ageout_config</code>, <code>api_keys</code>, and the GIS views. The schema is a set of idempotent per-area files in <code>db/schema/</code> applied in name order by <code>make db-schema</code>; versioned migrations begin at the first release. <code>docs/data-model.md</code> describes every table.</li><li><strong>OpenSearch</strong> holds the search index, rebuilt from <code>entities.events</code>; nothing else reads it.</li><li><strong>Kafka</strong> (KRaft, no ZooKeeper) is the only path between services for data; topics are created by <code>config/kafka/create-topics.sh</code>.</li><li><strong>MinIO</strong> is S3-compatible object storage, part of the stack but not yet used by a service.</li><li><strong>Keycloak</strong> keeps its own Postgres database.</li></ul>
+</section><section><h2 id="deployment">Deployment</h2>
+<ul><li><strong>Docker Compose</strong> runs the whole stack for development: <code>docker-compose.infra.yml</code> for the data stores and Keycloak alone, <code>docker-compose.yml</code> for everything. One-shot jobs apply the schema (<code>db-schema</code>), create topics, provision GeoServer (<code>geoserver-init</code>) and MinIO. Ingest scales with <code>--scale ingest-service=N</code>.</li><li><strong>Kubernetes</strong> uses the Helm chart under <code>k8s/charts/sentinel</code> (gateway and ingest deployments, optional GeoServer with the same provisioning script, a TAK certificate secret mount) and a Kustomize overlay per environment under <code>k8s/overlays</code>.</li><li><strong>Images</strong> are built per service from each app's <code>Dockerfile</code>; Go services build with <code>-tags dynamic</code> for librdkafka.</li></ul>
+</section><section><h2 id="repository-layout">Repository layout</h2>
+<pre class="tree"><code>sentinel/
+├── apps/                      one directory per deployable (below)
+├── libs/
+│   ├── common-go/             shared Go module
+│   │   ├── classification/    level order, Rank, Min, Intersect
+│   │   ├── config/            environment helpers
+│   │   ├── health/            liveness and readiness handlers
+│   │   ├── httputil/          JSON responses, pagination
+│   │   ├── ids/               deterministic ids
+│   │   ├── kafka/             batch consumer, producer, headers, keys, topic constants
+│   │   └── middleware/        identity-header auth, CORS
+│   └── proto-gen/             generated code: src/go, src/ts, src/python, golden fixtures in testdata/
+├── proto/sentinel/v1/         the contract: observation, entity, events, alert, track, link, platform, common
+├── db/
+│   ├── schema/                idempotent per-area SQL, applied in name order (00 schema … 99 cleanup)
+│   └── seed/seed.sql          development data
+├── config/
+│   ├── geoserver/             provision.sh, entities.sld, README
+│   ├── kafka/                 create-topics.sh
+│   ├── keycloak/              sentinel-realm.json (auto-imported)
+│   └── postgres/              init-extensions.sql, TimescaleDB/AGE installer
+├── k8s/
+│   ├── charts/sentinel/       Helm chart (templates/, files/, values.yaml)
+│   └── overlays/              Kustomize overlays per environment
+├── scripts/smoke.sh           exercises the running stack through the gateway
+├── docs/                      this documentation
+├── docker-compose.yml         full stack
+├── docker-compose.infra.yml   data stores and Keycloak only
+├── Makefile                   proto, build, dev, test, db-schema, docker targets
+├── nx.json, package.json      Nx workspace; every app and lib is an Nx project
+└── secrets/                   gitignored; TAK certificates mounted into ingest</code></pre>
+<h3 id="apps">apps/</h3>
+<div class="table-wrap"><table><thead><tr><th>Directory</th><th>Stack</th><th>Notes</th></tr></thead><tbody><tr><td><code>api-gateway</code></td><td>Go</td><td>the only public API</td></tr><tr><td><code>ingest-service</code></td><td>Go</td><td>feeds and connections; scales horizontally</td></tr><tr><td><code>entity-service</code></td><td>Go</td><td>observation store and fusion</td></tr><tr><td><code>track-service</code></td><td>Go</td><td>history and timeline</td></tr><tr><td><code>search-service</code></td><td>Go</td><td>OpenSearch front</td></tr><tr><td><code>link-analysis-service</code></td><td>Go</td><td>relationship graph</td></tr><tr><td><code>alert-service</code></td><td>Go</td><td>rules, geofences, alerts</td></tr><tr><td><code>analytics-service</code></td><td>Python</td><td>FastAPI, anomaly detection</td></tr><tr><td><code>client</code></td><td>Angular 19</td><td>CesiumJS map and management UI</td></tr></tbody></table></div>
+<h4 id="the-common-go-service-layout">The common Go service layout</h4>
+<p>Every Go service has the same shape:</p>
+<pre class="tree"><code>&lt;service&gt;/
+├── cmd/server/main.go     the only binary: config, connections, wiring, HTTP server
+├── internal/              everything else; sealed from other modules
+│   ├── config/            environment variables into a struct
+│   ├── handler/           HTTP handlers, one file per resource
+│   ├── store/             SQL, one file per table or query family
+│   └── consumer/          Kafka batch handler (where the service consumes)
+├── Dockerfile
+├── go.mod, go.sum         a standalone module
+└── project.json           Nx project (build, serve, test targets)</code></pre>
+<p>Go forbids importing another module's <code>internal</code>, so services share code only through <code>libs/common-go</code> and <code>libs/proto-gen</code>. The per-service packages beyond the common four are where the domain logic lives:</p>
+<p><strong>api-gateway/internal</strong></p>
+<div class="table-wrap"><table><thead><tr><th>Package</th><th>Role</th></tr></thead><tbody><tr><td><code>auth</code></td><td>JWT verification against JWKS, <code>User</code> with roles and clearance, API-key resolution, <code>RequireAuth</code> / <code>RequireRoles</code> middleware</td></tr><tr><td><code>server</code></td><td>router, the role policy table, health</td></tr><tr><td><code>proxy</code></td><td>reverse proxy to upstream services with identity headers</td></tr><tr><td><code>stream</code></td><td>WebSocket: <code>hub</code> (fan-out, clearance-ranked broadcast), <code>client</code> (viewport and clearance filter), <code>bridge</code> (Kafka to hub), <code>batcher</code>, viewport aggregation and area sync, <code>feed_directory</code>, the wire <code>protocol</code></td></tr><tr><td><code>locations</code></td><td>named locations, owned by the gateway</td></tr><tr><td><code>registration</code></td><td>self-registration flow against the Keycloak Admin API and SMTP</td></tr><tr><td><code>apikeys</code></td><td>key generation, hashing, store, handler</td></tr><tr><td><code>export</code></td><td>GeoJSON and KML encoders over an entity-service source</td></tr></tbody></table></div>
+<p><strong>ingest-service/internal</strong></p>
+<div class="table-wrap"><table><thead><tr><th>Package</th><th>Role</th></tr></thead><tbody><tr><td><code>registry</code></td><td>the feeds table: types, validation (JSON Schema plus common options), secret refs (<code>env:</code> and <code>file:</code>), LISTEN/NOTIFY</td></tr><tr><td><code>lease</code></td><td>one owner per feed with heartbeats, rendezvous hashing and fencing tokens</td></tr><tr><td><code>feed</code></td><td>the runner (one feed's lifecycle) and the supervisor (reconciles registry against running feeds, builds pumps)</td></tr><tr><td><code>drivers</code></td><td>driver catalog and <code>drivers/schemas/*.json</code> including the shared <code>common.json</code></td></tr><tr><td><code>mgmt</code></td><td>management API proxied by the gateway under <code>/api/v1/feeds</code> and <code>/api/v1/drivers</code></td></tr><tr><td><code>aoi</code></td><td>area-of-interest pushes from the gateway</td></tr><tr><td><code>obs</code>, <code>dedupe</code>, <code>wire</code>, <code>publish</code>, <code>kafka</code></td><td>an observation's path from driver to <code>observations.raw</code>: the domain type, repeat suppression, protobuf encoding, the publisher with dead-lettering</td></tr><tr><td><code>policy</code></td><td>the pure sharing-policy evaluator for connections</td></tr><tr><td><code>outbound</code></td><td>the pump: per-connection consumer, coalescing queue, rate limiting, shape source for geofences and locations</td></tr><tr><td><code>health</code>, <code>metrics</code></td><td>readiness and Prometheus collectors</td></tr><tr><td><code>source</code></td><td>the pluggable layer, below</td></tr></tbody></table></div>
+<p><code>source/</code> separates how bytes arrive from what they mean:</p>
+<pre class="tree"><code>source/
+├── transport/     moves bytes: tcpclient, tcpserver, udp, websocket, mqtt, stomp;
+│                  framing/ splits streams into messages; transporttest/ for tests
+├── decoder/       one message into observations: beast, sbs, nmeaais, nmeagps, cot,
+│                  link16, openskystates, adsblol, tlesgp4, jsonmapped
+├── encoder/       the reverse direction: cot
+├── httppoll/      shared scheduler for API pollers
+├── driver/        what a feed row names:
+│   ├── stream/    any transport + framer + decoder composed from config
+│   ├── opensky/, adsblol/, celestrak/, httpjson/   pollers
+│   └── tak/       one two-way CoT session; uses the cot decoder and encoder
+└── all/           imports every driver so registration happens by side effect</code></pre>
+<p><strong>entity-service/internal</strong></p>
+<div class="table-wrap"><table><thead><tr><th>Package</th><th>Role</th></tr></thead><tbody><tr><td><code>identity</code></td><td>which identity types are canonical (ICAO24, MMSI, NORAD_ID, COT_UID; everything else is per feed) and the new-entity shape</td></tr><tr><td><code>fusion</code></td><td><code>resolver</code> (observation to entity), <code>processor</code> (apply, decide, emit), <code>policy</code> (dedupe within a batch: newest source timestamp wins, ties by source priority), <code>report</code></td></tr><tr><td><code>store</code></td><td><code>observation_store</code>, <code>identity_store</code>, <code>source_store</code>, <code>fused_store</code> (the single fused update statement), <code>entity_store</code> (queries with ceiling, operator fields), <code>ageout_config_store</code></td></tr><tr><td><code>events</code></td><td>typed <code>EntityEvent</code> publishing</td></tr><tr><td><code>ageout</code></td><td>per-feed stale and aged-out transitions</td></tr><tr><td><code>consumer</code></td><td><code>observations.raw</code> batch handler</td></tr></tbody></table></div>
+<p><strong>Other services</strong></p>
+<div class="table-wrap"><table><thead><tr><th>Service</th><th>Packages beyond the common four</th></tr></thead><tbody><tr><td><code>alert-service</code></td><td><code>evaluator</code> (geofence and rule checks on typed snapshots)</td></tr><tr><td><code>search-service</code></td><td><code>opensearch</code> (client, index mapping, queries) in place of <code>store</code></td></tr><tr><td><code>track-service</code></td><td><code>batch</code> (point batching), <code>models</code></td></tr><tr><td><code>link-analysis-service</code></td><td>none; config, handler, store</td></tr></tbody></table></div>
+<h4 id="client-src-app">client/src/app</h4>
+<pre class="tree"><code>app/
+├── core/
+│   ├── guards/        authGuard, roleGuard
+│   └── services/      auth, websocket, entity, alert, feed, location, api-key,
+│                      layer-visibility, map-viewport, buildings, theme
+├── features/          one folder per route: map, alerts, connections, search, timeline,
+│                      link-graph, locations, settings, login, register
+└── shared/
+    ├── components/    schema-form, entity-detail-panel, layers-pill, user-menu, theme-picker
+    ├── directives/    has-role
+    └── models/        TypeScript types: entity, feed and connection, alert, classification</code></pre>
+<p>Standalone components, zoneless change detection, hash routing; <code>docs/frontend.md</code> describes the services and layout.</p>
+<h4 id="analytics-service">analytics-service</h4>
+<pre class="tree"><code>sentinel_analytics/
+├── main.py            FastAPI app; starts the Kafka consumer in its lifespan
+├── config.py, db.py
+├── routers/           HTTP endpoints
+├── services/          detection logic
+└── models/            Pydantic models
+tests/</code></pre>
+</section><section><h2 id="testing-and-tooling">Testing and tooling</h2>
+<ul><li><strong>Go</strong>: <code>go test -race</code> per module, via Nx (<code>npx nx test &lt;service&gt;</code>) or <code>make test-go</code>. Store tests that need Postgres read <code>TEST_DATABASE_URL</code> and skip without it.</li><li><strong>Client</strong>: Jest (<code>npx nx test client</code>).</li><li><strong>Contract</strong>: <code>make proto-check</code> regenerates and diffs the generated code; the golden-fixture test decodes the same bytes in Go, TypeScript and Python.</li><li><strong>Stack</strong>: <code>scripts/smoke.sh</code> runs against a live compose stack through the gateway: health, every proxied route, feeds and connections validation, exports, API keys, GeoServer WFS, Kafka topics, a location round trip, the client through nginx and a WebSocket handshake.</li><li><strong>Schema</strong>: every file in <code>db/schema/</code> must apply twice without error; <code>make db-schema</code> is the only way the schema changes before the first release.</li></ul></section>
+    </article>
+  </main>
+</div>
+
+<script>
+(function () {
+  var rail = document.getElementById('rail');
+  var btn = document.getElementById('railToggle');
+  btn.addEventListener('click', function () {
+    var open = rail.classList.toggle('open');
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  document.querySelectorAll('#toc a').forEach(function (a) {
+    a.addEventListener('click', function () { rail.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); });
+  });
+  var links = Array.prototype.slice.call(document.querySelectorAll('#toc a'));
+  var targets = links.map(function (a) { return document.getElementById(a.getAttribute('href').slice(1)); }).filter(Boolean);
+  function mark() {
+    var y = window.scrollY + 120, current = targets[0];
+    for (var i = 0; i < targets.length; i++) { if (targets[i].offsetTop <= y) current = targets[i]; }
+    links.forEach(function (a) { a.classList.toggle('current', current && a.getAttribute('href') === '#' + current.id); });
+  }
+  window.addEventListener('scroll', mark, { passive: true });
+  mark();
+})();
+</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "neutral" });</script>
+</body>
+</html>
