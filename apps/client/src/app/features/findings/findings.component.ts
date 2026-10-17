@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { IconComponent } from '../../shared/components/icon.component';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { AnalyticsService } from '../../core/services/analytics.service';
 import { AuthService } from '../../core/services/auth.service';
@@ -26,7 +27,7 @@ import {
   selector: 'app-findings',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule],
+  imports: [CommonModule, IconComponent],
   templateUrl: './findings.component.html',
   styleUrls: ['./findings.component.scss'],
 })

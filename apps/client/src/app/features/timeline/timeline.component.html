@@ -1,20 +1,25 @@
 <div class="timeline-strip">
   <!-- Playback Controls -->
   <div class="playback-controls">
-    <button class="playback-btn" (click)="skipBackward()" title="Skip Backward">
-      &#9194;
+    <button class="playback-btn" (click)="skipBackward()" title="Skip Backward" aria-label="Skip backward">
+      <app-icon name="skip-back" [size]="14" />
     </button>
     <button
       class="playback-btn play-btn"
       (click)="togglePlayback()"
-      [title]="playing() ? 'Pause' : 'Play'">
-      {{ playing() ? '&#9646;&#9646;' : '&#9654;' }}
+      [title]="playing() ? 'Pause' : 'Play'"
+      [attr.aria-label]="playing() ? 'Pause' : 'Play'">
+      @if (playing()) {
+        <app-icon name="pause" [size]="14" />
+      } @else {
+        <app-icon name="play" [size]="14" />
+      }
     </button>
-    <button class="playback-btn" (click)="skipForward()" title="Skip Forward">
-      &#9193;
+    <button class="playback-btn" (click)="skipForward()" title="Skip Forward" aria-label="Skip forward">
+      <app-icon name="skip-forward" [size]="14" />
     </button>
-    <button class="playback-btn" (click)="resetTime()" title="Reset to Now">
-      &#9632;
+    <button class="playback-btn" (click)="resetTime()" title="Reset to Now" aria-label="Reset to now">
+      <app-icon name="square" [size]="14" />
     </button>
   </div>
 

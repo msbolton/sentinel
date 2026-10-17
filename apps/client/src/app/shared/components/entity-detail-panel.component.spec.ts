@@ -58,10 +58,20 @@ function makeFeed(id: string, name: string): Feed {
   };
 }
 
+const NOW = Date.parse('2026-10-17T14:32:20Z');
+const secondsAgo = (s: number) => new Date(NOW - s * 1000).toISOString();
+
 describe('EntityDetailPanelComponent', () => {
   let fixture: ComponentFixture<EntityDetailPanelComponent>;
   let el: HTMLElement;
   let httpMock: HttpTestingController;
+  let nowSpy: jest.SpyInstance<number, []>;
+
+  /** Expands a collapsed section by its toggle. */
+  function open(section: string): void {
+    (el.querySelector(`.section-toggle[data-section="${section}"]`) as HTMLButtonElement).click();
+    fixture.detectChanges();
+  }
 
   function rows(): Record<string, string> {
     const out: Record<string, string> = {};
@@ -91,6 +101,7 @@ describe('EntityDetailPanelComponent', () => {
     analytics.reviewFinding.mockImplementation((id: string, status: string) => of({ id, status }));
     auth.hasAnyRole.mockReturnValue(false);
     locations.flyTo.mockClear();
+    nowSpy = jest.spyOn(Date, 'now').mockReturnValue(NOW);
     await TestBed.configureTestingModule({
       imports: [EntityDetailPanelComponent],
       providers: [
@@ -106,7 +117,10 @@ describe('EntityDetailPanelComponent', () => {
     el = fixture.nativeElement as HTMLElement;
   });
 
-  afterEach(() => httpMock.verify());
+  afterEach(() => {
+    httpMock.verify();
+    nowSpy.mockRestore();
+  });
 
   it('shows the origin rows for an entity that came through TAK', () => {
     fixture.componentRef.setInput(
@@ -122,6 +136,7 @@ describe('EntityDetailPanelComponent', () => {
       }),
     );
     fixture.detectChanges();
+    open('origin');
 
     expect(el.querySelector('.origin-section .section-label')?.textContent).toBe('Origin & Timing');
     // the feed list is fetched once so the connection can be named
@@ -141,7 +156,7 @@ describe('EntityDetailPanelComponent', () => {
       ['TAK HQ', 'COT'],
       ['OpenSky', 'OPENSKY'],
     ]);
-    expect(el.querySelector('.chip-classification')?.textContent?.trim()).toBe('UNCLASSIFIED');
+    expect(el.querySelector('.classification-banner')?.textContent?.trim()).toBe('UNCLASSIFIED');
   });
 
   it('falls back to platforms.cot.callsign, then the name, and hides what it does not have', () => {
@@ -154,6 +169,7 @@ describe('EntityDetailPanelComponent', () => {
       }),
     );
     fixture.detectChanges();
+    open('origin');
 
     let r = rows();
     expect(r['Connection']).toBeUndefined();
@@ -162,16 +178,102 @@ describe('EntityDetailPanelComponent', () => {
 
     fixture.componentRef.setInput('entity', makeEntity({ identities: [{ type: 'COT_UID', value: 'U-2' }] }));
     fixture.detectChanges();
+    open('origin');
     r = rows();
     expect(r['TAK uid']).toBe('U-2');
     expect(r['Callsign']).toBe('ALPHA 1');
 
     fixture.componentRef.setInput('entity', makeEntity({ identities: [{ type: 'ICAO24', value: 'abc123' }] }));
     fixture.detectChanges();
+    open('origin');
     r = rows();
     expect(r['TAK uid']).toBeUndefined();
     expect(r['Callsign']).toBeUndefined();
     httpMock.expectNone('/api/v1/feeds');
+  });
+
+  describe('header and key facts', () => {
+    it('shows how fresh the last fix is, next to the type and affiliation', () => {
+      fixture.componentRef.setInput('entity', makeEntity({ affiliation: 'HOSTILE' as Entity['affiliation'], lastSeenAt: secondsAgo(12) }));
+      fixture.detectChanges();
+      const pill = el.querySelector('.freshness')!;
+      expect(pill.classList).toContain('fresh');
+      expect(pill.textContent?.trim()).toBe('12 s ago');
+      const chips = Array.from(el.querySelectorAll('.header-chips .chip')).map((c) => c.textContent?.trim());
+      expect(chips).toEqual(['UNIT', 'HOSTILE']);
+    });
+
+    it('marks a track the feed declared stale even when its timestamp is recent', () => {
+      fixture.componentRef.setInput('entity', makeEntity({ lastSeenAt: secondsAgo(5), ageoutState: 'STALE' }));
+      fixture.detectChanges();
+      expect(el.querySelector('.freshness')?.classList).toContain('stale');
+    });
+
+    it('puts classification in a banner under the header', () => {
+      fixture.componentRef.setInput('entity', makeEntity({ classification: Classification.SECRET }));
+      fixture.detectChanges();
+      const banner = el.querySelector('.classification-banner')!;
+      expect(banner.textContent?.trim()).toBe('SECRET');
+      expect(banner.classList).toContain('SECRET');
+    });
+
+    it('leads with position, movement, last fix and altitude', () => {
+      fixture.componentRef.setInput(
+        'entity',
+        makeEntity({
+          position: { latitude: 25.276987, longitude: 55.296249, altitude: 0 },
+          circularError: 15,
+          speedKnots: 12.4,
+          heading: 47,
+          course: 45,
+          lastSeenAt: '2026-10-17T14:32:08Z',
+        }),
+      );
+      fixture.detectChanges();
+      const fact = (name: string) =>
+        Array.from(el.querySelectorAll(`.key-facts .fact[data-fact="${name}"] > *`))
+          .map((part) => part.textContent!.replace(/\s+/g, ' ').trim())
+          .join(' ');
+      expect(fact('position')).toBe('Position 25.2770° N 55.2962° E CEP 15 m');
+      expect(fact('movement')).toBe('Speed · Heading 12.4 kts 047° course 045°');
+      expect(fact('last-fix')).toBe('Last fix 14:32:08Z COT');
+      expect(fact('altitude')).toBe('Altitude 0 m');
+    });
+
+    it('writes a satellite altitude in kilometres', () => {
+      fixture.componentRef.setInput('entity', makeEntity({ entityType: EntityType.SATELLITE, position: { latitude: 0, longitude: 0, altitude: 408_250 } }));
+      fixture.detectChanges();
+      expect(el.querySelector('.key-facts .fact[data-fact="altitude"] .fact-value')?.textContent?.trim()).toBe('408 km');
+    });
+
+    it('shows a dash where a fact is unknown', () => {
+      fixture.componentRef.setInput('entity', makeEntity());
+      fixture.detectChanges();
+      expect(el.querySelector('.key-facts .fact[data-fact="movement"] .fact-value')?.textContent?.trim()).toBe('—');
+      expect(el.querySelector('.key-facts .fact[data-fact="position"] .fact-value')?.textContent?.trim()).toBe('—');
+    });
+
+    it('loads the 3D model only when its section is opened', () => {
+      fixture.componentRef.setInput('entity', makeEntity({ entityType: EntityType.VESSEL }));
+      fixture.detectChanges();
+      expect(el.querySelector('iframe')).toBeNull();
+      expect(el.querySelector('.section-toggle[data-section="model"] .section-summary')?.textContent?.trim()).toBe('vessel.glb');
+      open('model');
+      expect(el.querySelector('iframe')).not.toBeNull();
+      // a unit has no model and no model section
+      fixture.componentRef.setInput('entity', makeEntity({ entityType: EntityType.UNIT }));
+      fixture.detectChanges();
+      expect(el.querySelector('.section-toggle[data-section="model"]')).toBeNull();
+    });
+
+    it('opens identity by default and folds everything else', () => {
+      fixture.componentRef.setInput('entity', makeEntity({ platformData: { ais: { mmsi: '352598000' } } as Entity['platformData'] }));
+      fixture.detectChanges();
+      const states = Array.from(el.querySelectorAll('.section-toggle')).map((t) => [t.getAttribute('data-section'), t.getAttribute('aria-expanded')]);
+      expect(states).toContainEqual(['identity', 'true']);
+      expect(states.filter(([k]) => k !== 'identity').every(([, v]) => v === 'false')).toBe(true);
+      expect(el.textContent).toContain('352598000');
+    });
   });
 
   describe('behaviour section', () => {
@@ -217,7 +319,20 @@ describe('EntityDetailPanelComponent', () => {
       fixture.componentRef.setInput('entity', makeEntity());
       fixture.detectChanges();
       expect(analytics.getBaseline).toHaveBeenCalledWith('e1');
+      expect(el.querySelector('.section-toggle[data-section="behaviour"] .section-summary')?.textContent?.trim()).toBe('No baseline yet');
+      open('behaviour');
       expect(el.querySelector('.behaviour-section .behaviour-note')?.textContent).toContain('No baseline yet');
+      expect(el.querySelector('.place-list')).toBeNull();
+    });
+
+    it('keeps the behaviour section folded behind a one-line summary', () => {
+      analytics.baseline = makeBaseline();
+      analytics.findings = [makeFinding()];
+      fixture.componentRef.setInput('entity', makeEntity());
+      fixture.detectChanges();
+      const toggle = el.querySelector('.section-toggle[data-section="behaviour"]')!;
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(toggle.querySelector('.section-summary')?.textContent?.trim()).toBe('10 d baseline · 1 open');
       expect(el.querySelector('.place-list')).toBeNull();
     });
 
@@ -226,6 +341,14 @@ describe('EntityDetailPanelComponent', () => {
       analytics.findings = [makeFinding()];
       fixture.componentRef.setInput('entity', makeEntity());
       fixture.detectChanges();
+      // open findings sit above the folded sections, not inside behaviour
+      const finding = el.querySelector('.open-findings .finding-item')!;
+      expect(finding.textContent).toContain('Unusual place');
+      expect(finding.textContent).toContain('3.3 km from Depot');
+      // a viewer gets no review buttons
+      expect(el.querySelector('.finding-actions')).toBeNull();
+
+      open('behaviour');
       const section = el.querySelector('.behaviour-section')!;
       expect(section.textContent).toContain('3360 fixes');
       expect(section.textContent).toContain('10 d');
@@ -233,10 +356,6 @@ describe('EntityDetailPanelComponent', () => {
       const places = Array.from(section.querySelectorAll('.place-item .place-name')).map((n) => n.textContent?.trim());
       expect(places).toEqual(['Depot', 'Place 2']);
       expect(section.querySelectorAll('.hour-cell').length).toBe(168);
-      expect(section.querySelector('.finding-item')?.textContent).toContain('Unusual place');
-      expect(section.querySelector('.finding-item')?.textContent).toContain('3.3 km from Depot');
-      // a viewer gets no review buttons
-      expect(section.querySelector('.finding-actions')).toBeNull();
       (section.querySelector('.place-item') as HTMLElement).click();
       expect(locations.flyTo).toHaveBeenCalledWith(expect.objectContaining({ name: 'Depot', latitude: 40, longitude: -74 }));
     });

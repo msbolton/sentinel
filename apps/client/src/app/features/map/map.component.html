@@ -7,7 +7,7 @@
       <div class="layer-panel">
         <div class="layer-panel-header">
           <h3>Layers</h3>
-          <button class="btn-ghost btn-sm" (click)="showLayerPanel.set(false)">&times;</button>
+          <button class="btn-ghost btn-sm" (click)="showLayerPanel.set(false)" aria-label="Close layers"><app-icon name="x" [size]="14" /></button>
         </div>
         <div class="layer-list">
           @for (layer of layers; track layer.entityType) {
@@ -31,47 +31,27 @@
         (click)="showLayerPanel.set(!showLayerPanel())"
         title="Toggle Layers"
         [class.active]="showLayerPanel()">
-        &#9776;
+        <app-icon name="layers" />
       </button>
       <button class="control-btn" (click)="resetView()" title="Reset View">
-        &#127758;
+        <app-icon name="globe" />
       </button>
       <button class="control-btn" (click)="goToMyLocation()" title="My Location">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="4"/>
-          <path d="M12 2v4"/>
-          <path d="M12 18v4"/>
-          <path d="M2 12h4"/>
-          <path d="M18 12h4"/>
-        </svg>
+        <app-icon name="crosshair" />
       </button>
       <button
         class="control-btn"
         (click)="buildingsService.toggle()"
         title="Toggle 3D Buildings"
         [class.active]="buildingsService.buildings3dEnabled()">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="4" y="2" width="16" height="20" rx="2" ry="2"/>
-          <path d="M9 22V12h6v10"/>
-          <path d="M8 6h.01"/>
-          <path d="M16 6h.01"/>
-          <path d="M12 6h.01"/>
-          <path d="M12 10h.01"/>
-          <path d="M8 10h.01"/>
-          <path d="M16 10h.01"/>
-        </svg>
+        <app-icon name="building" />
       </button>
       <button class="control-btn" (click)="toggleFullscreen()" title="Fullscreen">
-        &#9974;
+        <app-icon name="maximize" />
       </button>
+      <span class="control-divider" aria-hidden="true"></span>
       <button class="control-btn control-btn--danger" (click)="clearAllEntities()" title="Clear All Entities">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="3 6 5 6 21 6"/>
-          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-          <path d="M10 11v6"/>
-          <path d="M14 11v6"/>
-          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-        </svg>
+        <app-icon name="trash" />
       </button>
     </div>
   </div>

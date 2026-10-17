@@ -8,7 +8,7 @@
 
   <div class="search-input-container">
     <div class="search-input-wrapper">
-      <span class="search-icon">&#128269;</span>
+      <span class="search-icon"><app-icon name="search" [size]="14" /></span>
       <input
         type="text"
         class="search-input"
@@ -18,7 +18,7 @@
         autofocus
       />
       @if (searchQuery()) {
-        <button class="search-clear" (click)="onSearchInput('')">&times;</button>
+        <button class="search-clear" (click)="onSearchInput('')" aria-label="Clear search"><app-icon name="x" [size]="12" /></button>
       }
     </div>
   </div>
@@ -97,14 +97,14 @@
 
     @if (!loading() && results().length === 0 && searchQuery()) {
       <div class="empty-state">
-        <span class="empty-icon">&#128269;</span>
+        <span class="empty-icon"><app-icon name="search" [size]="32" [strokeWidth]="1.5" /></span>
         <p>No entities found matching "{{ searchQuery() }}"</p>
       </div>
     }
 
     @if (!loading() && results().length === 0 && !searchQuery()) {
       <div class="empty-state">
-        <span class="empty-icon">&#128269;</span>
+        <span class="empty-icon"><app-icon name="search" [size]="32" [strokeWidth]="1.5" /></span>
         <p>Enter a search term to find entities</p>
       </div>
     }

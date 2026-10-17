@@ -1,6 +1,7 @@
 import { Component, OnInit, OnDestroy, signal, computed, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { IconComponent } from '../../shared/components/icon.component';
 import { HttpClient } from '@angular/common/http';
 import { Subscription, Subject, debounceTime, switchMap, of, catchError } from 'rxjs';
 import { Location, LocationCategory } from '../../shared/models/location.model';
@@ -18,7 +19,7 @@ interface GeoSearchResult {
   selector: 'app-locations',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, IconComponent],
   templateUrl: './locations.component.html',
   styleUrls: ['./locations.component.scss'],
 })

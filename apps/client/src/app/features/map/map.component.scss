@@ -60,11 +60,23 @@
     border-color: var(--accent-blue);
   }
 
-  &--danger:hover {
-    background: rgba(239, 68, 68, 0.2);
-    color: #ef4444;
-    border-color: #ef4444;
+  &--danger {
+    color: var(--accent-red);
+    border-color: color-mix(in srgb, var(--accent-red) 35%, transparent);
+
+    &:hover {
+      background: color-mix(in srgb, var(--accent-red) 20%, transparent);
+      color: var(--accent-red);
+      border-color: var(--accent-red);
+    }
   }
+}
+
+// Keeps the destructive control apart from the view controls above it.
+.control-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-color);
 }
 
 // --- Layer Panel ---
