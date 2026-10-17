@@ -140,3 +140,6 @@ The app uses a fixed layout with three zones:
 - **Ion token**: Configured via `CESIUM_ION_ACCESS_TOKEN` environment variable
 - **Build setup**: Cesium workers, assets, and widgets are copied into the build output via Angular build configuration
 - **Globe**: 3D terrain with entity billboards/points positioned using WGS84 coordinates
+- **Motion between fixes**: aircraft are dead-reckoned (`features/map/dead-reckoning.ts`); satellites are propagated with SGP4 from the elements they carry (`features/map/satellite-tracker.ts`, `satellite.js` 7.1), all of them four times a second and the selected one every frame
+- **Orbit overlays**: the selected satellite gets its next-revolution path at altitude, its ground track and its horizon footprint (`features/map/orbit-geometry.ts`), toggled from the detail panel through `OrbitOverlayService`
+- **Jest and satellite.js**: the package is ESM-only, so `apps/client/jest.config.ts` maps it to its entry file and lets the Angular transformer compile it

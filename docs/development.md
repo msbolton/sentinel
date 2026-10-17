@@ -145,6 +145,19 @@ OpenSky is polled only for the area connected map clients can see, so nothing is
 5. Aircraft glide between fixes (dead reckoning on the client). Pan a little and nothing is pushed; pan far or zoom in by half and one push plus an immediate poll follows. Zoom out to the globe and the interval stretches to 60 s.
 6. Close the tab: the gateway pushes `active: false` and the ingest service idles. Kill and restart the ingest service: polling resumes within the 30 s heartbeat.
 
+### Satellites (CelesTrak)
+
+The built-in `celestrak` feed is seeded disabled. Watch the space stations first (a dozen objects, no policy risk), or pin the ISS by catalog number:
+
+```bash
+curl -s -X PATCH http://localhost:3000/api/v1/feeds/celestrak -H 'content-type: application/json' \
+  -d '{"config": {"groups": ["stations"], "catalogNumbers": [25544], "refreshHours": 2, "propagationIntervalSec": 60}}'
+curl -s -X POST http://localhost:3000/api/v1/feeds/celestrak/enable
+curl -s http://localhost:3000/api/v1/feeds/celestrak | jq '.status.state, .status.detail'
+```
+
+`detail` shows `satellites`, `pinned`, `fetchedAt` and `nextFetchAt`. The state is `idle` until a map client is connected: satellites are emitted only over the clients' viewports, except pinned objects, which are emitted always. Open the map, pan to the Atlantic, and the ISS moves smoothly (the client propagates it between the server's once-a-minute fixes); click it for its orbit path, ground track and footprint. CelesTrak needs no key but enforces a usage policy; keep `refreshHours` at 2 and prefer a group over many catalog numbers (`docs/feeds.md`).
+
 ### Local receivers and other sources
 
 Every source is a feed created through `POST /api/v1/feeds` (or the Feeds page). The built-in drivers are `opensky`, `adsblol`, `celestrak`, `httpjson` (any JSON API, field-mapped) and `stream` (a transport, a framer and a decoder). Pull from site receivers rather than opening ports: a feed that listens (`tcpserver`, `udp`) must be pinned to one replica.
