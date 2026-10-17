@@ -56,3 +56,23 @@ func TestAreaEqualAndExpiry(t *testing.T) {
 		t.Error("expiry comparison wrong")
 	}
 }
+
+func TestBBoxContains(t *testing.T) {
+	b := BBox{North: 45, South: 40, East: -70, West: -80}
+	cases := []struct {
+		lat, lon float64
+		want     bool
+	}{
+		{42, -75, true}, {40, -80, true}, {45, -70, true}, // inside and on the edges
+		{39.9, -75, false}, {42, -69.9, false}, {42, -81, false}, {-42, -75, false},
+	}
+	for _, c := range cases {
+		if got := b.Contains(c.lat, c.lon); got != c.want {
+			t.Errorf("Contains(%v, %v) = %v, want %v", c.lat, c.lon, got, c.want)
+		}
+	}
+	global := BBox{North: 90, South: -90, East: 170, West: -170} // 90 % of each span counts as global
+	if !global.Contains(0, 179.9) {
+		t.Error("a global box must contain a point outside its nominal span")
+	}
+}

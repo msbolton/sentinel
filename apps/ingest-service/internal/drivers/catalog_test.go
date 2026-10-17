@@ -26,6 +26,9 @@ func TestDefaultCatalogListsDrivers(t *testing.T) {
 			t.Errorf("missing driver %s", want)
 		}
 	}
+	if o, _ := c.Get("celestrak"); !o.HasCapability(CapabilityArea) || !o.HasCapability(CapabilityPoll) || o.AreaTTL == 0 {
+		t.Errorf("celestrak info = %+v", o)
+	}
 	if o, _ := c.Get("opensky"); !o.HasCapability(CapabilityArea) || o.AreaTTL == 0 || len(o.SecretFields) != 2 {
 		t.Errorf("opensky info = %+v", o)
 	}

@@ -23,6 +23,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/sentinel/ingest-service/internal/aoi"
 	"github.com/sentinel/ingest-service/internal/source/decoder/tlesgp4"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 	"github.com/sentinel/ingest-service/internal/source/httppoll"
@@ -47,7 +48,8 @@ func init() {
 	driver.Register(driver.Definition{
 		ID: ID, Name: "CelesTrak satellites", Source: "CELESTRAK",
 		Description:  "Satellite positions propagated with SGP4 from CelesTrak orbital elements (OMM).",
-		Capabilities: []string{driver.CapabilityPoll},
+		Capabilities: []string{driver.CapabilityPoll, driver.CapabilityArea},
+		AreaTTL:      90 * time.Second,
 		ConfigSchema: schema,
 		New:          New,
 	})
@@ -92,7 +94,10 @@ type Driver struct {
 	jitter  func() time.Duration
 	now     func() time.Time
 
+	wake chan struct{} // an area change asks for a tick now
+
 	mu         sync.Mutex
+	area       aoi.Area
 	objects    map[int]cached   // by real catalog number
 	members    map[string][]int // selection key -> catalog numbers from its last good response
 	cond       map[string]condState
@@ -130,6 +135,7 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 		step:    driver.Seconds(cfg.PropagationIntervalSec, 60*time.Second),
 		jitter:  func() time.Duration { return time.Duration(rand.Int64N(int64(maxJitter))) },
 		now:     time.Now,
+		wake:    make(chan struct{}, 1),
 		objects: map[int]cached{},
 		members: map[string][]int{},
 		cond:    map[string]condState{},
@@ -190,20 +196,70 @@ func (d *Driver) Run(ctx context.Context, sink driver.Sink) error {
 			}
 		case <-propagate.C:
 			d.propagate(ctx, sink)
+		case <-d.wake:
+			d.propagate(ctx, sink)
 		}
 	}
+}
+
+// SetAreaOfInterest applies the viewport the gateway pushed. A change
+// asks for a propagation now, so a client that pans sees satellites
+// without waiting for the next tick.
+func (d *Driver) SetAreaOfInterest(a aoi.Area) aoi.Status {
+	d.mu.Lock()
+	changed := !d.area.Equal(a)
+	d.area = a
+	d.mu.Unlock()
+	if changed {
+		d.logger.Info("celestrak viewport updated", zap.Bool("active", a.Active), zap.Int("clients", a.Clients), zap.Int("boxes", len(a.Boxes)), zap.Float64("area_sq_deg", a.SqDeg()))
+		select {
+		case d.wake <- struct{}{}:
+		default:
+		}
+	}
+	return d.AreaStatus()
+}
+
+// AreaStatus reports the area and the tick timing. The feed is idle when
+// nobody is looking and nothing is pinned.
+func (d *Driver) AreaStatus() aoi.Status {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return aoi.Status{
+		Active:            d.area.Active,
+		Clients:           d.area.Clients,
+		Boxes:             d.area.Boxes,
+		AreaSqDeg:         d.area.SqDeg(),
+		EffectiveInterval: d.step,
+		LastPollAt:        d.lastFetch,
+		NextPollIn:        d.step,
+		ExpiresAt:         d.area.ExpiresAt,
+		Idle:              !d.liveLocked(d.now()) && d.pinnedLocked() == 0,
+		CreditsRemaining:  -1,
+	}
+}
+
+// liveLocked reports whether clients are looking at a non-expired area.
+func (d *Driver) liveLocked(now time.Time) bool {
+	return d.area.Active && len(d.area.Boxes) > 0 && !d.area.Expired(now)
+}
+
+func (d *Driver) pinnedLocked() int {
+	n := 0
+	for _, c := range d.objects {
+		if c.pinned {
+			n++
+		}
+	}
+	return n
 }
 
 // Health reports the element cache state.
 func (d *Driver) Health() driver.Health {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	pinned := 0
-	for _, c := range d.objects {
-		if c.pinned {
-			pinned++
-		}
-	}
+	pinned := d.pinnedLocked()
+	live := d.liveLocked(d.now())
 	detail := map[string]any{
 		"satellites": len(d.objects),
 		"pinned":     pinned,
@@ -227,7 +283,7 @@ func (d *Driver) Health() driver.Health {
 		}
 		detail["errors"] = errs
 	}
-	return driver.Health{Connected: !d.lastFetch.IsZero(), LastError: d.lastErr, Detail: detail}
+	return driver.Health{Idle: !live && pinned == 0, Connected: !d.lastFetch.IsZero(), LastError: d.lastErr, Detail: detail}
 }
 
 // fetchAll requests every selection once and rebuilds the cache from the
@@ -380,22 +436,31 @@ func parseRetryAfter(v string, now time.Time) time.Duration {
 	return wait
 }
 
+// propagate computes every cached object's position and emits the ones
+// somebody can see: pinned objects always, the rest only while their
+// sub-satellite point is inside a box clients are looking at.
 func (d *Driver) propagate(ctx context.Context, sink driver.Sink) {
+	now := d.now().UTC()
 	d.mu.Lock()
 	snapshot := make([]cached, 0, len(d.objects))
 	for _, c := range d.objects {
 		snapshot = append(snapshot, c)
 	}
+	live := d.liveLocked(now)
+	boxes := append([]aoi.BBox(nil), d.area.Boxes...)
 	d.mu.Unlock()
 	if len(snapshot) == 0 {
 		return
 	}
-	now := d.now().UTC()
 	sent := 0
 	for _, c := range snapshot {
 		o := tlesgp4.Propagate(c.tle, now)
 		if o == nil {
 			sink.Skipped("decayed_orbit")
+			continue
+		}
+		if !c.pinned && !(live && inAnyBox(boxes, o.Latitude, o.Longitude)) {
+			sink.Skipped("out_of_area")
 			continue
 		}
 		if err := sink.Emit(ctx, o); err != nil {
@@ -409,4 +474,13 @@ func (d *Driver) propagate(ctx context.Context, sink driver.Sink) {
 	d.mu.Unlock()
 	sink.Succeeded(sent)
 	d.logger.Info("celestrak propagation complete", zap.Int("emitted", sent), zap.Int("cached", len(snapshot)))
+}
+
+func inAnyBox(boxes []aoi.BBox, lat, lon float64) bool {
+	for _, b := range boxes {
+		if b.Contains(lat, lon) {
+			return true
+		}
+	}
+	return false
 }
