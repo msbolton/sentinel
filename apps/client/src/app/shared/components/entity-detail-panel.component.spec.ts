@@ -240,6 +240,12 @@ describe('EntityDetailPanelComponent', () => {
       expect(fact('altitude')).toBe('Altitude 0 m');
     });
 
+    it('writes a satellite altitude in kilometres', () => {
+      fixture.componentRef.setInput('entity', makeEntity({ entityType: EntityType.SATELLITE, position: { latitude: 0, longitude: 0, altitude: 408_250 } }));
+      fixture.detectChanges();
+      expect(el.querySelector('.key-facts .fact[data-fact="altitude"] .fact-value')?.textContent?.trim()).toBe('408 km');
+    });
+
     it('shows a dash where a fact is unknown', () => {
       fixture.componentRef.setInput('entity', makeEntity());
       fixture.detectChanges();

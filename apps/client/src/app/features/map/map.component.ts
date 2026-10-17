@@ -50,9 +50,10 @@ import { DeadReckoningTracker } from './dead-reckoning';
 import { SatelliteTracker, periodMinutes, type SatPosition } from './satellite-tracker';
 import { footprintRadiusM, sampleOrbit, splitAtAntimeridian } from './orbit-geometry';
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
+import { DROP_LINE_CONFIG, dropLinePoints, type GeoPoint } from './satellite-drop-line';
+import { formatAltitude } from '../../shared/geo-format';
 
 /** Dead-reckoning frame cap: ~30 fps is plenty for gliding markers. */
-/** Whether a #rrggbb colour is light enough to need dark text on it. */
 const DR_FRAME_INTERVAL_MS = 33;
 /** All satellites are re-propagated this often; the selected one every frame. */
 const SAT_STEP_INTERVAL_MS = 250;
@@ -170,6 +171,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   /** Overlays for the selected satellite; see orbit-geometry.ts. */
   private orbit: { forId: string | null; path: any | null; ground: any[]; footprint: any | null; builtAtMs: number; line1: string } =
     { forId: null, path: null, ground: [], footprint: null, builtAtMs: 0, line1: '' };
+  /** The line from the selected satellite down to the ground; see satellite-drop-line.ts. */
+  private dropLine: { forId: string | null; line: any; label: any; positions: any[]; labelText: string } =
+    { forId: null, line: null, label: null, positions: [], labelText: '' };
   private drFrame: number | null = null;
   private drLastTickMs = 0;
   private drScratch: any = null;
@@ -206,6 +210,12 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       const selected = this.selectedEntity();
       const flags = { path: this.orbitOverlay.showPath(), ground: this.orbitOverlay.showGroundTrack(), footprint: this.orbitOverlay.showFootprint() };
       this.ngZone.runOutsideAngular(() => untracked(() => this.syncOrbitOverlay(selected, flags)));
+    });
+
+    // The selected satellite shows how high it sits: a line to the ground.
+    effect(() => {
+      const selected = this.selectedEntity();
+      this.ngZone.runOutsideAngular(() => untracked(() => this.syncDropLine(selected)));
     });
 
     // Track whether a panel route is active (anything other than /map or /)
@@ -348,6 +358,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelOrbit) {
         return; // a click on the selected satellite's own overlay keeps the selection
+      }
+      if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelDropLine) {
+        return;
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelEntity) {
         this.ngZone.run(() => {
@@ -616,11 +629,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         ? Cesium.Cartesian3.fromDegrees(satPosition.lon, satPosition.lat, satPosition.height)
         : position;
 
+    const labelText = satPosition ? this.satelliteLabel(entity.name, satPosition.height) : entity.name;
+
     if (existing) {
       // Update existing entity
       existing.show = shown;
       existing._posProp.setValue(displayPosition);
-      existing.label.text = entity.name;
+      if (existing._labelText !== labelText) {
+        existing._labelText = labelText;
+        existing.label.text = labelText;
+      }
       if (existing.billboard) {
         existing.billboard.rotation = rotation;
         existing.billboard.color = (this.isMilitaryAircraft(entity) ? this.Cesium.Color.WHITE : cesiumColor).withAlpha(billboardAlpha);
@@ -673,7 +691,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
           alignedAxis: Cesium.Cartesian3.UNIT_Z,
         },
         label: {
-          text: entity.name,
+          text: labelText,
           font: '12px JetBrains Mono, monospace',
           fillColor: Cesium.Color.WHITE.withAlpha(billboardAlpha),
           outlineColor: Cesium.Color.BLACK,
@@ -704,6 +722,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       cesiumEntity._sentinelEntity = entity;
       cesiumEntity._posProp = posProp;
       cesiumEntity._heightRef = heightRef;
+      cesiumEntity._labelText = labelText;
       this.entityMap.set(entity.id, cesiumEntity);
     }
 
@@ -776,6 +795,12 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       }
       if (cesiumEntity.show === false) return;
       cesiumEntity._posProp.setValue(Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.height, undefined, this.drScratch));
+      const text = this.satelliteLabel(cesiumEntity._sentinelEntity?.name ?? '', pos.height);
+      if (cesiumEntity._labelText !== text && cesiumEntity.label) {
+        cesiumEntity._labelText = text;
+        cesiumEntity.label.text = text;
+      }
+      if (id === this.dropLine.forId) this.moveDropLine(pos);
       moved++;
       if (id === this.orbit.forId) this.updateOrbitOverlay(id, pos, now);
     };
@@ -921,11 +946,86 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (entityId === this.orbit.forId) this.clearOrbitOverlay();
     const cesiumEntity = this.entityMap.get(entityId);
     if (cesiumEntity && this.viewer) {
+      if (entityId === this.dropLine.forId) this.clearDropLine();
       this.viewer.entities.remove(cesiumEntity);
       this.entityMap.delete(entityId);
       this.trackTrails.delete(entityId);
       this.scheduleRender();
     }
+  }
+
+  // --- Satellite altitude -------------------------------------------------------
+
+  private satelliteLabel(name: string, heightM: number): string {
+    return `${name} · ${formatAltitude(heightM)}`;
+  }
+
+  /** Show the drop line under the selected satellite, or none. */
+  private syncDropLine(selected: Entity | null): void {
+    if (!this.viewer || !this.Cesium) return;
+    if (!selected || !this.satellites.has(selected.id)) {
+      this.clearDropLine();
+      return;
+    }
+    if (this.dropLine.forId === selected.id) return;
+    this.clearDropLine();
+    this.dropLine.forId = selected.id;
+    const pos = this.satellites.positionOf(selected.id, this.wsService.serverNow());
+    if (pos) this.moveDropLine(pos);
+  }
+
+  private moveDropLine(pos: GeoPoint): void {
+    const Cesium = this.Cesium;
+    const geometry = dropLinePoints(pos);
+    this.dropLine.positions = [
+      Cesium.Cartesian3.fromDegrees(geometry.top.lon, geometry.top.lat, geometry.top.height),
+      Cesium.Cartesian3.fromDegrees(geometry.ground.lon, geometry.ground.lat, geometry.ground.height),
+    ];
+    const mid = Cesium.Cartesian3.fromDegrees(geometry.mid.lon, geometry.mid.lat, geometry.mid.height);
+    if (!this.dropLine.line) {
+      const color = this.getCesiumColor(EntityType.SATELLITE);
+      this.dropLine.line = this.viewer.entities.add({
+        polyline: {
+          positions: new Cesium.CallbackProperty(() => this.dropLine.positions, false),
+          width: DROP_LINE_CONFIG.width,
+          material: new Cesium.PolylineDashMaterialProperty({ color, dashLength: DROP_LINE_CONFIG.dashLength }),
+        },
+      });
+      this.dropLine.line._sentinelDropLine = true;
+      this.dropLine.label = this.viewer.entities.add({
+        position: new Cesium.ConstantPositionProperty(mid),
+        label: {
+          text: geometry.label,
+          font: DROP_LINE_CONFIG.labelFont,
+          fillColor: color,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          showBackground: true,
+          backgroundColor: Cesium.Color.fromCssColorString('#0a0e17').withAlpha(0.7),
+          backgroundPadding: new Cesium.Cartesian2(5, 3),
+          pixelOffset: new Cesium.Cartesian2(8, 0),
+          horizontalOrigin: Cesium.HorizontalOrigin.LEFT,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+      this.dropLine.label._sentinelDropLine = true;
+      this.dropLine.labelText = geometry.label;
+    } else {
+      this.dropLine.label.position.setValue(mid);
+      if (this.dropLine.labelText !== geometry.label) {
+        this.dropLine.labelText = geometry.label;
+        this.dropLine.label.label.text = geometry.label;
+      }
+    }
+    this.scheduleRender();
+  }
+
+  private clearDropLine(): void {
+    if (this.dropLine.line) this.viewer?.entities.remove(this.dropLine.line);
+    if (this.dropLine.label) this.viewer?.entities.remove(this.dropLine.label);
+    this.dropLine = { forId: null, line: null, label: null, positions: [], labelText: '' };
+    this.scheduleRender();
   }
 
   private updateTrackTrail(entity: Entity): void {
@@ -1050,6 +1150,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       next: (result) => {
         // Remove tracked entities from the Cesium viewer (preserve user location dot)
         if (this.viewer) {
+          this.clearDropLine();
           for (const cesiumEntity of this.entityMap.values()) {
             this.viewer.entities.remove(cesiumEntity);
           }

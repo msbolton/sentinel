@@ -9,7 +9,7 @@ import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 import { Entity } from '../models/entity.model';
 import { EntityBaseline, EntityPlace, Finding, findingKindLabel, formatDuration, formatMetres } from '../models/finding.model';
 import { Location } from '../models/location.model';
-import { formatCoordinate } from '../geo-format';
+import { formatAltitude, formatCoordinate } from '../geo-format';
 import { freshnessOf } from '../freshness';
 import { IconComponent } from './icon.component';
 
@@ -121,7 +121,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
             <div class="fact" data-fact="altitude">
               <span class="fact-label">Altitude</span>
               @if (e.position?.altitude != null) {
-                <span class="fact-value mono">{{ e.position?.altitude | number:'1.0-0' }} m</span>
+                <span class="fact-value mono">{{ altitudeText() }}</span>
               } @else {
                 <span class="fact-value mono">&mdash;</span>
               }
@@ -1355,6 +1355,7 @@ export class EntityDetailPanelComponent {
     return p ? `${formatCoordinate(p.latitude, 'lat')}\n${formatCoordinate(p.longitude, 'lon')}` : '';
   });
 
+  protected altitudeText = computed(() => formatAltitude(this.entity()?.position?.altitude));
   protected headingText = computed(() => this.degrees(this.entity()?.heading));
   protected courseText = computed(() => this.degrees(this.entity()?.course));
 

@@ -1,4 +1,4 @@
-import { formatCoordinate } from './geo-format';
+import { formatAltitude, formatCoordinate } from './geo-format';
 
 describe('formatCoordinate', () => {
   it('writes latitude with four decimals and a hemisphere', () => {
@@ -14,5 +14,25 @@ describe('formatCoordinate', () => {
   it('treats zero as north and east', () => {
     expect(formatCoordinate(0, 'lat')).toBe('0.0000° N');
     expect(formatCoordinate(0, 'lon')).toBe('0.0000° E');
+  });
+});
+
+describe('formatAltitude', () => {
+  it('writes metres below ten kilometres', () => {
+    expect(formatAltitude(0)).toBe('0 m');
+    expect(formatAltitude(1234.6)).toBe('1235 m');
+    expect(formatAltitude(9999)).toBe('9999 m');
+  });
+
+  it('writes kilometres from ten kilometres, with a decimal below a hundred', () => {
+    expect(formatAltitude(10_000)).toBe('10.0 km');
+    expect(formatAltitude(35_786_000)).toBe('35786 km');
+    expect(formatAltitude(408_250)).toBe('408 km');
+  });
+
+  it('shows a dash for a missing value', () => {
+    expect(formatAltitude(null)).toBe('—');
+    expect(formatAltitude(undefined)).toBe('—');
+    expect(formatAltitude(Number.NaN)).toBe('—');
   });
 });
