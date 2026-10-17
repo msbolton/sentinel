@@ -184,6 +184,22 @@ Two paths, both honouring clearance:
 - **GeoServer** serves WMS/WFS from PostGIS views `entities_live_u`, `_c`, `_s`, `_ts` (each filtered to that level and below) and `locations_geo`, through a read-only database role. Layer access rules map the views to `ROLE_CLASS_*` roles with one account per level; an OIDC mapping is the planned replacement for the shared accounts.
 - **Gateway export** at `/api/v1/export/entities.geojson` and `.kml` goes through the entity service with the caller's identity headers, so the same ceiling applies. A per-user read-only API key (`sk_...`) may be passed as `?api_key=` on export URLs only, which is what a KML NetworkLink needs.
 
+### Behavioural analysis
+
+The analytics service learns what is normal for each entity and raises findings when it departs from that.
+
+```
+track_points (30 days) ──hourly job──▶ entity_baselines + entity_places   (places, range, hours, movement, reporting rhythm, maturity)
+entities.events ──▶ detectors per fix: unusual place, unusual time, unusual movement (incl. impossible moves)
+                 ──▶ detectors per minute: went dark (only where other feeds still report), absence at a busy hour
+                 ──▶ findings (one open per entity and kind; repeats absorbed; closed when evidence stops)
+findings at HIGH, or confirmed ──▶ alerts.events (alert id = finding id) ──▶ alert service, WebSocket, TAK connections
+```
+
+- A baseline needs 200 fixes over 3 days before the entity is judged; every finding records the baseline's maturity and the thresholds it was judged against.
+- Findings carry expected and actual values and the evidence window, and are reviewed in the client (confirm raises an alert, dismiss closes it). Reads apply the caller's clearance; findings inherit the entity's classification.
+- The service runs as one replica: detector state is in process and the hourly job takes a Postgres advisory lock.
+
 ## Classification and clearance
 
 | Where | Behaviour |
@@ -416,3 +432,4 @@ Same shape as the other Go services, with these packages beyond the common four:
 - **Contract**: `make proto-check` regenerates and diffs the generated code; the golden-fixture test decodes the same bytes in Go, TypeScript and Python.
 - **Stack**: `scripts/smoke.sh` runs against a live compose stack through the gateway: health, every proxied route, feeds and connections validation, exports, API keys, GeoServer WFS, Kafka topics, a location round trip, the client through nginx and a WebSocket handshake.
 - **Schema**: every file in `db/schema/` must apply twice without error; `make db-schema` is the only way the schema changes before the first release.
+- **Behavioural analysis, end to end**: create a VEHICLE, move it 100 km with two position updates more than five seconds apart, and `GET /api/v1/analytics/entities/{id}/findings` shows an UNUSUAL_MOVEMENT finding at HIGH that `GET /api/v1/alerts?entityId=` lists under the same id; `docs/development.md` has the commands.

@@ -66,8 +66,24 @@ Everything below requires a bearer token (or the dev bypass). The gateway forwar
 | `/api/v1/search/**` | search-service | read only |
 | `/api/v1/feeds/**` → `/feeds/**` | ingest-service | POST/PUT/PATCH/DELETE: `sentinel-operator`, `sentinel-admin` (see `docs/feeds.md`) |
 | `/api/v1/drivers/**` → `/drivers/**` | ingest-service | read only: the driver catalog with config schemas |
+| `/api/v1/analytics/**` | analytics-service | PATCH findings (confirm/dismiss): `sentinel-analyst`, `sentinel-admin` |
 
 The role table lives in `internal/server/policy.go`. Note that `GET /api/v1/links/communities` returns an empty list: the Apache AGE community detection was not carried over to Go.
+
+### Behavioural analysis (analytics-service)
+
+Every read applies the caller's clearance as a ceiling: an entity or finding above it does not exist for them.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/analytics/findings` | Findings, newest evidence first. Filters `status` (OPEN, CONFIRMED, DISMISSED, CLOSED), `kinds` (comma-separated: UNUSUAL_PLACE, UNUSUAL_TIME, UNUSUAL_MOVEMENT, WENT_DARK, REAPPEARED), `severity`, `entityId`, `since` (RFC 3339), `page`, `pageSize` |
+| GET | `/api/v1/analytics/findings/{id}` | One finding with its expected and actual values, thresholds, evidence window, hits and review |
+| PATCH | `/api/v1/analytics/findings/{id}` | `{"status": "CONFIRMED" \| "DISMISSED"}`; confirming publishes the finding as an alert if it has not been. 400 for another status, 409 when the finding is already closed or dismissed |
+| GET | `/api/v1/analytics/entities/{id}/baseline` | What is normal for the entity: fixes and days, maturity, places, range, speed and altitude statistics, reporting gaps, the 168-slot hour-of-week histogram in local solar time. 404 while there is none |
+| GET | `/api/v1/analytics/entities/{id}/findings` | The entity's findings, same filters as the list |
+| GET | `/api/v1/analytics/stats` | Counters: positions judged, findings opened, alerts published, baselines, open findings by severity and kind |
+
+A finding that reaches HIGH, or is confirmed, becomes an alert on `alerts.events` with the finding's id as the alert id and `metadata.findingId`, `kind`, `score`, `hits`; it then appears in `/api/v1/alerts`, on the `alert:new` WebSocket frame and on outbound connections like any other alert.
 
 ### Locations (owned by the gateway)
 

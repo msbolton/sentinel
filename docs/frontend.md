@@ -59,6 +59,7 @@ All routes are lazy-loaded. The CesiumJS map renders as a persistent background 
 | `/map` (default) | `MapComponent` | 3D globe with entity markers |
 | `/search` | `SearchComponent` | Entity search and filter panel |
 | `/alerts` | `AlertsComponent` | Alert list with acknowledgment |
+| `/findings` | `FindingsComponent` | Departures from entity baselines: expected vs seen, confirm/dismiss, show on map |
 | `/link-graph` | `LinkGraphComponent` | Entity relationship graph (vis-network) |
 | `/timeline` | `TimelineComponent` | Historical track replay |
 
@@ -92,6 +93,10 @@ Native `WebSocket` to the gateway's `/ws/entities` endpoint (JSON envelopes `{ t
 - Sends `viewport:update` when the map camera moves, `entity:subscribe` / `entity:unsubscribe` for pinned entities
 - Receives `entity:batch` (fanned out to `entityUpdates$`), `entity:deleted`, `events.entity.stale|agedout|restored` (`ageoutEvents$`), and `alert:new` (`alertStream$`)
 - Exposes `connectionStatus$` (connected/disconnected/reconnecting) for the status bar
+
+### AnalyticsService (`core/services/analytics.service.ts`)
+
+Findings and baselines from the analytics service: `getFindings(query)`, `getFinding(id)`, `reviewFinding(id, 'CONFIRMED' | 'DISMISSED')`, `getEntityFindings(entityId)`, `getBaseline(entityId)` (a 404 resolves to `null`: no baseline yet) and `getStats()`. The `openCount` signal feeds the sidebar badge; it refreshes on start, every minute, after a review and whenever an alert carrying `metadata.findingId` arrives on the WebSocket. The entity detail panel's **Behaviour** section uses it to show the baseline (places named after nearby saved locations, range, speed, reporting rhythm, a 7×24 activity grid in the entity's local time) and the entity's open findings.
 
 ### AlertService (`core/services/alert.service.ts`)
 
