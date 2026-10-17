@@ -91,6 +91,13 @@ grep -q '<NetworkLink>' /tmp/smoke-body && echo "  ok   kml NetworkLink" || { ec
 check GET "/api/v1/export/entities.geojson?bbox=1,2,3" 400
 check GET /api/v1/auth/api-keys 200
 
+echo "== analytics"
+check GET "/api/v1/analytics/findings?status=OPEN&pageSize=1" 200
+grep -q '"data"' /tmp/smoke-body && echo "  ok   findings page" || { echo "  FAIL findings body: $(head -c 120 /tmp/smoke-body)"; fail=1; }
+check GET /api/v1/analytics/entities/00000000-0000-4000-8000-000000000000/baseline 404
+check GET /api/v1/analytics/findings/00000000-0000-4000-8000-000000000000 404
+check GET /api/v1/analytics/stats 200
+
 if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx sentinel-geoserver; then
   echo "== geoserver"
   caps=$(curl -s -u "${GIS_USER:-gis-ts}:${GIS_PASSWORD:-gis-ts-dev}" "http://localhost:8600/geoserver/sentinel/wfs?service=WFS&version=2.0.0&request=GetCapabilities" 2>/dev/null)

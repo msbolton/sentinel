@@ -202,6 +202,23 @@ openssl pkcs12 -in truststore.p12 -nokeys -cacerts -out secrets/tak/ca.pem
 
 and `"secretRefs": {"clientCert": "file:/etc/sentinel/tak/client.pem", "clientKey": "file:/etc/sentinel/tak/client.key", "caCert": "file:/etc/sentinel/tak/ca.pem"}`.
 
+### Behavioural analysis
+
+The analytics service judges every fix against the entity's baseline. Baselines need a few days of history, but the impossible-move detector does not, so the quickest check is a teleport:
+
+```bash
+ID=$(curl -s -X POST http://localhost:3000/api/v1/entities -H 'content-type: application/json' \
+  -d '{"entityType":"VEHICLE","name":"teleport","source":"MANUAL","position":{"lat":40,"lng":-74}}' | jq -r .id)
+curl -s -o /dev/null -X PATCH http://localhost:3000/api/v1/entities/$ID/position -H 'content-type: application/json' -d '{"lat":40,"lng":-74}'
+sleep 6   # updates closer than ANALYTICS_MOVE_MIN_GAP_SEC (5) are not judged
+curl -s -o /dev/null -X PATCH http://localhost:3000/api/v1/entities/$ID/position -H 'content-type: application/json' -d '{"lat":40.9,"lng":-74}'
+sleep 3
+curl -s http://localhost:3000/api/v1/analytics/entities/$ID/findings | jq '.data[] | {kind, severity, status, alertId}'
+curl -s "http://localhost:3000/api/v1/alerts?entityId=$ID" | jq '.data[] | {alertId, alertType, severity}'
+```
+
+The finding appears in the Findings panel and in the entity's Behaviour section; confirm or dismiss it there, or with `PATCH /api/v1/analytics/findings/{id} {"status":"DISMISSED"}`. Thresholds are `ANALYTICS_*` environment variables (see `apps/analytics-service/internal/config/config.go`); `GET /api/v1/analytics/stats` shows what the service has judged. Baselines are recomputed hourly for entities seen in the last day (`ANALYTICS_BASELINE_INTERVAL_MIN`); `GET /api/v1/analytics/entities/{id}/baseline` returns one once it exists.
+
 ### Several ingest replicas
 
 Every enabled feed runs on exactly one replica: replicas heartbeat `sentinel.ingest_replicas`, a feed's preferred owner is chosen by rendezvous hashing over the live replicas (or `config.pinnedReplica`), and the owner holds a `sentinel.feed_leases` row it renews every `LEASE_TICK_SEC` (2 s) with a `LEASE_TTL_SEC` (15 s) expiry. `docker compose up -d --scale ingest-service=3` starts three; `GET /api/v1/feeds` shows each feed's `status.owner`, a replica that stops reporting renders its feeds as `unassigned` until another one takes them (within one TTL), and every observation carries the lease's fencing token in the `x-fence` header. Feeds whose transport binds a port (`tcpserver`, `udp`) must set `pinnedReplica`. `LEASE_ENABLED=false` runs every feed on one replica (local development with a single process).
