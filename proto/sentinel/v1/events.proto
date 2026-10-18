@@ -79,3 +79,27 @@ message EntityEvent {
     EntityRestored restored = 16;
   }
 }
+
+// DensityCell is how many distinct objects a feed saw in one grid cell.
+message DensityCell {
+  double latitude = 1;   // cell centre
+  double longitude = 2;  // cell centre
+  uint32 count = 3;
+}
+
+// DensityGrid counts the objects a feed sees over an area too large to
+// store them one by one, produced to the density.events topic keyed by
+// feed_id. Clients draw the counts while their view is larger than
+// cap_square_degrees and the objects themselves once zoomed in below it.
+message DensityGrid {
+  string feed_id = 1;
+  EntitySource source = 2;
+  EntityType entity_type = 3;
+  double cell_degrees = 4;
+  uint32 window_seconds = 5;          // an object counts while seen this recently
+  double cap_square_degrees = 6;      // the view size above which the feed counts instead of storing
+  google.protobuf.Timestamp generated_at = 7;
+  Classification classification = 8;  // the feed's level; clients below it get no grid
+  repeated DensityCell cells = 9;     // non-empty cells only
+  uint32 total = 10;                  // distinct objects across all cells
+}

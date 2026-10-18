@@ -11,6 +11,7 @@ import { EntityBaseline, EntityPlace, Finding, findingKindLabel, formatDuration,
 import { Location } from '../models/location.model';
 import { formatAltitude, formatCoordinate } from '../geo-format';
 import { freshnessOf } from '../freshness';
+import { VESSEL_CATEGORY_COLORS, VESSEL_CATEGORY_LABELS, formatAisEta, navStatusLabel, vesselCategory } from '../vessel-format';
 import { IconComponent } from './icon.component';
 
 /** Sections of the panel that fold; identity is the only one open by default. */
@@ -317,16 +318,16 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                       @case ('ais') {
                         @if (e.platformData?.ais; as ais) {
                           @if (ais.shipTypeName) {
-                            <div class="field-row"><span class="field-label">Ship Type</span><span class="field-value">{{ ais.shipTypeName }}</span></div>
+                            <div class="field-row"><span class="field-label">Ship Type</span><span class="field-value vessel-type"><span class="category-dot" [style.background]="vesselCategoryColor(ais.shipType)"></span>{{ vesselTypeText(ais.shipType, ais.shipTypeName) }}</span></div>
                           }
-                          @if (ais.navStatus && ais.navStatus !== 'UNKNOWN') {
-                            <div class="field-row"><span class="field-label">Nav Status</span><span class="field-value">{{ ais.navStatus }}</span></div>
+                          @if (navStatusLabel(ais.navStatus); as status) {
+                            <div class="field-row"><span class="field-label">Nav Status</span><span class="field-value">{{ status }}</span></div>
                           }
                           @if (ais.destination) {
                             <div class="field-row"><span class="field-label">Destination</span><span class="field-value">{{ ais.destination }}</span></div>
                           }
-                          @if (ais.eta) {
-                            <div class="field-row"><span class="field-label">ETA</span><span class="field-value mono">{{ ais.eta | date:'short' }}</span></div>
+                          @if (formatAisEta(ais.eta); as eta) {
+                            <div class="field-row"><span class="field-label">ETA</span><span class="field-value mono">{{ eta }}</span></div>
                           }
                           @if (ais.draught != null) {
                             <div class="field-row"><span class="field-label">Draught</span><span class="field-value mono">{{ ais.draught | number:'1.1-1' }} m</span></div>
@@ -982,6 +983,19 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       flex-shrink: 0;
     }
 
+    .vessel-type {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .category-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
     .field-value {
       font-size: 0.8rem;
       color: var(--text-secondary);
@@ -1308,8 +1322,9 @@ export class EntityDetailPanelComponent {
 
     effect(() => {
       const e = this.entity();
-      // A satellite's platform section holds the orbit toggles: open it.
-      this.expandedSections.set({ ...DEFAULT_SECTIONS, platformDetails: !!e?.platformData?.tle });
+      // A satellite's platform section holds the orbit toggles and a vessel's
+      // its voyage: open them.
+      this.expandedSections.set({ ...DEFAULT_SECTIONS, platformDetails: !!(e?.platformData?.tle || e?.platformData?.ais) });
     });
     // Behaviour: the baseline and open findings of the shown entity. A
     // request counter drops answers for an entity that is no longer shown.
@@ -1402,7 +1417,7 @@ export class EntityDetailPanelComponent {
     const pd = this.entity()?.platformData;
     if (!pd) return '';
     const parts: (string | undefined | null)[] = [];
-    if (pd.ais) parts.push(pd.ais.shipTypeName, pd.ais.destination ? `to ${pd.ais.destination}` : undefined);
+    if (pd.ais) parts.push(pd.ais.shipTypeName ? VESSEL_CATEGORY_LABELS[vesselCategory(pd.ais.shipType)] : undefined, navStatusLabel(pd.ais.navStatus), pd.ais.destination ? `to ${pd.ais.destination}` : undefined);
     else if (pd.adsb) parts.push(pd.adsb.aircraftTypeName || pd.adsb.aircraftType, pd.adsb.operatorName);
     else if (pd.tle) parts.push(pd.tle.objectType, pd.tle.country);
     else if (pd.cot) parts.push(pd.cot.cotType);
@@ -1587,6 +1602,21 @@ export class EntityDetailPanelComponent {
 
     return ids;
   });
+
+  // --- Vessel ---------------------------------------------------------------
+
+  protected readonly navStatusLabel = navStatusLabel;
+  protected readonly formatAisEta = formatAisEta;
+
+  protected vesselCategoryColor(shipType: number | undefined): string {
+    return VESSEL_CATEGORY_COLORS[vesselCategory(shipType)];
+  }
+
+  /** "Cargo", or "Service / special · Tug" when the type says more than its category. */
+  protected vesselTypeText(shipType: number | undefined, shipTypeName: string): string {
+    const category = VESSEL_CATEGORY_LABELS[vesselCategory(shipType)];
+    return shipTypeName && shipTypeName !== category ? `${category} · ${shipTypeName}` : category;
+  }
 
   protected affiliationColor = computed(() => {
     switch (this.entity()?.affiliation) {

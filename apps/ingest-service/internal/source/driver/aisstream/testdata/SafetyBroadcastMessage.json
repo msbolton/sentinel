@@ -1,0 +1,1 @@
+{"MetaData":{"MMSI":2320004,"MMSI_String":2320004,"ShipName":"","latitude":50.9,"longitude":1.4,"time_utc":"2026-10-18 10:36:13 +0000 UTC"},"MessageType":"SafetyBroadcastMessage","Message":{"SafetyBroadcastMessage":{"MessageID":14,"RepeatIndicator":0,"UserID":2320004,"Valid":true,"Spare":0,"Text":"TEST"}}}

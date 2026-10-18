@@ -271,7 +271,9 @@ describe('EntityDetailPanelComponent', () => {
       fixture.detectChanges();
       const states = Array.from(el.querySelectorAll('.section-toggle')).map((t) => [t.getAttribute('data-section'), t.getAttribute('aria-expanded')]);
       expect(states).toContainEqual(['identity', 'true']);
-      expect(states.filter(([k]) => k !== 'identity').every(([, v]) => v === 'false')).toBe(true);
+      // A vessel's details (its voyage) open too, as a satellite's orbit does.
+      expect(states).toContainEqual(['platformDetails', 'true']);
+      expect(states.filter(([k]) => k !== 'identity' && k !== 'platformDetails').every(([, v]) => v === 'false')).toBe(true);
       expect(el.textContent).toContain('352598000');
     });
   });
@@ -406,6 +408,43 @@ describe('EntityDetailPanelComponent', () => {
       fixture.detectChanges();
       expect(el.querySelector('.orbit-toggle')).toBeNull();
       expect(el.querySelector('.tle-lines')).toBeNull();
+    });
+  });
+
+  describe('vessel details section', () => {
+    const vessel = (ais: Record<string, unknown>) =>
+      makeEntity({ entityType: EntityType.VESSEL, name: 'PONTUS HIGHWAY', platformData: { ais: { mmsi: '352004564', ...ais } } as any });
+    const rows = () =>
+      Array.from(el.querySelectorAll('.field-row')).map((r) => `${r.querySelector('.field-label')?.textContent?.trim()} ${r.querySelector('.field-value')?.textContent?.trim()}`);
+
+    it('opens with the category, status in words and a readable ETA', () => {
+      fixture.componentRef.setInput(
+        'entity',
+        vessel({ shipType: 70, shipTypeName: 'Cargo', navStatus: 'UNDER_WAY_USING_ENGINE', destination: 'GBSOU', eta: '10-17T22:00' }),
+      );
+      fixture.detectChanges();
+      const section = el.querySelector('[data-section="platformDetails"]') as HTMLElement;
+      expect(section.getAttribute('aria-expanded')).toBe('true');
+      expect(rows()).toContain('Ship Type Cargo');
+      expect(rows()).toContain('Nav Status Under way (engine)');
+      expect(rows()).toContain('Destination GBSOU');
+      expect(rows()).toContain('ETA 17 Oct 22:00 UTC');
+      expect((el.querySelector('.category-dot') as HTMLElement).style.background).toBe('rgb(34, 197, 94)');
+    });
+
+    it('names the category and the specific type when they differ, and hides an unknown status', () => {
+      fixture.componentRef.setInput('entity', vessel({ shipType: 52, shipTypeName: 'Tug', navStatus: 'UNKNOWN' }));
+      fixture.detectChanges();
+      expect(rows()).toContain('Ship Type Service / special · Tug');
+      expect(rows().some((r) => r?.startsWith('Nav Status'))).toBe(false);
+    });
+
+    it('summarises the voyage when folded', () => {
+      fixture.componentRef.setInput('entity', vessel({ shipType: 80, shipTypeName: 'Tanker', navStatus: 'MOORED', destination: 'ROTTERDAM' }));
+      fixture.detectChanges();
+      (el.querySelector('[data-section="platformDetails"]') as HTMLElement).click();
+      fixture.detectChanges();
+      expect(el.querySelector('[data-section="platformDetails"] .section-summary')?.textContent?.trim()).toBe('Tanker · Moored · to ROTTERDAM');
     });
   });
 });

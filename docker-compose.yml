@@ -744,6 +744,8 @@ services:
       # OpenSky credentials, referenced by the opensky feed's secretRefs (from the host environment / .env)
       OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
       OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
+      # aisstream.io API key, referenced by the aisstream feed's secretRefs
+      AISSTREAM_API_KEY: ${AISSTREAM_API_KEY:-}
     volumes:
       # Certificates and other files that secretRefs reference as file:/etc/sentinel/tak/...
       # (gitignored; empty is fine).

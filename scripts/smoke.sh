@@ -53,6 +53,11 @@ check GET /api/v1/drivers/stream 200
 check GET /api/v1/drivers/nope 404
 check GET /api/v1/drivers/celestrak 200
 grep -q '"catalogNumbers"' /tmp/smoke-body && echo "  ok   celestrak schema lists catalogNumbers" || { echo "  FAIL celestrak schema: $(head -c 120 /tmp/smoke-body)"; fail=1; }
+check GET /api/v1/drivers/aisstream 200
+grep -q '"watchlistMmsi"' /tmp/smoke-body && echo "  ok   aisstream schema lists watchlistMmsi" || { echo "  FAIL aisstream schema: $(head -c 120 /tmp/smoke-body)"; fail=1; }
+check GET /api/v1/feeds/aisstream 200
+# The feed holds a reference to the key, never the key itself.
+grep -q '"apiKey":"env:AISSTREAM_API_KEY"' /tmp/smoke-body && echo "  ok   aisstream key is a reference" || { echo "  FAIL aisstream secretRefs: $(grep -o '"secretRefs":{[^}]*}' /tmp/smoke-body)"; fail=1; }
 check GET /api/v1/locations 200
 check POST /api/v1/entities 400 '{}'
 check GET /api/v1/locations/not-a-uuid 400

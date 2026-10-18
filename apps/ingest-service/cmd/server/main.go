@@ -17,6 +17,7 @@ import (
 	commonkafka "github.com/sentinel/go-common/kafka"
 
 	"github.com/sentinel/ingest-service/internal/config"
+	"github.com/sentinel/ingest-service/internal/density"
 	"github.com/sentinel/ingest-service/internal/drivers"
 	"github.com/sentinel/ingest-service/internal/feed"
 	"github.com/sentinel/ingest-service/internal/health"
@@ -104,7 +105,8 @@ func main() {
 		RawMax:         cfg.RawPayloadMaxBytes,
 		LeaseTick:      cfg.LeaseTick,
 		RebalanceAfter: cfg.LeaseRebalance,
-		Shapes: outbound.NewShapeStore(reg.Pool()),
+		Shapes:         outbound.NewShapeStore(reg.Pool()),
+		Density:        density.New(producer, commonkafka.TopicDensityEvents).For,
 		ConsumerFactory: func(groupID, clientID string) (outbound.Consumer, error) {
 			return commonkafka.NewBatchConsumer(cfg.KafkaBrokers, groupID, clientID, "latest", commonkafka.BatchOptions{MaxMessages: 200, MaxWait: 200 * time.Millisecond, MaxRetries: 1}, logger.With(zap.String("group", groupID)))
 		},
