@@ -57,6 +57,7 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 		"stream3":    `{"transport": {"kind": "websocket", "url": "wss://x/y"}, "decoder": {"name": "json", "options": {"records": "ac"}}}`,
 		"stream4":    `{"transport": {"kind": "tcpclient", "address": "readsb:30005"}, "framing": "beast", "decoder": {"name": "beast"}}`,
 		"stream5":    `{"transport": {"kind": "udp", "address": ":10110"}, "decoder": {"name": "nmea-ais"}, "pinnedReplica": "site-1"}`,
+		"stream6":    `{"transport": {"kind": "tcpserver", "address": ":4001", "allow": ["10.0.0.0/8"], "maxConnections": 20, "maxMessagesPerSec": 500, "tls": {"enabled": true, "requireClientCert": true}}, "decoder": {"name": "json"}}`,
 		"httpjson":   `{"url": "https://api.example.com/v2/point/{lat}/{lon}/{radius_nm}", "intervalSec": 15, "requireArea": true, "decoder": {"options": {"records": "ac", "identityType": "ICAO24", "fields": {"id": "hex", "latitude": "lat", "longitude": "lon"}}}}`,
 		"tak":        `{"address": "tak.example.org:8089", "siteId": "east", "direction": "both", "tls": {"enabled": true, "serverName": "tak.example.org"}, "heartbeatSec": 30, "tracks": {"staleSec": 120}, "alerts": {"emergencyMinSeverity": "CRITICAL"}, "shapes": {"enabled": true, "refreshSec": 60}, "policy": {"entityTypes": ["AIRCRAFT", "VESSEL"], "feeds": ["opensky"], "boxes": [{"north": 40, "south": 35, "east": -74, "west": -80}], "classificationCeiling": "UNCLASSIFIED", "alerts": {"enabled": true, "minSeverity": "MEDIUM"}}, "outbound": {"perEntityMinSec": 5, "maxEventsPerSec": 100}}`,
 		"tcp":        `{"mode": "listen", "port": 6000}`,
@@ -70,7 +71,7 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 		switch d {
 		case "empty":
 			d = "intelsky"
-		case "stream2", "stream3", "stream4", "stream5":
+		case "stream2", "stream3", "stream4", "stream5", "stream6":
 			d = "stream"
 		case "celestrak2":
 			d = "celestrak"
@@ -109,6 +110,10 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		{"stream", `{"transport": {"kind": "ftp", "address": ":4001"}, "decoder": {"name": "sbs"}}`, "/config/transport/kind"},
 		{"stream", `{"transport": {"kind": "websocket"}, "decoder": {"name": "json"}}`, "/config/transport"},
 		{"stream", `{"decoder": {"name": "json"}}`, "/config/"},
+		{"stream", `{"transport": {"kind": "tcpserver", "address": ":4001", "maxConnections": -1}, "decoder": {"name": "json"}}`, "/config/transport/maxConnections"},
+		{"stream", `{"transport": {"kind": "udp", "address": ":4001", "maxMessagesPerSec": -1}, "decoder": {"name": "json"}}`, "/config/transport/maxMessagesPerSec"},
+		{"stream", `{"transport": {"kind": "udp", "address": ":4001", "allow": "oops"}, "decoder": {"name": "json"}}`, "/config/transport/allow"},
+		{"stream", `{"transport": {"kind": "tcpserver", "address": ":4001", "tls": {"enabled": true, "requireClientCert": "yes"}}, "decoder": {"name": "json"}}`, "/config/transport/tls/requireClientCert"},
 		{"nope", `{}`, "/driver"},
 		{"intelsky", `{not json`, "/config"},
 		{"tak", `{"siteId": "east"}`, "/config/"},

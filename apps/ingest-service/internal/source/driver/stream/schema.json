@@ -22,11 +22,15 @@
         "username": { "type": "string", "title": "Username", "description": "The password comes from secretRefs.password." },
         "maxFrameBytes": { "type": "integer", "minimum": 64, "default": 1048576, "title": "Maximum frame size (bytes)" },
         "readTimeoutSec": { "type": "integer", "minimum": 0, "default": 0, "title": "Read timeout (s)", "description": "Close an idle stream connection after this long; 0 disables." },
+        "allow": { "type": "array", "items": { "type": "string", "minLength": 1 }, "title": "Allowed senders", "description": "IP addresses or CIDR ranges allowed to send; empty allows anyone who can reach the port. UDP source addresses can be forged.", "x-showWhen": { "kind": ["tcpserver", "udp"] } },
+        "maxConnections": { "type": "integer", "minimum": 0, "default": 50, "title": "Max connections", "description": "tcpserver: concurrent connections; 0 = unlimited", "x-showWhen": { "kind": "tcpserver" } },
+        "maxMessagesPerSec": { "type": "integer", "minimum": 0, "default": 0, "title": "Max messages per second", "description": "tcpserver and udp: shared by every sender of the listener; 0 = unlimited" },
         "tls": {
           "type": "object",
           "title": "TLS",
           "properties": {
             "enabled": { "type": "boolean", "default": false },
+            "requireClientCert": { "type": "boolean", "default": false, "title": "Require client certificates", "description": "tcpserver: mutual TLS, verified against the clientCa secret", "x-showWhen": { "enabled": true } },
             "insecureSkipVerify": { "type": "boolean", "default": false },
             "serverName": { "type": "string" },
             "caFile": { "type": "string" },

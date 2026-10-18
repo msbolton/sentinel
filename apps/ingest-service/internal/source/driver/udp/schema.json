@@ -9,7 +9,16 @@
     "port": { "type": "integer", "minimum": 1024, "maximum": 65535, "title": "Port", "description": "The port Sentinel opens (1024-65535)" },
     "format": { "type": "string", "enum": ["sentinel", "cot", "nmea-ais", "nmea-gps", "sbs", "link16", "json"], "default": "sentinel", "title": "Format" },
     "encoding": { "type": "string", "enum": ["protobuf", "json"], "default": "protobuf", "title": "Encoding", "description": "For the sentinel format: binary protobuf (one message per datagram) or JSON (one message per line)", "x-showWhen": { "format": "sentinel" } },
-    "decoderOptions": { "type": "object", "title": "Decoder options", "description": "For the json format: the field mapping (see docs/feeds.md)", "x-showWhen": { "format": "json" } },
+    "decoderOptions": {
+      "type": "object", "title": "Decoder options",
+      "description": "The decoder's options. json: a field map, with at least fields.latitude and fields.longitude; empty uses the default map (see docs/feeds.md). nmea-gps: sourceEntityId, the platform the receiver reports (required), and optionally name and entityType. cot: skipSite, a site id whose own events are dropped.",
+      "examples": [
+        { "fields": { "id": "id", "latitude": "lat", "longitude": "lon" } },
+        { "sourceEntityId": "truck-1", "name": "Truck 1", "entityType": "VEHICLE" },
+        { "skipSite": "east" }
+      ],
+      "x-showWhen": { "format": ["json", "nmea-gps", "cot"] }
+    },
     "defaultSource": { "type": "string", "enum": ["HUMINT", "SIGINT", "GEOINT", "OSINT", "MASINT", "CYBER", "MANUAL", "AIS", "ADS_B", "LINK16", "GPS", "RADAR"], "title": "Default source", "description": "Source for sentinel messages that leave it unset", "x-showWhen": { "format": "sentinel" } },
     "allow": { "type": "array", "items": { "type": "string", "minLength": 1 }, "title": "Allowed senders", "description": "IP addresses or CIDR ranges allowed to send; empty allows anyone who can reach the port. UDP source addresses can be forged." },
     "maxMessageBytes": { "type": "integer", "minimum": 64, "maximum": 65507, "default": 65507, "title": "Max datagram size (bytes)" },
