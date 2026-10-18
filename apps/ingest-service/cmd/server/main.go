@@ -134,6 +134,11 @@ func main() {
 	if cfg.LeaseEnabled {
 		mgmtHandler.StaleAfter = cfg.LeaseTTL
 	}
+	reserved, err := registry.ParsePortSet(cfg.ReservedPorts)
+	if err != nil {
+		logger.Fatal("INGEST_RESERVED_PORTS", zap.Error(err))
+	}
+	mgmtHandler.Reserved = reserved
 	mgmtHandler.RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
 
 	httpServer := &http.Server{

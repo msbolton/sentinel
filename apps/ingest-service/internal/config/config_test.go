@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/sentinel/ingest-service/internal/registry"
+)
 
 func TestDefaultsAreValid(t *testing.T) {
 	if err := Load().Validate(); err != nil {
@@ -25,5 +29,15 @@ func TestValidateRejects(t *testing.T) {
 		if err := c.Validate(); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
+	}
+}
+
+func TestReservedPortsDefaultAndOverride(t *testing.T) {
+	if got := Load().ReservedPorts; got != registry.DefaultReservedPorts {
+		t.Errorf("default = %q", got)
+	}
+	t.Setenv("INGEST_RESERVED_PORTS", "7000-7002")
+	if got := Load().ReservedPorts; got != "7000-7002" {
+		t.Errorf("override = %q", got)
 	}
 }

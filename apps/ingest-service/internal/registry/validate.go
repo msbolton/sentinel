@@ -7,7 +7,6 @@ import (
 
 	"github.com/sentinel/ingest-service/internal/drivers"
 	"github.com/sentinel/ingest-service/internal/source/driver"
-	"github.com/sentinel/ingest-service/internal/source/transport"
 )
 
 // Problem is one validation failure, addressed by a JSON-pointer-like path.
@@ -46,35 +45,12 @@ func (v *Validator) Validate(f *Feed) error {
 	} else {
 		problems = append(problems, v.Catalog.Validate(f.Driver, f.Config)...)
 		problems = append(problems, checkSecrets(info, f)...)
-		problems = append(problems, checkPinned(f)...)
 		problems = append(problems, checkDirection(info, f)...)
 	}
 	if len(problems) > 0 {
 		return &ValidationError{Problems: problems}
 	}
 	return nil
-}
-
-// checkPinned requires pinnedReplica for transports that bind a local
-// port: a listening feed can only run where its senders are pointed.
-func checkPinned(f *Feed) []Problem {
-	if f.Driver != "stream" {
-		return nil
-	}
-	var cfg struct {
-		Transport struct {
-			Kind string `json:"kind"`
-		} `json:"transport"`
-		PinnedReplica string `json:"pinnedReplica"`
-	}
-	if json.Unmarshal(f.Config, &cfg) != nil {
-		return nil
-	}
-	def, ok := transport.Lookup(cfg.Transport.Kind)
-	if !ok || !def.Listens || strings.TrimSpace(cfg.PinnedReplica) != "" {
-		return nil
-	}
-	return []Problem{{Path: "/config/pinnedReplica", Message: fmt.Sprintf("transport %s listens on a port and must be pinned to the replica the senders reach (set pinnedReplica)", cfg.Transport.Kind)}}
 }
 
 // checkDirection enforces that a feed's direction, policy and outbound

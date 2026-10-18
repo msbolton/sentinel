@@ -119,8 +119,10 @@ type CommonOptions struct {
 	StaleWarnSec     int    `json:"staleWarnSec"`
 	StaleCriticalSec int    `json:"staleCriticalSec"`
 	Backpressure     string `json:"backpressure"`
-	PinnedReplica    string `json:"pinnedReplica"`
-	RawPayload       string `json:"rawPayload"`
+	// PinnedReplica optionally runs the feed on one named replica; listening
+	// connections are placed on a listener replica without it.
+	PinnedReplica string `json:"pinnedReplica"`
+	RawPayload    string `json:"rawPayload"`
 	// Classification is the default level stamped on this feed's
 	// observations (bare sentinel.v1.Classification name; "" = UNCLASSIFIED).
 	Classification string `json:"classification"`

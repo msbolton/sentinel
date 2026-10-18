@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sentinel/ingest-service/internal/registry"
 )
 
 // Config is read from the environment by Load.
@@ -26,6 +28,9 @@ type Config struct {
 	// FeedsBootstrapEnabled lists built-in feeds to insert enabled when the
 	// feeds table does not have them yet (FEEDS_BOOTSTRAP_ENABLED, comma-separated).
 	FeedsBootstrapEnabled []string
+	// ReservedPorts are the ports a listening connection may not take
+	// (INGEST_RESERVED_PORTS, e.g. "3000-3005,5432"; default: the stack's own).
+	ReservedPorts string
 
 	PublisherShards    int // PUBLISHER_SHARDS (default: 8)
 	ObservationBuffer  int // OBS_BUFFER (default: 1000) observations queued per publisher shard
@@ -64,6 +69,7 @@ func Load() *Config {
 		ServiceToken:          envOr("INGEST_SERVICE_TOKEN", ""),
 		ReplicaID:             envOr("REPLICA_ID", hostname),
 		FeedsBootstrapEnabled: splitList(envOr("FEEDS_BOOTSTRAP_ENABLED", "")),
+		ReservedPorts:         envOr("INGEST_RESERVED_PORTS", registry.DefaultReservedPorts),
 
 		PublisherShards:    envOrInt("PUBLISHER_SHARDS", 8),
 		ObservationBuffer:  envOrInt("OBS_BUFFER", 1000),

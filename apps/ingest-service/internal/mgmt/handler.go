@@ -56,6 +56,8 @@ type Handler struct {
 	// StaleAfter is how old a status row written by another replica may be
 	// before the feed renders as unassigned (three heartbeats, 15 s).
 	StaleAfter time.Duration
+	// Reserved are the ports a listening connection may not bind (Sentinel's own).
+	Reserved registry.PortSet
 }
 
 // NewHandler wires the handler. runtime may be nil (status-only replicas).
@@ -197,6 +199,13 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
+	if problems, err := h.portProblems(r.Context(), f); err != nil {
+		h.fail(w, err)
+		return
+	} else if len(problems) > 0 {
+		h.fail(w, &registry.ValidationError{Problems: problems})
+		return
+	}
 	if err := h.store.Create(r.Context(), &f); err != nil {
 		h.fail(w, err)
 		return
@@ -293,12 +302,32 @@ func (h *Handler) saveUpdate(w http.ResponseWriter, r *http.Request, f *registry
 		h.fail(w, err)
 		return
 	}
+	if problems, err := h.portProblems(r.Context(), *f); err != nil {
+		h.fail(w, err)
+		return
+	} else if len(problems) > 0 {
+		h.fail(w, &registry.ValidationError{Problems: problems})
+		return
+	}
 	if err := h.store.Update(r.Context(), f); err != nil {
 		h.fail(w, err)
 		return
 	}
 	h.logger.Info("feed updated", zap.String("feed", f.ID), zap.Int("version", f.Version))
 	writeJSON(w, http.StatusOK, toFeedDTO(*f, h.catalog))
+}
+
+// portProblems checks the feed's allowlist, and its listening port against
+// every other feed.
+func (h *Handler) portProblems(ctx context.Context, f registry.Feed) ([]registry.Problem, error) {
+	if problems := registry.CheckAllow(f); len(problems) > 0 {
+		return problems, nil
+	}
+	others, err := h.store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return registry.CheckPorts(f, others, h.Reserved), nil
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {

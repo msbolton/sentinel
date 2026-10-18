@@ -442,3 +442,54 @@ func TestLiveSnapshotAndStaleRows(t *testing.T) {
 		t.Errorf("status endpoint = %s", body)
 	}
 }
+
+func TestListeningPortsMustBeUnique(t *testing.T) {
+	srv, _, _ := newServer(t, "")
+	feed := func(name string) string {
+		return `{"name":"` + name + `","driver":"stream","config":{"transport":{"kind":"udp","address":":10110"},"decoder":{"name":"nmea-ais"}}}`
+	}
+	if resp, out := do(t, srv, "POST", "/feeds", feed("Pier AIS"), operator); resp.StatusCode != 201 {
+		t.Fatalf("first: %d %s", resp.StatusCode, out)
+	}
+	resp, out := do(t, srv, "POST", "/feeds", feed("Dock AIS"), operator)
+	if resp.StatusCode != 422 || !strings.Contains(string(out), "/config/transport/address") || !strings.Contains(string(out), "pier-ais") {
+		t.Errorf("duplicate port: %d %s", resp.StatusCode, out)
+	}
+	bad := `{"name":"Bad allow","driver":"stream","config":{"transport":{"kind":"udp","address":":10111","allow":["10.0.0.0/33"]},"decoder":{"name":"nmea-ais"}}}`
+	if resp, out := do(t, srv, "POST", "/feeds", bad, operator); resp.StatusCode != 422 || !strings.Contains(string(out), "/config/transport/allow") {
+		t.Errorf("bad allowlist: %d %s", resp.StatusCode, out)
+	}
+}
+
+func TestListeningPortChecksRunOnUpdate(t *testing.T) {
+	store := newMemStore()
+	h := NewHandler(store, drivers.Default(), &fakeRuntime{}, nil)
+	h.Reserved = registry.PortSet{5432: true}
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux, Auth(AuthOptions{}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	feed := func(name, addr string) string {
+		return `{"name":"` + name + `","driver":"stream","config":{"transport":{"kind":"udp","address":"` + addr + `"},"decoder":{"name":"nmea-ais"}}}`
+	}
+	for name, addr := range map[string]string{"Pier AIS": ":10110", "Dock AIS": ":10111"} {
+		if resp, out := do(t, srv, "POST", "/feeds", feed(name, addr), operator); resp.StatusCode != 201 {
+			t.Fatalf("create %s: %d %s", name, resp.StatusCode, out)
+		}
+	}
+	// The merged config is what gets checked: moving onto another feed's port, or a reserved one, is refused.
+	for _, addr := range []string{":10110", ":5432", ":514"} {
+		patch := `{"config":{"transport":{"kind":"udp","address":"` + addr + `"}}}`
+		if resp, out := do(t, srv, "PATCH", "/feeds/dock-ais", patch, operator); resp.StatusCode != 422 || !strings.Contains(string(out), "/config/transport/address") {
+			t.Errorf("patch to %s: %d %s", addr, resp.StatusCode, out)
+		}
+	}
+	// Saving a feed on the port it already holds does not clash with itself.
+	if resp, out := do(t, srv, "PATCH", "/feeds/dock-ais", `{"description":"quay side"}`, operator); resp.StatusCode != 200 {
+		t.Errorf("unchanged port: %d %s", resp.StatusCode, out)
+	}
+	if resp, out := do(t, srv, "PATCH", "/feeds/dock-ais", `{"config":{"transport":{"kind":"udp","address":":10112"}}}`, operator); resp.StatusCode != 200 {
+		t.Errorf("free port: %d %s", resp.StatusCode, out)
+	}
+}
