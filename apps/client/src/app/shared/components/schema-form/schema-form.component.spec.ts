@@ -202,6 +202,12 @@ describe('SchemaFormComponent', () => {
     expect(credentials?.querySelector('input[name="apiKey"]')?.getAttribute('placeholder')).toBe('env:API_KEY');
     expect(el.querySelector('.sf-section-driver input[name="apiKey"]')).toBeNull();
 
+    // without x-secrets a label is the property's title, else the humanized name
+    expect(credentials?.querySelector('label[for="sf-secret-clientSecret"]')?.textContent?.trim()).toBe('Client secret');
+    expect(credentials?.querySelector('label[for="sf-secret-apiKey"]')?.textContent?.trim()).toBe('API key');
+    // the intro offers a mounted file as well as an environment variable
+    expect(credentials?.querySelector('.sf-help')?.textContent).toContain('file:/etc/sentinel/');
+
     setInput('input[name="clientSecret"]', 'plain-text-secret');
     expect(component.control('/secretRefs/clientSecret')?.hasError('pattern')).toBe(true);
     expect(last().valid).toBe(false);
@@ -486,6 +492,518 @@ describe('SchemaFormComponent', () => {
       fixture.detectChanges();
       expect(el.querySelector('[data-pointer="/config/decoderOptions"]')).not.toBeNull();
       expect(last().config['decoderOptions']).toEqual({ timeField: 'ts' });
+    });
+  });
+
+  describe('allOf conditions', () => {
+    // Like tcp: a port is always needed, a listener's must be unprivileged, and connecting needs a host too.
+    const tcpLikeSchema: JsonSchema = {
+      type: 'object',
+      required: ['mode'],
+      properties: {
+        mode: { type: 'string', enum: ['listen', 'connect'], default: 'listen', title: 'Mode' },
+        host: { type: 'string', minLength: 1, title: 'Host', 'x-showWhen': { mode: 'connect' } },
+        port: { type: 'integer', minimum: 1, maximum: 65535, title: 'Port' },
+      },
+      allOf: [
+        {
+          if: { properties: { mode: { const: 'listen' } }, required: ['mode'] },
+          then: { required: ['port'], properties: { port: { minimum: 1024 } } },
+        },
+        { if: { properties: { mode: { const: 'connect' } }, required: ['mode'] }, then: { required: ['host', 'port'] } },
+      ],
+    };
+
+    // Like stream: what a transport needs depends on its kind, which has no default.
+    const transportOf = (required: string[]): JsonSchema => ({
+      type: 'object',
+      properties: {
+        transport: {
+          type: 'object',
+          required,
+          properties: {
+            kind: { type: 'string', enum: ['tcpclient', 'udp', 'websocket'], title: 'Kind' },
+            address: { type: 'string', minLength: 1, title: 'Address' },
+            url: { type: 'string', title: 'WebSocket URL' },
+          },
+          allOf: [
+            { if: { properties: { kind: { const: 'tcpclient' } }, required: ['kind'] }, then: { required: ['address'] } },
+            { if: { properties: { kind: { const: 'udp' } }, required: ['kind'] }, then: { required: ['address'] } },
+            { if: { properties: { kind: { const: 'websocket' } }, required: ['kind'] }, then: { required: ['url'] } },
+          ],
+        },
+      },
+    });
+
+    /** The client-side messages a field shows. */
+    function messagesOf(pointer: string): Array<string | undefined> {
+      return Array.from(el.querySelectorAll(`[data-pointer="${pointer}"] > .sf-error`)).map((n) => n.textContent?.trim());
+    }
+
+    /** Whether the label (the legend, for a group) of a field carries the required asterisk. */
+    function marked(pointer: string): boolean {
+      const label = `[data-pointer="${pointer}"] > label .sf-required, [data-pointer="${pointer}"] > legend .sf-required`;
+      return el.querySelector(label) !== null;
+    }
+
+    it('requires port in listen mode, host and port in connect mode', () => {
+      render(tcpLikeSchema);
+
+      // listening needs a port and no host
+      expect(marked('/config/port')).toBe(true);
+      expect(el.querySelector('[data-pointer="/config/host"]')).toBeNull();
+      expect(last().valid).toBe(false);
+
+      setInput('input[name="port"]', '6001');
+      expect(last().valid).toBe(true);
+
+      // connecting needs both, and says so once the form is submitted
+      render(tcpLikeSchema, { value: { mode: 'connect' } });
+      expect(marked('/config/host')).toBe(true);
+      expect(marked('/config/port')).toBe(true);
+      expect(messagesOf('/config/host')).toEqual([]);
+      expect(last().valid).toBe(false);
+
+      component.markAllTouched();
+      fixture.detectChanges();
+      expect(messagesOf('/config/host')).toEqual(['Required.']);
+      expect(messagesOf('/config/port')).toEqual(['Required.']);
+
+      setInput('input[name="port"]', '6001');
+      expect(last().valid).toBe(false);
+      setInput('input[name="host"]', 'radar.example');
+      expect(last().valid).toBe(true);
+      expect(messagesOf('/config/host')).toEqual([]);
+    });
+
+    it('applies a conditional minimum only while its condition holds', () => {
+      render(tcpLikeSchema);
+
+      setInput('input[name="port"]', '80');
+      expect(messagesOf('/config/port')).toEqual(['Must be at least 1024.']);
+      expect(last().valid).toBe(false);
+
+      // below the schema's own minimum as well, there is still one message
+      setInput('input[name="port"]', '0');
+      expect(messagesOf('/config/port')).toEqual(['Must be at least 1024.']);
+
+      setInput('input[name="port"]', '1024');
+      expect(messagesOf('/config/port')).toEqual([]);
+      expect(last().valid).toBe(true);
+
+      // a remote port below 1024 is fine to connect to
+      render(tcpLikeSchema, { value: { mode: 'connect', host: 'radar.example', port: 80 } });
+      expect(messagesOf('/config/port')).toEqual([]);
+      expect(last().valid).toBe(true);
+
+      // and the minimum is back with its condition
+      component.control('/config/mode')?.setValue('listen');
+      component.markAllTouched();
+      fixture.detectChanges();
+      expect(messagesOf('/config/port')).toEqual(['Must be at least 1024.']);
+      expect(last().valid).toBe(false);
+    });
+
+    it('applies a conditional maximum the same way', () => {
+      render(
+        {
+          type: 'object',
+          properties: {
+            mode: { type: 'string', enum: ['fast', 'slow'], default: 'fast' },
+            rate: { type: 'integer', minimum: 1 },
+          },
+          allOf: [{ if: { properties: { mode: { enum: ['slow'] } } }, then: { properties: { rate: { maximum: 10 } } } }],
+        },
+        { value: { rate: 50 } },
+      );
+      expect(last().valid).toBe(true);
+
+      component.control('/config/mode')?.setValue('slow');
+      component.markAllTouched();
+      fixture.detectChanges();
+      expect(messagesOf('/config/rate')).toEqual(['Must be at most 10.']);
+      expect(last().valid).toBe(false);
+    });
+
+    it('leaves a rule alone while its sibling is empty with no default', () => {
+      render(transportOf(['kind']), { value: { transport: { kind: '' } } });
+
+      expect(component.control('/config/transport/kind')?.value).toBe('');
+      expect(marked('/config/transport/address')).toBe(false);
+      expect(marked('/config/transport/url')).toBe(false);
+
+      component.markAllTouched();
+      fixture.detectChanges();
+      expect(messagesOf('/config/transport/kind')).toEqual(['Required.']);
+      expect(messagesOf('/config/transport/address')).toEqual([]);
+
+      // once a kind is picked, its rule applies
+      component.control('/config/transport/kind')?.setValue('tcpclient');
+      fixture.detectChanges();
+      expect(marked('/config/transport/address')).toBe(true);
+      expect(marked('/config/transport/url')).toBe(false);
+      expect(messagesOf('/config/transport/address')).toEqual(['Required.']);
+      expect(last().valid).toBe(false);
+
+      setInput('input[name="address"]', ':4001');
+      expect(last().valid).toBe(true);
+
+      // where nothing else needs the kind, leaving it empty needs nothing at all
+      render(transportOf([]));
+      expect(last().valid).toBe(true);
+    });
+
+    it('ignores conditions it cannot read', () => {
+      // the server sends whatever its schemas say, which the type does not cover: anyOf, a string where a list belongs
+      const unreadable = {
+        type: 'object',
+        properties: {
+          mode: { type: 'string', enum: ['listen', 'connect'], default: 'listen' },
+          secure: { type: 'boolean' },
+          port: { type: 'integer' },
+          host: { type: 'string' },
+        },
+        allOf: [
+          // an if that tests two properties
+          { if: { properties: { mode: { const: 'listen' }, secure: { const: true } } }, then: { required: ['port'] } },
+          // an entry with no if and then
+          { anyOf: [{ required: ['port'] }, { required: ['host'] }] },
+          // an if that is not a plain property test
+          {
+            if: { anyOf: [{ properties: { mode: { const: 'listen' } } }, { properties: { secure: { const: true } } }] },
+            then: { required: ['host'] },
+          },
+          // an if that tests a pattern, not a value
+          { if: { properties: { mode: { pattern: '^l' } } }, then: { required: ['host'] } },
+          // an if that also needs something else to be present
+          { if: { properties: { mode: { const: 'listen' } }, required: ['host'] }, then: { required: ['port'] } },
+          // an if that says more about the same value than the form can follow
+          { if: { properties: { mode: { const: 'listen' } }, not: { required: ['host'] } }, then: { required: ['port'] } },
+          // a then that is not a list of names
+          { if: { properties: { mode: { const: 'listen' } } }, then: { required: 'port' } },
+        ],
+      } as unknown as JsonSchema;
+
+      expect(() => render(unreadable)).not.toThrow();
+      expect(el.querySelector('.sf-required')).toBeNull();
+      expect(last().valid).toBe(true);
+
+      component.markAllTouched();
+      fixture.detectChanges();
+      expect(el.querySelector('.sf-error')).toBeNull();
+    });
+
+    it('reads a rule whose then also constrains a nested object, and requires what it names', () => {
+      // as the tcp and udp schemas carry it: the then holds a nested required and a minLength the form cannot check
+      const nmeaGps: JsonSchema = {
+        if: { properties: { format: { const: 'nmea-gps' } }, required: ['format'] },
+        then: {
+          required: ['decoderOptions'],
+          properties: {
+            decoderOptions: { required: ['sourceEntityId'], properties: { sourceEntityId: { type: 'string', minLength: 1 } } },
+          },
+        },
+      };
+      const schema: JsonSchema = {
+        type: 'object',
+        properties: {
+          format: { type: 'string', enum: ['sentinel', 'json', 'nmea-gps', 'cot'], default: 'sentinel', title: 'Format' },
+          decoderOptions: {
+            type: 'object',
+            title: 'Decoder options',
+            'x-showWhen': { format: ['json', 'nmea-gps', 'cot'] },
+          },
+        },
+        allOf: [nmeaGps],
+      };
+
+      expect(() => render(schema, { value: { format: 'json' } })).not.toThrow();
+      expect(marked('/config/decoderOptions')).toBe(false);
+      expect(last().valid).toBe(true);
+
+      render(schema, { value: { format: 'nmea-gps' } });
+      expect(marked('/config/decoderOptions')).toBe(true);
+      expect(last().valid).toBe(false);
+
+      component.markAllTouched();
+      fixture.detectChanges();
+      expect(messagesOf('/config/decoderOptions')).toEqual(['Required.']);
+
+      // what is inside the object is the server's to check
+      setInput('textarea[name="decoderOptions"]', '{"name": "Truck 1"}');
+      expect(last().valid).toBe(true);
+      expect(messagesOf('/config/decoderOptions')).toEqual([]);
+
+      component.control('/config/format')?.setValue('cot');
+      fixture.detectChanges();
+      expect(marked('/config/decoderOptions')).toBe(false);
+    });
+
+    it('does not let a rule require a field that x-showWhen hides', () => {
+      render({
+        type: 'object',
+        properties: {
+          mode: { type: 'string', enum: ['listen', 'connect'], default: 'listen' },
+          secure: { type: 'boolean', title: 'Secure' },
+          certFile: { type: 'string', title: 'Certificate', 'x-showWhen': { secure: true } },
+        },
+        allOf: [{ if: { properties: { mode: { const: 'listen' } } }, then: { required: ['certFile'] } }],
+      });
+
+      // the rule holds, but the field is out of sight and out of the config
+      expect(el.querySelector('[data-pointer="/config/certFile"]')).toBeNull();
+      expect(last().valid).toBe(true);
+
+      component.control('/config/secure')?.setValue(true);
+      fixture.detectChanges();
+      expect(marked('/config/certFile')).toBe(true);
+      expect(last().valid).toBe(false);
+
+      setInput('input[name="certFile"]', 'server.pem');
+      expect(last().valid).toBe(true);
+
+      component.control('/config/secure')?.setValue(false);
+      fixture.detectChanges();
+      expect(last().valid).toBe(true);
+      expect(last().config['certFile']).toBeUndefined();
+    });
+
+    it('asks for a group that a rule requires', () => {
+      render(
+        {
+          type: 'object',
+          properties: {
+            mode: { type: 'string', enum: ['listen', 'connect'], default: 'listen' },
+            login: {
+              type: 'object',
+              title: 'Login',
+              properties: { username: { type: 'string' }, token: { type: 'string' } },
+            },
+          },
+          allOf: [{ if: { properties: { mode: { const: 'connect' } } }, then: { required: ['login'] } }],
+        },
+        { value: { mode: 'connect' } },
+      );
+
+      expect(marked('/config/login')).toBe(true);
+      expect(last().valid).toBe(false);
+
+      component.markAllTouched();
+      fixture.detectChanges();
+      expect(messagesOf('/config/login')).toEqual(['Required.']);
+
+      setInput('input[name="username"]', 'radar');
+      expect(last().valid).toBe(true);
+      expect(messagesOf('/config/login')).toEqual([]);
+
+      // listening leaves the group optional
+      component.control('/config/mode')?.setValue('listen');
+      fixture.detectChanges();
+      expect(marked('/config/login')).toBe(false);
+    });
+
+    it('x-showWhen with several keys needs all of them', () => {
+      const schema: JsonSchema = {
+        type: 'object',
+        properties: {
+          mode: { type: 'string', enum: ['listen', 'connect'], default: 'listen' },
+          secure: { type: 'boolean', title: 'Secure' },
+          clientCa: { type: 'string', title: 'Client CA', 'x-showWhen': { mode: 'listen', secure: true } },
+        },
+      };
+      render(schema, { value: { clientCa: 'ca.pem' } });
+      const shown = () => el.querySelector('[data-pointer="/config/clientCa"]') !== null;
+
+      expect(shown()).toBe(false); // listen, but not secure
+      expect(last().config['clientCa']).toBeUndefined();
+
+      component.control('/config/secure')?.setValue(true);
+      fixture.detectChanges();
+      expect(shown()).toBe(true);
+      expect(last().config['clientCa']).toBe('ca.pem');
+
+      component.control('/config/mode')?.setValue('connect');
+      fixture.detectChanges();
+      expect(shown()).toBe(false); // secure, but not listening
+      expect(last().config['clientCa']).toBeUndefined();
+
+      component.control('/config/secure')?.setValue(false);
+      fixture.detectChanges();
+      expect(shown()).toBe(false); // neither
+    });
+  });
+
+  describe('x-secrets', () => {
+    // Like tcp: which certificates a connection needs depends on its mode and on its TLS settings.
+    const tlsSchema: JsonSchema = {
+      type: 'object',
+      required: ['mode'],
+      properties: {
+        mode: { type: 'string', enum: ['listen', 'connect'], default: 'listen' },
+        tls: {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean', default: false },
+            requireClientCert: { type: 'boolean', default: false, 'x-showWhen': { enabled: true } },
+          },
+        },
+      },
+      'x-secrets': {
+        tlsCert: {
+          title: 'TLS certificate (PEM)',
+          description: 'listen: the certificate Sentinel presents. connect: an optional client certificate.',
+          examples: ['file:/etc/sentinel/secrets/server.pem'],
+          showWhen: { 'tls/enabled': true },
+          requiredWhen: { mode: 'listen', 'tls/enabled': true },
+        },
+        tlsKey: {
+          title: 'TLS private key (PEM)',
+          examples: ['file:/etc/sentinel/secrets/server.key'],
+          showWhen: { 'tls/enabled': true },
+          requiredWhen: { mode: 'listen', 'tls/enabled': true },
+        },
+        clientCa: {
+          title: 'Client CA (PEM)',
+          description: "Signs the senders' certificates.",
+          examples: ['file:/etc/sentinel/secrets/clients-ca.pem'],
+          showWhen: { mode: 'listen', 'tls/enabled': true, 'tls/requireClientCert': true },
+          requiredWhen: { mode: 'listen', 'tls/enabled': true, 'tls/requireClientCert': true },
+        },
+        serverCa: {
+          title: 'Server CA (PEM)',
+          description: "Signs the remote's certificate; empty trusts the system roots.",
+          examples: ['file:/etc/sentinel/secrets/ca.pem'],
+          showWhen: { mode: 'connect', 'tls/enabled': true },
+        },
+      },
+    };
+    const secretFields = ['tlsCert', 'tlsKey', 'clientCa', 'serverCa'];
+    const cert = 'file:/etc/sentinel/secrets/server.pem';
+    const key = 'file:/etc/sentinel/secrets/server.key';
+
+    function secret(name: string): HTMLInputElement | null {
+      return el.querySelector<HTMLInputElement>(`.sf-section-secrets input[name="${name}"]`);
+    }
+
+    function shownSecrets(): string[] {
+      return secretFields.filter((name) => secret(name) !== null);
+    }
+
+    /** The label of a secret, asterisk included. */
+    function labelOf(name: string): string | undefined {
+      return el.querySelector(`.sf-section-secrets label[for="sf-secret-${name}"]`)?.textContent?.trim();
+    }
+
+    function set(pointer: string, value: unknown): void {
+      component.control(pointer)?.setValue(value);
+      fixture.detectChanges();
+    }
+
+    it('labels secrets from x-secrets and shows each only while its conditions hold', () => {
+      render(tlsSchema, { secretFields });
+
+      // TLS is off, so there is nothing to ask for, and the section stays out of the way
+      expect(shownSecrets()).toEqual([]);
+      expect(el.querySelector('.sf-section-secrets')).toBeNull();
+
+      set('/config/tls/enabled', true);
+      expect(shownSecrets()).toEqual(['tlsCert', 'tlsKey']);
+      expect(labelOf('tlsCert')).toContain('TLS certificate (PEM)');
+      expect(secret('tlsCert')?.getAttribute('placeholder')).toBe('file:/etc/sentinel/secrets/server.pem');
+      expect(labelOf('tlsKey')).toContain('TLS private key (PEM)');
+      expect(secret('tlsKey')?.getAttribute('placeholder')).toBe('file:/etc/sentinel/secrets/server.key');
+      expect(el.querySelector('[data-pointer="/secretRefs/tlsCert"] .sf-help')?.textContent).toContain(
+        'the certificate Sentinel presents',
+      );
+
+      // the client CA needs listening, TLS and client certificates, all three
+      set('/config/tls/requireClientCert', true);
+      expect(shownSecrets()).toEqual(['tlsCert', 'tlsKey', 'clientCa']);
+      expect(labelOf('clientCa')).toContain('Client CA (PEM)');
+      expect(secret('clientCa')?.getAttribute('placeholder')).toBe('file:/etc/sentinel/secrets/clients-ca.pem');
+
+      set('/config/tls/enabled', false);
+      expect(shownSecrets()).toEqual([]);
+
+      set('/config/tls/enabled', true);
+      set('/config/mode', 'connect');
+      expect(shownSecrets()).toEqual(['tlsCert', 'tlsKey', 'serverCa']);
+      expect(labelOf('serverCa')).toContain('Server CA (PEM)');
+      expect(secret('serverCa')?.getAttribute('placeholder')).toBe('file:/etc/sentinel/secrets/ca.pem');
+    });
+
+    it('leaves hidden secrets out of secretRefs and validity', () => {
+      render(tlsSchema, {
+        secretFields,
+        value: { tls: { enabled: true } },
+        secretRefs: { tlsCert: cert, tlsKey: key, clientCa: 'not a reference', serverCa: 'file:/etc/sentinel/secrets/ca.pem' },
+      });
+
+      // a listener with TLS shows its certificate and key; the bogus client CA and the server CA stay hidden
+      expect(shownSecrets()).toEqual(['tlsCert', 'tlsKey']);
+      expect(last().valid).toBe(true);
+      expect(last().secretRefs).toEqual({ tlsCert: cert, tlsKey: key });
+
+      // asking for client certificates shows the client CA, which now counts
+      set('/config/tls/requireClientCert', true);
+      expect(last().valid).toBe(false);
+      expect(last().secretRefs).toEqual({ tlsCert: cert, tlsKey: key, clientCa: 'not a reference' });
+
+      // and it stops counting when it is hidden again
+      set('/config/tls/requireClientCert', false);
+      expect(last().valid).toBe(true);
+      expect(last().secretRefs).toEqual({ tlsCert: cert, tlsKey: key });
+
+      // what a hidden secret holds comes back with it
+      set('/config/mode', 'connect');
+      expect(last().secretRefs).toEqual({ tlsCert: cert, tlsKey: key, serverCa: 'file:/etc/sentinel/secrets/ca.pem' });
+    });
+
+    it('requires a secret while its requiredWhen holds', () => {
+      render(tlsSchema, { secretFields, value: { tls: { enabled: true } } });
+
+      // a listener presents a certificate, so it needs one and its key
+      expect(labelOf('tlsCert')).toContain('*');
+      expect(labelOf('tlsKey')).toContain('*');
+      expect(last().valid).toBe(false);
+
+      component.markAllTouched();
+      fixture.detectChanges();
+      const messages = (name: string) =>
+        Array.from(el.querySelectorAll(`[data-pointer="/secretRefs/${name}"] > .sf-error`)).map((n) => n.textContent?.trim());
+      expect(messages('tlsCert')).toEqual(['Required.']);
+      expect(messages('tlsKey')).toEqual(['Required.']);
+
+      setInput('input[name="tlsCert"]', cert);
+      expect(last().valid).toBe(false);
+      setInput('input[name="tlsKey"]', key);
+      expect(last().valid).toBe(true);
+      expect(messages('tlsCert')).toEqual([]);
+
+      // mutual TLS adds the client CA to what it needs
+      set('/config/tls/requireClientCert', true);
+      expect(labelOf('clientCa')).toContain('*');
+      expect(last().valid).toBe(false);
+      setInput('input[name="clientCa"]', 'file:/etc/sentinel/secrets/clients-ca.pem');
+      expect(last().valid).toBe(true);
+
+      // connecting, the certificate is only an option, and so is the server CA
+      set('/config/mode', 'connect');
+      expect(shownSecrets()).toEqual(['tlsCert', 'tlsKey', 'serverCa']);
+      expect(labelOf('tlsCert')).not.toContain('*');
+      expect(labelOf('serverCa')).not.toContain('*');
+      setInput('input[name="tlsCert"]', '');
+      setInput('input[name="tlsKey"]', '');
+      expect(last().valid).toBe(true);
+    });
+
+    it('keeps a secret that x-secrets does not list as it was: always shown, never required', () => {
+      render(tlsSchema, { secretFields: ['password'] });
+
+      expect(secret('password')).not.toBeNull();
+      expect(labelOf('password')).toBe('Password');
+      expect(secret('password')?.getAttribute('placeholder')).toBe('env:PASSWORD');
+      expect(last().valid).toBe(true);
     });
   });
 

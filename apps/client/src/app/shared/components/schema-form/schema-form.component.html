@@ -4,13 +4,11 @@
       @switch (def.kind) {
         @case ('group') {
           <fieldset class="sf-group" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
-            <legend>{{ def.label }}@if (def.required) {<span class="sf-required" aria-hidden="true">*</span>}</legend>
+            <legend>{{ def.label }}@if (isRequired(def)) {<span class="sf-required" aria-hidden="true">*</span>}</legend>
             @if (def.help) {
               <p class="sf-help">{{ def.help }}</p>
             }
-            @for (msg of problemsOf(def); track msg) {
-              <p class="sf-error sf-error-server">{{ msg }}</p>
-            }
+            <ng-container *ngTemplateOutlet="messages; context: { $implicit: def }"></ng-container>
             <ng-container *ngTemplateOutlet="fieldList; context: { $implicit: def.children }"></ng-container>
             <ng-container *ngTemplateOutlet="extrasNote; context: { $implicit: def.extras }"></ng-container>
           </fieldset>
@@ -38,7 +36,7 @@
         }
         @case ('select') {
           <div class="sf-field" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
-            <label [attr.for]="def.id">{{ def.label }}@if (def.required) {<span class="sf-required" aria-hidden="true">*</span>}</label>
+            <label [attr.for]="def.id">{{ def.label }}@if (isRequired(def)) {<span class="sf-required" aria-hidden="true">*</span>}</label>
             <select [id]="def.id" [attr.name]="def.key" [formControl]="def.control!" (blur)="touch()">
               <option [ngValue]="''" [disabled]="def.required">
                 @if (def.required) { Select… } @else if (def.defaultLabel) { Default ({{ def.defaultLabel }}) } @else { — }
@@ -55,7 +53,7 @@
         }
         @case ('number') {
           <div class="sf-field" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
-            <label [attr.for]="def.id">{{ def.label }}@if (def.required) {<span class="sf-required" aria-hidden="true">*</span>}</label>
+            <label [attr.for]="def.id">{{ def.label }}@if (isRequired(def)) {<span class="sf-required" aria-hidden="true">*</span>}</label>
             <input
               [id]="def.id"
               [attr.name]="def.key"
@@ -73,7 +71,7 @@
         }
         @case ('json') {
           <div class="sf-field" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
-            <label [attr.for]="def.id">{{ def.label }}@if (def.required) {<span class="sf-required" aria-hidden="true">*</span>}</label>
+            <label [attr.for]="def.id">{{ def.label }}@if (isRequired(def)) {<span class="sf-required" aria-hidden="true">*</span>}</label>
             <textarea
               [id]="def.id"
               [attr.name]="def.key"
@@ -91,7 +89,7 @@
         }
         @default {
           <div class="sf-field" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
-            <label [attr.for]="def.id">{{ def.label }}@if (def.required) {<span class="sf-required" aria-hidden="true">*</span>}</label>
+            <label [attr.for]="def.id">{{ def.label }}@if (isRequired(def)) {<span class="sf-required" aria-hidden="true">*</span>}</label>
             <input
               [id]="def.id"
               [attr.name]="def.key"
@@ -151,12 +149,13 @@
     <p class="sf-empty">This driver has no options.</p>
   }
 
-  @if (secretDefs().length > 0) {
+  @if (hasVisibleSecrets()) {
     <section class="sf-section sf-section-secrets">
       <h4 class="sf-section-title">Credentials</h4>
       <p class="sf-help">
         Secrets never leave the environment: enter a reference such as <code>env:VARIABLE_NAME</code> and the ingest
-        service reads the value from that variable.
+        service reads the value from that variable, or <code>file:/etc/sentinel/…</code> for a mounted file such as a
+        PEM.
       </p>
       <ng-container *ngTemplateOutlet="fieldList; context: { $implicit: secretDefs() }"></ng-container>
     </section>

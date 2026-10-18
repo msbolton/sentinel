@@ -73,6 +73,21 @@ export interface ReplaceFeedRequest {
 
 export type JsonType = 'object' | 'string' | 'number' | 'integer' | 'boolean' | 'array';
 
+/** What a driver says about one of its secrets (`x-secrets`), so the form can name it and ask for it when it is needed. */
+export interface SecretMeta {
+  title?: string;
+  description?: string;
+  /** Sample references; the first is the placeholder. */
+  examples?: string[];
+  /**
+   * Shown only while every entry holds: `{ "<path>": value | [values] }`, a path being slash-separated and
+   * relative to the config root (`tls/enabled`).
+   */
+  showWhen?: Record<string, unknown>;
+  /** Required only while every entry holds, written like `showWhen`. */
+  requiredWhen?: Record<string, unknown>;
+}
+
 /** The subset of JSON Schema the driver config schemas use. */
 export interface JsonSchema {
   $schema?: string;
@@ -100,8 +115,10 @@ export interface JsonSchema {
   format?: string;
   /** Marks a property whose value is a secret reference and belongs in secretRefs. */
   'x-secret'?: boolean;
-  /** Shows the property only while a sibling has one of these values: `{ "<siblingKey>": value | [values] }`. */
+  /** Shows the property only while its siblings have these values: `{ "<siblingKey>": value | [values] }`, every entry holding. */
   'x-showWhen'?: Record<string, unknown>;
+  /** At the root: what the driver says about each of its secrets, by name. */
+  'x-secrets'?: Record<string, SecretMeta>;
   allOf?: JsonSchema[];
   if?: JsonSchema;
   then?: JsonSchema;

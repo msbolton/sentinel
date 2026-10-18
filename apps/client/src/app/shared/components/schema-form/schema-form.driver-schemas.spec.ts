@@ -49,6 +49,11 @@ describe('SchemaFormComponent with the driver schemas', () => {
     return el.querySelector(`[data-pointer="${pointer}"]`) !== null;
   }
 
+  /** The client-side messages a field shows. */
+  function messagesOf(pointer: string): Array<string | undefined> {
+    return Array.from(el.querySelectorAll(`[data-pointer="${pointer}"] > .sf-error`)).map((n) => n.textContent?.trim());
+  }
+
   beforeEach(async () => {
     await TestBed.configureTestingModule({ imports: [SchemaFormComponent] }).compileComponents();
     fixture = TestBed.createComponent(SchemaFormComponent);
@@ -65,6 +70,31 @@ describe('SchemaFormComponent with the driver schemas', () => {
     expect(last().config['mode']).toBe('listen');
     expect(shown('/config/allow')).toBe(true);
     expect(shown('/config/host')).toBe(false);
+  });
+
+  it('tcp: listen mode needs a port of 1024 or more', () => {
+    render('tcp');
+
+    // a new connection listens, and a listener needs a port
+    expect(el.querySelector('[data-pointer="/config/port"] > label .sf-required')).not.toBeNull();
+    expect(last().valid).toBe(false);
+
+    setInput('input[name="port"]', '80');
+    expect(messagesOf('/config/port')).toEqual(['Must be at least 1024.']);
+    expect(last().valid).toBe(false);
+
+    setInput('input[name="port"]', '6001');
+    expect(messagesOf('/config/port')).toEqual([]);
+    expect(last().valid).toBe(true);
+
+    // connecting needs a host and a port, and any port will do
+    render('tcp', { mode: 'connect', port: 80 });
+    expect(el.querySelector('[data-pointer="/config/host"] > label .sf-required')).not.toBeNull();
+    expect(last().valid).toBe(false);
+
+    setInput('input[name="host"]', 'radar.example');
+    expect(messagesOf('/config/port')).toEqual([]);
+    expect(last().valid).toBe(true);
   });
 
   it('tcp: keeps keys the schema does not describe, and drops the ones connect mode hides', () => {

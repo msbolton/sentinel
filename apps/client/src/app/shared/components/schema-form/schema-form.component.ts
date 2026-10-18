@@ -19,7 +19,7 @@ import {
   Validators,
 } from '@angular/forms';
 import { Subscription } from 'rxjs';
-import { FeedProblem, JsonSchema, JsonType } from '../../models/feed.model';
+import { FeedProblem, JsonSchema, JsonType, SecretMeta } from '../../models/feed.model';
 import { COMMON_OPTION_KEYS, COMMON_OPTIONS_SCHEMA } from './common-options';
 
 /** What the form emits whenever anything changes. */
@@ -30,6 +30,20 @@ export interface SchemaFormChange {
 }
 
 export type FieldKind = 'text' | 'url' | 'number' | 'boolean' | 'select' | 'const' | 'array' | 'group' | 'secret' | 'json';
+
+/** The value at `path` (read from a group of the form) is one of `values`. */
+export interface Condition {
+  path: string[];
+  values: unknown[];
+}
+
+/** What a schema asks of a field, but only while every `when` condition holds. */
+export interface Rule {
+  when: Condition[];
+  required?: boolean;
+  minimum?: number;
+  maximum?: number;
+}
 
 /** One rendered field; groups carry their children. */
 export interface FieldDef {
@@ -57,9 +71,14 @@ export interface FieldDef {
   children?: FieldDef[];
   /** `group`: stored keys the schema does not describe, kept as they are. */
   extras?: Record<string, unknown>;
-  /** `x-showWhen`: shown only while the sibling `key` has one of `values`. */
-  showWhen?: { key: string; values: unknown[] };
-  /** The group this field's control lives in (its siblings), for `showWhen`. */
+  /** `x-showWhen`: shown only while every condition holds. */
+  showWhen?: Condition[];
+  /** Requirements that bind only while their conditions hold: `allOf` rules, a secret's `requiredWhen`. */
+  rules?: Rule[];
+  /**
+   * The group the conditions of `showWhen` and `rules` are read from: the one this field's control lives in
+   * (its siblings), or the config root for a secret, whose control lives apart.
+   */
   parent?: FormGroup;
 }
 
@@ -194,7 +213,7 @@ export class SchemaFormComponent {
 
   /** Hidden fields keep their controls but do not count: only the fields on show must be valid. */
   get valid(): boolean {
-    return this.allValid([...this.driverFields(), ...this.advancedFields()]) && this.secretGroup.valid;
+    return this.allValid([...this.driverFields(), ...this.advancedFields(), ...this.secretDefs()]);
   }
 
   /** Current snapshot, the same shape `changed` emits. */
@@ -238,10 +257,11 @@ export class SchemaFormComponent {
   errorsOf(def: FieldDef): string[] {
     this.tick();
     const control = def.control;
-    if (!control || !control.errors || !(control.touched || control.dirty || this.showAll())) {
+    if (!(control?.touched || control?.dirty || this.showAll())) {
       return [];
     }
-    return describeErrors(control.errors);
+    // a rule's minimum replaces the field's own, so a value out of both ranges gets one message
+    return describeErrors({ ...control?.errors, ...this.conditionalErrors(def) });
   }
 
   /** Server-side messages addressed to this field (or group). */
@@ -258,10 +278,22 @@ export class SchemaFormComponent {
     return Object.keys(extras ?? {});
   }
 
-  /** A field with `x-showWhen` is shown only while its sibling has one of the listed values. */
+  /** A field with `x-showWhen` is shown only while each of its conditions holds. */
   isShown(def: FieldDef, siblings: FormGroup | undefined = def.parent): boolean {
     this.tick(); // re-evaluate on every form change (OnPush)
     return this.visible(def, siblings);
+  }
+
+  /** Whether a field is marked as required: outright, or by a rule whose conditions hold right now. */
+  isRequired(def: FieldDef): boolean {
+    this.tick(); // re-evaluate on every form change (OnPush)
+    return def.required || this.activeRules(def).some((rule) => rule.required);
+  }
+
+  /** Whether any secret is on show; while none is, the Credentials section has nothing to ask. */
+  hasVisibleSecrets(): boolean {
+    this.tick(); // re-evaluate on every form change (OnPush)
+    return this.secretDefs().some((def) => this.visible(def));
   }
 
   // ---------------------------------------------------------------------
@@ -301,12 +333,15 @@ export class SchemaFormComponent {
     const claimed = new Set([...Object.keys(properties), ...COMMON_OPTION_KEYS, ...external, ...secretKeys]);
     this.extras.set(schema.additionalProperties === false ? {} : undescribed(value, claimed));
 
+    const rules = rulesOf(schema);
     const driverDefs: FieldDef[] = [];
     for (const [key, prop] of Object.entries(properties)) {
       if (secretKeys.has(key) || external.has(key)) {
         continue;
       }
-      driverDefs.push(this.buildField(key, prop, required.has(key), value[key], this.configGroup, '/config', 'sf'));
+      driverDefs.push(
+        this.buildField(key, prop, required.has(key), value[key], this.configGroup, '/config', 'sf', rules.get(key)),
+      );
     }
 
     const advancedDefs: FieldDef[] = [];
@@ -318,25 +353,33 @@ export class SchemaFormComponent {
       advancedDefs.push(this.buildField(key, prop, false, value[key], this.configGroup, '/config', 'sf-adv'));
     }
 
+    // What the driver says about its secrets: a name and an example, and when each is shown and needed.
+    // The conditions are read from the config, whose root is where the secrets' paths start.
+    const secretMeta = isRecord(schema['x-secrets']) ? schema['x-secrets'] : {};
     const secretDefs: FieldDef[] = [];
     const orderedSecrets = [...secretFields, ...[...secretKeys].filter((k) => !secretFields.includes(k))];
     for (const key of orderedSecrets) {
       const prop = properties[key];
+      const meta: SecretMeta | undefined = secretMeta[key];
       const control = new FormControl<string>(secretRefs[key] ?? '', {
         nonNullable: true,
         validators: [Validators.pattern(SECRET_REF_PATTERN)],
       });
       this.secretGroup.addControl(key, control, { emitEvent: false });
+      const requiredWhen = conditionsOf(meta?.requiredWhen, true);
       secretDefs.push({
         key,
         id: `sf-secret-${key}`,
         pointer: `/secretRefs/${key}`,
         kind: 'secret',
-        label: prop?.title ?? humanize(key),
-        help: prop?.description,
-        placeholder: `env:${toEnvName(key)}`,
+        label: meta?.title ?? prop?.title ?? humanize(key),
+        help: meta?.description ?? prop?.description,
+        placeholder: meta?.examples?.[0] ?? `env:${toEnvName(key)}`,
         required: false,
+        showWhen: conditionsOf(meta?.showWhen, true),
+        rules: requiredWhen.length > 0 ? [{ when: requiredWhen, required: true }] : [],
         control,
+        parent: this.configGroup,
       });
     }
 
@@ -364,6 +407,7 @@ export class SchemaFormComponent {
     parent: FormGroup<Record<string, AbstractControl>>,
     parentPointer: string,
     idPrefix: string,
+    rules: Rule[] = [],
   ): FieldDef {
     const base = {
       key,
@@ -372,7 +416,8 @@ export class SchemaFormComponent {
       label: prop.title ?? humanize(key),
       help: prop.description,
       required,
-      showWhen: parseShowWhen(prop['x-showWhen']),
+      showWhen: conditionsOf(prop['x-showWhen']),
+      rules,
       parent,
     };
 
@@ -415,8 +460,18 @@ export class SchemaFormComponent {
       this.siblingSchemas.set(group, prop.properties ?? {});
       const nestedRequired = new Set(prop.required ?? []);
       const nestedValue = isRecord(initial) ? initial : {};
+      const nestedRules = rulesOf(prop);
       const children = Object.entries(prop.properties ?? {}).map(([childKey, childProp]) =>
-        this.buildField(childKey, childProp, nestedRequired.has(childKey), nestedValue[childKey], group, base.pointer, base.id),
+        this.buildField(
+          childKey,
+          childProp,
+          nestedRequired.has(childKey),
+          nestedValue[childKey],
+          group,
+          base.pointer,
+          base.id,
+          nestedRules.get(childKey),
+        ),
       );
       // Stored keys the group does not describe are kept, unless it forbids them.
       const extras =
@@ -588,6 +643,9 @@ export class SchemaFormComponent {
   private collectSecrets(): Record<string, string> {
     const out: Record<string, string> = {};
     for (const def of this.secretDefs()) {
+      if (!this.visible(def)) {
+        continue; // hidden: the control keeps its value, the refs leave it out
+      }
       const v = (def.control?.value ?? '').trim();
       if (v !== '') {
         out[def.key] = v;
@@ -598,7 +656,9 @@ export class SchemaFormComponent {
 
   private allValid(defs: FieldDef[]): boolean {
     return defs.every(
-      (d) => !this.visible(d) || ((d.control ? d.control.valid : true) && this.allValid(d.children ?? [])),
+      (d) =>
+        !this.visible(d) ||
+        ((d.control ? d.control.valid : true) && !this.conditionalErrors(d) && this.allValid(d.children ?? [])),
     );
   }
 
@@ -607,19 +667,62 @@ export class SchemaFormComponent {
     if (!def.showWhen || !siblings) {
       return true;
     }
-    const { key, values } = def.showWhen;
-    const control = siblings.get(key);
-    let current: unknown = control?.value;
+    return def.showWhen.every((cond) => this.matches(cond, siblings));
+  }
+
+  /** The rules of a field whose conditions all hold right now. */
+  private activeRules(def: FieldDef): Rule[] {
+    const base = def.parent;
+    return base ? (def.rules ?? []).filter((rule) => rule.when.every((cond) => this.matches(cond, base))) : [];
+  }
+
+  /** What the rules in force find wrong with a field, in the shape of the validators' errors. */
+  private conditionalErrors(def: FieldDef): ValidationErrors | null {
+    const rules = this.activeRules(def);
+    if (rules.length === 0) {
+      return null;
+    }
+    const errors: ValidationErrors = {};
+    if (rules.some((rule) => rule.required) && this.isEmpty(def)) {
+      errors['required'] = true;
+    }
+    const value = def.control?.value;
+    if (def.kind === 'number' && typeof value === 'number' && !Number.isNaN(value)) {
+      // with no bound at all these are -Infinity and Infinity, which nothing falls outside
+      const min = Math.max(...rules.flatMap((rule) => (rule.minimum === undefined ? [] : [rule.minimum])));
+      const max = Math.min(...rules.flatMap((rule) => (rule.maximum === undefined ? [] : [rule.maximum])));
+      if (value < min) {
+        errors['min'] = { min, actual: value };
+      }
+      if (value > max) {
+        errors['max'] = { max, actual: value };
+      }
+    }
+    return Object.keys(errors).length > 0 ? errors : null;
+  }
+
+  /** Whether a field leaves nothing behind in the config (a secret: in secretRefs). */
+  private isEmpty(def: FieldDef): boolean {
+    return def.kind === 'secret' ? textOf(def.control?.value) === '' : this.valueOf(def) === undefined;
+  }
+
+  /**
+   * Whether the value at the condition's path, read from `base`, is one of its values. A value left empty
+   * counts as the default of its field, if the schema gives one.
+   */
+  private matches(cond: Condition, base: FormGroup): boolean {
+    let current: unknown = base.get(cond.path)?.value;
     if (typeof current === 'string') {
       current = current.trim();
     }
     if (current === '' || current === null || current === undefined) {
-      current = this.defaultOf(siblings, key);
+      const holder = cond.path.length > 1 ? base.get(cond.path.slice(0, -1)) : base;
+      current = holder instanceof FormGroup ? this.defaultOf(holder, cond.path[cond.path.length - 1]) : undefined;
     }
-    return values.includes(current);
+    return cond.values.includes(current);
   }
 
-  /** What an empty sibling counts as: its schema's `const`, else its `default`. */
+  /** What an empty field counts as: its schema's `const`, else its `default`. */
   private defaultOf(group: FormGroup, key: string): unknown {
     const prop = this.siblingSchemas.get(group)?.[key];
     return prop?.const !== undefined ? prop.const : prop?.default;
@@ -656,17 +759,86 @@ function toEnvName(key: string): string {
     .toUpperCase();
 }
 
-/** Reads `x-showWhen` (`{ sibling: value | [values] }`); only its first entry counts. */
-function parseShowWhen(when: unknown): FieldDef['showWhen'] {
+/**
+ * Reads `{ key: value | [values] }` as conditions that must all hold: the `x-showWhen` of a field, whose
+ * keys are its siblings, or with `nested` the `showWhen` and `requiredWhen` of a secret, whose keys are
+ * slash-separated paths from the config root (`tls/enabled`).
+ */
+function conditionsOf(when: unknown, nested = false): Condition[] {
   if (!isRecord(when)) {
+    return [];
+  }
+  return Object.entries(when).map(([key, value]) => ({
+    path: nested ? key.split('/') : [key],
+    values: Array.isArray(value) ? value : [value],
+  }));
+}
+
+/**
+ * The conditional requirements an object schema states in its `allOf`, by the property they bind. The
+ * form reads entries shaped `{ if: { properties: { k: { const | enum } } }, then: { required: [...],
+ * properties: { p: { minimum, maximum } } } }` and nothing else of them; what it cannot read is left to
+ * the server, which checks every rule.
+ */
+function rulesOf(schema: JsonSchema): Map<string, Rule[]> {
+  const rules = new Map<string, Rule[]>();
+  for (const entry of Array.isArray(schema.allOf) ? schema.allOf : []) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const when = conditionOfIf(entry.if);
+    const then = entry.then;
+    if (!when || !isRecord(then)) {
+      continue;
+    }
+    const required = Array.isArray(then.required) ? then.required : [];
+    const limits = isRecord(then.properties) ? then.properties : {};
+    for (const key of new Set([...required, ...Object.keys(limits)])) {
+      const bounds = limits[key];
+      const rule: Rule = { when: [when] };
+      if (required.includes(key)) {
+        rule.required = true;
+      }
+      if (isRecord(bounds) && typeof bounds.minimum === 'number') {
+        rule.minimum = bounds.minimum;
+      }
+      if (isRecord(bounds) && typeof bounds.maximum === 'number') {
+        rule.maximum = bounds.maximum;
+      }
+      if (rule.required || rule.minimum !== undefined || rule.maximum !== undefined) {
+        rules.set(key, [...(rules.get(key) ?? []), rule]);
+      }
+    }
+  }
+  return rules;
+}
+
+/**
+ * The one condition an `if` states: a single property tested against a `const` or an `enum`, with at most
+ * a `required` that names that property. An `if` that says anything more is not one the form can read, and
+ * guessing at it would ask for fields the server does not.
+ */
+function conditionOfIf(test: unknown): Condition | undefined {
+  if (!isRecord(test) || !isRecord(test.properties)) {
     return undefined;
   }
-  const [entry] = Object.entries(when);
-  if (!entry) {
+  // any other keyword changes what the if means
+  if (Object.keys(test).some((keyword) => keyword !== 'properties' && keyword !== 'required')) {
     return undefined;
   }
-  const [key, value] = entry;
-  return { key, values: Array.isArray(value) ? value : [value] };
+  const tested = Object.entries(test.properties);
+  if (tested.length !== 1) {
+    return undefined;
+  }
+  const [key, prop] = tested[0];
+  const presence = test.required ?? [];
+  if (!Array.isArray(presence) || presence.some((name) => name !== key) || !isRecord(prop)) {
+    return undefined;
+  }
+  if (prop.const !== undefined) {
+    return { path: [key], values: [prop.const] };
+  }
+  return Array.isArray(prop.enum) ? { path: [key], values: prop.enum } : undefined;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
