@@ -99,6 +99,16 @@ check GET /api/v1/drivers/udp 200
 # The management API answers validation problems with 422; a low port and one of Sentinel's own are refused.
 check POST /api/v1/feeds 422 '{"name":"smoke low port","driver":"udp","config":{"port":80}}'
 check POST /api/v1/feeds 422 '{"name":"smoke reserved port","driver":"udp","config":{"port":5432}}'
+# A port is unique per protocol: a second connection on a taken one is refused. Both are disabled,
+# so nothing binds; the cleanup also removes what a wrongly accepted create above would leave.
+dup="smoke-dup-port-$$"
+check POST /api/v1/feeds 201 '{"id":"'"$dup"'-a","name":"smoke dup port a '"$$"'","driver":"udp","enabled":false,"config":{"port":47100}}'
+check POST /api/v1/feeds 422 '{"id":"'"$dup"'-b","name":"smoke dup port b '"$$"'","driver":"udp","enabled":false,"config":{"port":47100}}'
+grep -q "used by connection $dup-a" /tmp/smoke-body && echo "  ok   duplicate port names the connection holding it" || { echo "  FAIL duplicate port body: $(head -c 160 /tmp/smoke-body)"; fail=1; }
+check DELETE "/api/v1/feeds/$dup-a" 204
+for leftover in "$dup-a" "$dup-b" smoke-low-port smoke-reserved-port; do
+  curl -s -o /dev/null ${auth[@]+"${auth[@]}"} -X DELETE "$GW/api/v1/feeds/$leftover" 2>/dev/null
+done
 
 echo "== export"
 check GET "/api/v1/export/entities.geojson?limit=1" 200
