@@ -1,5 +1,5 @@
 import { addPoint, canFinish, draftFromSession, finishShape, liveMeasure, newSession, previewRing, setAnchor, setCursor, setRadius } from './geofence-draw-state';
-import { geodesicDistanceM } from './geofence-geometry';
+import { circlePolygon, geodesicDistanceM } from './geofence-geometry';
 import { LngLat } from '../../shared/models/geofence.model';
 
 const A: LngLat = [55.0, 25.0];
@@ -72,5 +72,23 @@ describe('geofence draw session', () => {
       enabled: true,
     });
     expect(draftFromSession(s, 'Anchorage').name).toBe('Anchorage');
+  });
+
+  it("sets a ring's radius from the click after its anchor", () => {
+    const anchored = setAnchor(newSession('ring', '#f59e0b'), { entityId: 'e9', entityName: 'MV HORIZON STAR', position: A });
+    const edge: LngLat = [55.1489, 25.0]; // ≈ 15 km east
+    const s = addPoint(anchored, edge);
+    expect(s.radiusSet).toBe(true);
+    expect(Math.abs(s.radiusM - geodesicDistanceM(A, edge))).toBeLessThan(1);
+    expect(s.points).toEqual([]);
+  });
+
+  it('previews a ring at the cursor until its radius is set', () => {
+    const anchored = setCursor(setAnchor(newSession('ring', '#f59e0b'), { entityId: 'e9', entityName: 'MV HORIZON STAR', position: A }), [55.0378, 25.0]);
+    expect(liveMeasure(anchored)).toBe('3.8 km');
+    expect(previewRing(anchored)).toEqual(circlePolygon(A, geodesicDistanceM(A, [55.0378, 25.0])));
+    const typed = setRadius(anchored, 8000);
+    expect(liveMeasure(typed)).toBe('8.0 km');
+    expect(previewRing(typed)).toEqual(circlePolygon(A, 8000));
   });
 });

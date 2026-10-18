@@ -1,4 +1,4 @@
-import { GeofenceConfig, GeofenceRule, LngLat } from '../../shared/models/geofence.model';
+import { GeofenceConfig, GeofenceDraft, GeofenceRule, LngLat } from '../../shared/models/geofence.model';
 import { LABEL_SCALE_BY_DISTANCE, LABEL_TRANSLUCENCY_BY_DISTANCE } from './cesium-config';
 import { circlePolygon, formatDistance, geodesicDistanceM } from './geofence-geometry';
 
@@ -82,6 +82,9 @@ export function zoneEntityOptions(zone: GeofenceRule, selected: boolean, Cesium:
   };
 }
 
+/** The id the unsaved draft is drawn under; it is never a rule id. */
+export const DRAFT_ID = '__draft__';
+
 /** The grab points of a zone: every vertex, or a circle's centre (0) and east edge (1), or a ring's east edge (1). */
 export function handlePositions(config: GeofenceConfig, anchor: LngLat | null): { index: number; position: LngLat }[] {
   if (config.shape === 'circle' && config.circle) {
@@ -131,7 +134,8 @@ export class GeofenceLayer {
 
   constructor(private readonly viewer: any, private readonly Cesium: any) {}
 
-  sync(zones: GeofenceRule[], selectedId: string | null, anchorPosition: AnchorPosition): void {
+  /** `draft` is the zone just drawn and not yet saved; it is drawn selected so the user sees what they are naming. */
+  sync(zones: GeofenceRule[], selectedId: string | null, anchorPosition: AnchorPosition, draft: GeofenceDraft | null = null): void {
     this.zones = zones;
     this.selectedId = selectedId;
     this.anchorPosition = anchorPosition;
@@ -140,6 +144,10 @@ export class GeofenceLayer {
     for (const zone of zones) {
       seen.add(zone.id);
       this.buildZone(zone, zone.id === selectedId);
+    }
+    if (draft) {
+      seen.add(DRAFT_ID);
+      this.buildZone({ ...draft, id: DRAFT_ID, createdAt: '', updatedAt: 'draft' }, true);
     }
     for (const [id, { entity }] of this.entities) {
       if (!seen.has(id)) {

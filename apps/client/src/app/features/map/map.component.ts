@@ -54,7 +54,7 @@ import { CLUSTER_CONFIG, CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, draw
 import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine, type GeoPoint } from './drop-line';
 import { formatAltitude } from '../../shared/geo-format';
 import { GeofenceService } from '../../core/services/geofence.service';
-import { GeofenceLayer } from './geofence-layer';
+import { DRAFT_ID, GeofenceLayer } from './geofence-layer';
 import { GeofenceDrawTool } from './geofence-draw';
 import { GeofenceToolbarComponent } from './geofence-toolbar.component';
 import { DrawSession, addPoint, canFinish, draftFromSession, finishShape, newSession, setAnchor, setCursor, setRadius } from './geofence-draw-state';
@@ -63,6 +63,9 @@ import { GeofenceConfig, GeofenceShape, LngLat } from '../../shared/models/geofe
 /** Dead-reckoning frame cap: ~30 fps is plenty for gliding markers. */
 const DR_FRAME_INTERVAL_MS = 33;
 /** Two positions a double click produced from the same spot. */
+/** Pick window, in pixels, used to find the track under a ring's anchor click. */
+const ANCHOR_PICK_PX = 14;
+
 function samePoint(a: LngLat, b: LngLat): boolean {
   return Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6;
 }
@@ -258,8 +261,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       const zones = this.geofences.zones();
       const selectedId = this.geofences.selectedId();
+      const draft = this.geofences.draft();
       this.geofences.anchors();
-      this.ngZone.runOutsideAngular(() => untracked(() => this.geofenceLayer?.sync(zones, selectedId, (id) => this.geofenceAnchorPosition(id))));
+      this.ngZone.runOutsideAngular(() => untracked(() => this.geofenceLayer?.sync(zones, selectedId, (id) => this.geofenceAnchorPosition(id), draft)));
     });
 
     // A selected aircraft, drone or satellite shows how high it flies: a line to the ground.
@@ -415,6 +419,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
       if (this.drawSession()) {
         this.drawClick(click.position, pickedObject);
+        this.viewer.selectedEntity = undefined; // the viewer's own bracket means nothing while drawing
         return;
       }
 
@@ -423,7 +428,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelGeofence) {
         const zoneId = pickedObject.id._sentinelGeofence as string;
-        this.ngZone.run(() => this.geofences.select(zoneId));
+        this.viewer.selectedEntity = undefined; // the zone's handles mark the selection, not the viewer's bracket
+        if (zoneId !== DRAFT_ID) this.ngZone.run(() => this.geofences.select(zoneId));
         return;
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelCluster) {
@@ -1236,8 +1242,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private drawClick(position: any, pickedObject: any): void {
     const session = this.drawSession();
     if (!session) return;
-    if (session.shape === 'ring') {
-      const entity = pickedObject?.id?._sentinelEntity as Entity | undefined;
+    if (session.shape === 'ring' && !session.anchor) {
+      const entity = this.trackAt(position, pickedObject);
       if (!entity) return;
       const geo = this.displayedGeoPoint(entity, this.wsService.serverNow());
       if (!geo) return;
@@ -1247,6 +1253,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const p = this.pickLngLat(position);
     if (!p) return;
     this.ngZone.run(() => this.drawSession.set(addPoint(session, p)));
+  }
+
+  /** The track under a click, looking a few pixels around it: track icons are small targets. */
+  private trackAt(position: any, pickedObject: any): Entity | undefined {
+    const direct = pickedObject?.id?._sentinelEntity as Entity | undefined;
+    if (direct) return direct;
+    const around = this.viewer.scene.drillPick(position, 8, ANCHOR_PICK_PX, ANCHOR_PICK_PX) as any[];
+    return around.map((p) => p?.id?._sentinelEntity as Entity | undefined).find((e) => !!e);
   }
 
   /** The globe position under a screen point, or null when the point misses the globe. */

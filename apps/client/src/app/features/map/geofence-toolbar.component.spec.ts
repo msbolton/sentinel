@@ -95,4 +95,10 @@ describe('GeofenceToolbarComponent', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(host.cancelled).toBe(1);
   });
+
+  it('tells the ring user to click a track, then click for the radius', () => {
+    host.session.set(newSession('ring', '#f59e0b'));
+    fixture.detectChanges();
+    expect(el.querySelector('.hint')?.textContent).toContain('Click a track to anchor the ring, then click to set the radius');
+  });
 });

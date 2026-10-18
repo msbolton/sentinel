@@ -38,8 +38,11 @@ export function newSession(shape: GeofenceShape, color: string, radiusM = 5000):
   return { shape, color, radiusM, radiusSet: false, points: [], cursor: null, anchor: null };
 }
 
-/** Adds a point; for a circle the second point sets the radius instead. */
+/** Adds a point; for a circle the second point, and for an anchored ring any point, sets the radius instead. */
 export function addPoint(s: DrawSession, p: LngLat): DrawSession {
+  if (s.shape === 'ring') {
+    return s.anchor ? { ...s, radiusM: geodesicDistanceM(s.anchor.position, p), radiusSet: true } : s;
+  }
   if (s.shape === 'circle' && s.points.length >= 1) {
     return { ...s, radiusM: geodesicDistanceM(s.points[0], p), radiusSet: true, points: [s.points[0], p] };
   }
@@ -75,9 +78,17 @@ export function previewRing(s: DrawSession): LngLat[] {
       const r = s.points[1] ? s.radiusM : s.cursor ? geodesicDistanceM(s.points[0], s.cursor) : s.radiusM;
       return r > 0 ? circlePolygon(s.points[0], r) : [];
     }
-    case 'ring':
-      return s.anchor && s.radiusM > 0 ? circlePolygon(s.anchor.position, s.radiusM) : [];
+    case 'ring': {
+      if (!s.anchor) return [];
+      const r = ringRadius(s);
+      return r > 0 ? circlePolygon(s.anchor.position, r) : [];
+    }
   }
+}
+
+/** A ring's radius right now: the cursor's distance from the anchor until a click or the toolbar sets it. */
+function ringRadius(s: DrawSession): number {
+  return s.anchor && !s.radiusSet && s.cursor ? geodesicDistanceM(s.anchor.position, s.cursor) : s.radiusM;
 }
 
 /** What the label beside the cursor says: the edge being drawn, the radius, or the rectangle's size. */
@@ -100,8 +111,10 @@ export function liveMeasure(s: DrawSession): string {
       const r = s.points[1] ? s.radiusM : s.cursor ? geodesicDistanceM(s.points[0], s.cursor) : s.radiusM;
       return r > 0 ? formatDistance(r) : '';
     }
-    case 'ring':
-      return s.anchor ? formatDistance(s.radiusM) : '';
+    case 'ring': {
+      const r = ringRadius(s);
+      return s.anchor && r > 0 ? formatDistance(r) : '';
+    }
   }
 }
 

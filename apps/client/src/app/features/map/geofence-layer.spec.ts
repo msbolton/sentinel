@@ -1,4 +1,4 @@
-import { movedConfig, zoneEntityOptions } from './geofence-layer';
+import { GeofenceLayer, movedConfig, zoneEntityOptions } from './geofence-layer';
 import { geodesicDistanceM } from './geofence-geometry';
 import { GeofenceRule } from '../../shared/models/geofence.model';
 
@@ -88,5 +88,30 @@ describe('movedConfig', () => {
     expect(Math.abs(next.ring!.radiusM - geodesicDistanceM([55.3, 25.2], edge))).toBeLessThan(1);
     expect(next.ring!.entityId).toBe('e9');
     expect(next.polygon).toBeUndefined();
+  });
+});
+
+describe('GeofenceLayer draft', () => {
+  function fakeViewer() {
+    const added: any[] = [];
+    return {
+      added,
+      entities: { add: jest.fn((o: any) => { const e = { ...o }; added.push(e); return e; }), remove: jest.fn() },
+      scene: { requestRender: jest.fn() },
+      isDestroyed: () => false,
+    };
+  }
+
+  it('draws the unsaved draft as a selected zone while it is being named', () => {
+    const viewer = fakeViewer();
+    const layer = new GeofenceLayer(viewer, FakeCesium);
+    const draft = { name: 'New geofence', ruleType: 'GEOFENCE' as const, config: polygonZone.config, monitoredEntityTypes: [], severity: 'HIGH' as const, enabled: true };
+    layer.sync([], null, () => null, draft);
+    const drawn = viewer.added.filter((e) => e._sentinelGeofence);
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0]._sentinelGeofence).toBe('__draft__');
+    expect(drawn[0].polyline.width).toBe(3);
+    layer.sync([], null, () => null, null);
+    expect(viewer.entities.remove).toHaveBeenCalledWith(drawn[0]);
   });
 });

@@ -8,7 +8,7 @@ const SHAPES: { shape: GeofenceShape; label: string; icon: IconName; hint: strin
   { shape: 'polygon', label: 'Polygon', icon: 'hexagon', hint: 'Click to add a point · double-click to close · Esc cancels' },
   { shape: 'rectangle', label: 'Rectangle', icon: 'rectangle', hint: 'Click one corner, then the opposite corner' },
   { shape: 'circle', label: 'Circle', icon: 'circle-dot', hint: 'Click the origin, then click to set the radius' },
-  { shape: 'ring', label: 'Range ring', icon: 'ring', hint: 'Click a track to anchor the ring · drag the edge to resize' },
+  { shape: 'ring', label: 'Range ring', icon: 'ring', hint: 'Click a track to anchor the ring, then click to set the radius' },
 ];
 
 const SWATCH_NAMES = ['Red', 'Orange', 'Yellow', 'Green', 'Cyan', 'Blue', 'Purple'];
@@ -63,9 +63,10 @@ const SWATCH_NAMES = ['Red', 'Orange', 'Yellow', 'Green', 'Cyan', 'Blue', 'Purpl
     </div>
   `,
   styles: [`
-    :host { display: block; }
+    :host { display: block; pointer-events: none; }
     .toolbar {
-      display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 12px;
+      pointer-events: auto;
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 10px 8px 12px; max-width: 100%;
       border-radius: var(--radius-lg); background: var(--bg-panel); backdrop-filter: blur(16px);
       border: 1px solid var(--border-color); box-shadow: var(--shadow-lg); white-space: nowrap;
     }

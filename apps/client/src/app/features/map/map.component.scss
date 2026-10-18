@@ -149,12 +149,21 @@
 }
 
 // --- Geofence draw toolbar ---
+// Sits right of the control stack and, when a panel is open, left of it; wraps when narrow.
 .draw-toolbar {
   position: absolute;
   top: 16px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 68px;
+  right: 16px;
   z-index: 30;
+  display: flex;
+  justify-content: center;
+  // The host lets map clicks through beside the bar; the bar itself re-enables them.
+  pointer-events: none;
+}
+
+.map-container.panel-open .draw-toolbar {
+  right: calc(var(--panel-width) + 16px);
 }
 
 .map-container.drawing .cesium-viewer {

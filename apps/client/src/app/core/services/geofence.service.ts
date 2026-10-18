@@ -100,7 +100,7 @@ export class GeofenceService {
       ? 'everything'
       : zone.monitoredEntityTypes.map((t) => WATCHABLE_TYPES.find((w) => w.type === t)?.label.toLowerCase() ?? t.toLowerCase()).join(', ');
     if (c.shape === 'ring' && c.ring) {
-      const parts = [`anything within ${formatDistance(c.ring.radiusM)}`, zone.severity, 'follows track'];
+      const parts = [`${types} within ${formatDistance(c.ring.radiusM)}`, zone.severity, 'follows track'];
       if (this.anchors().get(c.ring.entityId) === null) parts.push('track lost');
       return parts.join(' · ');
     }

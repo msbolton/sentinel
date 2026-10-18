@@ -1,4 +1,4 @@
-<div class="map-container" [class.drawing]="drawSession()">
+<div class="map-container" [class.drawing]="drawSession()" [class.panel-open]="panelRouteActive()">
   <div #cesiumContainer class="cesium-viewer"></div>
 
   <!-- Map Controls -->
