@@ -30,6 +30,7 @@ type ObservationRef struct {
 	Source          EntitySource           `protobuf:"varint,3,opt,name=source,proto3,enum=sentinel.v1.EntitySource" json:"source,omitempty"`
 	SourceEntityId  string                 `protobuf:"bytes,4,opt,name=source_entity_id,json=sourceEntityId,proto3" json:"source_entity_id,omitempty"`
 	SourceTimestamp *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=source_timestamp,json=sourceTimestamp,proto3" json:"source_timestamp,omitempty"`
+	Background      bool                   `protobuf:"varint,6,opt,name=background,proto3" json:"background,omitempty"` // the observation was a background refresh: no track point
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -97,6 +98,13 @@ func (x *ObservationRef) GetSourceTimestamp() *timestamppb.Timestamp {
 		return x.SourceTimestamp
 	}
 	return nil
+}
+
+func (x *ObservationRef) GetBackground() bool {
+	if x != nil {
+		return x.Background
+	}
+	return false
 }
 
 // EntityCreated: a new entity row exists.
@@ -834,13 +842,16 @@ var File_sentinel_v1_events_proto protoreflect.FileDescriptor
 
 const file_sentinel_v1_events_proto_rawDesc = "" +
 	"\n" +
-	"\x18sentinel/v1/events.proto\x12\vsentinel.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x18sentinel/v1/common.proto\x1a\x18sentinel/v1/entity.proto\"\xf4\x01\n" +
+	"\x18sentinel/v1/events.proto\x12\vsentinel.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x18sentinel/v1/common.proto\x1a\x18sentinel/v1/entity.proto\"\x94\x02\n" +
 	"\x0eObservationRef\x12%\n" +
 	"\x0eobservation_id\x18\x01 \x01(\tR\robservationId\x12\x17\n" +
 	"\afeed_id\x18\x02 \x01(\tR\x06feedId\x121\n" +
 	"\x06source\x18\x03 \x01(\x0e2\x19.sentinel.v1.EntitySourceR\x06source\x12(\n" +
 	"\x10source_entity_id\x18\x04 \x01(\tR\x0esourceEntityId\x12E\n" +
-	"\x10source_timestamp\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x0fsourceTimestamp\"{\n" +
+	"\x10source_timestamp\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x0fsourceTimestamp\x12\x1e\n" +
+	"\n" +
+	"background\x18\x06 \x01(\bR\n" +
+	"background\"{\n" +
 	"\rEntityCreated\x12+\n" +
 	"\x06entity\x18\x01 \x01(\v2\x13.sentinel.v1.EntityR\x06entity\x12=\n" +
 	"\vobservation\x18\x02 \x01(\v2\x1b.sentinel.v1.ObservationRefR\vobservation\"c\n" +

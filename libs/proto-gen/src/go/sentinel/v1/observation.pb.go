@@ -150,8 +150,13 @@ type Observation struct {
 	// the decoder when the source carries a higher level. Entities take the
 	// highest level any contributing observation carried.
 	Classification Classification `protobuf:"varint,34,opt,name=classification,proto3,enum=sentinel.v1.Classification" json:"classification,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// A slow refresh of an object nobody is looking at closely (outside every
+	// detail viewport): it updates the entity's latest position, which search
+	// and alerts read, but is kept out of track history and the observation
+	// archive.
+	Background    bool `protobuf:"varint,35,opt,name=background,proto3" json:"background,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Observation) Reset() {
@@ -422,6 +427,13 @@ func (x *Observation) GetClassification() Classification {
 	return Classification_CLASSIFICATION_UNSPECIFIED
 }
 
+func (x *Observation) GetBackground() bool {
+	if x != nil {
+		return x.Background
+	}
+	return false
+}
+
 var File_sentinel_v1_observation_proto protoreflect.FileDescriptor
 
 const file_sentinel_v1_observation_proto_rawDesc = "" +
@@ -431,7 +443,7 @@ const file_sentinel_v1_observation_proto_rawDesc = "" +
 	"RawPayload\x12!\n" +
 	"\fcontent_type\x18\x01 \x01(\tR\vcontentType\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x12\x1c\n" +
-	"\ttruncated\x18\x03 \x01(\bR\ttruncated\"\xda\x0e\n" +
+	"\ttruncated\x18\x03 \x01(\bR\ttruncated\"\xfa\x0e\n" +
 	"\vObservation\x12%\n" +
 	"\x0eobservation_id\x18\x01 \x01(\tR\robservationId\x12\x17\n" +
 	"\afeed_id\x18\x02 \x01(\tR\x06feedId\x12\x16\n" +
@@ -475,7 +487,10 @@ const file_sentinel_v1_observation_proto_rawDesc = "" +
 	"\n" +
 	"replica_id\x18  \x01(\tR\treplicaId\x12#\n" +
 	"\rfencing_token\x18! \x01(\x03R\ffencingToken\x12C\n" +
-	"\x0eclassification\x18\" \x01(\x0e2\x1b.sentinel.v1.ClassificationR\x0eclassificationB\n" +
+	"\x0eclassification\x18\" \x01(\x0e2\x1b.sentinel.v1.ClassificationR\x0eclassification\x12\x1e\n" +
+	"\n" +
+	"background\x18# \x01(\bR\n" +
+	"backgroundB\n" +
 	"\n" +
 	"\b_headingB\x0e\n" +
 	"\f_speed_knotsB\t\n" +

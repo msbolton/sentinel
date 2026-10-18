@@ -108,6 +108,10 @@ func PointFromEvent(ev *sentinelv1.EntityEvent) (models.BufferedPoint, bool) {
 	if entity == nil || entity.Position == nil || entity.Id == "" {
 		return models.BufferedPoint{}, false
 	}
+	// A background refresh moves the entity but is not track history.
+	if ref != nil && ref.Background {
+		return models.BufferedPoint{}, false
+	}
 	p := models.BufferedPoint{
 		EntityID:      entity.Id,
 		Latitude:      entity.Position.Latitude,

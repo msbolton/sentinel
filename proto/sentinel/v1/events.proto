@@ -15,6 +15,7 @@ message ObservationRef {
   EntitySource source = 3;
   string source_entity_id = 4;
   google.protobuf.Timestamp source_timestamp = 5;
+  bool background = 6;  // the observation was a background refresh: no track point
 }
 
 // EntityCreated: a new entity row exists.

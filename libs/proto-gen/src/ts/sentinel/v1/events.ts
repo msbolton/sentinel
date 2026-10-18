@@ -36,7 +36,11 @@ export interface ObservationRef {
   feedId: string;
   source: EntitySource;
   sourceEntityId: string;
-  sourceTimestamp?: string | undefined;
+  sourceTimestamp?:
+    | string
+    | undefined;
+  /** the observation was a background refresh: no track point */
+  background: boolean;
 }
 
 /** EntityCreated: a new entity row exists. */
@@ -151,6 +155,7 @@ function createBaseObservationRef(): ObservationRef {
     source: EntitySource.UNSPECIFIED,
     sourceEntityId: "",
     sourceTimestamp: undefined,
+    background: false,
   };
 }
 
@@ -170,6 +175,9 @@ export const ObservationRef = {
     }
     if (message.sourceTimestamp !== undefined) {
       Timestamp.encode(toTimestamp(message.sourceTimestamp), writer.uint32(42).fork()).ldelim();
+    }
+    if (message.background !== false) {
+      writer.uint32(48).bool(message.background);
     }
     return writer;
   },
@@ -216,6 +224,13 @@ export const ObservationRef = {
 
           message.sourceTimestamp = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
           continue;
+        case 6:
+          if (tag !== 48) {
+            break;
+          }
+
+          message.background = reader.bool();
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -232,6 +247,7 @@ export const ObservationRef = {
       source: isSet(object.source) ? entitySourceFromJSON(object.source) : EntitySource.UNSPECIFIED,
       sourceEntityId: isSet(object.sourceEntityId) ? globalThis.String(object.sourceEntityId) : "",
       sourceTimestamp: isSet(object.sourceTimestamp) ? globalThis.String(object.sourceTimestamp) : undefined,
+      background: isSet(object.background) ? globalThis.Boolean(object.background) : false,
     };
   },
 
@@ -252,6 +268,9 @@ export const ObservationRef = {
     if (message.sourceTimestamp !== undefined) {
       obj.sourceTimestamp = message.sourceTimestamp;
     }
+    if (message.background !== false) {
+      obj.background = message.background;
+    }
     return obj;
   },
 
@@ -265,6 +284,7 @@ export const ObservationRef = {
     message.source = object.source ?? EntitySource.UNSPECIFIED;
     message.sourceEntityId = object.sourceEntityId ?? "";
     message.sourceTimestamp = object.sourceTimestamp ?? undefined;
+    message.background = object.background ?? false;
     return message;
   },
 };
