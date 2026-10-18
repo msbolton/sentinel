@@ -13,13 +13,13 @@ var Builtins = []Feed{
 	{
 		ID: "opensky", Name: "OpenSky Network", Driver: "opensky", Builtin: true,
 		Description: "Live ADS-B state vectors from the OpenSky Network, polled for the connected clients' viewports.",
-		Config:      json.RawMessage(`{"intervalSec": 10, "viewportTtlSec": 90, "minPollSpacingSec": 3, "maxAreaSqDeg": 400, "maxIntervalSec": 60, "creditFloor": 200, "staleWarnSec": 120, "staleCriticalSec": 300}`),
+		Config:      json.RawMessage(`{"intervalSec": 10, "viewportTtlSec": 90, "minPollSpacingSec": 3, "maxAreaSqDeg": 400, "maxIntervalSec": 60, "creditFloor": 200, "backgroundIntervalSec": 120, "staleWarnSec": 300, "staleCriticalSec": 900}`),
 		SecretRefs:  map[string]string{"clientId": "env:OPENSKY_CLIENT_ID", "clientSecret": "env:OPENSKY_CLIENT_SECRET"},
 	},
 	{
 		ID: "celestrak", Name: "CelesTrak satellites", Driver: "celestrak", Builtin: true,
 		Description: "Satellite positions propagated with SGP4 from CelesTrak orbital elements.",
-		Config:      json.RawMessage(`{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}`),
+		Config:      json.RawMessage(`{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "backgroundIntervalSec": 600, "staleWarnSec": 900, "staleCriticalSec": 1800}`),
 		SecretRefs:  map[string]string{},
 	},
 	{
@@ -31,7 +31,7 @@ var Builtins = []Feed{
 	{
 		ID: "aisstream", Name: "aisstream.io AIS", Driver: "aisstream", Builtin: true,
 		Description: "Worldwide AIS from aisstream.io: vessels over the connected clients' viewports plus an MMSI watchlist.",
-		Config:      json.RawMessage(`{"maxAreaSqDeg": 2500, "movingIntervalSec": 15, "stationaryIntervalSec": 180, "staleWarnSec": 600, "staleCriticalSec": 1800}`),
+		Config:      json.RawMessage(`{"movingIntervalSec": 15, "stationaryIntervalSec": 180, "backgroundIntervalSec": 300, "staleWarnSec": 600, "staleCriticalSec": 1800}`),
 		SecretRefs:  map[string]string{"apiKey": "env:AISSTREAM_API_KEY"},
 	},
 }

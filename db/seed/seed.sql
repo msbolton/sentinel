@@ -87,12 +87,12 @@ INSERT INTO sentinel.feeds (id, name, description, driver, config, secret_refs, 
 VALUES
   ('opensky', 'OpenSky Network', 'Live ADS-B state vectors from the OpenSky Network, polled for the connected clients'' viewports.',
    'opensky',
-   '{"intervalSec": 10, "viewportTtlSec": 90, "minPollSpacingSec": 3, "maxAreaSqDeg": 400, "maxIntervalSec": 60, "creditFloor": 200, "staleWarnSec": 120, "staleCriticalSec": 300}'::jsonb,
+   '{"intervalSec": 10, "viewportTtlSec": 90, "minPollSpacingSec": 3, "maxAreaSqDeg": 400, "maxIntervalSec": 60, "creditFloor": 200, "backgroundIntervalSec": 120, "staleWarnSec": 300, "staleCriticalSec": 900}'::jsonb,
    '{"clientId": "env:OPENSKY_CLIENT_ID", "clientSecret": "env:OPENSKY_CLIENT_SECRET"}'::jsonb,
    FALSE, TRUE),
   ('celestrak', 'CelesTrak satellites', 'Satellite positions propagated with SGP4 from CelesTrak orbital elements.',
    'celestrak',
-   '{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}'::jsonb,
+   '{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "backgroundIntervalSec": 600, "staleWarnSec": 900, "staleCriticalSec": 1800}'::jsonb,
    '{}'::jsonb,
    FALSE, TRUE),
   ('intelsky', 'IntelSky military aircraft', 'Military and government aircraft worldwide from IntelSky (intelsky.org).',
@@ -102,7 +102,7 @@ VALUES
    FALSE, TRUE),
   ('aisstream', 'aisstream.io AIS', 'Worldwide AIS from aisstream.io: vessels over the connected clients'' viewports plus an MMSI watchlist.',
    'aisstream',
-   '{"maxAreaSqDeg": 2500, "movingIntervalSec": 15, "stationaryIntervalSec": 180, "staleWarnSec": 600, "staleCriticalSec": 1800}'::jsonb,
+   '{"movingIntervalSec": 15, "stationaryIntervalSec": 180, "backgroundIntervalSec": 300, "staleWarnSec": 600, "staleCriticalSec": 1800}'::jsonb,
    '{"apiKey": "env:AISSTREAM_API_KEY"}'::jsonb,
    FALSE, TRUE)
 ON CONFLICT (id) DO NOTHING;

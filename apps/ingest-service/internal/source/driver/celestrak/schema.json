@@ -13,6 +13,7 @@
     "supplemental": { "type": "array", "items": { "type": "string", "enum": ["starlink", "oneweb", "kuiper", "planet", "iridium", "gps", "glonass", "ses", "intelsat", "telesat", "orbcomm", "iss", "css", "cpf", "ast", "eumetsat"] }, "title": "Supplemental GP files", "description": "Operator-supplied elements, usually better than the catalog for these constellations" },
     "refreshHours": { "type": "integer", "minimum": 2, "default": 2, "title": "Refresh (h)", "description": "How often elements are fetched; CelesTrak updates every two hours and blocks faster polling" },
     "tleRefreshHours": { "type": "integer", "minimum": 2, "title": "Refresh (h, former name)", "description": "Renamed refreshHours; still accepted", "deprecated": true },
+    "backgroundIntervalSec": { "type": "integer", "minimum": 0, "default": 600, "title": "Background interval (s)", "description": "How often every satellite is emitted wherever it is, so all are in the database for search; ones outside the viewed area update their entity but not track history. 0 disables." },
     "propagationIntervalSec": { "type": "integer", "minimum": 1, "default": 60, "title": "Propagation interval (s)" },
     "baseUrl": { "type": "string", "format": "uri", "title": "GP URL", "description": "Override for testing; default https://celestrak.org/NORAD/elements/gp.php" },
     "supplementalUrl": { "type": "string", "format": "uri", "title": "Supplemental GP URL", "description": "Override for testing; default https://celestrak.org/NORAD/elements/supplemental/sup-gp.php" }

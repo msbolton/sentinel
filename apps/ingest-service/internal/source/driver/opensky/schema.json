@@ -11,6 +11,7 @@
     "minPollSpacingSec": { "type": "integer", "minimum": 0, "default": 3, "title": "Minimum spacing between polls (s)" },
     "maxAreaSqDeg": { "type": "number", "exclusiveMinimum": 0, "default": 400, "title": "Area above which polling slows (sq deg)" },
     "maxIntervalSec": { "type": "integer", "minimum": 1, "default": 60, "title": "Slowest poll interval (s)" },
+    "backgroundIntervalSec": { "type": "integer", "minimum": 0, "default": 120, "title": "Background interval (s)", "description": "How often the whole globe is polled so every aircraft is in the database; aircraft outside the viewed area update their entity but not track history. A global poll costs 4 credits; 0 disables. Viewport mode only, at least 60." },
     "creditFloor": { "type": "integer", "minimum": 0, "default": 200, "title": "Credit floor", "description": "Below this many remaining daily credits, poll at the slowest interval." },
     "tokenUrl": { "type": "string", "format": "uri", "title": "OAuth token URL" },
     "baseUrl": { "type": "string", "format": "uri", "title": "API URL", "description": "Override for testing; default https://opensky-network.org/api/states/all" }

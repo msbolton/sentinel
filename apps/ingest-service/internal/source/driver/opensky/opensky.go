@@ -1,7 +1,12 @@
-// Package opensky polls the OpenSky Network REST API for the area connected
-// map clients can see. It idles without an active area (viewport mode),
-// stretches the interval for large areas, slows down when the daily
-// credit quota runs low, and deduplicates aircraft across boxes.
+// Package opensky polls the OpenSky Network REST API at two speeds: the
+// area connected map clients can see at the full interval (viewport mode,
+// stretched for large areas and when the daily credit quota runs low), and
+// the whole globe every backgroundIntervalSec (2 min) whether or not anyone
+// is looking, so every aircraft is in the database for search. Aircraft
+// the background poll finds outside the viewed area are marked background:
+// they update their entity but not track history. A global poll costs 4
+// credits, so 2 minutes uses about 2 900 of an account's 4 000 a day; when
+// credits run low the background poll slows to every 10 minutes.
 package opensky
 
 import (
@@ -29,6 +34,10 @@ const (
 	defaultBaseURL  = "https://opensky-network.org/api/states/all"
 	defaultTokenURL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 	defaultAreaTTL  = 90 * time.Second
+
+	defaultBackground    = 2 * time.Minute
+	minBackground        = time.Minute
+	lowCreditsBackground = 10 * time.Minute
 )
 
 //go:embed schema.json
@@ -56,8 +65,11 @@ type Config struct {
 	MaxAreaSqDeg      float64 `json:"maxAreaSqDeg"`
 	MaxIntervalSec    int     `json:"maxIntervalSec"`
 	CreditFloor       *int    `json:"creditFloor"`
-	TokenURL          string  `json:"tokenUrl"`
-	BaseURL           string  `json:"baseUrl"`
+	// BackgroundIntervalSec is how often the globe is polled for aircraft
+	// outside the viewed area; 0 disables. Only in viewport mode.
+	BackgroundIntervalSec *int   `json:"backgroundIntervalSec"`
+	TokenURL              string `json:"tokenUrl"`
+	BaseURL               string `json:"baseUrl"`
 }
 
 // Driver is one OpenSky feed.
@@ -69,10 +81,18 @@ type Driver struct {
 	client   *httppoll.Client
 	sched    *httppoll.Scheduler
 	viewport bool
+	// background is the global poll interval; 0 when disabled.
+	background time.Duration
+	now        func() time.Time
 
 	mu      sync.Mutex
 	sink    driver.Sink
 	lastErr string
+
+	bgPolls    int64
+	bgAircraft int
+	bgNext     time.Time
+	bgErr      string
 }
 
 // New validates the config and builds the driver.
@@ -81,7 +101,19 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if err := driver.DecodeConfig(spec, &cfg); err != nil {
 		return nil, err
 	}
-	d := &Driver{spec: spec, logger: deps.Logger, cfg: cfg, baseURL: defaultBaseURL, viewport: cfg.ViewportMode == nil || *cfg.ViewportMode}
+	d := &Driver{spec: spec, logger: deps.Logger, cfg: cfg, baseURL: defaultBaseURL, viewport: cfg.ViewportMode == nil || *cfg.ViewportMode, now: time.Now}
+	if d.logger == nil {
+		d.logger = zap.NewNop()
+	}
+	if d.viewport {
+		d.background = defaultBackground
+		if cfg.BackgroundIntervalSec != nil {
+			d.background = time.Duration(*cfg.BackgroundIntervalSec) * time.Second
+			if d.background > 0 && d.background < minBackground {
+				d.background = minBackground
+			}
+		}
+	}
 	if cfg.BaseURL != "" {
 		d.baseURL = cfg.BaseURL
 	}
@@ -158,7 +190,14 @@ func (d *Driver) Run(ctx context.Context, sink driver.Sink) error {
 	d.mu.Lock()
 	d.sink = sink
 	d.mu.Unlock()
-	d.logger.Info("opensky started", zap.Bool("viewport_mode", d.viewport), zap.Bool("authenticated", d.client.Auth.Kind == httppoll.AuthOAuth2))
+	d.logger.Info("opensky started", zap.Bool("viewport_mode", d.viewport), zap.Bool("authenticated", d.client.Auth.Kind == httppoll.AuthOAuth2), zap.Duration("background", d.background))
+	if d.background > 0 {
+		done := make(chan struct{})
+		defer func() { <-done }()
+		bgCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go func() { defer close(done); d.runBackground(bgCtx, sink) }()
+	}
 	return d.sched.Run(ctx, func(idle bool) {
 		if idle {
 			d.logger.Info("opensky idle: waiting for an active viewport")
@@ -191,10 +230,103 @@ func (d *Driver) Health() driver.Health {
 	d.mu.Lock()
 	lastErr := d.lastErr
 	d.mu.Unlock()
-	return driver.Health{Idle: st.Idle, Connected: !st.LastPollAt.IsZero(), LastError: lastErr, Detail: map[string]any{
+	detail := map[string]any{
 		"idle": st.Idle, "active": st.Active, "areaSqDeg": st.AreaSqDeg, "effectiveIntervalSec": int(st.EffectiveInterval / time.Second),
 		"lowCredits": st.LowCredits, "polls": d.sched.Polls(),
-	}}
+	}
+	d.mu.Lock()
+	connected := !st.LastPollAt.IsZero() || d.bgPolls > 0
+	if d.background > 0 {
+		detail["backgroundIntervalSec"] = int(d.background / time.Second)
+		detail["backgroundPolls"] = d.bgPolls
+		detail["backgroundAircraft"] = d.bgAircraft
+		if !d.bgNext.IsZero() {
+			detail["nextBackgroundAt"] = d.bgNext.UTC().Format(time.RFC3339)
+		}
+		if d.bgErr != "" {
+			detail["backgroundError"] = d.bgErr
+		}
+	}
+	d.mu.Unlock()
+	return driver.Health{Idle: st.Idle && d.background == 0, Connected: connected, LastError: lastErr, Detail: detail}
+}
+
+// runBackground polls the globe every background interval (slower while
+// credits are low) until ctx ends.
+func (d *Driver) runBackground(ctx context.Context, sink driver.Sink) {
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		d.pollGlobe(ctx, sink)
+		wait := d.background
+		if d.sched.Status().LowCredits && wait < lowCreditsBackground {
+			wait = lowCreditsBackground
+		}
+		d.mu.Lock()
+		d.bgNext = d.now().Add(wait)
+		d.mu.Unlock()
+		timer.Reset(wait)
+	}
+}
+
+// pollGlobe fetches every aircraft and emits those outside the live area
+// as background fixes; the area poll covers the rest at full rate.
+func (d *Driver) pollGlobe(ctx context.Context, sink driver.Sink) {
+	area := d.sched.Area()
+	live := area.Active && len(area.Boxes) > 0 && !area.Expired(d.now())
+	resp, err := d.client.GetOK(ctx, d.baseURL)
+	if err != nil {
+		var se *httppoll.StatusError
+		if errors.As(err, &se) {
+			d.quota(se.Header.Get("X-Rate-Limit-Remaining"))
+		}
+		d.mu.Lock()
+		d.bgErr = err.Error()
+		d.mu.Unlock()
+		d.logger.Warn("opensky background poll failed", zap.Error(err))
+		return
+	}
+	d.quota(resp.Header.Get("X-Rate-Limit-Remaining"))
+	out, err := openskystates.Decode(resp.Body)
+	if err != nil {
+		sink.DeadLetter(resp.Body, "parse_error", err)
+		d.mu.Lock()
+		d.bgErr = err.Error()
+		d.mu.Unlock()
+		return
+	}
+	sent := 0
+	for _, o := range out {
+		if live && o.HasPosition && inAnyBox(area.Boxes, o.Latitude, o.Longitude) {
+			continue // the area poll reports it at full rate
+		}
+		o.Background = true
+		if err := sink.Emit(ctx, o); err != nil {
+			return
+		}
+		sent++
+	}
+	sink.Succeeded(sent)
+	d.mu.Lock()
+	d.bgPolls++
+	d.bgAircraft = sent
+	d.bgErr = ""
+	d.mu.Unlock()
+	d.logger.Info("opensky background poll complete", zap.Int("aircraft", sent), zap.Int("total", len(out)))
+}
+
+func inAnyBox(boxes []aoi.BBox, lat, lon float64) bool {
+	for _, b := range boxes {
+		if b.Contains(lat, lon) {
+			return true
+		}
+	}
+	return false
 }
 
 // poll fetches every box of the area (or the globe) and emits each

@@ -39,6 +39,7 @@ const (
 	maxJitter              = 5 * time.Minute
 	maxBackoff             = time.Minute
 	maxRetryAfter          = 6 * time.Hour
+	defaultBackground      = 10 * time.Minute
 )
 
 //go:embed schema.json
@@ -69,6 +70,9 @@ type Config struct {
 	PropagationIntervalSec int    `json:"propagationIntervalSec"`
 	BaseURL                string `json:"baseUrl"`
 	SupplementalURL        string `json:"supplementalUrl"`
+	// BackgroundIntervalSec is how often every satellite is emitted, as a
+	// background fix, wherever it is; 0 disables.
+	BackgroundIntervalSec *int `json:"backgroundIntervalSec"`
 }
 
 type cached struct {
@@ -93,6 +97,9 @@ type Driver struct {
 	step    time.Duration
 	jitter  func() time.Duration
 	now     func() time.Time
+	// background is how often satellites outside the viewed area are
+	// emitted as background fixes; 0 disables.
+	background time.Duration
 
 	wake chan struct{} // an area change asks for a tick now
 
@@ -108,6 +115,8 @@ type Driver struct {
 	nextFetch  time.Time
 	polls      int64
 	emitted    int
+	lastBg     time.Time
+	bgEmitted  int
 }
 
 // New validates the config and builds the driver.
@@ -140,6 +149,13 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 		members: map[string][]int{},
 		cond:    map[string]condState{},
 		selErr:  map[string]string{},
+	}
+	d.background = defaultBackground
+	if cfg.BackgroundIntervalSec != nil {
+		d.background = time.Duration(*cfg.BackgroundIntervalSec) * time.Second
+		if d.background > 0 && d.background < d.step {
+			d.background = d.step
+		}
 	}
 	if cfg.BaseURL != "" {
 		d.baseURL = cfg.BaseURL
@@ -234,7 +250,7 @@ func (d *Driver) AreaStatus() aoi.Status {
 		LastPollAt:        d.lastFetch,
 		NextPollIn:        d.step,
 		ExpiresAt:         d.area.ExpiresAt,
-		Idle:              !d.liveLocked(d.now()) && d.pinnedLocked() == 0,
+		Idle:              !d.liveLocked(d.now()) && d.pinnedLocked() == 0 && d.background == 0,
 		CreditsRemaining:  -1,
 	}
 }
@@ -283,7 +299,11 @@ func (d *Driver) Health() driver.Health {
 		}
 		detail["errors"] = errs
 	}
-	return driver.Health{Idle: !live && pinned == 0, Connected: !d.lastFetch.IsZero(), LastError: d.lastErr, Detail: detail}
+	if d.background > 0 {
+		detail["backgroundIntervalSec"] = int(d.background / time.Second)
+		detail["backgroundEmitted"] = d.bgEmitted
+	}
+	return driver.Health{Idle: !live && pinned == 0 && d.background == 0, Connected: !d.lastFetch.IsZero(), LastError: d.lastErr, Detail: detail}
 }
 
 // fetchAll requests every selection once and rebuilds the cache from the
@@ -448,11 +468,12 @@ func (d *Driver) propagate(ctx context.Context, sink driver.Sink) {
 	}
 	live := d.liveLocked(now)
 	boxes := append([]aoi.BBox(nil), d.area.Boxes...)
+	bgDue := d.background > 0 && now.Sub(d.lastBg) >= d.background
 	d.mu.Unlock()
 	if len(snapshot) == 0 {
 		return
 	}
-	sent := 0
+	sent, background := 0, 0
 	for _, c := range snapshot {
 		o := tlesgp4.Propagate(c.tle, now)
 		if o == nil {
@@ -460,8 +481,12 @@ func (d *Driver) propagate(ctx context.Context, sink driver.Sink) {
 			continue
 		}
 		if !c.pinned && !(live && inAnyBox(boxes, o.Latitude, o.Longitude)) {
-			sink.Skipped("out_of_area")
-			continue
+			if !bgDue {
+				sink.Skipped("out_of_area")
+				continue
+			}
+			o.Background = true
+			background++
 		}
 		if err := sink.Emit(ctx, o); err != nil {
 			return
@@ -471,6 +496,9 @@ func (d *Driver) propagate(ctx context.Context, sink driver.Sink) {
 	d.mu.Lock()
 	d.polls++
 	d.emitted = sent
+	if bgDue {
+		d.lastBg, d.bgEmitted = now, background
+	}
 	d.mu.Unlock()
 	sink.Succeeded(sent)
 	d.logger.Info("celestrak propagation complete", zap.Int("emitted", sent), zap.Int("cached", len(snapshot)))
