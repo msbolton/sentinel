@@ -3,6 +3,7 @@ package transport
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -20,7 +21,9 @@ func ScanConn(ctx context.Context, conn net.Conn, cfg Config, emit Emit) error {
 		return err
 	}
 	sc := bufio.NewScanner(conn)
-	sc.Buffer(make([]byte, 0, 64*1024), cfg.MaxFrame())
+	// A delimited token carries its varint prefix, so the bound leaves room
+	// for it; the framers enforce the frame limit themselves.
+	sc.Buffer(make([]byte, 0, 64*1024), cfg.MaxFrame()+binary.MaxVarintLen64)
 	sc.Split(split)
 	remote := ""
 	if conn.RemoteAddr() != nil {

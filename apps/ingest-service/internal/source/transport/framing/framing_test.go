@@ -3,6 +3,8 @@ package framing
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"testing"
 )
 
@@ -103,5 +105,61 @@ func TestUnknownAndMessageFraming(t *testing.T) {
 	}
 	if !Known(Message) || !Known("") || Known("nope") {
 		t.Error("Known is wrong")
+	}
+}
+
+func delimitedFrames(t *testing.T, input []byte, max int) ([][]byte, error) {
+	t.Helper()
+	split, err := New(Delimited, max)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := bufio.NewScanner(bytes.NewReader(input))
+	sc.Buffer(make([]byte, 0, 16), max+binary.MaxVarintLen64)
+	sc.Split(split)
+	var out [][]byte
+	for sc.Scan() {
+		out = append(out, append([]byte(nil), sc.Bytes()...))
+	}
+	return out, sc.Err()
+}
+
+func TestDelimitedSplitsVarintFrames(t *testing.T) {
+	long := bytes.Repeat([]byte{'x'}, 300) // needs a two-byte varint
+	var in []byte
+	for _, p := range [][]byte{[]byte("ab"), long, []byte("c")} {
+		in = binary.AppendUvarint(in, uint64(len(p)))
+		in = append(in, p...)
+	}
+	frames, err := delimitedFrames(t, in, 1<<16)
+	if err != nil || len(frames) != 3 || string(frames[0]) != "ab" || len(frames[1]) != 300 || string(frames[2]) != "c" {
+		t.Fatalf("frames %d err %v", len(frames), err)
+	}
+	if !Known(Delimited) {
+		t.Error("delimited must be a known framing")
+	}
+}
+
+func TestDelimitedRejectsHugeAndMalformed(t *testing.T) {
+	huge := binary.AppendUvarint(nil, 1<<40) // a claimed 1 TiB frame
+	if _, err := delimitedFrames(t, append(huge, 'x'), 1<<16); !errors.Is(err, ErrFrameTooLong) {
+		t.Errorf("huge length: err = %v, want ErrFrameTooLong", err)
+	}
+	overlong := bytes.Repeat([]byte{0xff}, 11) // never terminates within 10 bytes
+	if _, err := delimitedFrames(t, overlong, 1<<16); err == nil || errors.Is(err, ErrFrameTooLong) {
+		t.Errorf("malformed varint: err = %v", err)
+	}
+	truncated := append(binary.AppendUvarint(nil, 10), 'a', 'b')
+	if _, err := delimitedFrames(t, truncated, 1<<16); err == nil {
+		t.Error("a frame cut short at EOF must be an error")
+	}
+}
+
+func TestDelimitedUnlimitedRejectsOverflowingLength(t *testing.T) {
+	// With no frame bound, a length that does not fit in an int must be an
+	// error rather than a slice panic.
+	huge := binary.AppendUvarint(nil, 1<<63)
+	if _, err := delimitedFrames(t, append(huge, 'x'), 0); err == nil {
+		t.Error("a length beyond the buffered data must be an error")
 	}
 }
