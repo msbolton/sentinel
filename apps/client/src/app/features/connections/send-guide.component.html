@@ -1,33 +1,48 @@
 @if (target(); as t) {
-  <section class="send-guide">
+  <section class="send-guide" [attr.aria-labelledby]="idBase() + '-h'">
     @if (t.mode === 'listen') {
-      <h4>Send to <code>{{ endpoint() }}</code></h4>
-      <p class="muted">
-        {{ t.protocol === 'tcp' ? 'TCP' : 'UDP' }}, format <code>{{ t.format }}</code>
-        @if (encodingNote(); as note) { ({{ note }}) }.
-        @if (t.tls) { TLS required{{ t.requireClientCert ? ', with a client certificate signed by the configured CA' : '' }}. }
+      <h4 [id]="idBase() + '-h'">Send to <code>{{ endpoint() }}</code></h4>
+      <p class="muted format">
+        {{ t.protocol === 'tcp' ? 'TCP' : 'UDP' }}, format <code>{{ formatLabel() }}</code>, framing <code>{{ t.framing }}</code>: {{ framingNote() }}.
+        @if (t.tls) {
+          TLS required{{ t.requireClientCert ? ', with a client certificate signed by the configured CA' : '' }}.
+        }
       </p>
-      @if (!t.host) {
-        <p class="warn">{{ lastError() || 'Not running on a listener replica yet.' }}</p>
+    } @else {
+      <h4 [id]="idBase() + '-h'">Connects to <code>{{ endpoint() }}</code></h4>
+      <p class="muted format">Sentinel connects and reads {{ formatLabel() }} messages, framing <code>{{ t.framing }}</code>: {{ framingNote() }}.</p>
+      @if (connectedSince(); as since) {
+        <p class="muted since">Connected since {{ since | date: 'HH:mm:ss' }}</p>
+      }
+    }
+    <!-- Always in the page, so a screen reader announces a message that appears in it. -->
+    <div class="status" role="status">
+      @if (lastError(); as err) {
+        <p class="warn">Last error: {{ err }}</p>
+      } @else if (t.mode === 'listen' && !t.host) {
+        <p class="warn">Not running on a listener replica yet.</p>
       }
       @if (allowOpen()) {
         <p class="warn">No allowlist: anyone who can reach this port can send.</p>
       }
-      @if (netcat(); as nc) {
-        <p class="label">Try it</p>
-        <pre class="mono">{{ nc }}</pre>
+    </div>
+    @if (t.mode === 'listen') {
+      @if (testCommand(); as test) {
+        <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: test }" />
+      }
+      @if (jsonSample(); as sample) {
+        <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: sample }" />
       }
       @if (showExamples()) {
-        <details>
+        <details class="examples">
           <summary>Sender examples (Go, Python)</summary>
-          <pre class="mono">{{ go() }}</pre>
-          <pre class="mono">{{ python() }}</pre>
+          <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: go() }" />
+          <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: python() }" />
         </details>
-      }
-    } @else {
-      <h4>Connects to <code>{{ endpoint() }}</code></h4>
-      @if (lastError(); as err) {
-        <p class="warn">{{ err }}</p>
+      } @else {
+        @if (noExamplesNote(); as why) {
+          <p class="muted note">{{ why }}</p>
+        }
       }
     }
     <p class="label">Protocol definitions</p>
@@ -38,24 +53,89 @@
     </p>
     @if (senders().length > 0) {
       <table class="senders">
+        <caption>
+          Senders in the last 10 minutes
+          @if (distinctSenders() > senders().length) {
+            (showing {{ senders().length }} of {{ distinctSenders() }})
+          }
+        </caption>
         <thead>
-          <tr><th>Sender</th><th>Messages</th><th>Last</th></tr>
+          <tr>
+            <th scope="col">Sender</th>
+            <th scope="col">Messages</th>
+            <th scope="col">Last</th>
+            @if (showSince()) {
+              <th scope="col">Connected since</th>
+            }
+            @if (hasDiagnostics()) {
+              <th scope="col">Undecodable</th>
+              <th scope="col">Last reason</th>
+            }
+          </tr>
         </thead>
         <tbody>
           @for (s of senders(); track s.remote) {
             <tr>
               <td class="mono">{{ s.remote }}{{ s.connected ? ' (connected)' : '' }}</td>
-              <td>{{ s.messages }}</td>
-              <td>{{ s.lastAt | date: 'HH:mm:ss' }}</td>
+              <td>{{ s.messages | number }}</td>
+              <td>
+                @if (senderTime(s.lastAt); as last) {
+                  {{ last | date: 'HH:mm:ss' }}
+                } @else {
+                  <span title="connected, nothing received yet">—</span>
+                }
+              </td>
+              @if (showSince()) {
+                <td>
+                  @if (s.connected && senderTime(s.since); as since) {
+                    {{ since | date: 'HH:mm:ss' }}
+                  } @else {
+                    —
+                  }
+                </td>
+              }
+              @if (hasDiagnostics()) {
+                <td>{{ s.malformed ?? 0 | number }}</td>
+                <td [attr.title]="s.lastError || null">{{ s.lastReason }}</td>
+              }
             </tr>
           }
         </tbody>
       </table>
     }
-    <p class="counters mono">
-      @for (c of counters(); track c.key) {
-        <span>{{ c.key }} {{ c.value }}</span>
-      }
-    </p>
+    @if (counters().length > 0) {
+      <dl class="counters">
+        @for (c of counters(); track c.key) {
+          <div [title]="c.help">
+            <dt>{{ c.label }}</dt>
+            <dd>{{ c.value | number }}</dd>
+          </div>
+        }
+      </dl>
+      <details class="glossary">
+        <summary>What the counters mean</summary>
+        <dl>
+          @for (c of counters(); track c.key) {
+            <dt>{{ c.label }}</dt>
+            <dd>{{ c.help }}</dd>
+          }
+        </dl>
+      </details>
+    }
+    <span class="sr-only" aria-live="polite">{{ copied() ? 'Copied to the clipboard' : '' }}</span>
   </section>
 }
+
+<ng-template #snippet let-s>
+  <figure class="snippet">
+    <figcaption [id]="idBase() + '-' + s.key">{{ s.title }}</figcaption>
+    <pre #pre class="mono" tabindex="0" role="region" [attr.aria-labelledby]="idBase() + '-' + s.key">{{ s.text }}</pre>
+    <button
+      type="button"
+      class="copy"
+      [class.copied]="copied() === s.key"
+      [attr.aria-describedby]="idBase() + '-' + s.key"
+      (click)="copy(s, pre)"
+    >{{ copied() === s.key ? 'Copied' : 'Copy' }}</button>
+  </figure>
+</ng-template>

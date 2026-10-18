@@ -1,4 +1,5 @@
 import { Feed } from '../../shared/models/feed.model';
+import { joinHostPort } from './listen-config';
 
 /** Where an external system sends to, or where Sentinel connects to. */
 export interface SendTarget {
@@ -8,40 +9,102 @@ export interface SendTarget {
   port: number;
   format: string;
   encoding: 'protobuf' | 'json';
+  /** How the stream is cut into messages, as the connection runs it: a key of FRAMING_NOTES. */
+  framing: string;
   tls: boolean;
   requireClientCert: boolean;
+  /** The name a sender checks the listener's certificate against, when the config sets one; else the host. */
+  serverName: string;
+  /** IP addresses and CIDR ranges allowed to send; empty is open to anyone who can reach the port. */
+  allow: string[];
 }
 
 /** The proto files a sender needs, served from assets/proto/sentinel/v1/. */
 export const PROTO_FILES = ['observation.proto', 'common.proto', 'entity.proto', 'platform.proto'];
 
+/** What the examples say until the listener's host is known. */
+const LISTENER_HOST = 'LISTENER_HOST';
+
+/** Where the examples assume the generated Go code lives. */
+const SENTINEL_GO_IMPORT = 'example.com/yourapp/sentinel/v1';
+
 function recordOf(v: unknown): Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+function stringsOf(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
+function textOf(v: unknown): string {
+  return typeof v === 'string' ? v : '';
 }
 
 /** A TCP or UDP connection's target, from its running health (host) and its config; null for other drivers. */
 export function sendTarget(feed: Feed): SendTarget | null {
   if (feed.driver !== 'tcp' && feed.driver !== 'udp') return null;
+  const protocol = feed.driver;
   const config = recordOf(feed.config);
   const detail = recordOf(feed.status?.detail);
   const tls = recordOf(config['tls']);
-  const mode: 'listen' | 'connect' = feed.driver === 'tcp' && config['mode'] === 'connect' ? 'connect' : 'listen';
+  const mode: 'listen' | 'connect' = protocol === 'tcp' && config['mode'] === 'connect' ? 'connect' : 'listen';
   const running = recordOf(mode === 'listen' ? detail['listen'] : detail['connect']);
+  const format = textOf(config['format']) || 'sentinel';
+  const encoding = config['encoding'] === 'json' ? 'json' : 'protobuf';
+  // Datagrams have no TLS, whatever a stray key says; a client certificate needs TLS.
+  const tlsOn = protocol === 'tcp' && !!tls['enabled'];
+  // A running connection reports the framing it uses; before that, the config's override (TCP only).
+  const override = protocol === 'tcp' ? textOf(config['framing']) : '';
+  const framing = textOf(detail['framing']) || override || impliedFraming(protocol, format, encoding);
   return {
     mode,
-    protocol: feed.driver,
+    protocol,
     host: mode === 'connect' ? String(config['host'] ?? '') : String(running['host'] ?? ''),
     port: Number(running['port'] ?? config['port'] ?? 0),
-    format: String(config['format'] ?? 'sentinel'),
-    encoding: config['encoding'] === 'json' ? 'json' : 'protobuf',
-    tls: !!tls['enabled'],
-    requireClientCert: !!tls['requireClientCert'],
+    format,
+    encoding,
+    framing,
+    tls: tlsOn,
+    requireClientCert: tlsOn && !!tls['requireClientCert'],
+    serverName: textOf(tls['serverName']),
+    allow: stringsOf(config['allow']),
   };
 }
 
+/**
+ * The framing a format and encoding imply when the config does not override it: the server's
+ * tcp.FramingFor and udp.framingFor. The encoding matters to the sentinel format only.
+ */
+export function impliedFraming(protocol: 'tcp' | 'udp', format: string, encoding: 'protobuf' | 'json'): string {
+  const sentinel = format === '' || format === 'sentinel';
+  if (protocol === 'udp') {
+    if (sentinel) return encoding === 'json' ? 'line' : 'message';
+    return format === 'cot' || format === 'link16' ? 'message' : 'line';
+  }
+  if (sentinel) return encoding === 'json' ? 'line' : 'delimited';
+  if (format === 'cot') return 'xmlevent';
+  if (format === 'beast') return 'beast';
+  return 'line';
+}
+
+/** What each framing looks like on the wire (the server's transport/framing package). */
+export const FRAMING_NOTES: Record<string, string> = {
+  line: 'one message per line, ended by a newline',
+  lengthprefix: 'each message preceded by its length as 2 bytes, big-endian',
+  delimited: 'each message preceded by its length as a protobuf varint',
+  beast: 'Mode-S Beast binary frames',
+  xmlevent: 'one <event>…</event> element per message (Cursor-on-Target)',
+  message: 'one message per datagram',
+};
+
 /** "host:port/protocol"; the host is "listener" until the connection runs. */
 export function endpointLabel(t: SendTarget): string {
-  return `${t.host || 'listener'}:${t.port}/${t.protocol}`;
+  return `${joinHostPort(t.host || 'listener', t.port)}/${t.protocol}`;
+}
+
+/** The host an example connects to: the listener's, or a placeholder until it is known. */
+function hostOf(t: SendTarget): string {
+  return t.host || LISTENER_HOST;
 }
 
 /** A minimal Observation in protobuf JSON form. */
@@ -54,54 +117,295 @@ export function jsonExample(): string {
   });
 }
 
-/** A one-line test with netcat, for plain-text JSON only. */
-export function netcatCommand(t: SendTarget): string | null {
-  if (t.format !== 'sentinel' || t.encoding !== 'json' || t.tls || !t.host) return null;
-  return `echo '${jsonExample()}' | nc ${t.protocol === 'udp' ? '-u ' : ''}-w1 ${t.host} ${t.port}`;
+/** Whether a sender writes Sentinel's own messages as one JSON object per line. */
+function sendsJsonLines(t: SendTarget): boolean {
+  return t.mode === 'listen' && t.format === 'sentinel' && t.encoding === 'json' && t.framing === 'line';
 }
 
-/** A Go sender for binary protobuf. */
+/**
+ * Whether the Go and Python examples fit the connection: Sentinel's protobuf, written with a varint
+ * length in front (TCP) or as one whole datagram (UDP). Any other framing needs different code.
+ */
+export function protobufExamplesFit(t: SendTarget): boolean {
+  return t.format === 'sentinel' && t.encoding === 'protobuf' && t.framing === (t.protocol === 'tcp' ? 'delimited' : 'message');
+}
+
+/** Why there are no Go or Python examples for this connection; empty when there are. */
+export function examplesNote(t: SendTarget): string {
+  if (protobufExamplesFit(t)) return '';
+  if (t.format !== 'sentinel') {
+    return `This connection reads ${t.format} messages from a device, not Sentinel's own, so there are no Sentinel samples or examples to show. Point the device at ${endpointLabel(t)}.`;
+  }
+  if (t.encoding === 'json') {
+    return 'The Go and Python examples write binary protobuf. This connection takes JSON, as in the sample above.';
+  }
+  const wants = t.protocol === 'tcp' ? 'length-delimited protobuf' : 'one protobuf message per datagram';
+  return `The Go and Python examples write ${wants}, but this connection uses ${t.framing} framing (${FRAMING_NOTES[t.framing] ?? t.framing}), so they would not be accepted as written.`;
+}
+
+/** A one-line test with netcat, for plain-text JSON only. */
+export function netcatCommand(t: SendTarget): string | null {
+  if (!sendsJsonLines(t) || t.tls) return null;
+  return `echo '${jsonExample()}' | nc ${t.protocol === 'udp' ? '-u ' : ''}-w1 ${hostOf(t)} ${t.port}`;
+}
+
+/**
+ * A one-line test with OpenSSL for JSON over TLS. ca.pem is the CA that signed the listener's
+ * certificate; a listener that requires client certificates also needs client.pem and client.key.
+ */
+export function tlsTestCommand(t: SendTarget): string | null {
+  if (!t.tls || t.protocol !== 'tcp' || !sendsJsonLines(t)) return null;
+  const host = hostOf(t);
+  const client = t.requireClientCert ? ' -cert client.pem -key client.key' : '';
+  return `echo '${jsonExample()}' | openssl s_client -quiet -no_ign_eof -verify_return_error -connect ${joinHostPort(host, t.port)} -servername ${t.serverName || host} -CAfile ca.pem${client}`;
+}
+
+/** Go source is written here with two-space indents and handed out with tabs, as gofmt lays it out. */
+function gofmtIndent(src: string): string {
+  return src.replace(/^(?: {2})+/gm, (spaces) => '\t'.repeat(spaces.length / 2));
+}
+
+/** The Go statements that open a TLS connection: trust the listener's CA, and present a certificate if it asks for one. */
+function goTlsDial(t: SendTarget, host: string, addr: string): string {
+  const clientCert = t.requireClientCert
+    ? `// The listener requires a client certificate, signed by the CA it trusts.
+cert, err := tls.LoadX509KeyPair("client.pem", "client.key")
+if err != nil {
+  log.Fatal(err)
+}
+cfg.Certificates = []tls.Certificate{cert}
+`
+    : '';
+  return `ca, err := os.ReadFile("ca.pem") // the CA that signed the listener's certificate
+if err != nil {
+  log.Fatal(err)
+}
+roots := x509.NewCertPool()
+if !roots.AppendCertsFromPEM(ca) {
+  log.Fatal("no certificates in ca.pem")
+}
+cfg := &tls.Config{RootCAs: roots, ServerName: "${t.serverName || host}"}
+${clientCert}conn, err := tls.Dial("tcp", "${addr}", cfg)`;
+}
+
+/** A complete Go sender for binary protobuf: its imports are the ones this variant uses. */
 export function goSnippet(t: SendTarget): string {
-  const addr = `${t.host || 'LISTENER_HOST'}:${t.port}`;
-  const body = t.protocol === 'tcp'
-    ? `conn, err := net.Dial("tcp", "${addr}")
-if err != nil { log.Fatal(err) }
-defer conn.Close()
-// One length-delimited message per observation (protodelim).
-if _, err := protodelim.MarshalTo(conn, obs); err != nil { log.Fatal(err) }`
-    : `conn, err := net.Dial("udp", "${addr}")
-if err != nil { log.Fatal(err) }
-defer conn.Close()
-// One datagram per observation.
-data, _ := proto.Marshal(obs)
-conn.Write(data)`;
-  return `// go get google.golang.org/protobuf, then generate Go code from the .proto files
-obs := &sentinelv1.Observation{
+  const host = hostOf(t);
+  const addr = joinHostPort(host, t.port);
+  const tls = t.protocol === 'tcp' && t.tls;
+  const imports = [
+    tls ? ['crypto/tls', 'crypto/x509', 'log', 'os'] : ['log', 'net'],
+    [t.protocol === 'tcp' ? 'google.golang.org/protobuf/encoding/protodelim' : 'google.golang.org/protobuf/proto'],
+    [`sentinelv1 "${SENTINEL_GO_IMPORT}"`],
+  ]
+    .map((group) => group.map((spec) => `  ${spec.includes(' ') ? spec : `"${spec}"`}`).join('\n'))
+    .join('\n\n');
+
+  const observation = `obs := &sentinelv1.Observation{
   SourceEntityId: "example-1",
   EntityType:     sentinelv1.EntityType_ENTITY_TYPE_VEHICLE,
   Position:       &sentinelv1.Coordinate{Latitude: 51.5, Longitude: -0.12},
+}`;
+
+  let send: string;
+  if (t.protocol === 'udp') {
+    send = `data, err := proto.Marshal(obs)
+if err != nil {
+  log.Fatal(err)
 }
-${body}`;
+
+conn, err := net.Dial("udp", "${addr}")
+if err != nil {
+  log.Fatal(err)
+}
+defer conn.Close()
+
+// One datagram per observation.
+if _, err := conn.Write(data); err != nil {
+  log.Fatal(err)
+}`;
+  } else {
+    send = `${tls ? goTlsDial(t, host, addr) : `conn, err := net.Dial("tcp", "${addr}")`}
+if err != nil {
+  log.Fatal(err)
+}
+defer conn.Close()
+
+// One length-delimited message per observation.
+if _, err := protodelim.MarshalTo(conn, obs); err != nil {
+  log.Fatal(err)
+}`;
+  }
+
+  const body = `${observation}\n\n${send}`
+    .split('\n')
+    .map((line) => (line ? `  ${line}` : line))
+    .join('\n');
+  return gofmtIndent(`// Save the downloaded .proto files in a directory named sentinel/v1/ (they import each
+// other by that path). From the directory above it, generate the Go code:
+//
+//   go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+//   protoc --go_out=. --go_opt=paths=source_relative sentinel/v1/*.proto
+//
+// Then, in your module (the import below assumes it is example.com/yourapp), go get
+// google.golang.org/protobuf and import the generated package:
+//
+//   import sentinelv1 "${SENTINEL_GO_IMPORT}"
+
+package main
+
+import (
+${imports}
+)
+
+func main() {
+${body}
+}
+`);
 }
 
 /** A Python sender for binary protobuf. */
 export function pythonSnippet(t: SendTarget): string {
-  const host = t.host || 'LISTENER_HOST';
-  const send = t.protocol === 'tcp'
-    ? `from google.protobuf.internal.encoder import _VarintBytes
-with socket.create_connection(("${host}", ${t.port})) as s:
-    data = obs.SerializeToString()
-    s.sendall(_VarintBytes(len(data)) + data)  # length-delimited`
-    : `s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-s.sendto(obs.SerializeToString(), ("${host}", ${t.port}))  # one datagram per observation`;
-  return `# Save the downloaded .proto files in a directory named sentinel/v1/ first:
+  const host = hostOf(t);
+  const tcp = t.protocol === 'tcp';
+  const tls = tcp && t.tls;
+  const header = `# Save the downloaded .proto files in a directory named sentinel/v1/ first:
 # they import each other by that path ("sentinel/v1/common.proto"), so protoc
 # must be run from the directory above it.
-# pip install protobuf; protoc --python_out=. sentinel/v1/*.proto
-import socket
-from sentinel.v1 import observation_pb2
-
-obs = observation_pb2.Observation(source_entity_id="example-1")
+# pip install -U protobuf (a runtime older than protoc cannot load its output); protoc --python_out=. sentinel/v1/*.proto
+import socket${tls ? '\nimport ssl\nimport time' : ''}
+from sentinel.v1 import entity_pb2, observation_pb2`;
+  const varint = `def varint(n):
+    out = bytearray()
+    while True:
+        b, n = n & 0x7F, n >> 7
+        out.append(b | 0x80 if n else b)
+        if not n:
+            return bytes(out)`;
+  const message = `obs = observation_pb2.Observation(
+    source_entity_id="example-1",
+    entity_type=entity_pb2.ENTITY_TYPE_VEHICLE,
+)
 obs.position.latitude, obs.position.longitude = 51.5, -0.12
-${send}`;
+data = obs.SerializeToString()`;
+
+  let send: string;
+  if (!tcp) {
+    send = `with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+    s.sendto(data, ("${host}", ${t.port}))  # one datagram per observation`;
+  } else if (tls) {
+    const clientCert = t.requireClientCert ? `ctx.load_cert_chain("client.pem", "client.key")  # a certificate the listener's client CA signed\n` : '';
+    send = `ctx = ssl.create_default_context(cafile="ca.pem")  # the CA that signed the listener's certificate
+${clientCert}with socket.create_connection(("${host}", ${t.port})) as raw:
+    with ctx.wrap_socket(raw, server_hostname="${t.serverName || host}") as s:
+        s.sendall(varint(len(data)) + data)  # length-delimited
+        # Closing at once can reset the connection and lose the message, because TLS 1.3 session
+        # tickets are still unread. A sender that stays connected does not need to wait.
+        time.sleep(0.5)`;
+  } else {
+    send = `with socket.create_connection(("${host}", ${t.port})) as s:
+    s.sendall(varint(len(data)) + data)  # length-delimited`;
+  }
+  // PEP 8: two blank lines around a function, one between statements.
+  const top = tcp ? `${header}\n\n\n${varint}\n\n\n${message}` : `${header}\n\n${message}`;
+  return `${top}\n\n${send}\n`;
+}
+
+/** A counter the listener or the dialling connection reports in `status.detail`, and what it counts. */
+export interface CounterDef {
+  key: string;
+  label: string;
+  /** What the number counts, in words for the person reading it. */
+  help: string;
+  /** Whether this connection can ever raise it, so a counter that is always zero stays hidden. */
+  applies: (t: SendTarget) => boolean;
+}
+
+const listens = (t: SendTarget) => t.mode === 'listen';
+const listensOnTcp = (t: SendTarget) => listens(t) && t.protocol === 'tcp';
+
+/** The counters, in the order they are shown; semantics from the tcpserver, udp and tcpclient transports. */
+export const COUNTERS: CounterDef[] = [
+  {
+    key: 'accepted',
+    label: 'Accepted',
+    help: 'Messages that passed the allowlist and the rate limits and were handed on for decoding.',
+    applies: listens,
+  },
+  {
+    key: 'rejected',
+    label: 'Not allowed',
+    help: 'Senders turned away because their address is not on the allowlist: TCP connections closed before any data was read, UDP datagrams dropped.',
+    applies: listens,
+  },
+  {
+    key: 'refused',
+    label: 'Over connection limit',
+    help: 'TCP connections closed at once because the connection limit (maxConnections) was already reached.',
+    applies: listensOnTcp,
+  },
+  {
+    key: 'rateLimited',
+    label: 'Rate limited',
+    help: 'Messages dropped because all senders together went over the messages-per-second limit (maxMessagesPerSec).',
+    applies: listens,
+  },
+  {
+    key: 'senderRateLimited',
+    label: 'Rate limited (per sender)',
+    help: 'Messages dropped because one sender went over its own messages-per-second limit (maxMessagesPerSecPerSender).',
+    applies: listens,
+  },
+  {
+    key: 'oversize',
+    label: 'Too large',
+    help: 'Messages bigger than the size limit (maxMessageBytes). A UDP datagram is dropped; a TCP connection is closed.',
+    applies: listens,
+  },
+  {
+    key: 'kernelDropped',
+    label: 'Dropped by the OS',
+    help: 'Datagrams the operating system threw away because its receive buffer was full, before Sentinel could read them.',
+    applies: (t) => listens(t) && t.protocol === 'udp',
+  },
+  {
+    key: 'tlsFailed',
+    label: 'TLS failed',
+    help: 'TCP connections whose TLS handshake failed, and TLS clients that reached a listener without TLS.',
+    applies: listensOnTcp,
+  },
+  {
+    key: 'tlsReloadFailed',
+    label: 'TLS reload failed',
+    help: 'Times a changed certificate or key could not be loaded. The previous certificate stays in use.',
+    applies: (t) => listensOnTcp(t) && t.tls,
+  },
+  {
+    key: 'malformed',
+    label: 'Undecodable',
+    help: 'Messages that arrived but could not be decoded, usually a wrong format or framing. Samples go to the dead-letter topic.',
+    applies: () => true,
+  },
+  {
+    key: 'messages',
+    label: 'Messages',
+    help: 'Messages read from the remote system.',
+    applies: (t) => t.mode === 'connect',
+  },
+  {
+    key: 'reconnects',
+    label: 'Reconnects',
+    help: 'Times Sentinel connected again after the connection dropped.',
+    applies: (t) => t.mode === 'connect',
+  },
+];
+
+/**
+ * A sender's timestamp, or null while it has none. Go writes "never" as the zero time (year 1),
+ * and the server leaves the field out altogether in newer versions.
+ */
+export function senderTime(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) || ms <= 0 ? null : iso;
 }

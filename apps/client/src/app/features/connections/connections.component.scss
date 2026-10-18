@@ -64,6 +64,52 @@
   overflow-x: auto;
 }
 
+// --- filter ---
+.toolbar {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.filter-chip {
+  padding: 3px 10px;
+  border-radius: 100px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: var(--font-mono);
+
+  &:hover {
+    border-color: var(--border-active);
+    background: rgba(59, 130, 246, 0.1);
+  }
+
+  &[aria-pressed='true'] {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--accent-blue);
+    border-color: var(--accent-blue);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 1px;
+  }
+
+  .count {
+    margin-left: 4px;
+    color: var(--text-muted);
+  }
+
+  &[aria-pressed='true'] .count {
+    color: inherit;
+  }
+}
+
 .empty {
   padding: 32px;
   text-align: center;

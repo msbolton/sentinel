@@ -6,6 +6,7 @@
   "targets": {
     "build": {
       "executor": "@angular-devkit/build-angular:application",
+      "inputs": ["production", "^production", "{workspaceRoot}/proto/sentinel/v1/*.proto"],
       "outputs": ["{options.outputPath}"],
       "options": {
         "outputPath": "dist/apps/client",
@@ -45,6 +46,12 @@
     },
     "test": {
       "executor": "@nx/jest:jest",
+      "inputs": [
+        "default",
+        "^production",
+        "{workspaceRoot}/apps/ingest-service/internal/source/driver/*/schema.json",
+        "{workspaceRoot}/apps/ingest-service/internal/drivers/schemas/common.json"
+      ],
       "outputs": ["{workspaceRoot}/coverage/apps/client"],
       "options": {
         "jestConfig": "apps/client/jest.config.ts",

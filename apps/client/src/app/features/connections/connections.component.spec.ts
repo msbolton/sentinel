@@ -185,7 +185,7 @@ describe('ConnectionsComponent', () => {
     expect(tak.querySelector('.col-counters')?.textContent?.replace(/\s+/g, '')).toBe('1,500/3');
     expect(tak.querySelector('.col-counters span[title="Delivered"]')?.textContent?.trim()).toBe('1,500');
     expect(tak.querySelector('.col-counters span[title="Waiting to go out"]')?.textContent?.trim()).toBe('3');
-    expect(tak.querySelector('.highlights')?.textContent?.trim()).toBe('tak.example.org:8089 · tls: ok');
+    expect(tak.querySelector('.highlights')?.textContent?.trim()).toBe('tak.example.org:8089 · tls');
 
     const kml = rowOf('kml');
     expect(kml.querySelector('.direction-badge')?.textContent?.trim()).toBe('out');
@@ -257,9 +257,10 @@ describe('ConnectionsComponent', () => {
       'assets/proto/sentinel/v1/observation.proto',
     );
     expect(guide.querySelector('.senders')?.textContent).toContain('10.0.0.5:4000');
-    expect(guide.querySelector('.counters')?.textContent).toContain('accepted 7');
+    expect(guide.querySelector('.counters dt')?.textContent?.trim()).toBe('Accepted');
+    expect(guide.querySelector('.counters dd')?.textContent?.trim()).toBe('7');
     // JSON is tried with netcat; the Go and Python senders write binary protobuf.
-    expect(guide.querySelector('details')).toBeNull();
+    expect(guide.querySelector('details.examples')).toBeNull();
     // Other drivers get no guide.
     expect(guides[1].querySelector('.send-guide')).toBeNull();
   });
@@ -287,8 +288,120 @@ describe('ConnectionsComponent', () => {
     const guide = el.querySelector('tr.detail-row app-send-guide')!;
     expect(guide.querySelector('.warn')?.textContent).toContain('INGEST_LISTENER=true');
     expect(guide.textContent).toContain('No allowlist');
-    expect(guide.querySelector('details')?.textContent).toContain('LISTENER_HOST:6000');
-    expect(guide.querySelector('.counters')?.textContent?.trim()).toBe('');
+    expect(guide.querySelector('details.examples')?.textContent).toContain('LISTENER_HOST:6000');
+    // Nothing reported, so no counters (and no glossary to explain them).
+    expect(guide.querySelector('.counters')).toBeNull();
+  });
+
+  describe('listening connections', () => {
+    const status = () => makeFeed({ id: 'x' }).status;
+    const detail = (d: Record<string, unknown>) => ({ ...status(), detail: d });
+    const highlightsOf = (id: string) => rowOf(id).querySelector('.highlights')?.textContent?.trim();
+    const idsShown = () => Array.from(el.querySelectorAll('tr.feed-row .feed-id')).map((n) => n.textContent?.trim());
+    const chips = () => Array.from(el.querySelectorAll<HTMLButtonElement>('[role=group] .filter-chip'));
+    const chip = (name: string) => chips().find((c) => c.textContent?.trim().startsWith(name))!;
+
+    it('a UDP row counts senders, not connections', () => {
+      flushInitial([
+        makeFeed({ id: 'pier', driver: 'udp', config: { port: 10110 }, status: detail({ transport: 'udp', connections: 0, distinctSenders: 3 }) }),
+        makeFeed({ id: 'lone', driver: 'udp', config: { port: 10111 }, status: detail({ transport: 'udp', connections: 0, distinctSenders: 1 }) }),
+        makeFeed({ id: 'quiet', driver: 'udp', config: { port: 10112 }, status: detail({ transport: 'udp', connections: 0, distinctSenders: 0 }) }),
+        // A stream feed on a udp transport is a datagram listener too.
+        makeFeed({ id: 'raw', driver: 'stream', config: { transport: { kind: 'udp', address: ':4001' } }, status: detail({ transport: 'udp', connections: 0, distinctSenders: 2 }) }),
+        // Connections are a TCP idea.
+        makeFeed({ id: 'plc', driver: 'tcp', config: { mode: 'listen', port: 6000 }, status: detail({ transport: 'tcpserver', connections: 4, distinctSenders: 9 }) }),
+        // A datagram listener that has not reported yet says nothing, not "0 conn".
+        makeFeed({ id: 'new', driver: 'udp', config: { port: 10113 }, status: detail({ transport: 'udp', connections: 0 }) }),
+      ]);
+
+      expect(highlightsOf('pier')).toBe('3 senders');
+      expect(highlightsOf('lone')).toBe('1 sender');
+      expect(highlightsOf('quiet')).toBe('0 senders');
+      expect(highlightsOf('raw')).toBe('2 senders');
+      expect(highlightsOf('plc')).toBe('4 conn');
+      expect(highlightsOf('new')).toBeUndefined();
+    });
+
+    it('shows the format as the source of TCP and UDP connections', () => {
+      flushInitial([
+        makeFeed({ id: 'ais', driver: 'tcp', source: '', config: { mode: 'listen', port: 6000, format: 'nmea-ais' } }),
+        makeFeed({ id: 'plain', driver: 'udp', source: '', config: { port: 10110 } }),
+        makeFeed({ id: 'sourced', driver: 'udp', source: '', config: { port: 10111, defaultSource: 'GPS' } }),
+        makeFeed({ id: 'dialled', driver: 'tcp', source: '', config: { mode: 'connect', host: 'h', port: 7000, format: 'cot' } }),
+        // A default source belongs to Sentinel's own format; a stale one stored beside another format is not shown.
+        makeFeed({ id: 'stale', driver: 'tcp', source: '', config: { mode: 'listen', port: 6002, format: 'cot', defaultSource: 'GPS' } }),
+        // The server's own source label wins where it has one.
+        makeFeed({ id: 'labelled', driver: 'tcp', source: 'ADS_B', config: { mode: 'listen', port: 6001, format: 'sbs' } }),
+        makeFeed({ id: 'sky' }),
+        makeFeed({ id: 'bare', driver: 'httpjson', source: '', config: {} }),
+      ]);
+
+      const source = (id: string) => rowOf(id).cells[4].textContent?.trim();
+      expect(source('ais')).toBe('nmea-ais');
+      expect(source('plain')).toBe('sentinel');
+      expect(source('sourced')).toBe('sentinel · GPS');
+      expect(source('dialled')).toBe('cot');
+      expect(source('stale')).toBe('cot');
+      expect(source('labelled')).toBe('ADS_B');
+      expect(source('sky')).toBe('OPENSKY');
+      expect(source('bare')).toBe('');
+    });
+
+    it('filters to listening connections', () => {
+      flushInitial([
+        makeFeed({ id: 'tcp-listen', driver: 'tcp', config: { mode: 'listen', port: 6000 } }),
+        makeFeed({ id: 'tcp-connect', driver: 'tcp', config: { mode: 'connect', host: 'h', port: 7000 } }),
+        makeFeed({ id: 'udp-in', driver: 'udp', config: { port: 10110 } }),
+        makeFeed({ id: 'stream-server', driver: 'stream', config: { transport: { kind: 'tcpserver', address: ':4001' } } }),
+        makeFeed({ id: 'stream-dial', driver: 'stream', config: { transport: { kind: 'tcpclient', address: 'h:4001' } } }),
+        makeFeed({ id: 'sky' }),
+      ]);
+
+      // Everything to begin with, and the buttons say how many each shows.
+      expect(idsShown()).toEqual(['tcp-listen', 'tcp-connect', 'udp-in', 'stream-server', 'stream-dial', 'sky']);
+      expect(chips().map((c) => c.textContent?.replace(/\s+/g, ' ').trim())).toEqual(['All 6', 'Listening 3']);
+      expect(chip('All').getAttribute('aria-pressed')).toBe('true');
+      expect(chip('Listening').getAttribute('aria-pressed')).toBe('false');
+      expect(el.querySelector('[role=group]')?.getAttribute('aria-label')).toBeTruthy();
+
+      chip('Listening').click();
+      fixture.detectChanges();
+      expect(idsShown()).toEqual(['tcp-listen', 'udp-in', 'stream-server']);
+      expect(chip('All').getAttribute('aria-pressed')).toBe('false');
+      expect(chip('Listening').getAttribute('aria-pressed')).toBe('true');
+
+      // A row opened while filtered is still there when the filter is lifted.
+      rowOf('udp-in').querySelector<HTMLButtonElement>('.expand-btn')?.click();
+      chip('All').click();
+      fixture.detectChanges();
+      expect(idsShown()).toHaveLength(6);
+      expect(el.querySelectorAll('tr.detail-row').length).toBe(1);
+      expect(chip('All').getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('shows an empty listening view with a way back', () => {
+      flushInitial([makeFeed({ id: 'sky' }), makeFeed({ id: 'tcp-connect', driver: 'tcp', config: { mode: 'connect', host: 'h', port: 7000 } })]);
+
+      chip('Listening').click();
+      fixture.detectChanges();
+      expect(chip('Listening').textContent?.replace(/\s+/g, ' ').trim()).toBe('Listening 0');
+      expect(el.querySelector('tr.feed-row')).toBeNull();
+      expect(el.querySelector('.empty')?.textContent).toContain('No connection listens on a port.');
+      const showAll = Array.from(el.querySelectorAll<HTMLButtonElement>('.empty button')).find((b) => b.textContent?.trim() === 'Show all')!;
+      expect(showAll).toBeTruthy();
+
+      showAll.click();
+      fixture.detectChanges();
+      expect(idsShown()).toEqual(['sky', 'tcp-connect']);
+      expect(el.querySelector('.empty')).toBeNull();
+      expect(chip('All').getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('offers no filter while there are no connections at all', () => {
+      flushInitial([]);
+      expect(el.querySelector('.filter-chip')).toBeNull();
+      expect(el.querySelector('.empty')?.textContent).toContain('No connections yet');
+    });
   });
 
   it('toggles enabled optimistically and rolls back on error', () => {
