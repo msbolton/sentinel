@@ -58,6 +58,8 @@ type Config struct {
 
 	// IntelSkyBaseURL is where flight paths for military aircraft come from.
 	IntelSkyBaseURL string
+	// AdsbdbBaseURL is where scheduled routes by callsign come from.
+	AdsbdbBaseURL string
 }
 
 // IsProduction reports whether the gateway runs with production hardening.
@@ -117,6 +119,7 @@ func Load() Config {
 		IngestServiceURL:       commonCfg.EnvOrDefault("INGEST_SERVICE_URL", "http://localhost:4000"),
 		IngestServiceToken:     commonCfg.EnvOrDefault("INGEST_SERVICE_TOKEN", ""),
 		IntelSkyBaseURL:        commonCfg.EnvOrDefault("INTELSKY_BASE_URL", "https://intelsky.org"),
+		AdsbdbBaseURL:          commonCfg.EnvOrDefault("ADSBDB_BASE_URL", "https://api.adsbdb.com"),
 		DetailMaxAreaSqDeg:     float64(commonCfg.EnvOrDefaultInt("DETAIL_MAX_AREA_SQ_DEG", 2500)),
 	}
 }

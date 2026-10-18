@@ -7,6 +7,8 @@ import { FeedService } from '../../core/services/feed.service';
 import { LocationService } from '../../core/services/location.service';
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 import { FlightPathService } from '../../core/services/flight-path.service';
+import { RouteService } from '../../core/services/route.service';
+import { AircraftRoute, placeLabel } from '../models/route.model';
 import { FLIGHT_PATH_DAYS } from '../models/flight-path.model';
 import { pathSummary } from '../../features/map/flight-path';
 import { Entity, EntitySource } from '../models/entity.model';
@@ -401,6 +403,20 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                           }
                           @if (adsb.category) {
                             <div class="field-row"><span class="field-label">Category</span><span class="field-value mono">{{ adsb.category }}</span></div>
+                          }
+                          @if (routeFor(adsb.icaoHex); as route) {
+                            @if (route.departure; as dep) {
+                              <div class="field-row"><span class="field-label">Departure</span><span class="field-value route-departure" [title]="placeLabel(dep)">{{ placeLabel(dep) }}</span></div>
+                            }
+                            @if (route.arrival; as arr) {
+                              <div class="field-row"><span class="field-label">Arrival</span><span class="field-value" [title]="placeLabel(arr)">{{ placeLabel(arr) }}</span></div>
+                            }
+                            @if (route.airline; as airline) {
+                              <div class="field-row"><span class="field-label">Airline</span><span class="field-value">{{ airline.name }}</span></div>
+                            }
+                            @if (route.provider) {
+                              <p class="path-note">{{ route.provider === 'adsbdb' ? 'Scheduled route for the callsign (adsbdb)' : 'Where IntelSky first saw it today' }}</p>
+                            }
                           }
                           @if (adsb.icaoHex) {
                             <div class="field-row"><span class="field-label">Flight path</span>
@@ -1053,6 +1069,10 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       }
     }
 
+    .route-departure {
+      color: #a855f7;
+    }
+
     .path-note {
       margin: 0 0 6px;
       font-size: 0.72rem;
@@ -1348,6 +1368,14 @@ export class EntityDetailPanelComponent {
   protected readonly flightPath = inject(FlightPathService);
   protected readonly flightPathDays = FLIGHT_PATH_DAYS;
   protected readonly flightPathSummary = pathSummary;
+  protected readonly routes = inject(RouteService);
+  protected readonly placeLabel = placeLabel;
+
+  /** The loaded route when it belongs to this aircraft. */
+  protected routeFor(icaoHex: string): AircraftRoute | null {
+    const route = this.routes.state().route;
+    return route && route.hex === icaoHex.toUpperCase() ? route : null;
+  }
   private readonly destroyRef = inject(DestroyRef);
   private feedsRequested = false;
   private behaviourRequest = 0;

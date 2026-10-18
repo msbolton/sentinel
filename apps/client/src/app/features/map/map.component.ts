@@ -45,6 +45,7 @@ import {
   ORBIT_OVERLAY_CONFIG,
   DENSITY_OVERLAY_CONFIG,
   FLIGHT_PATH_CONFIG,
+  ROUTE_LINE_CONFIG,
 } from './cesium-config';
 import { CircularBuffer, decimateTrail, TrailPoint } from './trail-utils';
 import { isGlobalBounds, rectangleToBounds } from './viewport-bounds';
@@ -57,6 +58,8 @@ import { SatelliteTracker, periodMinutes, type SatPosition } from './satellite-t
 import { footprintRadiusM, sampleOrbit, splitAtAntimeridian } from './orbit-geometry';
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 import { FlightPathService, FlightPathState } from '../../core/services/flight-path.service';
+import { RouteService, RouteState } from '../../core/services/route.service';
+import { routeQueryOf } from '../../shared/models/route.model';
 import { pathRuns } from './flight-path';
 import { CLUSTER_CONFIG, CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, drawClusterDisc, syncLabelGlyphClusterShow, syncTrailClusterShow } from './entity-clusters';
 import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine, type GeoPoint } from './drop-line';
@@ -235,6 +238,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private densityRequest: Subscription | null = null;
   /** The selected aircraft's past path: polylines and what they were drawn from. */
   private flightPathLines: any[] = [];
+  /** The purple line from the selected aircraft's departure to where it is drawn now. */
+  private routeLine: { forId: string | null; departure: { lat: number; lon: number } | null; line: any; positions: any[] } =
+    { forId: null, departure: null, line: null, positions: [] };
   private flightPathKey = '';
 
   constructor(
@@ -251,6 +257,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly mapViewport: MapViewportService,
     private readonly geofences: GeofenceService,
     private readonly flightPath: FlightPathService,
+    private readonly routes: RouteService,
   ) {
     // Entities stay in the viewer when their layer is hidden (show=false) so
     // dead reckoning keeps advancing them; this flips `show` when the user's
@@ -272,13 +279,17 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // the selection and the panel's range; the map draws what it loaded.
     effect(() => {
       const selected = this.selectedEntity();
-      untracked(() => this.flightPath.select(selected));
+      untracked(() => { this.flightPath.select(selected); this.routes.select(selected); });
       // In a wide view the selection is the one entity drawn on its own.
       if (this.wideView) this.ngZone.runOutsideAngular(() => untracked(() => this.applyLayerVisibility()));
     });
     effect(() => {
       const state = this.flightPath.state();
       this.ngZone.runOutsideAngular(() => untracked(() => this.syncFlightPath(state)));
+    });
+    effect(() => {
+      const state = this.routes.state();
+      this.ngZone.runOutsideAngular(() => untracked(() => this.syncRouteLine(state)));
     });
 
     // The panel's New button and the map control ask for a new zone here.
@@ -362,6 +373,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.geofenceLayer = null;
     this.clearOrbitOverlay();
     this.clearFlightPath();
+    this.clearRouteLine();
     if (this.ageoutConfigTimer) clearInterval(this.ageoutConfigTimer);
     if (this.densityTimer) clearInterval(this.densityTimer);
     this.densityRequest?.unsubscribe();
@@ -461,7 +473,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         return;
       }
 
-      if (Cesium.defined(pickedObject) && (pickedObject.id?._sentinelOrbit || pickedObject.id?._sentinelFlightPath)) {
+      if (Cesium.defined(pickedObject) && (pickedObject.id?._sentinelOrbit || pickedObject.id?._sentinelFlightPath || pickedObject.id?._sentinelRoute)) {
         return; // a click on the selection's own overlay keeps the selection
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelGeofence) {
@@ -1165,6 +1177,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const cesiumEntity = this.entityMap.get(entityId);
     if (cesiumEntity && this.viewer) {
       if (entityId === this.dropLine.forId) this.clearDropLine();
+      if (entityId === this.routeLine.forId) this.clearRouteLine();
       (cesiumEntity.entityCollection ?? this.viewer.entities).remove(cesiumEntity);
       this.entityMap.delete(entityId);
       this.trackTrails.delete(entityId);
@@ -1485,7 +1498,52 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     return p ? { lat: p.latitude, lon: p.longitude, height: p.altitude ?? 0 } : null;
   }
 
+  /** Draws the line from the departure once the selected aircraft's route is known. */
+  private syncRouteLine(state: RouteState): void {
+    if (!this.viewer || this.viewer.isDestroyed()) return;
+    const selected = untracked(() => this.selectedEntity());
+    const departure = state.route?.departure;
+    if (!departure || !selected || routeQueryOf(selected)?.hex !== state.route?.hex) {
+      this.clearRouteLine();
+      return;
+    }
+    const Cesium = this.Cesium;
+    this.routeLine.forId = selected.id;
+    this.routeLine.departure = { lat: departure.lat, lon: departure.lon };
+    const pos = this.displayedGeoPoint(selected, this.wsService.serverNow());
+    if (pos) this.moveRouteLine(pos);
+    if (!this.routeLine.line) {
+      const cfg = ROUTE_LINE_CONFIG;
+      this.routeLine.line = this.viewer.entities.add({
+        polyline: {
+          positions: new Cesium.CallbackProperty(() => this.routeLine.positions, false),
+          width: cfg.width,
+          material: Cesium.Color.fromCssColorString(cfg.color).withAlpha(cfg.alpha),
+          arcType: Cesium.ArcType.GEODESIC,
+        },
+      });
+      this.routeLine.line._sentinelRoute = true;
+    }
+    this.scheduleRender();
+  }
+
+  /** Follows the aircraft: departure on the ground, along the great circle, up to the aircraft. */
+  private moveRouteLine(pos: GeoPoint): void {
+    const d = this.routeLine.departure;
+    if (!d) return;
+    const Cesium = this.Cesium;
+    this.routeLine.positions = [Cesium.Cartesian3.fromDegrees(d.lon, d.lat, 0), Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.height)];
+  }
+
+  private clearRouteLine(): void {
+    if (!this.routeLine.forId && !this.routeLine.line) return;
+    if (this.routeLine.line && this.viewer && !this.viewer.isDestroyed()) this.viewer.entities.remove(this.routeLine.line);
+    this.routeLine = { forId: null, departure: null, line: null, positions: [] };
+    this.scheduleRender();
+  }
+
   private moveDropLine(pos: GeoPoint): void {
+    if (this.routeLine.forId && this.routeLine.forId === this.dropLine.forId) this.moveRouteLine(pos);
     const Cesium = this.Cesium;
     const geometry = dropLinePoints(pos);
     this.dropLine.positions = [
@@ -1665,6 +1723,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         if (this.viewer) {
           this.clearDropLine();
           this.clearFlightPath();
+          this.clearRouteLine();
           for (const cesiumEntity of this.entityMap.values()) {
             (cesiumEntity.entityCollection ?? this.viewer.entities).remove(cesiumEntity);
           }

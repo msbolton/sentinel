@@ -184,3 +184,10 @@ export const FLIGHT_PATH_CONFIG = {
   width: 2,
   dashLength: 14,
 };
+
+/** The line from the selected aircraft's departure to where it is now. */
+export const ROUTE_LINE_CONFIG = {
+  color: '#a855f7',
+  alpha: 0.9,
+  width: 5,
+};
