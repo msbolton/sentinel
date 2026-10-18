@@ -19,7 +19,8 @@
     "maxMessageBytes": { "type": "integer", "minimum": 64, "maximum": 16777216, "default": 65536, "title": "Max message size (bytes)" },
     "maxMessagesPerSec": { "type": "integer", "minimum": 0, "default": 1000, "title": "Max messages per second", "description": "0 = unlimited" },
     "tls": {
-      "type": "object", "title": "TLS",
+      "type": "object", "title": "TLS", "additionalProperties": false,
+      "description": "Certificates and keys come from the tlsCert, tlsKey, clientCa and serverCa secrets, never from file paths.",
       "properties": {
         "enabled": { "type": "boolean", "default": false, "title": "Use TLS" },
         "requireClientCert": { "type": "boolean", "default": false, "title": "Require client certificates", "description": "listen: mutual TLS, verified against the clientCa secret", "x-showWhen": { "enabled": true } },

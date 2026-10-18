@@ -53,7 +53,26 @@ type Config struct {
 	MaxConnections    *int            `json:"maxConnections"`
 	MaxMessageBytes   int             `json:"maxMessageBytes"`
 	MaxMessagesPerSec *int            `json:"maxMessagesPerSec"`
-	TLS               *transport.TLS  `json:"tls"`
+	TLS               *TLSOptions     `json:"tls"`
+}
+
+// TLSOptions are the TLS settings a feed config carries. Certificates and
+// keys come from the secrets only, so the file path fields transport.TLS
+// also has (caFile, certFile, keyFile, clientCaFile) are not decoded: a
+// config cannot make the ingest host read a file.
+type TLSOptions struct {
+	Enabled            bool   `json:"enabled"`
+	RequireClientCert  bool   `json:"requireClientCert"`
+	ServerName         string `json:"serverName"`
+	InsecureSkipVerify bool   `json:"insecureSkipVerify"`
+}
+
+// transport maps the options onto the transport's TLS section.
+func (o *TLSOptions) transport() *transport.TLS {
+	if o == nil {
+		return nil
+	}
+	return &transport.TLS{Enabled: o.Enabled, RequireClientCert: o.RequireClientCert, ServerName: o.ServerName, InsecureSkipVerify: o.InsecureSkipVerify}
 }
 
 // Driver wraps the stream driver to report where it listens or connects.
@@ -130,7 +149,7 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	tcfg := transport.Config{TLS: c.TLS, MaxFrameBytes: c.MaxMessageBytes, MaxMessagesPerSec: intOr(c.MaxMessagesPerSec, 1000)}
+	tcfg := transport.Config{TLS: c.TLS.transport(), MaxFrameBytes: c.MaxMessageBytes, MaxMessagesPerSec: intOr(c.MaxMessagesPerSec, 1000)}
 	if tcfg.MaxFrameBytes == 0 {
 		tcfg.MaxFrameBytes = 65536
 	}

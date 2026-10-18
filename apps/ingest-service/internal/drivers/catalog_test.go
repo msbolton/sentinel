@@ -116,6 +116,8 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		{"tcp", `{"mode": "listen", "port": 80}`, "/config/port"},
 		{"tcp", `{"mode": "connect", "port": 7000}`, "/config/"},
 		{"tcp", `{"mode": "listen", "port": 6000, "format": "xml"}`, "/config/format"},
+		{"tcp", `{"mode": "listen", "port": 6000, "tls": {"enabled": true, "certFile": "/x"}}`, "/config/tls"},
+		{"tcp", `{"mode": "listen", "port": 6000, "tls": {"enabled": true, "requireClientCrt": true}}`, "/config/tls"},
 	}
 	for _, tc := range cases {
 		problems := c.Validate(tc.driver, json.RawMessage(tc.cfg))

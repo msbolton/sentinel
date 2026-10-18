@@ -7,7 +7,10 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -162,6 +165,39 @@ func TestListenTLSFromSecrets(t *testing.T) {
 	}
 	if d.Health().Detail["tls"] != true {
 		t.Errorf("tls detail = %v", d.Health().Detail["tls"])
+	}
+}
+
+// TLS material comes from the secrets only. A config that carries file
+// paths (it never passes the schema, but New can be called without it) must
+// not make the host read them.
+func TestTLSFilePathsAreNotHonoured(t *testing.T) {
+	pair := transporttest.NewCA(t).Issue(t, "localhost")
+	dir := t.TempDir()
+	certFile, keyFile := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(certFile, pair.CertPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pair.KeyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	listen := func(files map[string]any) map[string]any {
+		files["enabled"] = true
+		return map[string]any{"mode": "listen", "port": 6000, "tls": files}
+	}
+	// A path that does not exist: the file would be read first and fail with
+	// a file error, so the error here proves it was never read.
+	_, err := newDriver(t, listen(map[string]any{"certFile": "/nonexistent/cert.pem", "keyFile": "/nonexistent/key.pem", "clientCaFile": "/nonexistent/ca.pem"}), nil)
+	if err == nil || !strings.Contains(err.Error(), "needs a certificate") || strings.Contains(err.Error(), "reading") {
+		t.Errorf("nonexistent paths: err = %v, want the needs-a-certificate error", err)
+	}
+	// Paths that hold a valid pair still give a listener no certificate.
+	if _, err := newDriver(t, listen(map[string]any{"certFile": certFile, "keyFile": keyFile}), nil); err == nil || !strings.Contains(err.Error(), "needs a certificate") {
+		t.Errorf("valid paths: err = %v, want the needs-a-certificate error", err)
+	}
+	// A client does not read a CA file either.
+	if _, err := newDriver(t, map[string]any{"mode": "connect", "host": "h", "port": 7000, "tls": map[string]any{"enabled": true, "caFile": "/nonexistent/ca.pem"}}, nil); err != nil {
+		t.Errorf("connect with a caFile: %v", err)
 	}
 }
 
