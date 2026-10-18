@@ -164,10 +164,19 @@ func defaultPolicy(kind string) string {
 	return driver.BackpressureBlock
 }
 
-// listenOf reports the port a listening stream transport binds.
+// listenOf reports the network and port a listening stream transport binds.
+// A tcpserver or udp transport always listens: an address with no numeric
+// port (no port at all, or a service name) reports port 0, so the registry's
+// port rules refuse it instead of it surfacing at bind time. Only
+// non-listening kinds and config that does not decode report ok=false. Only
+// the kind and address are read, so a mistyped unrelated field (allow, say)
+// cannot turn a listener into a non-listener and skip the checks on it.
 func listenOf(raw json.RawMessage) (string, int, bool) {
 	var cfg struct {
-		Transport transport.Config `json:"transport"`
+		Transport struct {
+			Kind    string `json:"kind"`
+			Address string `json:"address"`
+		} `json:"transport"`
 	}
 	if json.Unmarshal(raw, &cfg) != nil {
 		return "", 0, false
@@ -183,11 +192,11 @@ func listenOf(raw json.RawMessage) (string, int, bool) {
 	}
 	_, p, err := net.SplitHostPort(cfg.Transport.Address)
 	if err != nil {
-		return "", 0, false
+		return network, 0, true
 	}
 	port, err := strconv.Atoi(p)
 	if err != nil {
-		return "", 0, false
+		return network, 0, true
 	}
 	return network, port, true
 }

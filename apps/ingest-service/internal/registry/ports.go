@@ -78,24 +78,43 @@ func CheckPorts(f Feed, others []Feed, reserved PortSet) []Problem {
 	return nil
 }
 
-// CheckAllow validates a connection's allowlist entries (IPs or CIDRs):
-// allow on tcp and udp, transport.allow on stream.
+// CheckAllow validates a listening connection's allowlist (IPs or CIDRs):
+// allow on tcp and udp, transport.allow on stream. A value that is not an
+// array of strings is refused too. Connections that do not listen have no
+// allowlist to check.
 func CheckAllow(f Feed) []Problem {
-	var c struct {
-		Allow     []string `json:"allow"`
-		Transport struct {
-			Allow []string `json:"allow"`
-		} `json:"transport"`
-	}
-	if json.Unmarshal(f.Config, &c) != nil {
+	if _, _, listens := driver.ListenOf(f.Driver, f.Config); !listens {
 		return nil
 	}
-	path, list := "/config/allow", c.Allow
+	path, keys := "/config/allow", []string{"allow"}
 	if f.Driver == "stream" {
-		path, list = "/config/transport/allow", c.Transport.Allow
+		path, keys = "/config/transport/allow", []string{"transport", "allow"}
+	}
+	raw := rawAt(f.Config, keys...)
+	if raw == nil {
+		return nil
+	}
+	var list []string
+	if json.Unmarshal(raw, &list) != nil {
+		return []Problem{{Path: path, Message: "must be an array of IP addresses or CIDRs"}}
 	}
 	if _, err := transport.ParseAllowlist(list); err != nil {
 		return []Problem{{Path: path, Message: err.Error()}}
 	}
 	return nil
+}
+
+// rawAt returns the value under the nested object keys, or nil when it is
+// absent or the path crosses something that is not an object.
+func rawAt(raw json.RawMessage, keys ...string) json.RawMessage {
+	for _, k := range keys {
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(raw, &obj) != nil {
+			return nil
+		}
+		if raw = obj[k]; raw == nil {
+			return nil
+		}
+	}
+	return raw
 }

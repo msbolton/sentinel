@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	_ "github.com/sentinel/ingest-service/internal/source/all"
+	"github.com/sentinel/ingest-service/internal/source/driver"
 )
 
 func udpStream(id, addr string, enabled bool) Feed {
@@ -55,6 +56,12 @@ func TestPortRules(t *testing.T) {
 	if ps := CheckPorts(udpStream("res", ":5432", true), nil, reserved); !strings.Contains(msg(ps), "Sentinel") {
 		t.Errorf("reserved port: %s", msg(ps))
 	}
+	// A listening transport without a numeric port is refused, not skipped.
+	for _, addr := range []string{"localhost", ":http", ":abc", ":0"} {
+		if ps := CheckPorts(udpStream("noport", addr, true), nil, reserved); !strings.Contains(msg(ps), "1024") {
+			t.Errorf("address %q: %s", addr, msg(ps))
+		}
+	}
 	// Connections that do not listen are not checked.
 	client := Feed{ID: "c", Driver: "stream", Config: json.RawMessage(`{"transport":{"kind":"tcpclient","address":"h:80"},"decoder":{"name":"sbs"}}`)}
 	if ps := CheckPorts(client, nil, reserved); len(ps) != 0 {
@@ -62,16 +69,61 @@ func TestPortRules(t *testing.T) {
 	}
 }
 
+// listenerTestDriver stands in for the tcp/udp drivers: top-level port and
+// allow, and a Listen hook, under an id no real driver will take.
+const listenerTestDriver = "test-listener"
+
+func init() {
+	driver.Register(driver.Definition{
+		ID:  listenerTestDriver,
+		New: func(driver.Spec, driver.Deps) (driver.Driver, error) { return nil, nil },
+		Listen: func(cfg json.RawMessage) (string, int, bool) {
+			var c struct {
+				Port int `json:"port"`
+			}
+			return "udp", c.Port, json.Unmarshal(cfg, &c) == nil
+		},
+	})
+}
+
 func TestCheckAllow(t *testing.T) {
-	bad := Feed{Driver: "udp", Config: json.RawMessage(`{"port":6000,"allow":["10.0.0.0/8","10.0.0.0/33"]}`)}
-	if ps := CheckAllow(bad); len(ps) != 1 || ps[0].Path != "/config/allow" {
+	udpAllow := func(allow string) Feed {
+		return Feed{Driver: "stream", Config: json.RawMessage(`{"transport":{"kind":"udp","address":":6000","allow":` + allow + `}}`)}
+	}
+	if ps := CheckAllow(udpAllow(`["10.0.0.0/8","10.0.0.0/33"]`)); len(ps) != 1 || ps[0].Path != "/config/transport/allow" || !strings.Contains(ps[0].Message, "10.0.0.0/33") {
 		t.Errorf("bad CIDR: %+v", ps)
 	}
-	nested := Feed{Driver: "stream", Config: json.RawMessage(`{"transport":{"kind":"udp","address":":6000","allow":["nope"]}}`)}
-	if ps := CheckAllow(nested); len(ps) != 1 || ps[0].Path != "/config/transport/allow" {
+	if ps := CheckAllow(udpAllow(`["nope"]`)); len(ps) != 1 || ps[0].Path != "/config/transport/allow" {
 		t.Errorf("stream allow: %+v", ps)
 	}
-	if ps := CheckAllow(Feed{Driver: "tcp", Config: json.RawMessage(`{"mode":"listen","port":6000,"allow":["192.168.1.20","2001:db8::/32"]}`)}); len(ps) != 0 {
-		t.Errorf("valid list: %+v", ps)
+	// A mistyped allowlist is refused, not ignored.
+	for _, bad := range []string{`"10.0.0.0/8"`, `[1]`, `{"ip":"10.0.0.1"}`} {
+		ps := CheckAllow(udpAllow(bad))
+		if len(ps) != 1 || ps[0].Path != "/config/transport/allow" || !strings.Contains(ps[0].Message, "array") {
+			t.Errorf("allow %s: %+v", bad, ps)
+		}
+	}
+	for _, ok := range []string{`["192.168.1.20","2001:db8::/32"]`, `[]`, `null`} {
+		if ps := CheckAllow(udpAllow(ok)); len(ps) != 0 {
+			t.Errorf("allow %s: %+v", ok, ps)
+		}
+	}
+	tcp := Feed{Driver: "stream", Config: json.RawMessage(`{"transport":{"kind":"tcpserver","address":":6000","allow":["192.168.1.20"]}}`)}
+	if ps := CheckAllow(tcp); len(ps) != 0 {
+		t.Errorf("valid tcpserver list: %+v", ps)
+	}
+	// Drivers with a top-level allow (tcp, udp) use /config/allow.
+	top := Feed{Driver: listenerTestDriver, Config: json.RawMessage(`{"port":6000,"allow":["10.0.0.0/8","10.0.0.0/33"]}`)}
+	if ps := CheckAllow(top); len(ps) != 1 || ps[0].Path != "/config/allow" {
+		t.Errorf("top-level bad CIDR: %+v", ps)
+	}
+	top.Config = json.RawMessage(`{"port":6000,"allow":"10.0.0.0/8"}`)
+	if ps := CheckAllow(top); len(ps) != 1 || ps[0].Path != "/config/allow" {
+		t.Errorf("top-level mistyped: %+v", ps)
+	}
+	// A connection that does not listen is not checked.
+	client := Feed{Driver: "stream", Config: json.RawMessage(`{"transport":{"kind":"tcpclient","address":"h:80","allow":["nope"]},"decoder":{"name":"sbs"}}`)}
+	if ps := CheckAllow(client); len(ps) != 0 {
+		t.Errorf("client: %+v", ps)
 	}
 }

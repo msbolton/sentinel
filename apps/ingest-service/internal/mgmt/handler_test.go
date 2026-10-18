@@ -459,6 +459,13 @@ func TestListeningPortsMustBeUnique(t *testing.T) {
 	if resp, out := do(t, srv, "POST", "/feeds", bad, operator); resp.StatusCode != 422 || !strings.Contains(string(out), "/config/transport/allow") {
 		t.Errorf("bad allowlist: %d %s", resp.StatusCode, out)
 	}
+	// A listener with no numeric port is refused at create, not stored to fail at bind time.
+	for _, addr := range []string{"localhost", ":http"} {
+		noPort := `{"name":"No port","driver":"stream","config":{"transport":{"kind":"udp","address":"` + addr + `"},"decoder":{"name":"nmea-ais"}}}`
+		if resp, out := do(t, srv, "POST", "/feeds", noPort, operator); resp.StatusCode != 422 {
+			t.Errorf("address %q: %d %s", addr, resp.StatusCode, out)
+		}
+	}
 }
 
 func TestListeningPortChecksRunOnUpdate(t *testing.T) {
