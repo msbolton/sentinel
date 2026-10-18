@@ -1,4 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { FormGroup } from '@angular/forms';
 import { SchemaFormChange, SchemaFormComponent } from './schema-form.component';
 import { JsonSchema } from '../../models/feed.model';
 
@@ -362,5 +363,126 @@ describe('SchemaFormComponent', () => {
     expect(el.querySelector('input[name="intervalSec"]')).toBeNull();
     expect(last().config).toEqual({});
     expect(last().valid).toBe(true);
+  });
+
+  describe('x-showWhen', () => {
+    const showWhenSchema: JsonSchema = {
+      type: 'object',
+      required: ['mode'],
+      properties: {
+        mode: { type: 'string', enum: ['listen', 'connect'], default: 'listen' },
+        host: { type: 'string', title: 'Host', 'x-showWhen': { mode: 'connect' } },
+        allow: { type: 'array', items: { type: 'string' }, title: 'Allowed senders', 'x-showWhen': { mode: ['listen'] } },
+        tls: {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean' },
+            requireClientCert: { type: 'boolean', 'x-showWhen': { enabled: true } },
+          },
+        },
+      },
+    };
+
+    function setSelect(selector: string, value: string): void {
+      const select = el.querySelector<HTMLSelectElement>(selector);
+      if (!select) {
+        throw new Error(`no select for ${selector}`);
+      }
+      select.value = Array.from(select.options).find((o) => o.textContent?.trim() === value)!.value;
+      select.dispatchEvent(new Event('change'));
+      fixture.detectChanges();
+    }
+
+    it('shows a field only while its sibling has one of the values, and leaves hidden values out', () => {
+      render(showWhenSchema, { value: { mode: 'listen', host: 'stale.example' } });
+      expect(el.querySelector('[data-pointer="/config/host"]')).toBeNull();
+      expect(el.querySelector('[data-pointer="/config/allow"]')).not.toBeNull();
+      expect(last().config['host']).toBeUndefined();
+
+      component.configGroup.get('mode')!.setValue('connect');
+      fixture.detectChanges();
+      expect(el.querySelector('[data-pointer="/config/host"]')).not.toBeNull();
+      expect(el.querySelector('[data-pointer="/config/allow"]')).toBeNull();
+      expect(last().config['host']).toBe('stale.example');
+    });
+
+    it('re-evaluates when the user picks a value in the form', () => {
+      render(showWhenSchema, { value: { mode: 'listen' } });
+      expect(el.querySelector('input[name="host"]')).toBeNull();
+
+      setSelect('select[name="mode"]', 'connect');
+      expect(el.querySelector('input[name="host"]')).not.toBeNull();
+      expect(el.querySelector('input[name="allow"]')).toBeNull();
+    });
+
+    it('works inside groups, and leaves hidden nested values out', () => {
+      render(showWhenSchema, { value: { mode: 'listen', tls: { requireClientCert: true } } });
+      expect(el.querySelector('[data-pointer="/config/tls/requireClientCert"]')).toBeNull();
+      expect(last().config['tls']).toEqual({ enabled: false });
+
+      (component.configGroup.get('tls') as FormGroup).get('enabled')!.setValue(true);
+      fixture.detectChanges();
+      expect(el.querySelector('[data-pointer="/config/tls/requireClientCert"]')).not.toBeNull();
+      expect(last().config['tls']).toEqual({ enabled: true, requireClientCert: true });
+    });
+
+    it('treats an empty sibling as its schema default', () => {
+      render(showWhenSchema); // mode left unset: the default, listen, applies
+      expect(el.querySelector('[data-pointer="/config/host"]')).toBeNull();
+      expect(el.querySelector('[data-pointer="/config/allow"]')).not.toBeNull();
+    });
+
+    it('hides a field whose empty sibling has no default', () => {
+      render({
+        type: 'object',
+        properties: {
+          format: { type: 'string', enum: ['sentinel', 'json'] },
+          encoding: { type: 'string', enum: ['protobuf', 'json'], 'x-showWhen': { format: 'sentinel' } },
+        },
+      });
+      expect(el.querySelector('[data-pointer="/config/encoding"]')).toBeNull();
+    });
+
+    it('does not let a hidden required field block validity', () => {
+      render(
+        { ...showWhenSchema, required: ['mode', 'host'] },
+        { value: { mode: 'listen' } },
+      );
+      expect(last().valid).toBe(true);
+
+      component.configGroup.get('mode')!.setValue('connect');
+      fixture.detectChanges();
+      expect(last().valid).toBe(false);
+
+      component.configGroup.get('host')!.setValue('radar.example');
+      fixture.detectChanges();
+      expect(last().valid).toBe(true);
+    });
+
+    it('hides a whole group, its children included, from the form, the config and validity', () => {
+      render(
+        {
+          type: 'object',
+          properties: {
+            format: { type: 'string', enum: ['sentinel', 'json'], default: 'sentinel' },
+            decoderOptions: {
+              type: 'object',
+              required: ['timeField'],
+              properties: { timeField: { type: 'string' } },
+              'x-showWhen': { format: 'json' },
+            },
+          },
+        },
+        { value: { decoderOptions: { timeField: 'ts' } } },
+      );
+      expect(el.querySelector('[data-pointer="/config/decoderOptions"]')).toBeNull();
+      expect(last().config['decoderOptions']).toBeUndefined();
+      expect(last().valid).toBe(true);
+
+      component.configGroup.get('format')!.setValue('json');
+      fixture.detectChanges();
+      expect(el.querySelector('[data-pointer="/config/decoderOptions"]')).not.toBeNull();
+      expect(last().config['decoderOptions']).toEqual({ timeField: 'ts' });
+    });
   });
 });

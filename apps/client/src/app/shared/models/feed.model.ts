@@ -93,6 +93,8 @@ export interface JsonSchema {
   format?: string;
   /** Marks a property whose value is a secret reference and belongs in secretRefs. */
   'x-secret'?: boolean;
+  /** Shows the property only while a sibling has one of these values: `{ "<siblingKey>": value | [values] }`. */
+  'x-showWhen'?: Record<string, unknown>;
   allOf?: JsonSchema[];
   if?: JsonSchema;
   then?: JsonSchema;

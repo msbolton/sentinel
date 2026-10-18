@@ -51,6 +51,10 @@ export interface FieldDef {
   constValue?: unknown;
   control?: FormControl;
   children?: FieldDef[];
+  /** `x-showWhen`: shown only while the sibling `key` has one of `values`. */
+  showWhen?: { key: string; values: unknown[] };
+  /** The group this field's control lives in (its siblings), for `showWhen`. */
+  parent?: FormGroup;
 }
 
 export const SECRET_REF_PATTERN = /^(env:[A-Z0-9_]+|file:\/\S+)$/;
@@ -143,6 +147,9 @@ export class SchemaFormComponent {
     return out;
   });
 
+  /** Property schemas of each group built, so a `showWhen` sibling's default can be found. */
+  private readonly siblingSchemas = new WeakMap<FormGroup, Record<string, JsonSchema>>();
+
   private changeSub: Subscription | null = null;
 
   constructor() {
@@ -177,8 +184,9 @@ export class SchemaFormComponent {
     });
   }
 
+  /** Hidden fields keep their controls but do not count: only the fields on show must be valid. */
   get valid(): boolean {
-    return this.configGroup.valid && this.secretGroup.valid;
+    return this.allValid([...this.driverFields(), ...this.advancedFields()]) && this.secretGroup.valid;
   }
 
   /** Current snapshot, the same shape `changed` emits. */
@@ -237,6 +245,12 @@ export class SchemaFormComponent {
     return this.errorsOf(def).length > 0 || this.problemsOf(def).length > 0;
   }
 
+  /** A field with `x-showWhen` is shown only while its sibling has one of the listed values. */
+  isShown(def: FieldDef, siblings: FormGroup | undefined = def.parent): boolean {
+    this.tick(); // re-evaluate on every form change (OnPush)
+    return this.visible(def, siblings);
+  }
+
   // ---------------------------------------------------------------------
   // Building
   // ---------------------------------------------------------------------
@@ -266,6 +280,8 @@ export class SchemaFormComponent {
         secretKeys.add(key);
       }
     }
+
+    this.siblingSchemas.set(this.configGroup, { ...(COMMON_OPTIONS_SCHEMA.properties ?? {}), ...properties });
 
     const driverDefs: FieldDef[] = [];
     for (const [key, prop] of Object.entries(properties)) {
@@ -338,6 +354,8 @@ export class SchemaFormComponent {
       label: prop.title ?? humanize(key),
       help: prop.description,
       required,
+      showWhen: parseShowWhen(prop['x-showWhen']),
+      parent,
     };
 
     if (prop.const !== undefined) {
@@ -349,6 +367,7 @@ export class SchemaFormComponent {
     if (type === 'object') {
       const group = new FormGroup<Record<string, AbstractControl>>({});
       parent.addControl(key, group, { emitEvent: false });
+      this.siblingSchemas.set(group, prop.properties ?? {});
       const nestedRequired = new Set(prop.required ?? []);
       const nestedValue = isRecord(initial) ? initial : {};
       const children = Object.entries(prop.properties ?? {}).map(([childKey, childProp]) =>
@@ -457,6 +476,9 @@ export class SchemaFormComponent {
   private collect(defs: FieldDef[]): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     for (const def of defs) {
+      if (!this.visible(def)) {
+        continue; // hidden: the control keeps its value, the config leaves it out
+      }
       const v = this.valueOf(def);
       if (v !== undefined) {
         out[def.key] = v;
@@ -509,7 +531,32 @@ export class SchemaFormComponent {
   }
 
   private allValid(defs: FieldDef[]): boolean {
-    return defs.every((d) => (d.control ? d.control.valid : true) && this.allValid(d.children ?? []));
+    return defs.every(
+      (d) => !this.visible(d) || ((d.control ? d.control.valid : true) && this.allValid(d.children ?? [])),
+    );
+  }
+
+  /** `isShown` without the signal read, for code that must not track `tick`. */
+  private visible(def: FieldDef, siblings: FormGroup | undefined = def.parent): boolean {
+    if (!def.showWhen || !siblings) {
+      return true;
+    }
+    const { key, values } = def.showWhen;
+    const control = siblings.get(key);
+    let current: unknown = control?.value;
+    if (typeof current === 'string') {
+      current = current.trim();
+    }
+    if (current === '' || current === null || current === undefined) {
+      current = this.defaultOf(siblings, key);
+    }
+    return values.includes(current);
+  }
+
+  /** What an empty sibling counts as: its schema's `const`, else its `default`. */
+  private defaultOf(group: FormGroup, key: string): unknown {
+    const prop = this.siblingSchemas.get(group)?.[key];
+    return prop?.const !== undefined ? prop.const : prop?.default;
   }
 
   /** Exact pointer, else the longest field pointer the problem sits under. */
@@ -541,6 +588,19 @@ function toEnvName(key: string): string {
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .replace(/[^A-Za-z0-9]+/g, '_')
     .toUpperCase();
+}
+
+/** Reads `x-showWhen` (`{ sibling: value | [values] }`); only its first entry counts. */
+function parseShowWhen(when: unknown): FieldDef['showWhen'] {
+  if (!isRecord(when)) {
+    return undefined;
+  }
+  const [entry] = Object.entries(when);
+  if (!entry) {
+    return undefined;
+  }
+  const [key, value] = entry;
+  return { key, values: Array.isArray(value) ? value : [value] };
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
