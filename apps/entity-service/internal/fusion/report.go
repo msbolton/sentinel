@@ -110,7 +110,7 @@ type Priority map[string]int
 // DefaultPriority: direct receivers first, aggregators next, OpenSky last
 // among live feeds, manual edits lowest.
 var DefaultPriority = Priority{
-	"ADS_B": 100, "AIS": 90, "GPS": 85, "RADAR": 85, "ADSB_LOL": 80, "LINK16": 70, "OPENSKY": 60, "CELESTRAK": 50, "MANUAL": 10,
+	"ADS_B": 100, "AIS": 90, "GPS": 85, "RADAR": 85, "ADSB_LOL": 80, "INTELSKY": 80, "LINK16": 70, "OPENSKY": 60, "CELESTRAK": 50, "MANUAL": 10,
 }
 
 // Of returns the priority of a bare source name (0 when unknown).

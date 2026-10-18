@@ -29,6 +29,12 @@ var Builtins = []Feed{
 		SecretRefs:  map[string]string{},
 	},
 	{
+		ID: "intelsky", Name: "IntelSky military aircraft", Driver: "intelsky", Builtin: true,
+		Description: "Military and government aircraft worldwide from IntelSky (intelsky.org).",
+		Config:      json.RawMessage(`{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}`),
+		SecretRefs:  map[string]string{},
+	},
+	{
 		ID: "aisstream", Name: "aisstream.io AIS", Driver: "aisstream", Builtin: true,
 		Description: "Worldwide AIS from aisstream.io: vessels over the connected clients' viewports plus an MMSI watchlist.",
 		Config:      json.RawMessage(`{"maxAreaSqDeg": 2500, "movingIntervalSec": 15, "stationaryIntervalSec": 180, "staleWarnSec": 600, "staleCriticalSec": 1800}`),

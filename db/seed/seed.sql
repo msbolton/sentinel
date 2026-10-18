@@ -100,6 +100,11 @@ VALUES
    '{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}'::jsonb,
    '{}'::jsonb,
    FALSE, TRUE),
+  ('intelsky', 'IntelSky military aircraft', 'Military and government aircraft worldwide from IntelSky (intelsky.org).',
+   'intelsky',
+   '{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}'::jsonb,
+   '{}'::jsonb,
+   FALSE, TRUE),
   ('aisstream', 'aisstream.io AIS', 'Worldwide AIS from aisstream.io: vessels over the connected clients'' viewports plus an MMSI watchlist.',
    'aisstream',
    '{"maxAreaSqDeg": 2500, "movingIntervalSec": 15, "stationaryIntervalSec": 180, "staleWarnSec": 600, "staleCriticalSec": 1800}'::jsonb,
@@ -113,7 +118,8 @@ SELECT v.feed, v.src, v.stale, v.ageout
 FROM (VALUES
   ('opensky',   'OPENSKY',   60000,  300000),
   ('adsb-lol',  'ADSB_LOL',  60000,  300000),
-  ('celestrak', 'CELESTRAK', 600000, 7200000)
+  ('celestrak', 'CELESTRAK', 600000, 7200000),
+  ('intelsky',  'INTELSKY',  60000,  300000)
 ) AS v(feed, src, stale, ageout)
 WHERE NOT EXISTS (
   SELECT 1 FROM sentinel.feed_ageout_config c WHERE c."feedId" = v.feed AND c."sourceType" = v.src

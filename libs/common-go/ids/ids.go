@@ -14,4 +14,5 @@ const (
 	FeedIDOpenSky   = "opensky"
 	FeedIDADSBLol   = "adsb-lol"
 	FeedIDCelesTrak = "celestrak"
+	FeedIDIntelSky  = "intelsky"
 )

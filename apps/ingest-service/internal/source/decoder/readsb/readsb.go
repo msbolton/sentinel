@@ -1,6 +1,7 @@
-// Package adsblol decodes the adsb.lol v2 aircraft response (the readsb
-// aircraft.json shape) into observations.
-package adsblol
+// Package readsb decodes the readsb aircraft.json document, the shape
+// community ADS-B aggregators serve (IntelSky's live feed among them), into
+// observations. The caller names the source and the decoder.
+package readsb
 
 import (
 	"encoding/json"
@@ -12,8 +13,13 @@ import (
 	"github.com/sentinel/ingest-service/internal/obs"
 )
 
-// Name is the decoder name stamped on observations.
-const Name = "adsblol"
+// Options name what the observations came from.
+type Options struct {
+	// Decoder is the decoder name stamped on observations.
+	Decoder string
+	// Source is the EntitySource name, e.g. "INTELSKY".
+	Source string
+}
 
 const knotsPerMeterPerSec = 1.94384
 
@@ -51,6 +57,9 @@ type Aircraft struct {
 	SDA              *int      `json:"sda"`
 	Seen             *float64  `json:"seen"`
 	SeenPos          *float64  `json:"seen_pos"`
+	// DBFlags is a country as a flag emoji or an ISO code (IntelSky), or a
+	// bitfield number (other aggregators, ignored).
+	DBFlags json.RawMessage `json:"dbFlags"`
 }
 
 // Altitude is alt_baro: a number in feet or the string "ground".
@@ -88,38 +97,75 @@ func Parse(body []byte) (Response, error) {
 
 // Decode parses the body and converts every aircraft with a position. now
 // is the receive time; the response's own clock is used when present.
-func Decode(body []byte, now time.Time) ([]*obs.Observation, error) {
+func Decode(body []byte, now time.Time, opts Options) ([]*obs.Observation, error) {
 	resp, err := Parse(body)
 	if err != nil {
 		return nil, err
 	}
 	at := now
 	if resp.Now > 0 {
-		at = time.UnixMilli(int64(resp.Now * 1000)).UTC()
+		at = responseTime(resp.Now)
 	}
 	out := make([]*obs.Observation, 0, len(resp.AC))
 	for _, ac := range resp.AC {
-		if o := Convert(ac, at); o != nil {
+		if o := Convert(ac, at, opts); o != nil {
 			out = append(out, o)
 		}
 	}
 	return out, nil
 }
 
+// responseTime reads "now": seconds in readsb itself, milliseconds from
+// some aggregators. Anything past 1e11 (the year 5138 in seconds) is ms.
+func responseTime(now float64) time.Time {
+	if now > 1e11 {
+		return time.UnixMilli(int64(now)).UTC()
+	}
+	return time.UnixMilli(int64(now * 1000)).UTC()
+}
+
+// Country reads dbFlags as an ISO 3166 alpha-2 code: a flag emoji (two
+// regional indicator symbols) or two letters. Anything else is "".
+func Country(raw json.RawMessage) string {
+	var s string
+	if len(raw) == 0 || json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	runes := []rune(strings.TrimSpace(s))
+	if len(runes) != 2 {
+		return ""
+	}
+	out := make([]rune, 2)
+	for i, r := range runes {
+		switch {
+		case r >= 0x1F1E6 && r <= 0x1F1FF:
+			out[i] = 'A' + (r - 0x1F1E6)
+		case r >= 'a' && r <= 'z':
+			out[i] = r - 'a' + 'A'
+		case r >= 'A' && r <= 'Z':
+			out[i] = r
+		default:
+			return ""
+		}
+	}
+	return string(out)
+}
+
 // Convert turns an aircraft into an observation; nil without a position.
-func Convert(ac Aircraft, at time.Time) *obs.Observation {
+func Convert(ac Aircraft, at time.Time, opts Options) *obs.Observation {
 	if ac.Lat == nil || ac.Lon == nil {
 		return nil
 	}
 	icao := strings.ToUpper(ac.Hex)
 	o := &obs.Observation{
-		Decoder: Name, Source: "ADSB_LOL", SourceEntityID: "ICAO-" + icao,
+		Decoder: opts.Decoder, Source: opts.Source, SourceEntityID: "ICAO-" + icao,
 		EntityType: obs.EntityAircraft, TrackEnvironment: obs.EnvAir, DisplayName: ac.Hex, SourceTimestamp: at,
 	}
 	if ac.SeenPos != nil {
 		o.SourceTimestamp = at.Add(-time.Duration(*ac.SeenPos * float64(time.Second)))
 	}
 	o.SetPosition(*ac.Lat, *ac.Lon)
+	o.CountryOfOrigin = Country(ac.DBFlags)
 	o.AddIdentity(obs.IdentityICAO24, icao)
 	adsb := &obs.ADSBData{ICAOHex: icao}
 	if ac.Flight != nil {

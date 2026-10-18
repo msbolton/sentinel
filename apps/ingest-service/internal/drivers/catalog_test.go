@@ -21,7 +21,7 @@ func TestDefaultCatalogListsDrivers(t *testing.T) {
 			t.Errorf("%s schema is not JSON: %v", d.ID, err)
 		}
 	}
-	for _, want := range []string{"opensky", "adsblol", "celestrak", "aisstream", "stream", "httpjson"} {
+	for _, want := range []string{"opensky", "adsblol", "celestrak", "aisstream", "intelsky", "stream", "httpjson"} {
 		if !ids[want] {
 			t.Errorf("missing driver %s", want)
 		}
@@ -35,6 +35,9 @@ func TestDefaultCatalogListsDrivers(t *testing.T) {
 	if a, _ := c.Get("adsblol"); !a.HasCapability(CapabilityArea) {
 		t.Errorf("adsblol should take an area: %+v", a)
 	}
+	if i, _ := c.Get("intelsky"); !i.HasCapability(CapabilityPoll) || i.HasCapability(CapabilityArea) || len(i.SecretFields) != 0 {
+		t.Errorf("intelsky info = %+v", i)
+	}
 	if a, _ := c.Get("aisstream"); !a.HasCapability(CapabilityArea) || a.AreaTTL == 0 || len(a.SecretFields) != 1 || a.SecretFields[0] != "apiKey" {
 		t.Errorf("aisstream info = %+v", a)
 	}
@@ -47,6 +50,7 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 		"adsblol":    `{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}`,
 		"celestrak":  `{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}`,
 		"celestrak2": `{"catalogNumbers": [25544], "designators": ["1998-067"], "names": ["ISS (ZARYA)"], "special": ["GPZ"], "supplemental": ["iss"], "tleRefreshHours": 6}`,
+		"intelsky":   `{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}`,
 		"aisstream":  `{"maxAreaSqDeg": 2500, "movingIntervalSec": 15, "stationaryIntervalSec": 180, "staleWarnSec": 600, "staleCriticalSec": 1800}`,
 		"aisstream2": `{"watchlistMmsi": ["235100247", "538005120"], "messageTypes": ["PositionReport", "ShipStaticData"], "maxAreaSqDeg": 0, "movingIntervalSec": 0}`,
 		"stream":     `{"transport": {"kind": "mqtt", "brokerUrl": "tcp://broker:1883", "topics": ["a/#"]}, "decoder": {"name": "json"}}`,
@@ -88,6 +92,8 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		{"celestrak", `{"refreshHours": 1}`, "/config/refreshHours"},
 		{"celestrak", `{"special": ["nope"]}`, "/config/special"},
 		{"celestrak", `{"catalogNumbers": [0]}`, "/config/catalogNumbers"},
+		{"intelsky", `{"intervalSec": 2}`, "/config/intervalSec"},
+		{"intelsky", `{"url": "ftp://x"}`, "/config/url"},
 		{"aisstream", `{"watchlistMmsi": ["12345"]}`, "/config/watchlistMmsi/0"},
 		{"aisstream", `{"messageTypes": ["SafetyBroadcastMessage"]}`, "/config/messageTypes/0"},
 		{"aisstream", `{"movingIntervalSec": -1}`, "/config/movingIntervalSec"},

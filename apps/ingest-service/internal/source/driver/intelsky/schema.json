@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sentinel.local/schemas/intelsky.json",
+  "title": "IntelSky military aircraft",
+  "description": "Military and government aircraft worldwide from IntelSky (intelsky.org), polled from its live feed. No API key; IntelSky allows 60 live requests a minute per IP and asks commercial or high-volume users to contact it first.",
+  "type": "object",
+  "properties": {
+    "intervalSec": { "type": "integer", "minimum": 8, "default": 10, "title": "Poll interval (s)", "description": "IntelSky refreshes its feed about every 8 s" },
+    "url": { "type": "string", "pattern": "^https?://", "title": "Live feed URL", "description": "Override for testing; default https://intelsky.org/api/" }
+  }
+}
