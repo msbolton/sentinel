@@ -678,9 +678,10 @@ func TestSchemaDefaultMatchesDefaultMaxConnections(t *testing.T) {
 // The form titles each TLS secret from the schema's x-secrets. A stream's TLS
 // is not always governed by tls.enabled (a wss:// URL or an ssl:// broker turns
 // it on too), so no secret is hidden or required by it, with one exception: only
-// a tcpserver that requires client certificates reads a client CA, and a
-// tcpserver refuses one it would not check, so the form offers clientCa to that
-// listener alone.
+// a tcpserver that requires client certificates reads a client CA. It refuses
+// one it would not check, and cannot start without one when it asks for client
+// certificates, so the form offers clientCa to that listener alone, and asks
+// for it there.
 func TestSchemaTitlesTheTLSSecrets(t *testing.T) {
 	var doc struct {
 		Secrets map[string]map[string]json.RawMessage `json:"x-secrets"`
@@ -697,6 +698,8 @@ func TestSchemaTitlesTheTLSSecrets(t *testing.T) {
 			t.Errorf("x-secrets has no entry for %s", name)
 		}
 	}
+	// A tcpserver, with TLS on, asking senders for certificates.
+	mutualTLS := map[string]any{"transport/kind": "tcpserver", "transport/tls/enabled": true, "transport/tls/requireClientCert": true}
 	for name, meta := range doc.Secrets {
 		if !slices.Contains(def.SecretFields, name) {
 			t.Errorf("x-secrets describes %s, which is not one of the driver's secret fields %v", name, def.SecretFields)
@@ -705,21 +708,20 @@ func TestSchemaTitlesTheTLSSecrets(t *testing.T) {
 		if err := json.Unmarshal(meta["title"], &title); err != nil || title == "" {
 			t.Errorf("x-secrets.%s has no title", name)
 		}
-		if _, has := meta["requiredWhen"]; has {
-			t.Errorf("x-secrets.%s has requiredWhen, but the form does not require a stream's TLS secrets", name)
-		}
-		var showWhen map[string]any
-		if raw, has := meta["showWhen"]; has {
-			if err := json.Unmarshal(raw, &showWhen); err != nil {
-				t.Errorf("x-secrets.%s showWhen is not an object: %v", name, err)
+		for _, condition := range []string{"showWhen", "requiredWhen"} {
+			var got map[string]any
+			if raw, has := meta[condition]; has {
+				if err := json.Unmarshal(raw, &got); err != nil {
+					t.Errorf("x-secrets.%s %s is not an object: %v", name, condition, err)
+				}
 			}
-		}
-		var want map[string]any // nil: every other secret is always offered
-		if name == "clientCa" {
-			want = map[string]any{"transport/kind": "tcpserver", "transport/tls/enabled": true, "transport/tls/requireClientCert": true}
-		}
-		if !maps.Equal(showWhen, want) {
-			t.Errorf("x-secrets.%s showWhen = %v, want %v", name, showWhen, want)
+			var want map[string]any // nil: every other secret is always offered and never required
+			if name == "clientCa" {
+				want = mutualTLS
+			}
+			if !maps.Equal(got, want) {
+				t.Errorf("x-secrets.%s %s = %v, want %v", name, condition, got, want)
+			}
 		}
 	}
 }

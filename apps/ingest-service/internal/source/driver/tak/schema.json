@@ -45,8 +45,8 @@
     }
   },
   "x-secrets": {
-    "clientCert": { "title": "Client certificate (PEM)", "description": "The certificate Sentinel presents to the TAK Server; its TLS streaming port (usually 8089) asks for one. Give the client key with it.", "examples": ["file:/etc/sentinel/secrets/client.pem"] },
-    "clientKey": { "title": "Client private key (PEM)", "description": "The key of the client certificate. Give the certificate with it.", "examples": ["file:/etc/sentinel/secrets/client.key"] },
-    "caCert": { "title": "Server CA (PEM)", "description": "Signs the TAK Server's certificate; empty trusts the system roots.", "examples": ["file:/etc/sentinel/secrets/ca.pem"] }
+    "clientCert": { "title": "Client certificate (PEM)", "description": "The certificate Sentinel presents to the TAK Server; its TLS streaming port (usually 8089) asks for one. Give the client key with it.", "examples": ["file:/etc/sentinel/tak/client.pem"] },
+    "clientKey": { "title": "Client private key (PEM)", "description": "The key of the client certificate. Give the certificate with it.", "examples": ["file:/etc/sentinel/tak/client.key"] },
+    "caCert": { "title": "Server CA (PEM)", "description": "Signs the TAK Server's certificate; empty trusts the system roots.", "examples": ["file:/etc/sentinel/tak/ca.pem"] }
   }
 }
