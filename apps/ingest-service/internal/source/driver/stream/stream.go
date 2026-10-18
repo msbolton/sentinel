@@ -248,6 +248,9 @@ func (d *Driver) decodeOne(ctx context.Context, f transport.Frame, sink driver.S
 		d.lastErr = err.Error()
 		d.mu.Unlock()
 		reason := "parse_error"
+		if r := decoder.RejectReason(err); r != "" {
+			reason = r
+		}
 		if errors.Is(err, errPanic) {
 			reason = "panic"
 		}
@@ -267,7 +270,9 @@ func (d *Driver) decodeOne(ctx context.Context, f transport.Frame, sink driver.S
 		if o.SensorID == "" {
 			o.SensorID = f.Remote
 		}
-		o.RawContentType = d.ddef.ContentType
+		if o.RawContentType == "" {
+			o.RawContentType = d.ddef.ContentType
+		}
 		o.Raw = f.Payload
 		if err := sink.Emit(ctx, o); err != nil {
 			return

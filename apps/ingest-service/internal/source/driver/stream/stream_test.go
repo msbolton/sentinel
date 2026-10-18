@@ -281,3 +281,40 @@ func TestNewRejectsBadConfigs(t *testing.T) {
 		t.Error("unknown backpressure policy must be rejected")
 	}
 }
+
+func TestRejectReasonAndDecoderContentType(t *testing.T) {
+	tr := &fakeTransport{frames: [][]byte{[]byte("rejected"), []byte("kept"), []byte("defaulted")}}
+	dec := decoder.Stateless(func(f transport.Frame) ([]*obs.Observation, error) {
+		switch string(f.Payload) {
+		case "rejected":
+			return nil, decoder.Reject("missing_identity", errors.New("no identity"))
+		case "kept":
+			o := &obs.Observation{SourceEntityID: "a", RawContentType: "application/x-protobuf"}
+			o.SetPosition(1, 1)
+			return []*obs.Observation{o}, nil
+		}
+		o := &obs.Observation{SourceEntityID: "b"}
+		o.SetPosition(1, 1)
+		return []*obs.Observation{o}, nil
+	})
+	d := newFakeDriver(driver.BackpressureBlock, tr, dec)
+	d.ddef.ContentType = "text/plain"
+	sink := newSink()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = d.Run(ctx, sink) }()
+	if !waitFor(func() bool { return sink.count() == 2 && len(sink.deadLetters()) == 1 }, time.Second) {
+		t.Fatalf("observations=%d dlq=%v", sink.count(), sink.deadLetters())
+	}
+	if dl := sink.deadLetters()[0]; dl != "missing_identity:rejected" {
+		t.Errorf("dead letter = %q, want it filed under the decoder's reason", dl)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if got := sink.obs[0].RawContentType; got != "application/x-protobuf" {
+		t.Errorf("a decoder-set content type = %q, want it kept", got)
+	}
+	if got := sink.obs[1].RawContentType; got != "text/plain" {
+		t.Errorf("content type without a decoder value = %q, want the definition's", got)
+	}
+}

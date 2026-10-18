@@ -20,6 +20,7 @@ import (
 	_ "github.com/sentinel/ingest-service/internal/source/decoder/nmeaais"
 	_ "github.com/sentinel/ingest-service/internal/source/decoder/nmeagps"
 	_ "github.com/sentinel/ingest-service/internal/source/decoder/sbs"
+	_ "github.com/sentinel/ingest-service/internal/source/decoder/sentinelobs"
 
 	// Drivers.
 	_ "github.com/sentinel/ingest-service/internal/source/driver/aisstream"
