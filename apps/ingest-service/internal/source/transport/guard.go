@@ -6,10 +6,12 @@ import (
 	"net"
 	"net/netip"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/time/rate"
 )
@@ -75,14 +77,34 @@ func NewLimiter(perSec int) *Limiter {
 // Allow takes one token.
 func (l *Limiter) Allow() bool { return l == nil || l.l.Allow() }
 
-// SenderStat is one sender as health reports it.
+// SenderStat is one sender as health reports it. LastAt is left out until the
+// sender has sent something (a connection that has not yet is listed too).
+// Malformed counts the sender's messages that did not decode; the last of
+// them is described by LastReason, LastError and LastMalformedAt, which are
+// left out until there is one.
 type SenderStat struct {
 	Remote    string    `json:"remote"`
 	Since     time.Time `json:"since"`
-	LastAt    time.Time `json:"lastAt"`
+	LastAt    time.Time `json:"lastAt,omitzero"`
 	Messages  int64     `json:"messages"`
 	Connected bool      `json:"connected"`
+
+	Malformed       int64      `json:"malformed"`
+	LastReason      string     `json:"lastReason,omitempty"`
+	LastError       string     `json:"lastError,omitempty"`
+	LastMalformedAt *time.Time `json:"lastMalformedAt,omitempty"`
 }
+
+// MalformedNoter is implemented by a transport that tells its senders apart,
+// so the stream driver can report each message from remote that did not
+// decode. It is defined here so that this package needs no driver imports.
+type MalformedNoter interface {
+	NoteMalformed(remote, reason, errText string)
+}
+
+// maxErrorBytes bounds the error text kept per sender; health lists up to 50
+// senders in a feed's status row.
+const maxErrorBytes = 200
 
 // Senders tracks who is sending, capped at max entries (connected senders
 // are kept over idle ones).
@@ -145,6 +167,26 @@ func (s *Senders) Seen(remote string, now time.Time) {
 	e.LastAt = now
 }
 
+// Malformed records that a message from remote did not decode: the sender
+// keeps a count and the latest reason, error text (cut to 200 bytes) and
+// time. The message itself was counted by Seen when it arrived. A sender
+// evicted while the message waited to be decoded is tracked afresh, with
+// LastAt set, which Snapshot needs to keep it.
+func (s *Senders) Malformed(remote, reason, errText string, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.entry(remote, now)
+	e.Malformed++
+	e.LastReason, e.LastError = reason, truncateUTF8(errText, maxErrorBytes)
+	// Snapshot copies the entry, pointer included, so a new value is stored
+	// each time rather than the old one written through.
+	at := now
+	e.LastMalformedAt = &at
+	if e.LastAt.IsZero() {
+		e.LastAt = now
+	}
+}
+
 // Snapshot returns connected senders and those seen within window, newest
 // first, and their count; older idle senders are forgotten.
 func (s *Senders) Snapshot(now time.Time, window time.Duration) ([]SenderStat, int) {
@@ -160,6 +202,19 @@ func (s *Senders) Snapshot(now time.Time, window time.Duration) ([]SenderStat, i
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].LastAt.After(out[j].LastAt) })
 	return out, len(out)
+}
+
+// truncateUTF8 cuts s to at most n bytes without splitting a rune. The cut is
+// a copy, so a sender's row does not keep the whole error text alive.
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return strings.Clone(s[:cut])
 }
 
 // ListenCounters are a listener's running totals.

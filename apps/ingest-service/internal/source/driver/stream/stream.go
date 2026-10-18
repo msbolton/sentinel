@@ -71,6 +71,7 @@ type Driver struct {
 	tcfg      transport.Config
 	tdef      transport.Definition
 	transport transport.Transport
+	noter     transport.MalformedNoter // the transport, if it tells its senders apart
 	decoder   decoder.Decoder
 	ddef      decoder.Definition
 	policy    string
@@ -165,7 +166,8 @@ func NewFromParts(spec driver.Spec, deps driver.Deps, tcfg transport.Config, fra
 	default:
 		return nil, fmt.Errorf("unknown backpressure policy %q", policy)
 	}
-	return &Driver{spec: spec, logger: deps.Logger, tcfg: tcfg, tdef: tdef, transport: t, decoder: decoded, ddef: ddef, policy: policy}, nil
+	noter, _ := t.(transport.MalformedNoter)
+	return &Driver{spec: spec, logger: deps.Logger, tcfg: tcfg, tdef: tdef, transport: t, noter: noter, decoder: decoded, ddef: ddef, policy: policy}, nil
 }
 
 // ApplySecrets copies resolved secret references into the transport
@@ -337,8 +339,9 @@ func (d *Driver) decodeOne(ctx context.Context, f transport.Frame, sink driver.S
 			sink.Skipped(reason)
 			return
 		}
+		msg := err.Error()
 		d.mu.Lock()
-		d.lastErr = err.Error()
+		d.lastErr = msg
 		d.mu.Unlock()
 		reason := "parse_error"
 		if r := decoder.RejectReason(err); r != "" {
@@ -348,7 +351,14 @@ func (d *Driver) decodeOne(ctx context.Context, f transport.Frame, sink driver.S
 			reason = "panic"
 		}
 		d.malformed.Add(1)
-		sink.DeadLetter(f.Payload, reason, err)
+		if d.noter != nil {
+			d.noter.NoteMalformed(f.Remote, reason, msg)
+		}
+		if ps, ok := sink.(driver.ProvenanceSink); ok {
+			ps.DeadLetterFrom(f.Payload, reason, err, driver.Provenance{Decoder: d.ddef.Name, Sender: f.Remote, ReceivedAt: f.ReceivedAt})
+		} else {
+			sink.DeadLetter(f.Payload, reason, err)
+		}
 		return
 	}
 	for _, o := range out {

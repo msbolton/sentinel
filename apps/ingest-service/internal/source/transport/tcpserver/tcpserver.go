@@ -202,6 +202,14 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 	return nil
 }
 
+var _ transport.MalformedNoter = (*Server)(nil)
+
+// NoteMalformed counts a message from remote that did not decode against that
+// sender, which State lists.
+func (s *Server) NoteMalformed(remote, reason, errText string) {
+	s.senders.Malformed(remote, reason, errText, time.Now().UTC())
+}
+
 // State reports connectivity, counters and senders.
 func (s *Server) State() transport.State {
 	st := s.Get()

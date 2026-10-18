@@ -188,6 +188,163 @@ func TestDecoderPanicIsDeadLettered(t *testing.T) {
 	cancel()
 }
 
+// provSink is a memSink that also takes the provenance of a dead letter, as
+// the feed runner does: the stream driver prefers that to the plain
+// DeadLetter, so a dead letter lands in letters and not in the memSink's.
+type provSink struct {
+	*memSink
+	pmu     sync.Mutex
+	letters []provLetter
+}
+
+type provLetter struct {
+	raw, reason string
+	cause       error
+	p           driver.Provenance
+}
+
+func (s *provSink) DeadLetterFrom(raw []byte, reason string, cause error, p driver.Provenance) {
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	s.letters = append(s.letters, provLetter{string(raw), reason, cause, p})
+}
+
+func (s *provSink) fromLetters() []provLetter {
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	return append([]provLetter(nil), s.letters...)
+}
+
+// sendGarbage runs a tcpserver stream feed with the sentinel decoder into
+// sink, sends it one line that is not a sentinel.v1.Observation, and returns
+// the driver with the client's end of the connection, whose local address is
+// the sender as the server sees it.
+func sendGarbage(t *testing.T, sink driver.Sink) (*Driver, net.Conn) {
+	t.Helper()
+	addr := freePort(t)
+	spec := driver.Spec{FeedID: "g", Driver: ID, Config: json.RawMessage(`{"transport":{"kind":"tcpserver","address":"` + addr + `"},"framing":"line","decoder":{"name":"sentinel"}}`)}
+	d, err := New(spec, driver.Deps{Logger: zap.NewNop()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = d.Run(ctx, sink) }()
+	t.Cleanup(func() { cancel(); <-done })
+	var conn net.Conn
+	if !waitFor(func() bool {
+		c, err := net.Dial("tcp", addr)
+		if err == nil {
+			conn = c
+		}
+		return err == nil
+	}, 2*time.Second) {
+		t.Fatal("server did not come up")
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if _, err := conn.Write([]byte("garbage\n")); err != nil {
+		t.Fatal(err)
+	}
+	return d.(*Driver), conn
+}
+
+// senderStats is the senders list of a listening transport in the driver's
+// health detail.
+func senderStats(t *testing.T, d *Driver) []transport.SenderStat {
+	t.Helper()
+	list, ok := d.Health().Detail["senders"].([]transport.SenderStat)
+	if !ok {
+		t.Fatalf("detail.senders = %T, want []transport.SenderStat", d.Health().Detail["senders"])
+	}
+	return list
+}
+
+// An undecodable message is dead-lettered with the decoder that refused it,
+// the sender it came from and the time it arrived, and the listener counts it
+// against that sender, so an integrator can see which sender is at fault.
+func TestDeadLetterCarriesProvenanceAndNotesSender(t *testing.T) {
+	sink := &provSink{memSink: newSink()}
+	before := time.Now().Add(-time.Second)
+	d, conn := sendGarbage(t, sink)
+	if !waitFor(func() bool { return len(sink.fromLetters()) == 1 }, 2*time.Second) {
+		t.Fatalf("no dead letter with provenance; plain dead letters: %v", sink.deadLetters())
+	}
+	got := sink.fromLetters()[0]
+	if got.reason != "parse_error" || got.raw != "garbage" || got.cause == nil {
+		t.Errorf("dead letter = %+v, want garbage under parse_error with its cause", got)
+	}
+	if got.p.Decoder != "sentinel" || got.p.Sender != conn.LocalAddr().String() {
+		t.Errorf("provenance = %+v, want decoder sentinel and sender %s", got.p, conn.LocalAddr())
+	}
+	if got.p.ReceivedAt.Before(before) || got.p.ReceivedAt.After(time.Now()) {
+		t.Errorf("receivedAt = %v, want the time the frame arrived (after %v)", got.p.ReceivedAt, before)
+	}
+	if plain := sink.deadLetters(); len(plain) != 0 {
+		t.Errorf("a sink that takes provenance also got the plain dead letter %v", plain)
+	}
+
+	senders := senderStats(t, d)
+	if len(senders) != 1 {
+		t.Fatalf("senders = %+v, want the one client", senders)
+	}
+	s := senders[0]
+	if s.Remote != got.p.Sender || s.Malformed != 1 || s.LastReason != "parse_error" || s.LastError != got.cause.Error() || s.LastMalformedAt == nil {
+		t.Errorf("sender = %+v, want one undecodable message, reason parse_error, error %q", s, got.cause)
+	}
+	if s.Messages != 1 || !s.Connected {
+		t.Errorf("sender = %+v, want its one message counted and the connection still open", s)
+	}
+}
+
+// A sink that does not take provenance (every polled driver's tests, and any
+// sink written before it existed) still gets the dead letter, and the sender
+// is still noted.
+func TestPlainSinkStillGetsDeadLetters(t *testing.T) {
+	sink := newSink()
+	d, conn := sendGarbage(t, sink)
+	if !waitFor(func() bool { return len(sink.deadLetters()) == 1 }, 2*time.Second) {
+		t.Fatalf("dead letters = %v", sink.deadLetters())
+	}
+	if got := sink.deadLetters()[0]; got != "parse_error:garbage" {
+		t.Errorf("dead letter = %q", got)
+	}
+	senders := senderStats(t, d)
+	if len(senders) != 1 || senders[0].Remote != conn.LocalAddr().String() || senders[0].Malformed != 1 || senders[0].LastReason != "parse_error" {
+		t.Errorf("senders = %+v, want the client with one undecodable message", senders)
+	}
+}
+
+// A transport that cannot tell senders apart (it is not a listener, so there is
+// no sender to note) still has the provenance name the decoder and the
+// frame's origin, whatever that is: a topic, a queue or an address.
+func TestProvenanceFromATransportWithoutSenders(t *testing.T) {
+	received := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	tr := &originTransport{frame: transport.Frame{Payload: []byte("x"), ReceivedAt: received, Remote: "sensors/ais"}}
+	d := newFakeDriver(driver.BackpressureBlock, tr, panicDecoder{})
+	sink := &provSink{memSink: newSink()}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = d.Run(ctx, sink) }()
+	defer func() { cancel(); <-done }()
+	if !waitFor(func() bool { return len(sink.fromLetters()) == 1 }, time.Second) {
+		t.Fatal("no dead letter")
+	}
+	got := sink.fromLetters()[0]
+	if got.reason != "panic" || got.p.Decoder != "fake" || got.p.Sender != "sensors/ais" || !got.p.ReceivedAt.Equal(received) {
+		t.Errorf("dead letter = %+v, want the panic from the fake decoder, frame origin sensors/ais, received %v", got, received)
+	}
+}
+
+// originTransport emits one frame as given.
+type originTransport struct{ frame transport.Frame }
+
+func (o *originTransport) Run(ctx context.Context, emit transport.Emit) error {
+	_ = emit(ctx, o.frame)
+	<-ctx.Done()
+	return nil
+}
+func (o *originTransport) State() transport.State { return transport.State{Connected: true} }
+
 func TestBackpressurePolicies(t *testing.T) {
 	saved := FrameBuffer
 	FrameBuffer = 1

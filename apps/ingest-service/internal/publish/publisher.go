@@ -128,10 +128,13 @@ func (p *Publisher) Emit(ctx context.Context, o *obs.Observation) error {
 	}
 }
 
-// DeadLetter sends an undecodable payload to the dead-letter topic, at
-// most DLQRatePerSec per feed; excess is counted and dropped so a
-// misconfigured feed cannot flood Kafka.
-func (p *Publisher) DeadLetter(feedID, driverID, decoder string, raw []byte, reason string, cause error) {
+// DeadLetter sends an undecodable payload to the dead-letter topic, with the
+// decoder that refused it and the sender it came from when the driver knew
+// them, at most DLQRatePerSec per feed; excess is counted and dropped so a
+// misconfigured feed cannot flood Kafka. received-at is when the frame
+// arrived, or when it was dead-lettered for a payload that was never a frame.
+func (p *Publisher) DeadLetter(dl obs.DeadLetter) {
+	feedID := dl.FeedID
 	if feedID == "" {
 		feedID = "unknown"
 	}
@@ -141,20 +144,25 @@ func (p *Publisher) DeadLetter(feedID, driverID, decoder string, raw []byte, rea
 		}
 		return
 	}
+	receivedAt := dl.ReceivedAt
+	if receivedAt.IsZero() {
+		receivedAt = time.Now()
+	}
 	headers := []kafka.Header{
 		{Key: commonkafka.HeaderProducer, Value: []byte(wire.Producer)},
 		{Key: commonkafka.HeaderFeedID, Value: []byte(feedID)},
-		{Key: "driver", Value: []byte(driverID)},
-		{Key: "decoder", Value: []byte(decoder)},
-		{Key: "reason", Value: []byte(reason)},
-		{Key: commonkafka.HeaderError, Value: []byte(errString(cause))},
-		{Key: "received-at", Value: []byte(time.Now().UTC().Format(time.RFC3339Nano))},
+		{Key: "driver", Value: []byte(dl.Driver)},
+		{Key: "decoder", Value: []byte(dl.Decoder)},
+		{Key: "sender", Value: []byte(dl.Sender)},
+		{Key: "reason", Value: []byte(dl.Reason)},
+		{Key: commonkafka.HeaderError, Value: []byte(errString(dl.Cause))},
+		{Key: "received-at", Value: []byte(receivedAt.UTC().Format(time.RFC3339Nano))},
 	}
 	topic := p.opts.DeadLetterTopic
 	msg := &kafka.Message{
 		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
 		Key:            []byte(feedID),
-		Value:          raw,
+		Value:          dl.Raw,
 		Headers:        headers,
 		Opaque:         feedID,
 	}
@@ -163,7 +171,7 @@ func (p *Publisher) DeadLetter(feedID, driverID, decoder string, raw []byte, rea
 		return
 	}
 	if p.metrics != nil {
-		p.metrics.DeadLetterTotal.WithLabelValues(feedID, reason).Inc()
+		p.metrics.DeadLetterTotal.WithLabelValues(feedID, dl.Reason).Inc()
 	}
 }
 

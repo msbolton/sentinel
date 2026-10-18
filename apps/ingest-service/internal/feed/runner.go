@@ -23,7 +23,7 @@ import (
 // Publisher is what the runner hands observations to.
 type Publisher interface {
 	Emit(ctx context.Context, o *obs.Observation) error
-	DeadLetter(feedID, driverID, decoder string, raw []byte, reason string, cause error)
+	DeadLetter(dl obs.DeadLetter)
 }
 
 // Raw payload retention policies (config key rawPayload).
@@ -62,6 +62,10 @@ type Stats struct {
 
 	Outbound *outbound.Counters
 }
+
+// A runner takes the provenance of a dead letter, so a driver that knows who
+// sent a payload can say.
+var _ driver.ProvenanceSink = (*Runner)(nil)
 
 // Runner runs one driver and is its sink.
 type Runner struct {
@@ -224,8 +228,15 @@ func (r *Runner) boundRaw(o *obs.Observation) {
 	}
 }
 
-// DeadLetter forwards an undecodable payload.
+// DeadLetter forwards an undecodable payload whose origin the driver does not
+// know (a polled response, say).
 func (r *Runner) DeadLetter(raw []byte, reason string, cause error) {
+	r.DeadLetterFrom(raw, reason, cause, driver.Provenance{})
+}
+
+// DeadLetterFrom forwards an undecodable payload with the decoder that refused
+// it, the sender it came from and the time its frame arrived.
+func (r *Runner) DeadLetterFrom(raw []byte, reason string, cause error, p driver.Provenance) {
 	r.mu.Lock()
 	r.stats.ErrorsTotal++
 	if cause != nil {
@@ -235,8 +246,8 @@ func (r *Runner) DeadLetter(raw []byte, reason string, cause error) {
 	if r.metrics != nil {
 		r.metrics.DecodeErrorsTotal.WithLabelValues(r.feedID, r.driverID, reason).Inc()
 	}
-	r.logger.Debug("frame dead-lettered", zap.String("feed", r.feedID), zap.String("reason", reason), zap.Error(cause))
-	r.pub.DeadLetter(r.feedID, r.driverID, "", raw, reason, cause)
+	r.logger.Debug("frame dead-lettered", zap.String("feed", r.feedID), zap.String("decoder", p.Decoder), zap.String("sender", p.Sender), zap.String("reason", reason), zap.Error(cause))
+	r.pub.DeadLetter(obs.DeadLetter{FeedID: r.feedID, Driver: r.driverID, Decoder: p.Decoder, Sender: p.Sender, Reason: reason, Cause: cause, Raw: raw, ReceivedAt: p.ReceivedAt})
 }
 
 // Skipped counts a frame that produced nothing.

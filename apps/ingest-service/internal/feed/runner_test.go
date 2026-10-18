@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/obs"
@@ -17,7 +19,7 @@ import (
 type memPublisher struct {
 	mu   sync.Mutex
 	obs  []*obs.Observation
-	dlq  []string
+	dlq  []obs.DeadLetter
 	fail error
 }
 
@@ -30,10 +32,15 @@ func (p *memPublisher) Emit(_ context.Context, o *obs.Observation) error {
 	p.obs = append(p.obs, o)
 	return nil
 }
-func (p *memPublisher) DeadLetter(feedID, driverID, decoder string, raw []byte, reason string, cause error) {
+func (p *memPublisher) DeadLetter(dl obs.DeadLetter) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.dlq = append(p.dlq, feedID+"/"+driverID+"/"+reason)
+	p.dlq = append(p.dlq, dl)
+}
+func (p *memPublisher) deadLetters() []obs.DeadLetter {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]obs.DeadLetter(nil), p.dlq...)
 }
 func (p *memPublisher) observations() []*obs.Observation {
 	p.mu.Lock()
@@ -88,8 +95,65 @@ func TestRunnerStampsProvenanceAndDedupes(t *testing.T) {
 	if st.FramesTotal != 3 || st.Observations != 2 || st.EntitiesLast != 2 || st.ErrorsTotal != 1 || st.LastSuccessAt.IsZero() || st.LastError != "bad" {
 		t.Errorf("stats = %+v", st)
 	}
-	if len(pub.dlq) != 1 || pub.dlq[0] != "feed-x/stream/parse_error" {
-		t.Errorf("dlq = %v", pub.dlq)
+	// A driver that says nothing of who sent the payload leaves the sender, the
+	// decoder and the receive time empty for the publisher to fill in.
+	dls := pub.deadLetters()
+	if len(dls) != 1 {
+		t.Fatalf("dlq = %+v, want one dead letter", dls)
+	}
+	if dl := dls[0]; dl.FeedID != "feed-x" || dl.Driver != "stream" || dl.Reason != "parse_error" || string(dl.Raw) != "garbage" ||
+		dl.Cause == nil || dl.Cause.Error() != "bad" || dl.Decoder != "" || dl.Sender != "" || !dl.ReceivedAt.IsZero() {
+		t.Errorf("dead letter = %+v", dl)
+	}
+}
+
+// A driver that knows who sent a payload says so through DeadLetterFrom, and
+// the publisher gets the sender, the decoder and the time the frame arrived
+// beside the runner's own feed and driver. The plain DeadLetter still works.
+func TestRunnerDeadLetterProvenance(t *testing.T) {
+	pub := &memPublisher{}
+	core, logs := observer.New(zapcore.DebugLevel)
+	received := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	cause := errors.New("bad")
+	drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+		ps, ok := sink.(driver.ProvenanceSink)
+		if !ok {
+			return errors.New("the runner is not a driver.ProvenanceSink")
+		}
+		ps.DeadLetterFrom([]byte("garbage"), "parse_error", cause, driver.Provenance{Decoder: "sbs", Sender: "10.0.0.5:4000", ReceivedAt: received})
+		sink.DeadLetter([]byte("<html>"), "bad_response", errors.New("not json"))
+		return nil
+	}}
+	r := NewRunner("feed-x", "stream", drv, pub, metrics.New(nil), zap.New(core), RunnerOptions{})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	dls := pub.deadLetters()
+	if len(dls) != 2 {
+		t.Fatalf("dlq = %+v, want two dead letters", dls)
+	}
+	from := dls[0]
+	if from.FeedID != "feed-x" || from.Driver != "stream" || from.Decoder != "sbs" || from.Sender != "10.0.0.5:4000" ||
+		from.Reason != "parse_error" || from.Cause != cause || string(from.Raw) != "garbage" || !from.ReceivedAt.Equal(received) {
+		t.Errorf("dead letter with provenance = %+v", from)
+	}
+	plain := dls[1]
+	if plain.FeedID != "feed-x" || plain.Driver != "stream" || plain.Reason != "bad_response" || string(plain.Raw) != "<html>" ||
+		plain.Decoder != "" || plain.Sender != "" || !plain.ReceivedAt.IsZero() {
+		t.Errorf("plain dead letter = %+v, want no decoder, sender or receive time", plain)
+	}
+
+	// Both are accounted the same way.
+	if st := r.Stats(); st.ErrorsTotal != 2 || st.LastError != "not json" {
+		t.Errorf("stats = %+v, want two errors, the last being not json", st)
+	}
+	entries := logs.FilterMessage("frame dead-lettered").All()
+	if len(entries) != 2 {
+		t.Fatalf("%d dead-letter log entries, want 2", len(entries))
+	}
+	if ctx := entries[0].ContextMap(); ctx["sender"] != "10.0.0.5:4000" || ctx["decoder"] != "sbs" || ctx["reason"] != "parse_error" {
+		t.Errorf("log fields = %v, want the sender and decoder named", ctx)
 	}
 }
 

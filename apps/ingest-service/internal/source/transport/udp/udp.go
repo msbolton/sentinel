@@ -148,6 +148,14 @@ func trimCR(b []byte) []byte {
 	return b
 }
 
+var _ transport.MalformedNoter = (*Listener)(nil)
+
+// NoteMalformed counts a message from remote that did not decode against that
+// sender, which State lists.
+func (l *Listener) NoteMalformed(remote, reason, errText string) {
+	l.senders.Malformed(remote, reason, errText, time.Now().UTC())
+}
+
 // State reports connectivity, counters and the senders seen in the last 10
 // minutes: at most 50 are listed, distinctSenders counts them all.
 func (l *Listener) State() transport.State {

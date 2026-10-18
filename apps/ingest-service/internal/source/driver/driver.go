@@ -96,7 +96,8 @@ type Sink interface {
 	// driver, receive time, raw payload bounds, id). It blocks while the
 	// publisher is saturated and returns ctx.Err() when the run ends.
 	Emit(ctx context.Context, o *obs.Observation) error
-	// DeadLetter records a payload nothing could decode.
+	// DeadLetter records a payload nothing could decode. A sink that also
+	// implements ProvenanceSink is told where it came from as well.
 	DeadLetter(raw []byte, reason string, cause error)
 	// Skipped counts a frame that produced no observation, by reason.
 	Skipped(reason string)
@@ -105,6 +106,25 @@ type Sink interface {
 	Succeeded(count int)
 	// Blocked accounts time spent waiting on backpressure.
 	Blocked(d time.Duration)
+}
+
+// Provenance says where a dead-lettered payload came from.
+type Provenance struct {
+	// Decoder is the decoder that refused the payload.
+	Decoder string
+	// Sender is the remote address, topic or queue the payload came from.
+	Sender string
+	// ReceivedAt is when the frame arrived, which may be well before it was
+	// decoded; zero when the payload was never a frame.
+	ReceivedAt time.Time
+}
+
+// ProvenanceSink is an optional interface of a Sink: one that takes the
+// provenance of a dead letter. A driver that knows it calls DeadLetterFrom
+// when the sink has it and DeadLetter otherwise. It is separate from Sink so
+// that every existing Sink keeps compiling.
+type ProvenanceSink interface {
+	DeadLetterFrom(raw []byte, reason string, cause error, p Provenance)
 }
 
 // UpdateKind says what an outbound entity update means to the remote.

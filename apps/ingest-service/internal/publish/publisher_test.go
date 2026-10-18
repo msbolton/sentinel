@@ -139,22 +139,63 @@ func TestEmitBlocksWhenShardFullAndHonoursContext(t *testing.T) {
 	pub.Close()
 }
 
+func headers(m *kafka.Message) map[string]string {
+	out := map[string]string{}
+	for _, h := range m.Headers {
+		out[h.Key] = string(h.Value)
+	}
+	return out
+}
+
 func TestDeadLetterIsRateLimited(t *testing.T) {
 	fp := &fakeProducer{}
 	pub := New(fp, nil, nil, Options{DLQRatePerSec: 1, DLQBurst: 3})
 	for i := 0; i < 10; i++ {
-		pub.DeadLetter("feed-a", "tcp", "sbs", []byte("garbage"), "parse_error", errors.New("bad"))
+		pub.DeadLetter(obs.DeadLetter{FeedID: "feed-a", Driver: "tcp", Decoder: "sbs", Sender: "10.0.0.5:4000", Raw: []byte("garbage"), Reason: "parse_error", Cause: errors.New("bad")})
 	}
-	pub.DeadLetter("feed-b", "tcp", "sbs", []byte("garbage"), "panic", nil)
+	pub.DeadLetter(obs.DeadLetter{FeedID: "feed-b", Driver: "tcp", Decoder: "sbs", Raw: []byte("garbage"), Reason: "panic"})
 	a := fp.byTopic("observations.dlq")
 	if len(a) != 4 {
 		t.Fatalf("dead letters = %d, want 3 (burst) + 1 (other feed)", len(a))
 	}
-	hdr := map[string]string{}
-	for _, h := range a[0].Headers {
-		hdr[h.Key] = string(h.Value)
-	}
-	if hdr["feed-id"] != "feed-a" || hdr["reason"] != "parse_error" || hdr["error"] != "bad" || hdr["decoder"] != "sbs" || string(a[0].Value) != "garbage" {
+	hdr := headers(a[0])
+	if hdr["feed-id"] != "feed-a" || hdr["driver"] != "tcp" || hdr["reason"] != "parse_error" || hdr["error"] != "bad" ||
+		hdr["decoder"] != "sbs" || hdr["sender"] != "10.0.0.5:4000" || string(a[0].Value) != "garbage" {
 		t.Fatalf("headers = %v", hdr)
+	}
+	// A dead letter whose sender is unknown still carries the header, empty,
+	// as it does for a decoder it cannot name.
+	other := headers(a[3])
+	if sender, ok := other["sender"]; other["feed-id"] != "feed-b" || !ok || sender != "" || other["error"] != "" {
+		t.Errorf("headers of the other feed's dead letter = %v, want an empty sender and error", other)
+	}
+}
+
+// received-at is when the frame arrived, so a dead letter that waited behind
+// a busy decoder still says when its sender sent it. A payload that was never
+// a frame (a polled response) has no such time and is stamped when it is
+// dead-lettered.
+func TestDeadLetterReceivedAt(t *testing.T) {
+	fp := &fakeProducer{}
+	pub := New(fp, nil, nil, Options{})
+	frame := time.Date(2026, 10, 18, 12, 0, 0, 123456789, time.FixedZone("UTC+2", 2*3600))
+	pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "parse_error", ReceivedAt: frame})
+	before := time.Now()
+	pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "bad_response"})
+	after := time.Now()
+
+	msgs := fp.byTopic("observations.dlq")
+	if len(msgs) != 2 {
+		t.Fatalf("dead letters = %d, want 2", len(msgs))
+	}
+	if got, want := headers(msgs[0])["received-at"], "2026-10-18T10:00:00.123456789Z"; got != want {
+		t.Errorf("received-at of a frame = %q, want the frame's own time %q", got, want)
+	}
+	stamped, err := time.Parse(time.RFC3339Nano, headers(msgs[1])["received-at"])
+	if err != nil {
+		t.Fatalf("received-at of a payload with no frame: %v", err)
+	}
+	if stamped.Before(before) || stamped.After(after) {
+		t.Errorf("received-at = %v, want the time of dead-lettering, between %v and %v", stamped, before, after)
 	}
 }

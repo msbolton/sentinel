@@ -21,6 +21,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/obs"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 	"github.com/sentinel/ingest-service/internal/source/driver/stream"
+	"github.com/sentinel/ingest-service/internal/source/transport"
 	"github.com/sentinel/ingest-service/internal/source/transport/transporttest"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
@@ -34,8 +35,15 @@ import (
 const waitTimeout = 5 * time.Second
 
 type memSink struct {
-	mu  sync.Mutex
-	obs []*obs.Observation
+	mu      sync.Mutex
+	obs     []*obs.Observation
+	letters []deadLetter
+}
+
+// deadLetter is a dead letter with the provenance the feed runner would get.
+type deadLetter struct {
+	raw, reason string
+	p           driver.Provenance
 }
 
 func (s *memSink) Emit(_ context.Context, o *obs.Observation) error {
@@ -49,6 +57,19 @@ func (s *memSink) Skipped(string)                   {}
 func (s *memSink) Succeeded(int)                    {}
 func (s *memSink) Blocked(time.Duration)            {}
 func (s *memSink) count() int                       { s.mu.Lock(); defer s.mu.Unlock(); return len(s.obs) }
+
+// DeadLetterFrom is what the feed runner offers a driver beside DeadLetter;
+// the stream driver prefers it.
+func (s *memSink) DeadLetterFrom(raw []byte, reason string, _ error, p driver.Provenance) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.letters = append(s.letters, deadLetter{string(raw), reason, p})
+}
+func (s *memSink) deadLetters() []deadLetter {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]deadLetter(nil), s.letters...)
+}
 
 func freePort(t *testing.T) int {
 	t.Helper()
@@ -142,6 +163,51 @@ func TestListenJSONLines(t *testing.T) {
 	_, _ = c.Write([]byte(`{"sourceEntityId":"j1","position":{"latitude":1,"longitude":2}}` + "\n"))
 	if !transporttest.WaitFor(func() bool { return sink.count() == 1 }, waitTimeout) {
 		t.Fatal("no observation from a JSON line")
+	}
+}
+
+// A message nothing can decode is dead-lettered with the connection it came
+// from, and that sender's row in the health detail counts it; a sender whose
+// lines decode is not blamed.
+func TestMalformedMessageNamesItsSender(t *testing.T) {
+	port := freePort(t)
+	d, sink := start(t, map[string]any{"mode": "listen", "port": port, "address": "127.0.0.1", "encoding": "json"}, nil)
+	good, bad := dial(t, port, nil), dial(t, port, nil)
+
+	before := time.Now().Add(-time.Second)
+	_, _ = good.Write([]byte(`{"sourceEntityId":"ok","position":{"latitude":1,"longitude":2}}` + "\n"))
+	_, _ = bad.Write([]byte("not json\n"))
+	if !transporttest.WaitFor(func() bool { return len(sink.deadLetters()) == 1 && sink.count() == 1 }, waitTimeout) {
+		t.Fatalf("dead letters = %+v, observations = %d, want one of each", sink.deadLetters(), sink.count())
+	}
+
+	dl := sink.deadLetters()[0]
+	if dl.reason != "parse_error" || dl.raw != "not json" {
+		t.Errorf("dead letter = %+v, want the line under parse_error", dl)
+	}
+	if dl.p.Decoder != "sentinel" || dl.p.Sender != bad.LocalAddr().String() {
+		t.Errorf("provenance = %+v, want decoder sentinel and sender %s", dl.p, bad.LocalAddr())
+	}
+	if dl.p.ReceivedAt.Before(before) || dl.p.ReceivedAt.After(time.Now()) {
+		t.Errorf("receivedAt = %v, want the time the line arrived (after %v)", dl.p.ReceivedAt, before)
+	}
+
+	senders, ok := d.Health().Detail["senders"].([]transport.SenderStat)
+	if !ok {
+		t.Fatalf("detail.senders = %T", d.Health().Detail["senders"])
+	}
+	byRemote := map[string]transport.SenderStat{}
+	for _, s := range senders {
+		byRemote[s.Remote] = s
+	}
+	if len(byRemote) != 2 {
+		t.Fatalf("senders = %+v, want both connections", senders)
+	}
+	if s := byRemote[bad.LocalAddr().String()]; s.Malformed != 1 || s.LastReason != "parse_error" || s.LastError == "" || s.LastMalformedAt == nil || !s.Connected {
+		t.Errorf("the sender of the bad line = %+v, want one undecodable message with its reason and error", s)
+	}
+	if s := byRemote[good.LocalAddr().String()]; s.Malformed != 0 || s.LastReason != "" || s.LastError != "" || s.LastMalformedAt != nil || s.Messages != 1 {
+		t.Errorf("the sender of the good line = %+v, want one message and nothing malformed", s)
 	}
 }
 
