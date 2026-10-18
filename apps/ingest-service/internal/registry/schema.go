@@ -50,14 +50,15 @@ func (e *SchemaError) Error() string {
 	}
 	return "database schema is older than this ingest-service: missing " + strings.Join(missing, ", ") +
 		" (" + strings.Join(files, ", ") + "). Apply db/schema in name order, every file is idempotent: " +
-		"compose `docker compose up db-schema` or `make db-schema`, otherwise " +
+		"compose `docker compose up db-schema` or `make db-schema`; on Helm the dbSchema Job applies it " +
+		"on install and upgrade (`dbSchema.enabled`, default true); otherwise " +
 		"`psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f <file>` for each file"
 }
 
 // CheckSchema returns a *SchemaError when the database lacks a column in
 // RequiredColumns. db/schema is applied outside the service (the db-schema
-// compose job, make db-schema), so an older database is a deployment mistake
-// to refuse at startup, not something to repair.
+// compose job, make db-schema, the Helm dbSchema Job), so an older database is
+// a deployment mistake to refuse at startup, not something to repair.
 func (s *Store) CheckSchema(ctx context.Context) error {
 	return checkColumns(ctx, s.pool, schemaName, RequiredColumns)
 }
