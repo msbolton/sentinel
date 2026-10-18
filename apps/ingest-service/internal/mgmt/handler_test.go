@@ -190,7 +190,7 @@ func TestListAndFilters(t *testing.T) {
 		t.Fatalf("area filter = %s", body)
 	}
 	for _, f := range feeds {
-		if f.ID != "opensky" && f.ID != "adsb-lol" && f.ID != "celestrak" {
+		if f.ID != "opensky" && f.ID != "adsb-lol" && f.ID != "celestrak" && f.ID != "aisstream" {
 			t.Errorf("unexpected area feed %s", f.ID)
 		}
 	}
@@ -208,7 +208,7 @@ func TestListAndFilters(t *testing.T) {
 	}
 	// Every built-in feed is a source: direction=in lists all, out none.
 	_, body = do(t, srv, "GET", "/feeds?direction=in", "", reqOpts{})
-	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 3 || feeds[0].Direction != "in" {
+	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != len(registry.Builtins) || feeds[0].Direction != "in" {
 		t.Fatalf("direction=in filter = %s", body)
 	}
 	_, body = do(t, srv, "GET", "/feeds?direction=out", "", reqOpts{})
