@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -102,7 +103,7 @@ func main() {
 	err = reg.CheckSchema(schemaCtx)
 	schemaCancel()
 	if err != nil {
-		logger.Fatal("database schema is out of date", zap.Error(err))
+		logger.Fatal(schemaCheckMessage(err), zap.Error(err))
 	}
 	if err := reg.EnsureBuiltins(ctx, cfg.FeedsBootstrapEnabled); err != nil {
 		logger.Fatal("failed to ensure built-in feeds", zap.Error(err))
@@ -213,6 +214,18 @@ func main() {
 	}
 
 	logger.Info("sentinel ingest service shut down gracefully")
+}
+
+// schemaCheckMessage is the fatal log message for a CheckSchema error. Only a
+// *registry.SchemaError means the schema is older than this code. Any other
+// error (a timeout, a permissions error, a dropped connection) means the check
+// did not finish, and calling the schema out of date would send the operator
+// to apply db/schema when the cause is elsewhere.
+func schemaCheckMessage(err error) string {
+	if errors.As(err, new(*registry.SchemaError)) {
+		return "database schema is out of date"
+	}
+	return "checking the database schema failed"
 }
 
 func driverIDs(c *drivers.Catalog) []string {
