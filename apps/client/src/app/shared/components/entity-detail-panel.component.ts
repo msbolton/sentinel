@@ -6,7 +6,10 @@ import { AuthService } from '../../core/services/auth.service';
 import { FeedService } from '../../core/services/feed.service';
 import { LocationService } from '../../core/services/location.service';
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
-import { Entity } from '../models/entity.model';
+import { FlightPathService } from '../../core/services/flight-path.service';
+import { FLIGHT_PATH_DAYS } from '../models/flight-path.model';
+import { pathSummary } from '../../features/map/flight-path';
+import { Entity, EntitySource } from '../models/entity.model';
 import { EntityBaseline, EntityPlace, Finding, findingKindLabel, formatDuration, formatMetres } from '../models/finding.model';
 import { Location } from '../models/location.model';
 import { formatAltitude, formatCoordinate } from '../geo-format';
@@ -398,6 +401,20 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                           }
                           @if (adsb.category) {
                             <div class="field-row"><span class="field-label">Category</span><span class="field-value mono">{{ adsb.category }}</span></div>
+                          }
+                          @if (adsb.icaoHex) {
+                            <div class="field-row"><span class="field-label">Flight path</span>
+                              <span class="path-range" role="group" aria-label="Flight path range">
+                                @for (opt of flightPathDays; track opt.days) {
+                                  <button type="button" class="path-range-btn" [class.active]="flightPath.state().days === opt.days" [attr.aria-pressed]="flightPath.state().days === opt.days" (click)="flightPath.setDays(opt.days)">{{ opt.label }}</button>
+                                }
+                              </span>
+                            </div>
+                            @if (flightPath.state(); as fp) {
+                              @if (fp.days > 0) {
+                                <p class="path-note mono">{{ fp.loading ? 'Loading from IntelSky…' : (fp.error ?? flightPathSummary(fp.path)) }}</p>
+                              }
+                            }
                           }
                         }
                       }
@@ -1015,6 +1032,34 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       color: var(--text-muted);
     }
 
+    .path-range {
+      display: inline-flex;
+      gap: 2px;
+    }
+
+    .path-range-btn {
+      padding: 1px 7px;
+      font-size: 0.72rem;
+      color: var(--text-secondary);
+      background: transparent;
+      border: 1px solid var(--border-color, rgba(148, 163, 184, 0.3));
+      border-radius: 4px;
+      cursor: pointer;
+
+      &.active {
+        color: #fff;
+        background: #f97316;
+        border-color: #f97316;
+      }
+    }
+
+    .path-note {
+      margin: 0 0 6px;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      text-align: right;
+    }
+
     .orbit-toggles {
       display: flex;
       flex-wrap: wrap;
@@ -1300,6 +1345,9 @@ export class EntityDetailPanelComponent {
   private readonly auth = inject(AuthService);
   private readonly locations = inject(LocationService);
   protected readonly orbit = inject(OrbitOverlayService);
+  protected readonly flightPath = inject(FlightPathService);
+  protected readonly flightPathDays = FLIGHT_PATH_DAYS;
+  protected readonly flightPathSummary = pathSummary;
   private readonly destroyRef = inject(DestroyRef);
   private feedsRequested = false;
   private behaviourRequest = 0;
@@ -1322,9 +1370,10 @@ export class EntityDetailPanelComponent {
 
     effect(() => {
       const e = this.entity();
-      // A satellite's platform section holds the orbit toggles and a vessel's
-      // its voyage: open them.
-      this.expandedSections.set({ ...DEFAULT_SECTIONS, platformDetails: !!(e?.platformData?.tle || e?.platformData?.ais) });
+      // A satellite's platform section holds the orbit toggles, a vessel's its
+      // voyage and a military aircraft's its flight path: open them.
+      const pd = e?.platformData;
+      this.expandedSections.set({ ...DEFAULT_SECTIONS, platformDetails: !!(pd?.tle || pd?.ais || (pd?.adsb && e?.source === EntitySource.INTELSKY)) });
     });
     // Behaviour: the baseline and open findings of the shown entity. A
     // request counter drops answers for an entity that is no longer shown.

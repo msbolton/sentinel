@@ -175,3 +175,11 @@ export const DENSITY_OVERLAY_CONFIG = {
   /** How often a shown grid is re-checked for staleness without a camera move. */
   recheckMs: 15_000,
 };
+
+/** The selected aircraft's past path from IntelSky: dashed, in the military orange. */
+export const FLIGHT_PATH_CONFIG = {
+  color: '#f97316',
+  alpha: 0.85,
+  width: 2,
+  dashLength: 14,
+};
