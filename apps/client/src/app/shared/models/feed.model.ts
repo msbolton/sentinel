@@ -264,6 +264,35 @@ export interface FeedErrorResponse {
   details?: FeedProblem[];
 }
 
+/** A run of ports, both ends included. */
+export interface PortRange {
+  from: number;
+  to: number;
+}
+
+/** A port a listening connection holds. */
+export interface ListenPort {
+  protocol: 'tcp' | 'udp';
+  port: number;
+  feedId: string;
+  feedName: string;
+  /** A disabled connection keeps its port, so nobody else may take it. */
+  enabled: boolean;
+}
+
+/**
+ * `GET /api/v1/feeds/ports`: which ports a listening connection may bind. `min` and `max` bound them, `reserved`
+ * are Sentinel's own (INGEST_RESERVED_PORTS), `taken` are held by connections. `suggested` is a free port per
+ * protocol for a connection that has none yet; a missing one, or one that is not free, is ignored.
+ */
+export interface ListenPorts {
+  min: number;
+  max: number;
+  reserved: PortRange[];
+  taken: ListenPort[];
+  suggested: Partial<Record<'tcp' | 'udp', number>>;
+}
+
 /** A feed's direction, with older servers (no field) treated as a source. */
 export function directionOf(feed: { direction?: FeedDirection } | null | undefined): FeedDirection {
   return feed?.direction ?? 'in';

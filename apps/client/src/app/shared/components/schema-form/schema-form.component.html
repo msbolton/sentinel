@@ -118,6 +118,14 @@
   @for (msg of problemsOf(def); track msg) {
     <p class="sf-error sf-error-server">{{ msg }}</p>
   }
+  @for (hint of hintsOf(def); track $index) {
+    <p class="sf-hint" [class.sf-hint-warn]="hint.level === 'warn'">
+      {{ hint.message }}
+      @if (hint.action; as action) {
+        <button type="button" class="sf-hint-action" [disabled]="disabled()" (click)="applyHint(def, hint)">{{ action.label }}</button>
+      }
+    </p>
+  }
 </ng-template>
 
 <ng-template #extrasNote let-extras>

@@ -5,7 +5,7 @@ import { ConnectionFormComponent, slugify } from './connection-form.component';
 import { AuthService } from '../../core/services/auth.service';
 import { FeedService } from '../../core/services/feed.service';
 import { MapViewportService } from '../../core/services/map-viewport.service';
-import { Feed, FeedDriver } from '../../shared/models/feed.model';
+import { Feed, FeedDriver, ListenPorts } from '../../shared/models/feed.model';
 
 const drivers: FeedDriver[] = [
   {
@@ -82,9 +82,72 @@ const tcpDriver: FeedDriver = {
       mode: { type: 'string', enum: ['listen', 'connect'], default: 'listen', title: 'Mode' },
       host: { type: 'string', minLength: 1, title: 'Host', 'x-showWhen': { mode: 'connect' } },
       port: { type: 'integer', minimum: 1, maximum: 65535, title: 'Port' },
+      allow: { type: 'array', items: { type: 'string' }, title: 'Allowed senders', 'x-showWhen': { mode: 'listen' } },
     },
   },
   secretFields: [],
+};
+
+/** The UDP driver, trimmed the same way: it always listens. */
+const udpDriver: FeedDriver = {
+  id: 'udp',
+  name: 'UDP',
+  description: 'An external system sends datagrams',
+  source: '',
+  direction: 'in',
+  capabilities: ['listen'],
+  configSchema: {
+    type: 'object',
+    required: ['port'],
+    properties: {
+      port: { type: 'integer', minimum: 1024, maximum: 65535, title: 'Port' },
+      allow: { type: 'array', items: { type: 'string' }, title: 'Allowed senders' },
+    },
+  },
+  secretFields: [],
+};
+
+/** A stream whose transport can listen (tcpserver, udp) or dial out (tcpclient); the port is part of its address. */
+const streamListenerDriver: FeedDriver = {
+  id: 'stream',
+  name: 'Message stream',
+  description: 'Bytes over a transport',
+  source: 'ADS_B',
+  capabilities: [],
+  configSchema: {
+    type: 'object',
+    required: ['transport'],
+    properties: {
+      transport: {
+        type: 'object',
+        title: 'Transport',
+        required: ['kind'],
+        properties: {
+          kind: { type: 'string', enum: ['tcpserver', 'udp', 'tcpclient'], title: 'Kind' },
+          address: { type: 'string', title: 'Address' },
+          allow: {
+            type: 'array',
+            items: { type: 'string' },
+            title: 'Allowed senders',
+            'x-showWhen': { kind: ['tcpserver', 'udp'] },
+          },
+        },
+      },
+    },
+  },
+  secretFields: [],
+};
+
+/** What `GET /api/v1/feeds/ports` answers: Sentinel's own ports, what connections hold, a suggestion per protocol. */
+const portsBody: ListenPorts = {
+  min: 1024,
+  max: 65535,
+  reserved: [{ from: 3000, to: 3005 }],
+  taken: [
+    { protocol: 'tcp', port: 6000, feedId: 'radar', feedName: 'Radar feed', enabled: true },
+    { protocol: 'udp', port: 10110, feedId: 'pier', feedName: 'Pier AIS', enabled: false },
+  ],
+  suggested: { tcp: 6001, udp: 10111 },
 };
 
 const existing: Feed = {
@@ -136,6 +199,25 @@ describe('ConnectionFormComponent', () => {
     fixture.componentRef.setInput('mode', mode);
     fixture.componentRef.setInput('feed', feed);
     fixture.detectChanges();
+  }
+
+  /** Loads the catalog again with these drivers in it, replacing any of the same id. */
+  function addDrivers(...extra: FeedDriver[]): void {
+    TestBed.inject(FeedService).loadDrivers().subscribe();
+    httpMock.expectOne('/api/v1/drivers').flush([...drivers.filter((d) => !extra.some((e) => e.id === d.id)), ...extra]);
+  }
+
+  /** Answers the form's request for the ports in use. */
+  function flushPorts(body: ListenPorts = portsBody): void {
+    const req = httpMock.expectOne('/api/v1/feeds/ports');
+    expect(req.request.method).toBe('GET');
+    req.flush(body);
+    fixture.detectChanges();
+  }
+
+  /** A stored TCP connection, as the edit form is opened on it. */
+  function tcpFeed(config: Record<string, unknown>, id = 'radar', name = 'Radar feed'): Feed {
+    return { ...existing, id, name, driver: 'tcp', source: '', enabled: true, config, secretRefs: {} };
   }
 
   beforeEach(async () => {
@@ -280,6 +362,7 @@ describe('ConnectionFormComponent', () => {
     open('create');
     component.selectDriver('tcp');
     fixture.detectChanges();
+    flushPorts();
 
     const mode = el.querySelector<HTMLSelectElement>('app-schema-form select[name="mode"]')!;
     expect(component.schemaForm()?.control('/config/mode')?.value).toBe('listen');
@@ -482,6 +565,243 @@ describe('ConnectionFormComponent', () => {
       classification: 'SECRET',
       direction: 'out',
       policy: { entityTypes: ['VESSEL'], classificationCeiling: 'CONFIDENTIAL', reexport: true },
+    });
+  });
+
+  // A connection that listens is told, while it is edited, about the port it picks and the senders it lets in.
+  describe('a listening connection', () => {
+    beforeEach(() => addDrivers(tcpDriver, udpDriver, streamListenerDriver));
+
+    /** The hint shown with the field at `pointer`. */
+    function hintAt(pointer: string): HTMLElement | null {
+      return el.querySelector<HTMLElement>(`[data-pointer="${pointer}"] > .sf-hint`);
+    }
+
+    function text(node: Element | null): string {
+      return node?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+    }
+
+    /** Takes what the hint at `pointer` offers. */
+    function use(pointer: string): void {
+      const button = hintAt(pointer)?.querySelector('button');
+      if (!button) {
+        throw new Error(`no action on the hint at ${pointer}`);
+      }
+      button.click();
+      fixture.detectChanges();
+    }
+
+    function setConfig(pointer: string, value: unknown): void {
+      component.schemaForm()!.control(pointer)!.setValue(value);
+      fixture.detectChanges();
+    }
+
+    const portInput = 'app-schema-form input[name="port"]';
+
+    it('create: suggests a free port and flags a taken one for a TCP listener', () => {
+      open('create');
+      component.selectDriver('tcp');
+      fixture.detectChanges();
+      flushPorts();
+
+      expect(text(hintAt('/config/port'))).toBe('Port 6001 is not used by Sentinel or another TCP connection. Use 6001');
+      expect(hintAt('/config/port')?.classList.contains('sf-hint-warn')).toBe(false);
+
+      use('/config/port');
+      expect(component.schemaForm()?.control('/config/port')?.value).toBe(6001);
+      expect(el.querySelector<HTMLInputElement>(portInput)?.value).toBe('6001');
+      // a free port needs no remark
+      expect(hintAt('/config/port')).toBeNull();
+
+      // a port another TCP connection holds
+      type(portInput, '6000');
+      expect(text(hintAt('/config/port'))).toBe('Port 6000/tcp is already used by Radar feed (radar). Use 6001');
+      expect(hintAt('/config/port')?.classList.contains('sf-hint-warn')).toBe(true);
+      use('/config/port');
+      expect(component.schemaForm()?.control('/config/port')?.value).toBe(6001);
+
+      // one of Sentinel's own
+      type(portInput, '3002');
+      expect(text(hintAt('/config/port'))).toBe("Port 3002 is one of Sentinel's own (INGEST_RESERVED_PORTS). Use 3006");
+      use('/config/port');
+      expect(el.querySelector<HTMLInputElement>(portInput)?.value).toBe('3006');
+
+      // a warning is no obstacle: the connection can be saved with the port it flags
+      type(portInput, '6000');
+      type('#feed-name', 'Radar feed');
+      expect(hintAt('/config/port')).not.toBeNull();
+      expect(component.canSubmit()).toBe(true);
+    });
+
+    it('warns while the allowlist is empty', () => {
+      open('create');
+      component.selectDriver('tcp');
+      fixture.detectChanges();
+      flushPorts();
+      type(portInput, '6100');
+
+      const warning = () => hintAt('/config/allow');
+      expect(text(warning())).toBe(
+        "Empty: anyone who can reach port 6100 can connect. List the senders' IP addresses or CIDR ranges.",
+      );
+      expect(warning()?.classList.contains('sf-hint-warn')).toBe(true);
+      expect(warning()?.querySelector('button')).toBeNull();
+
+      type('app-schema-form input[name="allow"]', '10.0.0.0/8, 192.0.2.7');
+      expect(warning()).toBeNull();
+      type('app-schema-form input[name="allow"]', '');
+      expect(warning()).not.toBeNull();
+
+      // connecting dials out: nothing listens, so nothing is left open
+      setConfig('/config/mode', 'connect');
+      expect(el.querySelector('app-schema-form .sf-hint')).toBeNull();
+    });
+
+    it('udp: asks at once, suggests a UDP port and warns that senders can be forged', () => {
+      open('create');
+      component.selectDriver('udp');
+      fixture.detectChanges();
+      flushPorts();
+
+      expect(text(hintAt('/config/port'))).toBe('Port 10111 is not used by Sentinel or another UDP connection. Use 10111');
+      expect(text(hintAt('/config/allow'))).toBe(
+        "Empty: anyone who can reach the port can connect. List the senders' IP addresses or CIDR ranges. " +
+          'UDP source addresses can be forged; on an untrusted network prefer TCP with mutual TLS.',
+      );
+
+      use('/config/port');
+      expect(component.schemaForm()?.control('/config/port')?.value).toBe(10111);
+      // a port a TCP connection holds is free on UDP
+      type(portInput, '6000');
+      expect(hintAt('/config/port')).toBeNull();
+      // a disabled UDP connection keeps its port
+      type(portInput, '10110');
+      expect(text(hintAt('/config/port'))).toBe(
+        'Port 10110/udp is already used by Pier AIS (pier). Disabled connections keep their port. Use 10111',
+      );
+    });
+
+    it('stream: offers an address once the transport listens', () => {
+      open('create');
+      component.selectDriver('stream');
+      fixture.detectChanges();
+      // no transport yet, so nothing is bound
+      httpMock.expectNone('/api/v1/feeds/ports');
+
+      setConfig('/config/transport/kind', 'tcpserver');
+      flushPorts();
+      const address = 'app-schema-form input[name="address"]';
+
+      expect(text(hintAt('/config/transport/address'))).toBe(
+        'Port 6001 is not used by Sentinel or another TCP connection. Use 6001',
+      );
+      use('/config/transport/address');
+      expect(el.querySelector<HTMLInputElement>(address)?.value).toBe(':6001');
+
+      // the interface stays, only the port changes
+      type(address, '10.0.0.5:6000');
+      expect(text(hintAt('/config/transport/address'))).toContain('Port 6000/tcp is already used by Radar feed (radar).');
+      use('/config/transport/address');
+      expect(el.querySelector<HTMLInputElement>(address)?.value).toBe('10.0.0.5:6001');
+
+      // the address is free text, so the floor is pointed out here
+      type(address, ':80');
+      expect(text(hintAt('/config/transport/address'))).toBe('Listening ports start at 1024.');
+
+      // the allowlist is inside the transport
+      type(address, ':6100');
+      expect(text(hintAt('/config/transport/allow'))).toContain('Empty: anyone who can reach port 6100 can connect.');
+      expect(hintAt('/config/transport/address')).toBeNull();
+
+      // dialing out binds nothing
+      setConfig('/config/transport/kind', 'tcpclient');
+      expect(el.querySelector('app-schema-form .sf-hint')).toBeNull();
+    });
+
+    it('never asks for ports for a driver that cannot listen', () => {
+      open('create');
+      for (const id of ['opensky', 'tak', 'kml-push']) {
+        component.selectDriver(id);
+        fixture.detectChanges();
+        httpMock.expectNone('/api/v1/feeds/ports');
+        expect(el.querySelector('app-schema-form .sf-hint')).toBeNull();
+        component.back();
+        fixture.detectChanges();
+      }
+
+      // a stream that has not picked a transport binds nothing, nor does one that dials out
+      component.selectDriver('stream');
+      fixture.detectChanges();
+      httpMock.expectNone('/api/v1/feeds/ports');
+      setConfig('/config/transport/kind', 'tcpclient');
+      httpMock.expectNone('/api/v1/feeds/ports');
+
+      // nor does a TCP connection that connects
+      open('edit', tcpFeed({ mode: 'connect', host: 'radar.example', port: 7000 }));
+      httpMock.expectNone('/api/v1/feeds/ports');
+      expect(el.querySelector('app-schema-form .sf-hint')).toBeNull();
+    });
+
+    it('asks when a connection starts to listen, and once for each time the form is opened', () => {
+      open('edit', tcpFeed({ mode: 'connect', host: 'radar.example', port: 7000 }));
+      httpMock.expectNone('/api/v1/feeds/ports');
+
+      setConfig('/config/mode', 'listen');
+      flushPorts();
+      setConfig('/config/mode', 'connect');
+      setConfig('/config/mode', 'listen');
+      setConfig('/config/port', 7001);
+      httpMock.expectNone('/api/v1/feeds/ports');
+
+      // another connection is another opening, and the answer may have changed
+      open('edit', tcpFeed({ mode: 'listen', port: 7002 }, 'gate', 'Gate feed'));
+      flushPorts();
+    });
+
+    it('stops waiting for the ports when the form closes', () => {
+      open('create');
+      component.selectDriver('tcp');
+      fixture.detectChanges();
+      const req = httpMock.expectOne('/api/v1/feeds/ports');
+
+      fixture.destroy();
+
+      expect(req.cancelled).toBe(true);
+    });
+
+    it('edit: leaves the connection its own port, and flags it for another connection', () => {
+      const allow = ['10.0.0.0/8'];
+      open('edit', tcpFeed({ mode: 'listen', port: 6000, allow }, 'radar'));
+      flushPorts();
+      expect(hintAt('/config/port')).toBeNull();
+      expect(hintAt('/config/allow')).toBeNull();
+
+      open('edit', tcpFeed({ mode: 'listen', port: 6000, allow }, 'gate', 'Gate feed'));
+      flushPorts();
+      expect(text(hintAt('/config/port'))).toBe('Port 6000/tcp is already used by Radar feed (radar). Use 6001');
+    });
+
+    it('still saves when the ports endpoint is missing', () => {
+      open('create');
+      component.selectDriver('tcp');
+      fixture.detectChanges();
+      httpMock.expectOne('/api/v1/feeds/ports').flush({ error: 'not found' }, { status: 404, statusText: 'Not Found' });
+      fixture.detectChanges();
+
+      // no port hints, no complaint; the allowlist warning does not depend on the ports
+      expect(hintAt('/config/port')).toBeNull();
+      expect(el.querySelector('.sf-hint-action')).toBeNull();
+      expect(el.querySelector('.form-error')).toBeNull();
+      expect(text(hintAt('/config/allow'))).toContain('Empty: anyone who can reach the port can connect.');
+
+      type('#feed-name', 'Radar feed');
+      type(portInput, '6100');
+      expect(component.canSubmit()).toBe(true);
+      component.submit();
+
+      const save = httpMock.expectOne('/api/v1/feeds');
+      expect(save.request.method).toBe('POST');
+      expect(save.request.body.config).toEqual({ mode: 'listen', port: 6100, classification: 'UNCLASSIFIED' });
     });
   });
 

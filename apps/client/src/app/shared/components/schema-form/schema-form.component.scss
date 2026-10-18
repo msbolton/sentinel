@@ -172,6 +172,45 @@
   }
 }
 
+// A remark from the parent: advice under the field, in the colour of a caution when it is one.
+.sf-hint {
+  margin: 0;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+
+  &.sf-hint-warn {
+    color: var(--accent-yellow);
+  }
+}
+
+.sf-hint-action {
+  margin-left: 6px;
+  padding: 1px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+
+  &:hover:not(:disabled) {
+    border-color: var(--border-active);
+    color: var(--text-primary);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 1px;
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+}
+
 .sf-group {
   display: flex;
   flex-direction: column;

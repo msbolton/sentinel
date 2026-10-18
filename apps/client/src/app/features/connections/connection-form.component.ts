@@ -1,6 +1,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   HostListener,
   computed,
   effect,
@@ -11,9 +12,9 @@ import {
   untracked,
   viewChild,
 } from '@angular/core';
-import { toSignal } from '@angular/core/rxjs-interop';
+import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
-import { map } from 'rxjs';
+import { EMPTY, catchError, map } from 'rxjs';
 import { AuthService } from '../../core/services/auth.service';
 import { FeedService, problemsOf } from '../../core/services/feed.service';
 import { ClassificationLevel, levelsUpTo, normalizeClearance, rank } from '../../shared/models/classification';
@@ -26,6 +27,8 @@ import {
   ReplaceFeedRequest,
 } from '../../shared/models/feed.model';
 import { SchemaFormChange, SchemaFormComponent } from '../../shared/components/schema-form/schema-form.component';
+import { connectionHints } from './connection-hints';
+import { listenOf } from './listen-config';
 import { PolicyChange, PolicyEditorComponent } from './policy-editor.component';
 
 export const FEED_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -66,6 +69,7 @@ export function slugify(name: string): string {
 export class ConnectionFormComponent {
   private readonly feedService = inject(FeedService);
   private readonly authService = inject(AuthService);
+  private readonly destroyRef = inject(DestroyRef);
 
   readonly mode = input.required<'create' | 'edit'>();
   readonly feed = input<Feed | null>(null);
@@ -110,6 +114,8 @@ export class ConnectionFormComponent {
 
   private readonly schemaState = signal<SchemaFormChange>({ config: {}, secretRefs: {}, valid: true });
   private readonly policyState = signal<PolicyChange>({ value: {}, valid: true });
+  /** Whether the ports in use have been asked for since the form was last opened. */
+  private portsAsked = false;
 
   /** The driver's direction, narrowed by the form's own choice for a `both` driver. */
   readonly effectiveDirection = computed<FeedDirection>(() => {
@@ -126,6 +132,22 @@ export class ConnectionFormComponent {
     return d === 'out' || d === 'both';
   });
   readonly driverCanNarrow = computed(() => this.driver()?.direction === 'both');
+
+  /** Whether the connection as configured binds a port, read the way the server reads it. */
+  readonly listens = computed(() => listenOf(this.driver()?.id, this.schemaState().config) !== null);
+
+  /**
+   * What to tell the user about a listener while it is edited: a free port to take, one that is taken or
+   * reserved, an allowlist left open. They never stop a save; the server has the last word.
+   */
+  readonly hints = computed(() =>
+    connectionHints({
+      driverId: this.driver()?.id,
+      config: this.schemaState().config,
+      ports: this.feedService.listenPorts(),
+      selfId: this.mode() === 'edit' ? this.feed()?.id : undefined,
+    }),
+  );
 
   /** Keys the schema form must leave alone. */
   readonly externalKeys = computed(() => (this.sending() ? OWN_CONFIG_KEYS : [...OWN_CONFIG_KEYS, ...SENDING_ONLY_KEYS]));
@@ -217,6 +239,9 @@ export class ConnectionFormComponent {
 
   onSchemaChange(change: SchemaFormChange): void {
     this.schemaState.set(change);
+    if (this.listens()) {
+      this.askForPorts();
+    }
   }
 
   onPolicyChange(change: PolicyChange): void {
@@ -321,7 +346,26 @@ export class ConnectionFormComponent {
     });
   }
 
+  /**
+   * Asks which ports are in use the first time the connection listens, once for each opening of the form.
+   * Without an answer there are no port hints and nothing else changes: the server checks the port on save.
+   */
+  private askForPorts(): void {
+    if (this.portsAsked) {
+      return;
+    }
+    this.portsAsked = true;
+    this.feedService
+      .loadPorts()
+      .pipe(
+        catchError(() => EMPTY),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe();
+  }
+
   private reset(mode: 'create' | 'edit', feed: Feed | null): void {
+    this.portsAsked = false;
     this.problems.set([]);
     this.error.set(null);
     this.saving.set(false);

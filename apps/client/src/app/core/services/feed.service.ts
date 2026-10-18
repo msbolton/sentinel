@@ -1,6 +1,6 @@
 import { Injectable, inject, signal, computed, DestroyRef } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { Observable, tap, retry, timer, Subscription, interval, startWith, switchMap, catchError, of } from 'rxjs';
+import { Observable, tap, retry, timer, Subscription, interval, startWith, switchMap, catchError, of, defer } from 'rxjs';
 import {
   Feed,
   FeedDriver,
@@ -8,6 +8,7 @@ import {
   ReplaceFeedRequest,
   FeedErrorResponse,
   FeedProblem,
+  ListenPorts,
 } from '../../shared/models/feed.model';
 
 /**
@@ -22,9 +23,11 @@ export class FeedService {
   private readonly destroyRef = inject(DestroyRef);
   private readonly feedsUrl = '/api/v1/feeds';
   private readonly driversUrl = '/api/v1/drivers';
+  private readonly portsUrl = '/api/v1/feeds/ports';
 
   private readonly feedsState = signal<Feed[]>([]);
   private readonly driversState = signal<FeedDriver[]>([]);
+  private readonly listenPortsState = signal<ListenPorts | null>(null);
   private readonly loadingState = signal(false);
   private readonly errorState = signal<string | null>(null);
   private loaded = false;
@@ -34,6 +37,8 @@ export class FeedService {
   /** Every feed, built-ins first (server order). */
   readonly feeds = this.feedsState.asReadonly();
   readonly drivers = this.driversState.asReadonly();
+  /** The answer to the latest `loadPorts`: null before it, while it waits, and when it failed. */
+  readonly listenPorts = this.listenPortsState.asReadonly();
   readonly loading = this.loadingState.asReadonly();
   readonly error = this.errorState.asReadonly();
   readonly enabledFeeds = computed(() => this.feedsState().filter((f) => f.enabled));
@@ -65,6 +70,19 @@ export class FeedService {
   /** Fetches the driver catalog (schemas included). */
   loadDrivers(): Observable<FeedDriver[]> {
     return this.http.get<FeedDriver[]>(this.driversUrl).pipe(tap((d) => this.driversState.set(d)));
+  }
+
+  /**
+   * Asks which ports listening connections hold, which Sentinel keeps for itself and which one to suggest. An
+   * earlier answer is dropped as soon as the question is asked, and a failure leaves none: what is in
+   * `listenPorts` is always the latest answer. A failure is the caller's to ignore, as the server checks the
+   * port when a connection is saved.
+   */
+  loadPorts(): Observable<ListenPorts> {
+    return defer(() => {
+      this.listenPortsState.set(null);
+      return this.http.get<ListenPorts>(this.portsUrl);
+    }).pipe(tap((ports) => this.listenPortsState.set(ports)));
   }
 
   driver(id: string): FeedDriver | undefined {

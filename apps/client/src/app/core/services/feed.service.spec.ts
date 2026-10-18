@@ -2,7 +2,7 @@ import { TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { FeedService, problemsOf } from './feed.service';
-import { Feed, FeedStatus } from '../../shared/models/feed.model';
+import { Feed, FeedStatus, ListenPorts } from '../../shared/models/feed.model';
 
 function makeStatus(overrides: Partial<FeedStatus> = {}): FeedStatus {
   return {
@@ -40,6 +40,15 @@ function makeFeed(id: string, overrides: Partial<Feed> = {}): Feed {
     ...overrides,
   };
 }
+
+/** What `GET /api/v1/feeds/ports` answers. */
+const listenPorts: ListenPorts = {
+  min: 1024,
+  max: 65535,
+  reserved: [{ from: 3000, to: 3005 }],
+  taken: [{ protocol: 'udp', port: 10110, feedId: 'pier', feedName: 'Pier AIS', enabled: true }],
+  suggested: { tcp: 6000, udp: 10111 },
+};
 
 describe('FeedService', () => {
   let service: FeedService;
@@ -97,6 +106,39 @@ describe('FeedService', () => {
     ]);
     expect(service.drivers().map((d) => d.id)).toEqual(['opensky']);
     expect(service.driver('opensky')?.name).toBe('OpenSky');
+  });
+
+  it('loadPorts() fetches the ports listening connections hold and keeps the answer', () => {
+    expect(service.listenPorts()).toBeNull();
+
+    service.loadPorts().subscribe();
+    const req = http.expectOne('/api/v1/feeds/ports');
+    expect(req.request.method).toBe('GET');
+    req.flush(listenPorts);
+
+    expect(service.listenPorts()).toEqual(listenPorts);
+    // it is not a feed, and leaves the feeds alone
+    expect(service.feeds()).toEqual([]);
+  });
+
+  it('loadPorts() holds no answer while it asks, and none when the request fails', () => {
+    service.loadPorts().subscribe();
+    http.expectOne('/api/v1/feeds/ports').flush(listenPorts);
+    expect(service.listenPorts()).toEqual(listenPorts);
+
+    // the earlier answer is not the latest once the question is asked again
+    service.loadPorts().subscribe();
+    const second = http.expectOne('/api/v1/feeds/ports');
+    expect(service.listenPorts()).toBeNull();
+    second.flush({ ...listenPorts, suggested: { tcp: 6001 } });
+    expect(service.listenPorts()?.suggested).toEqual({ tcp: 6001 });
+
+    let failed = false;
+    service.loadPorts().subscribe({ error: () => (failed = true) });
+    http.expectOne('/api/v1/feeds/ports').flush({ error: 'not found' }, { status: 404, statusText: 'Not Found' });
+
+    expect(failed).toBe(true);
+    expect(service.listenPorts()).toBeNull();
   });
 
   it('setEnabled() posts to enable/disable and updates the feed in place', () => {

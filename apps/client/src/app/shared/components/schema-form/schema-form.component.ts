@@ -29,6 +29,19 @@ export interface SchemaFormChange {
   valid: boolean;
 }
 
+/**
+ * A remark about one field from whoever hosts the form: a free port to take, a warning about an open listener.
+ * It is advice shown with the field's own messages, never an error, and it never decides whether the form is valid.
+ */
+export interface FieldHint {
+  /** JSON pointer of the field or group it is about; a hint for one that is hidden or not on the form is not shown. */
+  path: string;
+  message: string;
+  level?: 'info' | 'warn';
+  /** A button beside the message that puts `value` in the field. */
+  action?: { label: string; value: unknown };
+}
+
 export type FieldKind = 'text' | 'url' | 'number' | 'boolean' | 'select' | 'const' | 'array' | 'group' | 'secret' | 'json';
 
 /** The value at `path` (read from a group of the form) is one of `values`. */
@@ -111,6 +124,8 @@ export class SchemaFormComponent {
    * the schema or the initial value says.
    */
   readonly externalKeys = input<string[]>([]);
+  /** Remarks from the parent about fields, shown under the field they name. */
+  readonly hints = input<FieldHint[]>([]);
 
   readonly changed = output<SchemaFormChange>();
 
@@ -147,6 +162,17 @@ export class SchemaFormComponent {
   });
 
   readonly unmatchedProblems = computed(() => this.resolvedProblems().unmatched);
+
+  /** Hints by the pointer of the field they name. */
+  private readonly hintsByPointer = computed(() => {
+    const byPointer = new Map<string, FieldHint[]>();
+    for (const hint of this.hints() ?? []) {
+      const list = byPointer.get(hint.path) ?? [];
+      list.push(hint);
+      byPointer.set(hint.path, list);
+    }
+    return byPointer;
+  });
 
   /** Every field and group on the form by its pointer. */
   private readonly fieldsByPointer = computed(() => {
@@ -266,6 +292,32 @@ export class SchemaFormComponent {
 
   hasIssue(def: FieldDef): boolean {
     return this.errorsOf(def).length > 0 || this.problemsOf(def).length > 0;
+  }
+
+  /** The parent's hints for this field or group, by its exact pointer (so none for a field that is not shown). */
+  hintsOf(def: FieldDef): FieldHint[] {
+    return this.hintsByPointer().get(def.pointer) ?? [];
+  }
+
+  /** Puts the value a hint offers in its field as if the user had typed it: the field counts as edited. */
+  applyHint(def: FieldDef, hint: FieldHint): void {
+    const control = def.control;
+    if (!hint.action || !control || this.disabled()) {
+      return;
+    }
+    let value = hint.action.value;
+    if (def.kind === 'number') {
+      // a number field takes a number, whatever form the parent gave it in; what does not read as one is not applied
+      const parsed = numberOf(value);
+      if (parsed === null) {
+        return;
+      }
+      value = parsed;
+    }
+    control.setValue(value);
+    control.markAsDirty();
+    control.markAsTouched();
+    this.tick.update((n) => n + 1);
   }
 
   /** The names of the stored keys a form or group keeps without showing them. */
@@ -850,6 +902,12 @@ function typesOf(prop: JsonSchema): JsonType[] {
 /** The entries of `value` whose keys are not in `known`. */
 function undescribed(value: Record<string, unknown>, known: ReadonlySet<string>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(value).filter(([key]) => !known.has(key)));
+}
+
+/** `v` as a number, if it is one or is text that reads as one. */
+function numberOf(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : null;
 }
 
 /** The trimmed text of a text control's value. */

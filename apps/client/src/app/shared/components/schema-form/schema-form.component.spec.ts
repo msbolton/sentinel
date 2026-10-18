@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { FormGroup } from '@angular/forms';
-import { SchemaFormChange, SchemaFormComponent } from './schema-form.component';
+import { FieldHint, SchemaFormChange, SchemaFormComponent } from './schema-form.component';
 import { JsonSchema } from '../../models/feed.model';
 
 const streamLikeSchema: JsonSchema = {
@@ -1620,6 +1620,202 @@ describe('SchemaFormComponent', () => {
         expect(serverMessages('/config/transport/allow')).toEqual(['not a CIDR']);
         expect(serverMessages('/config/transport')).toEqual([]);
       });
+    });
+  });
+
+  // Remarks the parent has about fields: a free port to take, a warning about an open listener. They sit with the
+  // field's own messages and offer an action, but they are not errors and never decide whether the form is valid.
+  describe('hints', () => {
+    const hintSchema: JsonSchema = {
+      type: 'object',
+      required: ['mode'],
+      properties: {
+        mode: { type: 'string', enum: ['listen', 'connect'], default: 'listen' },
+        host: { type: 'string', title: 'Host', 'x-showWhen': { mode: 'connect' } },
+        port: { type: 'integer', minimum: 1024, title: 'Port' },
+        label: { type: 'string', title: 'Label' },
+        transport: {
+          type: 'object',
+          title: 'Transport',
+          properties: { address: { type: 'string', title: 'Address' } },
+        },
+      },
+    };
+
+    function setHints(hints: FieldHint[]): void {
+      fixture.componentRef.setInput('hints', hints);
+      fixture.detectChanges();
+    }
+
+    /** The hints shown with the field or group at `pointer`, not with the fields inside it. */
+    function hintsAt(pointer: string): HTMLElement[] {
+      return Array.from(el.querySelectorAll<HTMLElement>(`[data-pointer="${pointer}"] > .sf-hint`));
+    }
+
+    function allHints(): Array<string | undefined> {
+      return Array.from(el.querySelectorAll('.sf-hint')).map((n) => n.textContent?.replace(/\s+/g, ' ').trim());
+    }
+
+    it('renders a hint under the field it names and applies its action', () => {
+      render(hintSchema);
+      setHints([{ path: '/config/port', message: 'Port 6001 is free.', action: { label: 'Use 6001', value: 6001 } }]);
+
+      const [hint] = hintsAt('/config/port');
+      expect(hint.textContent).toContain('Port 6001 is free.');
+      expect(hint.classList.contains('sf-hint-warn')).toBe(false);
+      // after the field's own control, with its other messages
+      expect(el.querySelector('[data-pointer="/config/port"]')?.lastElementChild).toBe(hint);
+
+      const use = hint.querySelector('button')!;
+      expect(use.textContent?.trim()).toBe('Use 6001');
+      // inside the form, a button must not submit it
+      expect(use.type).toBe('button');
+
+      const emitted = changes.length;
+      use.click();
+      fixture.detectChanges();
+
+      expect(el.querySelector<HTMLInputElement>('input[name="port"]')?.value).toBe('6001');
+      expect(component.control('/config/port')?.value).toBe(6001);
+      expect(changes.length).toBeGreaterThan(emitted);
+      expect(last().config['port']).toBe(6001);
+
+      // it counts as an edit of the field
+      expect(component.control('/config/port')?.dirty).toBe(true);
+      expect(component.control('/config/port')?.touched).toBe(true);
+    });
+
+    it('marks a warning, and shows a remark with no action as plain text', () => {
+      render(hintSchema);
+      setHints([
+        { path: '/config/port', level: 'warn', message: 'Port 80 is below the floor.' },
+        { path: '/config/label', level: 'info', message: 'Just so you know.' },
+      ]);
+
+      const [warning] = hintsAt('/config/port');
+      expect(warning.classList.contains('sf-hint-warn')).toBe(true);
+      expect(warning.querySelector('button')).toBeNull();
+      const [info] = hintsAt('/config/label');
+      expect(info.classList.contains('sf-hint-warn')).toBe(false);
+      expect(info.querySelector('button')).toBeNull();
+    });
+
+    it('gives a text field the value as it is, and a number field a number', () => {
+      render(hintSchema);
+      setHints([
+        { path: '/config/label', message: 'Try this.', action: { label: 'Use north', value: 'north' } },
+        { path: '/config/port', message: 'Try this.', action: { label: 'Use 6003', value: '6003' } },
+      ]);
+
+      hintsAt('/config/label')[0].querySelector('button')!.click();
+      hintsAt('/config/port')[0].querySelector('button')!.click();
+      fixture.detectChanges();
+
+      expect(last().config['label']).toBe('north');
+      expect(component.control('/config/port')?.value).toBe(6003);
+      expect(last().config['port']).toBe(6003);
+    });
+
+    it('renders hints on a group and on the fields inside it, each on its own pointer', () => {
+      render(hintSchema);
+      setHints([
+        { path: '/config/transport', level: 'warn', message: 'About the transport.' },
+        { path: '/config/transport/address', message: 'About the address.', action: { label: 'Use :6001', value: ':6001' } },
+      ]);
+
+      expect(hintsAt('/config/transport').map((h) => h.textContent?.trim())).toEqual(['About the transport.']);
+      expect(hintsAt('/config/transport/address').map((h) => h.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+        'About the address. Use :6001',
+      ]);
+      expect(el.querySelector('fieldset[data-pointer="/config/transport"] > .sf-hint')).not.toBeNull();
+
+      hintsAt('/config/transport/address')[0].querySelector('button')!.click();
+      fixture.detectChanges();
+      expect(el.querySelector<HTMLInputElement>('input[name="address"]')?.value).toBe(':6001');
+      expect(last().config['transport']).toEqual({ address: ':6001' });
+    });
+
+    it('drops hints for hidden or unknown fields', () => {
+      render(hintSchema);
+      setHints([
+        { path: '/config/host', message: 'About the host.' },
+        { path: '/config/nope', message: 'About nothing.' },
+        { path: '/config', message: 'About everything.' },
+        { path: '/config/por', message: 'About a prefix of the port.' },
+        { path: '/config/port/x', message: 'About below the port.' },
+        { path: '/config/port', message: 'About the port.' },
+      ]);
+
+      // the host is hidden in listen mode, and nothing else is named by a pointer of the form
+      expect(allHints()).toEqual(['About the port.']);
+
+      // a field that comes into view brings its hint
+      component.control('/config/mode')!.setValue('connect');
+      fixture.detectChanges();
+      expect(allHints()).toEqual(['About the host.', 'About the port.']);
+    });
+
+    it('follows the hints it is given', () => {
+      render(hintSchema);
+      setHints([{ path: '/config/port', message: 'First.' }]);
+      expect(allHints()).toEqual(['First.']);
+
+      // in the order of the fields, whatever the order of the hints
+      setHints([{ path: '/config/label', message: 'Third.' }, { path: '/config/port', message: 'Second.' }]);
+      expect(allHints()).toEqual(['Second.', 'Third.']);
+
+      setHints([]);
+      expect(allHints()).toEqual([]);
+    });
+
+    it('hints never change validity', () => {
+      render(hintSchema, { value: { port: 80 } });
+      expect(component.valid).toBe(false);
+      const emitted = changes.length;
+
+      setHints([
+        { path: '/config/port', level: 'warn', message: 'Port 80 is below the floor.', action: { label: 'Use 6001', value: 6001 } },
+        { path: '/config/label', level: 'warn', message: 'Careful.' },
+      ]);
+
+      // a warning is no error: the form is as valid as it was, nothing turns red, no message of the field's own appears
+      expect(component.valid).toBe(false);
+      expect(changes.length).toBe(emitted);
+      expect(el.querySelector('[data-pointer="/config/label"]')?.classList.contains('has-issue')).toBe(false);
+      expect(component.hasIssue(component.driverFields().find((d) => d.key === 'label')!)).toBe(false);
+      expect(el.querySelectorAll('.sf-error').length).toBe(0);
+
+      setInput('input[name="port"]', '6001');
+      expect(component.valid).toBe(true);
+      expect(last().valid).toBe(true);
+      expect(allHints()).toHaveLength(2);
+    });
+
+    it('does nothing while the form is disabled', () => {
+      render(hintSchema);
+      setHints([{ path: '/config/port', message: 'Try this.', action: { label: 'Use 6001', value: 6001 } }]);
+      fixture.componentRef.setInput('disabled', true);
+      fixture.detectChanges();
+
+      const use = hintsAt('/config/port')[0].querySelector('button')!;
+      expect(use.disabled).toBe(true);
+      use.click();
+      // and not through the component either
+      const port = component.driverFields().find((d) => d.key === 'port')!;
+      component.applyHint(port, { path: '/config/port', message: 'Try this.', action: { label: 'Use 6001', value: 6001 } });
+
+      expect(component.control('/config/port')?.value).toBeNull();
+    });
+
+    it('ignores an action whose value a number field cannot take', () => {
+      render(hintSchema);
+      const port = component.driverFields().find((d) => d.key === 'port')!;
+
+      component.applyHint(port, { path: '/config/port', message: '', action: { label: 'Use it', value: 'six' } });
+      component.applyHint(port, { path: '/config/port', message: 'No action here.' });
+
+      expect(component.control('/config/port')?.value).toBeNull();
+      expect(component.control('/config/port')?.dirty).toBe(false);
     });
   });
 });
