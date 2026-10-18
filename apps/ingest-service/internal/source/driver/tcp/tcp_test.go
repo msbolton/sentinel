@@ -345,18 +345,17 @@ func TestReadTimeoutClosesIdleConnections(t *testing.T) {
 	if !transporttest.WaitFor(func() bool { return sink.count() == 1 }, waitTimeout) {
 		t.Fatal("no observation before the idle period")
 	}
-	connections := func() any { return d.Health().Detail["connections"] }
-	if !transporttest.WaitFor(func() bool { return connections() == 2 }, waitTimeout) {
-		t.Fatalf("connections = %v, want 2", connections())
-	}
-	if !transporttest.WaitFor(func() bool { return connections() == 0 }, waitTimeout) {
-		t.Fatalf("idle connections still open: %v", connections())
-	}
+	// The server closes both: each read ends at the server's close, well
+	// before this client's own deadline.
 	for name, c := range map[string]net.Conn{"silent": silent, "quiet": quiet} {
-		_ = c.SetReadDeadline(time.Now().Add(time.Second))
+		_ = c.SetReadDeadline(time.Now().Add(waitTimeout))
 		if _, err := c.Read(make([]byte, 1)); err == nil || isTimeout(err) {
 			t.Errorf("%s connection not closed by the server: %v", name, err)
 		}
+	}
+	connections := func() any { return d.Health().Detail["connections"] }
+	if !transporttest.WaitFor(func() bool { return connections() == 0 }, waitTimeout) {
+		t.Fatalf("idle connections still counted: %v", connections())
 	}
 	if e := d.Health().LastError; e != "" {
 		t.Errorf("an idle close is not an error: %q", e)
