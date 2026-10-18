@@ -87,4 +87,15 @@ describe('EntityService', () => {
     });
     http.expectOne('/api/v1/entities/a').flush({ id: 'a', position: { lat: 1, lon: 2 } });
   });
+
+  it('asks the entity-service for counts per type and cell in a box', () => {
+    let total = -1;
+    service.getDensity({ north: 70, south: 20, east: 40, west: -30 }, 10).subscribe((d) => (total = d.total));
+    const req = http.expectOne((r) => r.url === '/api/v1/entities/density');
+    expect(req.request.params.get('north')).toBe('70');
+    expect(req.request.params.get('west')).toBe('-30');
+    expect(req.request.params.get('cell')).toBe('10');
+    req.flush({ cellDegrees: 10, generatedAt: '2026-10-18T12:00:00Z', total: 3, cells: [['VESSEL', 50.5, -1.5, 3]] });
+    expect(total).toBe(3);
+  });
 });

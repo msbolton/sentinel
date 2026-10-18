@@ -1,18 +1,15 @@
 /**
- * A feed's density grid (`density:grid` on the WebSocket): how many distinct
- * objects it saw per cell while the viewed area was too large to store them
- * one by one. Cells are [latitude, longitude, count] at the cell centre.
+ * Live entities counted per type and grid cell inside a box
+ * (GET /api/v1/entities/density). The map draws these for views wider than
+ * the gateway's detail cap, where it gets no live positions. Cells are
+ * [entityType, lat, lon, count]; lat and lon are the entities' mean position.
  */
-export interface DensityGrid {
-  feedId: string;
-  source: string;
-  entityType: string;
+export interface EntityDensity {
   cellDegrees: number;
-  windowSeconds: number;
-  /** Views larger than this many square degrees get counts instead of objects. */
-  capSquareDegrees: number;
   generatedAt: string;
-  classification: string;
   total: number;
-  cells: [number, number, number][];
+  cells: [string, number, number, number][];
 }
+
+/** The gateway's default detail cap, used until connection:ack says otherwise. */
+export const DEFAULT_DETAIL_MAX_AREA_SQ_DEG = 2500;

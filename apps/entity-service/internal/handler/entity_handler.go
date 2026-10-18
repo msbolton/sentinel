@@ -35,6 +35,7 @@ func (h *EntityHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/entities", h.handleQuery)
 	mux.HandleFunc("GET /api/v1/entities/nearby", h.handleNearby)
 	mux.HandleFunc("GET /api/v1/entities/counts", h.handleCounts)
+	mux.HandleFunc("GET /api/v1/entities/density", h.handleDensity)
 	mux.HandleFunc("GET /api/v1/entities/{id}", h.handleGetByID)
 	// Registered under a literal segment: "{id}/observations" would be
 	// ambiguous with "ageout-config/{sourceType}" in the Go mux.
@@ -158,6 +159,25 @@ func (h *EntityHandler) handleCounts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.JSON(w, http.StatusOK, counts)
+}
+
+// handleDensity counts live entities per type and grid cell inside a box:
+// GET /api/v1/entities/density?north=&south=&east=&west=&cell=. The map
+// draws these for views too wide to show objects one by one.
+func (h *EntityHandler) handleDensity(w http.ResponseWriter, r *http.Request) {
+	p, problem := parseDensityQuery(r.URL.Query())
+	if problem != "" {
+		httputil.Error(w, http.StatusBadRequest, problem)
+		return
+	}
+	p.Ceiling = ceilingOf(r)
+	cells, err := h.store.Density(r.Context(), p)
+	if err != nil {
+		h.logger.Error("density failed", zap.Error(err))
+		httputil.Error(w, http.StatusInternalServerError, "Failed to count entities")
+		return
+	}
+	httputil.JSON(w, http.StatusOK, densityResponse(p.CellDegrees, cells))
 }
 
 // ceilingOf is the caller's clearance as propagated by the gateway; a

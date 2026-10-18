@@ -1,68 +1,35 @@
-import { DensityGrid } from '../../shared/models/density.model';
 import { ViewportBounds, isGlobalBounds } from './viewport-bounds';
 
 /**
- * Pure helpers for the vessel density overlay: whether a grid applies to
- * the current view, how its cells merge into discs that stay readable at
- * the view's scale, and how counts are written. No Cesium.
+ * Pure helpers for wide views: whether a view is wider than the gateway's
+ * detail cap, how fine a grid to ask the entity service for, and how counts
+ * are drawn. No Cesium.
  */
 
-/** A grid older than this is ignored: the feed stopped sending or the view shrank. */
-export const DENSITY_FRESH_MS = 60_000;
-
-/** Roughly how many discs fit across the view. */
-const BUCKETS_ACROSS = 12;
-const BUCKET_STEPS_DEG = [1, 2, 5, 10, 15, 30, 45, 90];
-
-/** One disc on the map: the count-weighted centre of the cells merged into it. */
-export interface DensityBucket {
-  lat: number;
-  lon: number;
-  count: number;
-}
+/** Roughly how many cells fit across the view. */
+const CELLS_ACROSS = 12;
+const CELL_STEPS_DEG = [0.5, 1, 2, 5, 10, 15, 30];
 
 /** Longitude span of a view, handling views that wrap across the antimeridian. */
 export function lonSpan(b: ViewportBounds): number {
   return b.east >= b.west ? b.east - b.west : 360 - (b.west - b.east);
 }
 
-/** Area of a view in square degrees, the unit the feed's cap is in. */
+/** Area of a view in square degrees, the unit the cap is in. */
 export function viewAreaSqDeg(b: ViewportBounds): number {
   if (isGlobalBounds(b)) return 180 * 360;
   return Math.max(0, b.north - b.south) * lonSpan(b);
 }
 
-/** True when the grid should be drawn for this view: fresh, and the view is over the cap. */
-export function densityApplies(grid: DensityGrid | null, receivedAtMs: number, view: ViewportBounds | null, nowMs: number): boolean {
-  if (!grid || !view) return false;
-  if (nowMs - receivedAtMs > DENSITY_FRESH_MS) return false;
-  return grid.capSquareDegrees > 0 && viewAreaSqDeg(view) > grid.capSquareDegrees;
+/** True when the view is wider than the cap: the map draws counts instead of objects. */
+export function isWideView(view: ViewportBounds | null, capSqDeg: number): boolean {
+  return !!view && capSqDeg > 0 && viewAreaSqDeg(view) > capSqDeg;
 }
 
-/** The bucket size for a view: about BUCKETS_ACROSS across it, never finer than the grid. */
-export function bucketDegrees(view: ViewportBounds, cellDegrees: number): number {
-  const want = Math.max(cellDegrees, lonSpan(view) / BUCKETS_ACROSS);
-  return BUCKET_STEPS_DEG.find((s) => s >= want) ?? 90;
-}
-
-function inView(lat: number, lon: number, v: ViewportBounds): boolean {
-  if (lat < v.south || lat > v.north) return false;
-  return v.east >= v.west ? lon >= v.west && lon <= v.east : lon >= v.west || lon <= v.east;
-}
-
-/** Merges the grid's cells inside the view into buckets of `sizeDeg`. */
-export function bucketCells(cells: [number, number, number][], view: ViewportBounds, sizeDeg: number): DensityBucket[] {
-  const sums = new Map<string, { lat: number; lon: number; count: number }>();
-  for (const [lat, lon, count] of cells) {
-    if (count <= 0 || !inView(lat, lon, view)) continue;
-    const key = `${Math.floor(lat / sizeDeg)}:${Math.floor(lon / sizeDeg)}`;
-    const s = sums.get(key) ?? { lat: 0, lon: 0, count: 0 };
-    s.lat += lat * count;
-    s.lon += lon * count;
-    s.count += count;
-    sums.set(key, s);
-  }
-  return [...sums.values()].map((s) => ({ lat: s.lat / s.count, lon: s.lon / s.count, count: s.count }));
+/** The grid to ask for: about CELLS_ACROSS across the view. */
+export function densityCellDegrees(view: ViewportBounds): number {
+  const want = lonSpan(view) / CELLS_ACROSS;
+  return CELL_STEPS_DEG.find((s) => s >= want) ?? 30;
 }
 
 /** A count as a disc shows it: 950, 1.2k, 12k. */
@@ -75,4 +42,20 @@ export function densityLabel(count: number): string {
 /** Disc edge in px: grows with the count on a log scale. */
 export function densityDiscSize(count: number): number {
   return Math.round(Math.min(60, 34 + 6 * Math.log10(Math.max(1, count))));
+}
+
+/**
+ * Discs of different types in the same cell sit side by side: each type
+ * gets its own horizontal pixel offset.
+ */
+const TYPE_OFFSETS: Record<string, number> = { AIRCRAFT: -22, VESSEL: 0, SATELLITE: 22 };
+export function densityOffsetPx(entityType: string): number {
+  return TYPE_OFFSETS[entityType] ?? 0;
+}
+
+/** `#rrggbb` as `rgba(r, g, b, alpha)`. */
+export function withAlpha(hex: string, alpha: number): string {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return hex;
+  return `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, ${alpha})`;
 }
