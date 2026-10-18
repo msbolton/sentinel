@@ -53,7 +53,7 @@ type RunnerOptions struct {
 // Stats is what a runner has counted so far. The Outbound fields are zero
 // for a plain source.
 type Stats struct {
-	FramesTotal   int64
+	Received      int64 // observations the driver emitted, before duplicate suppression
 	Observations  int64
 	ErrorsTotal   int64
 	LastSuccessAt time.Time
@@ -160,10 +160,10 @@ func (r *Runner) Stats() Stats {
 // Emit stamps provenance, drops repeated fixes and publishes.
 func (r *Runner) Emit(ctx context.Context, o *obs.Observation) error {
 	r.mu.Lock()
-	r.stats.FramesTotal++
+	r.stats.Received++
 	r.mu.Unlock()
 	if r.metrics != nil {
-		r.metrics.FramesTotal.WithLabelValues(r.feedID, r.driverID).Inc()
+		r.metrics.ObservationsReceived.WithLabelValues(r.feedID, r.driverID).Inc()
 	}
 	o.FeedID = r.feedID
 	o.Driver = r.driverID

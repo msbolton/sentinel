@@ -11,14 +11,14 @@ import (
 type Metrics struct {
 	Registry *prometheus.Registry
 
-	FramesTotal        *prometheus.CounterVec // feed_id, driver
-	ObservationsTotal  *prometheus.CounterVec // feed_id, driver
-	DecodeErrorsTotal  *prometheus.CounterVec // feed_id, driver, reason (parse_error|panic)
-	SkippedTotal       *prometheus.CounterVec // feed_id, driver, reason
-	FramesDroppedTotal *prometheus.CounterVec // feed_id, reason
-	NackedTotal        *prometheus.CounterVec // feed_id
-	BlockedSeconds     *prometheus.CounterVec // feed_id
-	DuplicatesTotal    *prometheus.CounterVec // feed_id
+	ObservationsReceived *prometheus.CounterVec // feed_id, driver
+	ObservationsTotal    *prometheus.CounterVec // feed_id, driver
+	DecodeErrorsTotal    *prometheus.CounterVec // feed_id, driver, reason (parse_error|panic)
+	SkippedTotal         *prometheus.CounterVec // feed_id, driver, reason
+	FramesDroppedTotal   *prometheus.CounterVec // feed_id, reason
+	NackedTotal          *prometheus.CounterVec // feed_id
+	BlockedSeconds       *prometheus.CounterVec // feed_id
+	DuplicatesTotal      *prometheus.CounterVec // feed_id
 
 	FeedsRunning    *prometheus.GaugeVec   // driver
 	FeedsUnplaced   *prometheus.GaugeVec   // reason (no_listener|no_ordinary_replica)
@@ -63,7 +63,7 @@ func New(reg *prometheus.Registry) *Metrics {
 	reg.MustRegister(blocked)
 	return &Metrics{
 		Registry:                    reg,
-		FramesTotal:                 counter("frames_total", "Frames received from transports or records returned by polls, per feed.", "feed_id", "driver"),
+		ObservationsReceived:        counter("observations_received_total", "Observations drivers emitted, before duplicate suppression.", "feed_id", "driver"),
 		ObservationsTotal:           counter("observations_total", "Observations emitted by drivers after deduplication, per feed.", "feed_id", "driver"),
 		DecodeErrorsTotal:           counter("decode_errors_total", "Frames that failed to decode and were dead-lettered, per feed and reason.", "feed_id", "driver", "reason"),
 		SkippedTotal:                counter("skipped_total", "Frames that produced no observation, per feed and reason.", "feed_id", "driver", "reason"),

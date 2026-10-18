@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -73,7 +74,8 @@ func TestRunnerStampsProvenanceAndDedupes(t *testing.T) {
 		sink.DeadLetter([]byte("garbage"), "parse_error", errors.New("bad"))
 		return nil
 	}}
-	r := NewRunner("feed-x", "stream", drv, pub, metrics.New(nil), zap.NewNop(), RunnerOptions{RawMax: 4})
+	m := metrics.New(nil)
+	r := NewRunner("feed-x", "stream", drv, pub, m, zap.NewNop(), RunnerOptions{RawMax: 4})
 	if err := r.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -92,8 +94,22 @@ func TestRunnerStampsProvenanceAndDedupes(t *testing.T) {
 		t.Errorf("raw = %q truncated=%v", o.Raw, o.RawTruncated)
 	}
 	st := r.Stats()
-	if st.FramesTotal != 3 || st.Observations != 2 || st.EntitiesLast != 2 || st.ErrorsTotal != 1 || st.LastSuccessAt.IsZero() || st.LastError != "bad" {
+	if st.Received != 3 || st.Observations != 2 || st.EntitiesLast != 2 || st.ErrorsTotal != 1 || st.LastSuccessAt.IsZero() || st.LastError != "bad" {
 		t.Errorf("stats = %+v", st)
+	}
+	// Received counts what the driver emitted, the duplicate included;
+	// observations_total what was published after it was suppressed.
+	for name, c := range map[string]struct {
+		got  float64
+		want float64
+	}{
+		"observations_received_total": {testutil.ToFloat64(m.ObservationsReceived.WithLabelValues("feed-x", "stream")), 3},
+		"observations_total":          {testutil.ToFloat64(m.ObservationsTotal.WithLabelValues("feed-x", "stream")), 2},
+		"duplicates_total":            {testutil.ToFloat64(m.DuplicatesTotal.WithLabelValues("feed-x")), 1},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want %v", name, c.got, c.want)
+		}
 	}
 	// A driver that says nothing of who sent the payload leaves the sender, the
 	// decoder and the receive time empty for the publisher to fill in.

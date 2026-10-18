@@ -118,7 +118,7 @@ func TestListenerCollectorRegistersBesideTheOtherMetrics(t *testing.T) {
 	if err := m.Registry.Register(NewListenerCollector(exposedListeners)); err != nil {
 		t.Fatal(err)
 	}
-	m.FramesTotal.WithLabelValues("gate", "tcp").Inc()
+	m.ObservationsReceived.WithLabelValues("gate", "tcp").Inc()
 	if _, err := m.Registry.Gather(); err != nil {
 		t.Errorf("gathering both: %v", err)
 	}

@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -18,6 +19,49 @@ func TestNewCreatesEveryCollector(t *testing.T) {
 		if field.Type.Implements(collector) && m.Field(i).IsZero() {
 			t.Errorf("Metrics.%s is declared but New never creates it", field.Name)
 		}
+	}
+}
+
+// The runner counts every observation a driver emits, before duplicate
+// suppression, under this name. The counter's old name said frames, which it
+// never counted: listener_events_total{event="accepted"} is the frame count.
+func TestObservationsReceivedIsExported(t *testing.T) {
+	m := New(nil)
+	m.ObservationsReceived.WithLabelValues("a", "tcp").Add(3)
+
+	families, err := m.Registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, family := range families {
+		if family.GetName() != "sentinel_ingest_observations_received_total" {
+			continue
+		}
+		found = true
+		if got := family.GetType().String(); got != "COUNTER" {
+			t.Errorf("type = %s, want COUNTER", got)
+		}
+		if !strings.Contains(family.GetHelp(), "before duplicate suppression") {
+			t.Errorf("help = %q, want it to say the count is before duplicate suppression", family.GetHelp())
+		}
+		series := family.GetMetric()
+		if len(series) != 1 {
+			t.Fatalf("%d series, want 1", len(series))
+		}
+		labels := map[string]string{}
+		for _, l := range series[0].GetLabel() {
+			labels[l.GetName()] = l.GetValue()
+		}
+		if want := map[string]string{"feed_id": "a", "driver": "tcp"}; !reflect.DeepEqual(labels, want) {
+			t.Errorf("labels = %v, want %v", labels, want)
+		}
+		if got := series[0].GetCounter().GetValue(); got != 3 {
+			t.Errorf("value = %v, want 3", got)
+		}
+	}
+	if !found {
+		t.Error("sentinel_ingest_observations_received_total is not exported")
 	}
 }
 
