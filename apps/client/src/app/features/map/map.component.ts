@@ -1647,9 +1647,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     return cached;
   }
 
+  /** IntelSky reports only military and government aircraft; ADSB_LOL is the feed it replaced. */
   private isMilitaryAircraft(entity: Entity): boolean {
     return entity.entityType === EntityType.AIRCRAFT
-      && entity.source === EntitySource.ADSB_LOL;
+      && (entity.source === EntitySource.INTELSKY || entity.source === EntitySource.ADSB_LOL);
   }
 
   private getBillboardImage(entity: Entity): string {

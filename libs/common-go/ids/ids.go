@@ -12,7 +12,6 @@ const (
 
 	// Built-in feeds seeded by db/seed/seed.sql and the ingest registry.
 	FeedIDOpenSky   = "opensky"
-	FeedIDADSBLol   = "adsb-lol"
 	FeedIDCelesTrak = "celestrak"
 	FeedIDIntelSky  = "intelsky"
 )

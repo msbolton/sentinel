@@ -22,7 +22,6 @@ import (
 	_ "github.com/sentinel/ingest-service/internal/source/decoder/sbs"
 
 	// Drivers.
-	_ "github.com/sentinel/ingest-service/internal/source/driver/adsblol"
 	_ "github.com/sentinel/ingest-service/internal/source/driver/aisstream"
 	_ "github.com/sentinel/ingest-service/internal/source/driver/celestrak"
 	_ "github.com/sentinel/ingest-service/internal/source/driver/httpjson"
