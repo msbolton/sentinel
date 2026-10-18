@@ -82,6 +82,14 @@ type Config struct {
 	Password string `json:"-"` // from secret refs
 	TLS      *TLS   `json:"tls"`
 
+	// Listener protection (tcpserver, udp).
+	Allow             []string `json:"allow"`             // IPs or CIDRs allowed to send; empty = anyone who can reach the port
+	MaxConnections    int      `json:"maxConnections"`    // tcpserver: concurrent connections; 0 = unlimited
+	MaxMessagesPerSec int      `json:"maxMessagesPerSec"` // frames per second for the listener; 0 = unlimited
+
+	// TLS material from secret references; never part of the config JSON.
+	CertPEM, KeyPEM, ClientCAPEM, CAPEM []byte `json:"-"`
+
 	// MaxFrameBytes bounds one frame for stream transports (default 1 MiB).
 	MaxFrameBytes int `json:"maxFrameBytes"`
 	// ReadTimeoutSec closes an idle stream connection (0 = none).
@@ -98,6 +106,8 @@ type TLS struct {
 	CAFile             string `json:"caFile"`
 	CertFile           string `json:"certFile"`
 	KeyFile            string `json:"keyFile"`
+	ClientCAFile       string `json:"clientCaFile"`      // tcpserver: CA that signs accepted client certificates
+	RequireClientCert  bool   `json:"requireClientCert"` // tcpserver: mutual TLS
 }
 
 // MaxFrame returns the configured frame bound or the default.

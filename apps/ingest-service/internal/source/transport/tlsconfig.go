@@ -8,33 +8,78 @@ import (
 	"os"
 )
 
-// TLSConfig builds a crypto/tls config from the options, or nil when TLS is
-// off.
+// TLSConfig builds a crypto/tls config from the options, or nil when TLS
+// is off. PEM material set from secret references wins over file paths.
+// The same config serves both directions: RootCAs verify a server we
+// dial, ClientCAs and ClientAuth verify clients a listener accepts.
 func (c Config) TLSConfig() (*tls.Config, error) {
 	if c.TLS == nil || !c.TLS.Enabled {
 		return nil, nil
 	}
 	t := &tls.Config{InsecureSkipVerify: c.TLS.InsecureSkipVerify, ServerName: c.TLS.ServerName, MinVersion: tls.VersionTLS12} //nolint:gosec // operator choice
-	if c.TLS.CAFile != "" {
-		pem, err := os.ReadFile(c.TLS.CAFile)
-		if err != nil {
-			return nil, fmt.Errorf("reading CA file: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, errors.New("CA file holds no certificates")
-		}
-		t.RootCAs = pool
+	ca, err := pemOrFile(c.CAPEM, c.TLS.CAFile, "CA")
+	if err != nil {
+		return nil, err
 	}
-	if (c.TLS.CertFile == "") != (c.TLS.KeyFile == "") {
-		return nil, errors.New("certFile and keyFile must be set together")
-	}
-	if c.TLS.CertFile != "" {
-		cert, err := tls.LoadX509KeyPair(c.TLS.CertFile, c.TLS.KeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("loading client certificate: %w", err)
+	if ca != nil {
+		if t.RootCAs, err = pool(ca, "CA"); err != nil {
+			return nil, err
 		}
-		t.Certificates = []tls.Certificate{cert}
+	}
+	cert, err := pemOrFile(c.CertPEM, c.TLS.CertFile, "certificate")
+	if err != nil {
+		return nil, err
+	}
+	key, err := pemOrFile(c.KeyPEM, c.TLS.KeyFile, "key")
+	if err != nil {
+		return nil, err
+	}
+	if (cert == nil) != (key == nil) {
+		return nil, errors.New("a certificate and its key must be set together")
+	}
+	if cert != nil {
+		pair, err := tls.X509KeyPair(cert, key)
+		if err != nil {
+			return nil, fmt.Errorf("loading certificate: %w", err)
+		}
+		t.Certificates = []tls.Certificate{pair}
+	}
+	clientCA, err := pemOrFile(c.ClientCAPEM, c.TLS.ClientCAFile, "client CA")
+	if err != nil {
+		return nil, err
+	}
+	if clientCA != nil {
+		if t.ClientCAs, err = pool(clientCA, "client CA"); err != nil {
+			return nil, err
+		}
+	}
+	if c.TLS.RequireClientCert {
+		if t.ClientCAs == nil {
+			return nil, errors.New("requiring client certificates needs a client CA")
+		}
+		t.ClientAuth = tls.RequireAndVerifyClientCert
 	}
 	return t, nil
+}
+
+func pemOrFile(pemBytes []byte, file, what string) ([]byte, error) {
+	if len(pemBytes) > 0 {
+		return pemBytes, nil
+	}
+	if file == "" {
+		return nil, nil
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s file: %w", what, err)
+	}
+	return b, nil
+}
+
+func pool(pemBytes []byte, what string) (*x509.CertPool, error) {
+	p := x509.NewCertPool()
+	if !p.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("%s holds no certificates", what)
+	}
+	return p, nil
 }
