@@ -1,17 +1,8 @@
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { SchemaFormChange, SchemaFormComponent } from './schema-form.component';
-import { JsonSchema, ListenPorts } from '../../models/feed.model';
-import { connectionHints } from '../../../features/connections/connection-hints';
-import { listenOf } from '../../../features/connections/listen-config';
+import { schemaOf } from '../../testing/driver-schemas';
 
-/** The schema an ingest driver really ships, so an edit to it that the form cannot honour fails here. */
-function schemaOf(driver: string): JsonSchema {
-  const file = join(__dirname, '../../../../../../ingest-service/internal/source/driver', driver, 'schema.json');
-  return JSON.parse(readFileSync(file, 'utf-8')) as JsonSchema;
-}
-
+/** Renders the schemas the ingest drivers really ship, so an edit to one that the form cannot honour fails here. */
 describe('SchemaFormComponent with the driver schemas', () => {
   let fixture: ComponentFixture<SchemaFormComponent>;
   let component: SchemaFormComponent;
@@ -296,61 +287,6 @@ describe('SchemaFormComponent with the driver schemas', () => {
       expect(el.querySelector('.sf-unmatched')).toBeNull();
       fixture.componentRef.setInput('problems', []);
       fixture.detectChanges();
-    }
-  });
-
-  // A hint is addressed by pointer and a field that is not shown has no place for one, so a schema that renames
-  // or moves the port or the allowlist would silence the hints without a word. The pointers come from `listenOf`.
-  it('tcp, udp and stream: the port and allowlist hints land on fields the schema shows', () => {
-    const ports: ListenPorts = {
-      min: 1024,
-      max: 65535,
-      reserved: [{ from: 3000, to: 3005 }],
-      taken: [
-        { protocol: 'tcp', port: 6001, feedId: 'radar', feedName: 'Radar feed', enabled: true },
-        { protocol: 'udp', port: 10110, feedId: 'pier', feedName: 'Pier AIS', enabled: true },
-      ],
-      suggested: { tcp: 6002, udp: 10111 },
-    };
-    const listeners = [
-      { driver: 'tcp', protocol: 'tcp', taken: 6001, config: (port?: number) => ({ mode: 'listen', port }) },
-      { driver: 'udp', protocol: 'udp', taken: 10110, config: (port?: number) => ({ port }) },
-      {
-        driver: 'stream',
-        protocol: 'tcp',
-        taken: 6001,
-        config: (port?: number) => ({ transport: { kind: 'tcpserver', address: port ? `:${port}` : undefined } }),
-      },
-      {
-        driver: 'stream',
-        protocol: 'udp',
-        taken: 10110,
-        config: (port?: number) => ({ transport: { kind: 'udp', address: port ? `:${port}` : undefined } }),
-      },
-    ] as const;
-
-    for (const { driver, protocol, taken, config } of listeners) {
-      // no port yet: a free one to take; a taken port: a warning, with a free one to take instead
-      for (const stored of [config(), config(taken)]) {
-        const hints = connectionHints({ driverId: driver, config: stored, ports });
-        expect(hints.map((h) => h.path)).toEqual([listenOf(driver, stored)!.portPath, listenOf(driver, stored)!.allowPath]);
-
-        render(driver, stored);
-        fixture.componentRef.setInput('hints', hints);
-        fixture.detectChanges();
-        for (const hint of hints) {
-          expect(el.querySelector(`[data-pointer="${hint.path}"] > .sf-hint`)?.textContent).toContain(hint.message);
-        }
-
-        // taking the port leaves a config the server reads as listening on it
-        el.querySelector<HTMLButtonElement>(`[data-pointer="${hints[0].path}"] > .sf-hint button`)!.click();
-        fixture.detectChanges();
-        const port = listenOf(driver, last().config)?.port;
-        expect(port).toBe(ports.suggested[protocol]);
-        expect(connectionHints({ driverId: driver, config: last().config, ports }).map((h) => h.path)).toEqual([
-          listenOf(driver, stored)!.allowPath,
-        ]);
-      }
     }
   });
 
