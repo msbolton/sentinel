@@ -79,11 +79,11 @@ The chart's `ingestListener` values:
 | `ingestListener.nodeSelector` | `sentinel.io/ingest-listener: "true"` | Which node runs it |
 | `ingestListener.resources` | 250m / 128Mi requested, 2000m / 512Mi limit | |
 
-The Deployment `<release>-ingest-listener` has one replica, `hostNetwork: true` (with `dnsPolicy: ClusterFirstWithHostNet`) and health on `:4010`, bound on every interface of the node so the kubelet probes reach it (unlike Compose, which binds it to loopback). It reads the same Secret as the ingest service for `INGEST_SERVICE_TOKEN` and takes `ingestService.env`, `ingestService.lease` and the TAK certificate mount from the ingest values.
+The Deployment `<fullname>-ingest-listener` (the chart's full name: `fullnameOverride` if set, else `<release>-sentinel`, or just the release name when it contains `sentinel`, so `sentinel-dev-ingest-listener` for the release `sentinel-dev`) has one replica, `hostNetwork: true` (with `dnsPolicy: ClusterFirstWithHostNet`) and health on `:4010`, bound on every interface of the node so the kubelet probes reach it (unlike Compose, which binds it to loopback). It reads the same Secret as the ingest service for `INGEST_SERVICE_TOKEN` and takes `ingestService.env`, `ingestService.lease` and the TAK certificate mount from the ingest values.
 
 - **Label a node first**, or the Pod stays Pending: `kubectl label node <node> sentinel.io/ingest-listener=true`. Choose a node whose address senders can reach and that you will keep; senders use the node address (or `ingestListener.host`), there is no Service or load balancer in front of it.
 - **Rollouts drop inbound traffic.** The Deployment uses `strategy: Recreate`: a hostNetwork pod's ports count as taken on its node, so a surge pod could never schedule beside the old one. Each rollout therefore briefly stops inbound TCP and UDP; TCP senders reconnect, and datagrams sent in the gap are lost. Roll it out in a quiet window.
-- **The dev overlay leaves it off.** The listener only schedules on a labelled node, and a dev cluster seldom has one, so `k8s/overlays/dev/values.yaml` sets `ingestListener.enabled: false`. To turn it on, label a node and install with `--set ingestListener.enabled=true` (or a later `-f` file that sets it): `helm upgrade --install sentinel-dev ./k8s/charts/sentinel -f k8s/overlays/dev/values.yaml --set ingestListener.enabled=true -n sentinel-dev`.
+- **The dev overlay leaves it off.** The listener only schedules on a labelled node, and a dev cluster seldom has one, so `k8s/overlays/dev/values.yaml` sets `ingestListener.enabled: false`. To turn it on, label a node and install with `--set ingestListener.enabled=true` (or a later `-f` file that sets it): `helm upgrade --install sentinel-dev ./k8s/charts/sentinel -f k8s/overlays/dev/values.yaml --set ingestListener.enabled=true --set ingestService.serviceToken=<token> -n sentinel-dev` (the chart refuses to render without `ingestService.serviceToken` or `ingestService.existingSecret`).
 - **Firewalls and security groups.** Allow inbound TCP and UDP on the ports your connections use to the labelled node, from the senders' networks only: the host firewall, the cloud security group and any network ACL. A port chosen later in Connections is closed until you open it, so open a range you control and narrow it with each connection's `allow`. Never open `:4010`.
 - **Node ports.** The default `INGEST_RESERVED_PORTS` covers Sentinel's own ports, not the node's (the kubelet's 10250, node exporters, ...). Add them with `ingestService.env.INGEST_RESERVED_PORTS`, which reaches the ingest and listener Deployments alike; the value replaces the default list, so repeat what you still want, and keep it the same everywhere because the replica that answers a request validates the port.
 - **Render the chart before a release.** The listener templates need a real `helm template` pass, with the chart's dependencies built and a service token (the chart refuses to render without one):
@@ -95,6 +95,7 @@ The Deployment `<release>-ingest-listener` has one replica, `hostNetwork: true` 
   ```
 
   The first output contains the `t-sentinel-ingest-listener` Deployment (`hostNetwork: true`, `strategy: Recreate`, the node selector); the dev overlay's output does not.
+
 ## PostgreSQL Configuration
 
 - **Image**: `postgis/postgis:16-3.4` (PostgreSQL 16 with PostGIS 3.4)
