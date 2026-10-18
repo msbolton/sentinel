@@ -76,8 +76,6 @@ graph TB
     AS -->|alerts.events| KF
     AN -->|alerts.events| KF
     KF -->|alerts.events| AS & GW & IS
-    IS -->|density.events| KF
-    KF -->|density.events| GW
 
     IS --> PG
     ES --> PG
@@ -126,7 +124,7 @@ sequenceDiagram
     ES->>ES: resolve identities, fuse (newest fix wins, classification high-water mark)
     ES->>PG: observations, entity_identities, entity_sources, entities
     ES->>KF: entities.events (created / updated / position / deleted / stale / aged_out / restored)
-    KF->>GW: entities.events, alerts.events, density.events
+    KF->>GW: entities.events, alerts.events
     GW->>WS: entity:batch, entity:deleted, ageout frames, alert:new (viewport and clearance filtered)
 ```
 
@@ -134,7 +132,7 @@ sequenceDiagram
 2. **Ownership.** Each enabled feed runs on exactly one replica, chosen by rendezvous hashing over the live replicas (or pinned). The owner renews a `feed_leases` row; acquisition bumps a fencing token that travels on every observation and guards status writes.
 3. **Driver.** The supervisor builds the driver from the catalog, wraps it in a runner and starts it. Pollers (`opensky`, `intelsky`, `celestrak`, `httpjson`) call an API on a schedule; `aisstream` keeps WebSocket subscriptions that follow the viewports and a watchlist; `stream` composes a transport, a framer and a decoder from config; `tak` owns one session to a TAK Server.
 4. **Runner.** Stamps provenance (feed id, driver, receive time, lease token) and the feed's classification (a decoder may only raise it), guarantees an identity, bounds the raw payload, suppresses repeated fixes, computes a deterministic observation id and publishes to `observations.raw` keyed by identity. Undecodable payloads go to `observations.dlq` with the reason in headers.
-5. **Area of interest.** Drivers with the `area` capability poll, or in CelesTrak's case emit, only what connected map clients can see. The gateway aggregates client viewports and pushes them to every such feed with a 90 s lease, so polling stops when nobody is looking or the gateway dies.
+5. **Area of interest.** Drivers with the `area` capability poll, or in CelesTrak's case emit, only what connected map clients can see. The gateway aggregates client viewports and pushes them to every such feed with a 90 s lease, so polling stops when nobody is looking or the gateway dies. Every object is also ingested outside the viewports, at a slow background rate (aircraft 2 min, satellites 10 min, vessels 5 min) and flagged `background`: such fixes update the entity, so search and alerts see everything, but stay out of the observation archive and track history. Only viewports up to `DETAIL_MAX_AREA_SQ_DEG` steer the feeds and receive live positions; wider views draw counts from `GET /api/v1/entities/density`.
 6. **Fusion.** The entity service resolves the observation's identities to an entity (creating one when needed), applies the newest-fix-wins rule across feeds, replicas and out-of-order delivery, keeps the highest classification any feed reported, records the contributing feed in `entity_sources`, and emits one typed event per change on `entities.events`.
 7. **Consumers.** The track service stores every accepted fix with provenance; the alert service evaluates geofences and rules; the search service updates its index; the analytics service judges the fix against the entity's baseline; the gateway bridge streams to browsers; outbound connections forward to their remote.
 
@@ -177,7 +175,7 @@ There is no cache in front of PostgreSQL: the PostGIS index answers viewport que
 
 ### Live stream to browsers
 
-The gateway's bridge consumes `entities.events`, `alerts.events` and `density.events` (vessel counts for views too large to show vessels) and hands each event to the hub with its position and classification rank. Each WebSocket client holds a viewport and a clearance; the hub batches matching entity frames every 200 ms and broadcasts id-only frames (`deleted`, `stale`, `aged_out`, `restored`) to everyone. The same connection carries the client's viewport upstream, which the gateway aggregates for the area-of-interest push.
+The gateway's bridge consumes `entities.events` and `alerts.events` and hands each event to the hub with its position and classification rank. Each WebSocket client holds a viewport and a clearance; the hub batches matching entity frames every 200 ms and broadcasts id-only frames (`deleted`, `stale`, `aged_out`, `restored`) to everyone. The same connection carries the client's viewport upstream, which the gateway aggregates for the area-of-interest push.
 
 ### GIS consumers
 
@@ -242,7 +240,6 @@ Order: UNCLASSIFIED < CONFIDENTIAL < SECRET < TOP_SECRET. The order lives once i
 | `observations.dlq` | feed id | raw payload + reason headers | ingest replicas | operators |
 | `entities.events` | entity id | `sentinel.v1.EntityEvent` (full snapshot + event oneof) | entity-service | track, alert, search, analytics, gateway, outbound connections |
 | `alerts.events` | entity id | `sentinel.v1.AlertEvent` | alert-service, analytics | alert-service, gateway, outbound connections |
-| `density.events` | feed id | `sentinel.v1.DensityGrid` (distinct objects per grid cell) | ingest (`aisstream`) | gateway |
 
 Partitioning by key keeps one object's reports and one entity's events in order. Consumers commit after their database transaction, so a crash replays a batch and the deterministic observation id absorbs the duplicates.
 
@@ -353,7 +350,6 @@ Go forbids importing another module's `internal`, so services share code only th
 | `mgmt` | management API proxied by the gateway under `/api/v1/feeds` and `/api/v1/drivers` |
 | `aoi` | area-of-interest pushes from the gateway |
 | `obs`, `dedupe`, `wire`, `publish`, `kafka` | an observation's path from driver to `observations.raw`: the domain type, repeat suppression, protobuf encoding, the publisher with dead-lettering |
-| `density` | the per-feed publisher drivers use for `density.events` (vessel counts for views over a feed's cap), stamped with the feed id and classification |
 | `policy` | the pure sharing-policy evaluator for connections |
 | `outbound` | the pump: per-connection consumer, coalescing queue, rate limiting, shape source for geofences and locations |
 | `health`, `metrics` | readiness and Prometheus collectors |

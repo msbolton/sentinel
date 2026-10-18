@@ -167,7 +167,7 @@ curl -s -X POST http://localhost:3000/api/v1/feeds/intelsky/enable
 curl -s http://localhost:3000/api/v1/feeds/intelsky | jq '.status.state, .status.detail'
 ```
 
-`detail` shows `aircraft` (about 75 worldwide), `lastStatus` 200, `fetchedAt` and `nextFetchAt`; the feed polls every 10 s whether or not a map is open. Military aircraft appear in orange. Select one: Aircraft Details opens with today's path drawn as a dashed orange line, and the Flight path control switches to 3 or 7 days or off (`GET /api/v1/aircraft/{hex}/path?days=`). To check against the live service without the stack: `cd apps/ingest-service && go test -tags live -run TestLivePoll -v ./internal/source/driver/intelsky/` and `cd apps/api-gateway && go test -tags live -run TestLivePaths -v ./internal/flightpath/`.
+`detail` shows `aircraft` (about 75 worldwide), `lastStatus` 200, `fetchedAt` and `nextFetchAt`; the feed polls every 10 s whether or not a map is open. Military aircraft appear in green. Select one: Aircraft Details opens with today's path drawn as a dashed green line and a thick purple line from where IntelSky first saw it today, and the Flight path control switches to 3 or 7 days or off (`GET /api/v1/aircraft/{hex}/path?days=`). To check against the live service without the stack: `cd apps/ingest-service && go test -tags live -run TestLivePoll -v ./internal/source/driver/intelsky/` and `cd apps/api-gateway && go test -tags live -run TestLivePaths -v ./internal/flightpath/`.
 
 ### Ships (aisstream.io)
 
@@ -180,14 +180,14 @@ curl -s -X POST http://localhost:3000/api/v1/feeds/aisstream/enable
 curl -s http://localhost:3000/api/v1/feeds/aisstream | jq '.status.state, .status.detail'
 ```
 
-The state is `idle` until a map client is connected (or the watchlist has entries). Open the map over the English Channel: vessels appear coloured by ship type, turned to their heading and gliding between fixes; `detail.mode` is `detail`, both `confirmed` and `compression` are true on `detail.connections.area`, and `emitted` stays below `messages` as positions are thinned. Zoom out to Europe and discs with counts replace the vessels: `detail.mode` is `density` and `detail.density` reports the last grid's cells and vessels. Track a vessel while nobody looks:
+The feed is never idle: one connection streams the whole world, and vessels outside every viewport are stored as background fixes every 5 minutes (`detail.background`). Open the map over the English Channel: vessels there arrive at full rate (`detail.detail` grows), coloured by ship type, turned to their heading and gliding between fixes, and `detail.connection` shows `confirmed` and `compression` true. Zoom out to Europe and the map draws counts per type from the database instead of individual vessels. Keep a vessel at full rate wherever it is:
 
 ```bash
 curl -s -X PATCH http://localhost:3000/api/v1/feeds/aisstream -H 'content-type: application/json' \
-  -d '{"config": {"watchlistMmsi": ["235100247"], "maxAreaSqDeg": 2500, "movingIntervalSec": 15, "stationaryIntervalSec": 180}}'
+  -d '{"config": {"watchlistMmsi": ["235100247"], "movingIntervalSec": 15, "stationaryIntervalSec": 180, "backgroundIntervalSec": 300}}'
 ```
 
-To check the driver against the live service without the stack: `cd apps/ingest-service && AISSTREAM_API_KEY=<key> go test -tags live -run TestLiveStream -v ./internal/source/driver/aisstream/` (about 35 s).
+To check the driver against the live service without the stack: `cd apps/ingest-service && AISSTREAM_API_KEY=<key> go test -tags live -run TestLiveStream -v ./internal/source/driver/aisstream/` (about 30 s; it expects both full-rate and background fixes).
 
 ### Local receivers and other sources
 
