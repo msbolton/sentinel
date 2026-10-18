@@ -9,6 +9,7 @@
 #   24 partitions - observations.raw (every report from every feed, keyed by identity)
 #   12 partitions - entities.events (one entity's events stay in order on one partition)
 #    3 partitions - alerts.events and the dead-letter topic
+#    1 partition  - density.events (short-lived counts, 10 min retention)
 # =============================================================================
 
 set -euo pipefail
@@ -38,6 +39,7 @@ TOPICS=(
   "observations.dlq|3|2592000000"
   "entities.events|12|604800000"
   "alerts.events|3|2592000000"
+  "density.events|1|600000"
 )
 
 create_topic() {

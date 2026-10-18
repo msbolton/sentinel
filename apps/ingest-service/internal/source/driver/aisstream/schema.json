@@ -10,7 +10,10 @@
     "movingIntervalSec": { "type": "integer", "minimum": 0, "default": 15, "title": "Moving vessel interval (s)", "description": "At most one stored position per moving vessel this often; 0 stores every report" },
     "stationaryIntervalSec": { "type": "integer", "minimum": 0, "default": 180, "title": "Stationary vessel interval (s)", "description": "The same for vessels moored, at anchor, aground or slower than the stationary speed" },
     "stationaryKnots": { "type": "number", "minimum": 0, "default": 0.5, "title": "Stationary speed (kn)" },
-    "maxAreaSqDeg": { "type": "number", "minimum": 0, "default": 2500, "title": "Largest viewed area (sq deg)", "description": "Above this the viewed area is too large to store every vessel; 0 removes the cap" },
+    "maxAreaSqDeg": { "type": "number", "minimum": 0, "default": 2500, "title": "Largest viewed area (sq deg)", "description": "Above this the viewed area is too large to store every vessel: vessels are counted per grid cell instead; 0 removes the cap" },
+    "densityCellDeg": { "type": "number", "minimum": 0.1, "maximum": 10, "default": 1, "title": "Density cell (deg)", "description": "Grid cell size for the vessel counts drawn while a view is over the cap" },
+    "densityWindowSec": { "type": "integer", "minimum": 60, "default": 600, "title": "Density window (s)", "description": "A vessel counts while seen this recently" },
+    "densityIntervalSec": { "type": "integer", "minimum": 5, "default": 15, "title": "Density interval (s)", "description": "How often counts are published" },
     "url": { "type": "string", "pattern": "^wss?://", "title": "Stream URL", "description": "Override for testing; default wss://stream.aisstream.io/v0/stream" }
   }
 }

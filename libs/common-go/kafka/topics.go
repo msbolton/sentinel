@@ -13,6 +13,9 @@ const (
 	TopicEntityEvents = "entities.events"
 	// TopicAlertEvents carries sentinel.v1.AlertEvent, keyed by entity id.
 	TopicAlertEvents = "alerts.events"
+	// TopicDensityEvents carries sentinel.v1.DensityGrid, keyed by feed id:
+	// per-cell object counts for views too large to store objects one by one.
+	TopicDensityEvents = "density.events"
 )
 
 // Consumer group ids.

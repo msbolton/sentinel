@@ -56,6 +56,15 @@ type Deps struct {
 	// Shapes lists Sentinel's own geofences and locations for drivers that
 	// export them (nil when the replica has no database access).
 	Shapes ShapeSource
+	// Density publishes the counts a driver keeps for areas too large to
+	// store objects one by one (nil when the replica has no producer).
+	Density DensityPublisher
+}
+
+// DensityPublisher sends a feed's density grids to the density.events
+// topic. The feed id and classification are filled in for the driver.
+type DensityPublisher interface {
+	PublishDensity(grid *sentinelv1.DensityGrid) error
 }
 
 // Geofence is an operator-drawn polygon (an alert rule's area).
@@ -173,7 +182,10 @@ func (d Direction) Normalize() Direction {
 func (d Direction) Inbound() bool { n := d.Normalize(); return n == DirectionIn || n == DirectionBoth }
 
 // Outbound reports whether the direction consumes events.
-func (d Direction) Outbound() bool { n := d.Normalize(); return n == DirectionOut || n == DirectionBoth }
+func (d Direction) Outbound() bool {
+	n := d.Normalize()
+	return n == DirectionOut || n == DirectionBoth
+}
 
 // Valid reports whether d is one of the three directions (or unset).
 func (d Direction) Valid() bool {

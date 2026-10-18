@@ -194,6 +194,20 @@ describe('WebSocketService', () => {
     expect(alerts).toEqual([{ id: 'a1', title: 'Breach' }]);
   });
 
+  it('routes density grids to their stream', () => {
+    const grids: any[] = [];
+    service.density$.subscribe((g) => grids.push(g));
+    service.connect();
+    const socket = latestSocket();
+    socket.simulateOpen();
+
+    const grid = { feedId: 'aisstream', entityType: 'VESSEL', capSquareDegrees: 2500, cells: [[50.5, -1.5, 2]] };
+    socket.receive({ type: 'density:grid', data: grid });
+    socket.receive({ type: 'density:grid' });
+
+    expect(grids).toEqual([grid]);
+  });
+
   it('reconnects with backoff after an unexpected close and replays state', () => {
     jest.useFakeTimers();
     const statuses: ConnectionStatus[] = [];

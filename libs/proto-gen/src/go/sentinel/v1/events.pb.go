@@ -649,6 +649,187 @@ func (*EntityEvent_AgedOut) isEntityEvent_Event() {}
 
 func (*EntityEvent_Restored) isEntityEvent_Event() {}
 
+// DensityCell is how many distinct objects a feed saw in one grid cell.
+type DensityCell struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Latitude      float64                `protobuf:"fixed64,1,opt,name=latitude,proto3" json:"latitude,omitempty"`   // cell centre
+	Longitude     float64                `protobuf:"fixed64,2,opt,name=longitude,proto3" json:"longitude,omitempty"` // cell centre
+	Count         uint32                 `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DensityCell) Reset() {
+	*x = DensityCell{}
+	mi := &file_sentinel_v1_events_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DensityCell) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DensityCell) ProtoMessage() {}
+
+func (x *DensityCell) ProtoReflect() protoreflect.Message {
+	mi := &file_sentinel_v1_events_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DensityCell.ProtoReflect.Descriptor instead.
+func (*DensityCell) Descriptor() ([]byte, []int) {
+	return file_sentinel_v1_events_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *DensityCell) GetLatitude() float64 {
+	if x != nil {
+		return x.Latitude
+	}
+	return 0
+}
+
+func (x *DensityCell) GetLongitude() float64 {
+	if x != nil {
+		return x.Longitude
+	}
+	return 0
+}
+
+func (x *DensityCell) GetCount() uint32 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+// DensityGrid counts the objects a feed sees over an area too large to
+// store them one by one, produced to the density.events topic keyed by
+// feed_id. Clients draw the counts while their view is larger than
+// cap_square_degrees and the objects themselves once zoomed in below it.
+type DensityGrid struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	FeedId           string                 `protobuf:"bytes,1,opt,name=feed_id,json=feedId,proto3" json:"feed_id,omitempty"`
+	Source           EntitySource           `protobuf:"varint,2,opt,name=source,proto3,enum=sentinel.v1.EntitySource" json:"source,omitempty"`
+	EntityType       EntityType             `protobuf:"varint,3,opt,name=entity_type,json=entityType,proto3,enum=sentinel.v1.EntityType" json:"entity_type,omitempty"`
+	CellDegrees      float64                `protobuf:"fixed64,4,opt,name=cell_degrees,json=cellDegrees,proto3" json:"cell_degrees,omitempty"`
+	WindowSeconds    uint32                 `protobuf:"varint,5,opt,name=window_seconds,json=windowSeconds,proto3" json:"window_seconds,omitempty"`             // an object counts while seen this recently
+	CapSquareDegrees float64                `protobuf:"fixed64,6,opt,name=cap_square_degrees,json=capSquareDegrees,proto3" json:"cap_square_degrees,omitempty"` // the view size above which the feed counts instead of storing
+	GeneratedAt      *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
+	Classification   Classification         `protobuf:"varint,8,opt,name=classification,proto3,enum=sentinel.v1.Classification" json:"classification,omitempty"` // the feed's level; clients below it get no grid
+	Cells            []*DensityCell         `protobuf:"bytes,9,rep,name=cells,proto3" json:"cells,omitempty"`                                                    // non-empty cells only
+	Total            uint32                 `protobuf:"varint,10,opt,name=total,proto3" json:"total,omitempty"`                                                  // distinct objects across all cells
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *DensityGrid) Reset() {
+	*x = DensityGrid{}
+	mi := &file_sentinel_v1_events_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DensityGrid) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DensityGrid) ProtoMessage() {}
+
+func (x *DensityGrid) ProtoReflect() protoreflect.Message {
+	mi := &file_sentinel_v1_events_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DensityGrid.ProtoReflect.Descriptor instead.
+func (*DensityGrid) Descriptor() ([]byte, []int) {
+	return file_sentinel_v1_events_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *DensityGrid) GetFeedId() string {
+	if x != nil {
+		return x.FeedId
+	}
+	return ""
+}
+
+func (x *DensityGrid) GetSource() EntitySource {
+	if x != nil {
+		return x.Source
+	}
+	return EntitySource_ENTITY_SOURCE_UNSPECIFIED
+}
+
+func (x *DensityGrid) GetEntityType() EntityType {
+	if x != nil {
+		return x.EntityType
+	}
+	return EntityType_ENTITY_TYPE_UNKNOWN
+}
+
+func (x *DensityGrid) GetCellDegrees() float64 {
+	if x != nil {
+		return x.CellDegrees
+	}
+	return 0
+}
+
+func (x *DensityGrid) GetWindowSeconds() uint32 {
+	if x != nil {
+		return x.WindowSeconds
+	}
+	return 0
+}
+
+func (x *DensityGrid) GetCapSquareDegrees() float64 {
+	if x != nil {
+		return x.CapSquareDegrees
+	}
+	return 0
+}
+
+func (x *DensityGrid) GetGeneratedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.GeneratedAt
+	}
+	return nil
+}
+
+func (x *DensityGrid) GetClassification() Classification {
+	if x != nil {
+		return x.Classification
+	}
+	return Classification_CLASSIFICATION_UNSPECIFIED
+}
+
+func (x *DensityGrid) GetCells() []*DensityCell {
+	if x != nil {
+		return x.Cells
+	}
+	return nil
+}
+
+func (x *DensityGrid) GetTotal() uint32 {
+	if x != nil {
+		return x.Total
+	}
+	return 0
+}
+
 var File_sentinel_v1_events_proto protoreflect.FileDescriptor
 
 const file_sentinel_v1_events_proto_rawDesc = "" +
@@ -698,7 +879,24 @@ const file_sentinel_v1_events_proto_rawDesc = "" +
 	"\x05stale\x18\x0e \x01(\v2\x19.sentinel.v1.EntityAgeoutH\x00R\x05stale\x126\n" +
 	"\baged_out\x18\x0f \x01(\v2\x19.sentinel.v1.EntityAgeoutH\x00R\aagedOut\x129\n" +
 	"\brestored\x18\x10 \x01(\v2\x1b.sentinel.v1.EntityRestoredH\x00R\brestoredB\a\n" +
-	"\x05eventB6Z4github.com/sentinel/proto-gen/sentinel/v1;sentinelv1b\x06proto3"
+	"\x05event\"]\n" +
+	"\vDensityCell\x12\x1a\n" +
+	"\blatitude\x18\x01 \x01(\x01R\blatitude\x12\x1c\n" +
+	"\tlongitude\x18\x02 \x01(\x01R\tlongitude\x12\x14\n" +
+	"\x05count\x18\x03 \x01(\rR\x05count\"\xd5\x03\n" +
+	"\vDensityGrid\x12\x17\n" +
+	"\afeed_id\x18\x01 \x01(\tR\x06feedId\x121\n" +
+	"\x06source\x18\x02 \x01(\x0e2\x19.sentinel.v1.EntitySourceR\x06source\x128\n" +
+	"\ventity_type\x18\x03 \x01(\x0e2\x17.sentinel.v1.EntityTypeR\n" +
+	"entityType\x12!\n" +
+	"\fcell_degrees\x18\x04 \x01(\x01R\vcellDegrees\x12%\n" +
+	"\x0ewindow_seconds\x18\x05 \x01(\rR\rwindowSeconds\x12,\n" +
+	"\x12cap_square_degrees\x18\x06 \x01(\x01R\x10capSquareDegrees\x12=\n" +
+	"\fgenerated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vgeneratedAt\x12C\n" +
+	"\x0eclassification\x18\b \x01(\x0e2\x1b.sentinel.v1.ClassificationR\x0eclassification\x12.\n" +
+	"\x05cells\x18\t \x03(\v2\x18.sentinel.v1.DensityCellR\x05cells\x12\x14\n" +
+	"\x05total\x18\n" +
+	" \x01(\rR\x05totalB6Z4github.com/sentinel/proto-gen/sentinel/v1;sentinelv1b\x06proto3"
 
 var (
 	file_sentinel_v1_events_proto_rawDescOnce sync.Once
@@ -712,7 +910,7 @@ func file_sentinel_v1_events_proto_rawDescGZIP() []byte {
 	return file_sentinel_v1_events_proto_rawDescData
 }
 
-var file_sentinel_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_sentinel_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_sentinel_v1_events_proto_goTypes = []any{
 	(*ObservationRef)(nil),        // 0: sentinel.v1.ObservationRef
 	(*EntityCreated)(nil),         // 1: sentinel.v1.EntityCreated
@@ -722,27 +920,30 @@ var file_sentinel_v1_events_proto_goTypes = []any{
 	(*EntityAgeout)(nil),          // 5: sentinel.v1.EntityAgeout
 	(*EntityRestored)(nil),        // 6: sentinel.v1.EntityRestored
 	(*EntityEvent)(nil),           // 7: sentinel.v1.EntityEvent
-	(EntitySource)(0),             // 8: sentinel.v1.EntitySource
-	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
-	(*Entity)(nil),                // 10: sentinel.v1.Entity
-	(EntityType)(0),               // 11: sentinel.v1.EntityType
-	(AgeoutState)(0),              // 12: sentinel.v1.AgeoutState
+	(*DensityCell)(nil),           // 8: sentinel.v1.DensityCell
+	(*DensityGrid)(nil),           // 9: sentinel.v1.DensityGrid
+	(EntitySource)(0),             // 10: sentinel.v1.EntitySource
+	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
+	(*Entity)(nil),                // 12: sentinel.v1.Entity
+	(EntityType)(0),               // 13: sentinel.v1.EntityType
+	(AgeoutState)(0),              // 14: sentinel.v1.AgeoutState
+	(Classification)(0),           // 15: sentinel.v1.Classification
 }
 var file_sentinel_v1_events_proto_depIdxs = []int32{
-	8,  // 0: sentinel.v1.ObservationRef.source:type_name -> sentinel.v1.EntitySource
-	9,  // 1: sentinel.v1.ObservationRef.source_timestamp:type_name -> google.protobuf.Timestamp
-	10, // 2: sentinel.v1.EntityCreated.entity:type_name -> sentinel.v1.Entity
+	10, // 0: sentinel.v1.ObservationRef.source:type_name -> sentinel.v1.EntitySource
+	11, // 1: sentinel.v1.ObservationRef.source_timestamp:type_name -> google.protobuf.Timestamp
+	12, // 2: sentinel.v1.EntityCreated.entity:type_name -> sentinel.v1.Entity
 	0,  // 3: sentinel.v1.EntityCreated.observation:type_name -> sentinel.v1.ObservationRef
-	10, // 4: sentinel.v1.EntityUpdated.entity:type_name -> sentinel.v1.Entity
-	10, // 5: sentinel.v1.EntityPosition.entity:type_name -> sentinel.v1.Entity
+	12, // 4: sentinel.v1.EntityUpdated.entity:type_name -> sentinel.v1.Entity
+	12, // 5: sentinel.v1.EntityPosition.entity:type_name -> sentinel.v1.Entity
 	0,  // 6: sentinel.v1.EntityPosition.observation:type_name -> sentinel.v1.ObservationRef
-	11, // 7: sentinel.v1.EntityAgeout.entity_type:type_name -> sentinel.v1.EntityType
-	8,  // 8: sentinel.v1.EntityAgeout.source:type_name -> sentinel.v1.EntitySource
-	12, // 9: sentinel.v1.EntityAgeout.previous_state:type_name -> sentinel.v1.AgeoutState
-	9,  // 10: sentinel.v1.EntityAgeout.last_seen_at:type_name -> google.protobuf.Timestamp
-	10, // 11: sentinel.v1.EntityRestored.entity:type_name -> sentinel.v1.Entity
-	12, // 12: sentinel.v1.EntityRestored.previous_state:type_name -> sentinel.v1.AgeoutState
-	9,  // 13: sentinel.v1.EntityEvent.event_time:type_name -> google.protobuf.Timestamp
+	13, // 7: sentinel.v1.EntityAgeout.entity_type:type_name -> sentinel.v1.EntityType
+	10, // 8: sentinel.v1.EntityAgeout.source:type_name -> sentinel.v1.EntitySource
+	14, // 9: sentinel.v1.EntityAgeout.previous_state:type_name -> sentinel.v1.AgeoutState
+	11, // 10: sentinel.v1.EntityAgeout.last_seen_at:type_name -> google.protobuf.Timestamp
+	12, // 11: sentinel.v1.EntityRestored.entity:type_name -> sentinel.v1.Entity
+	14, // 12: sentinel.v1.EntityRestored.previous_state:type_name -> sentinel.v1.AgeoutState
+	11, // 13: sentinel.v1.EntityEvent.event_time:type_name -> google.protobuf.Timestamp
 	1,  // 14: sentinel.v1.EntityEvent.created:type_name -> sentinel.v1.EntityCreated
 	2,  // 15: sentinel.v1.EntityEvent.updated:type_name -> sentinel.v1.EntityUpdated
 	3,  // 16: sentinel.v1.EntityEvent.position:type_name -> sentinel.v1.EntityPosition
@@ -750,11 +951,16 @@ var file_sentinel_v1_events_proto_depIdxs = []int32{
 	5,  // 18: sentinel.v1.EntityEvent.stale:type_name -> sentinel.v1.EntityAgeout
 	5,  // 19: sentinel.v1.EntityEvent.aged_out:type_name -> sentinel.v1.EntityAgeout
 	6,  // 20: sentinel.v1.EntityEvent.restored:type_name -> sentinel.v1.EntityRestored
-	21, // [21:21] is the sub-list for method output_type
-	21, // [21:21] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	10, // 21: sentinel.v1.DensityGrid.source:type_name -> sentinel.v1.EntitySource
+	13, // 22: sentinel.v1.DensityGrid.entity_type:type_name -> sentinel.v1.EntityType
+	11, // 23: sentinel.v1.DensityGrid.generated_at:type_name -> google.protobuf.Timestamp
+	15, // 24: sentinel.v1.DensityGrid.classification:type_name -> sentinel.v1.Classification
+	8,  // 25: sentinel.v1.DensityGrid.cells:type_name -> sentinel.v1.DensityCell
+	26, // [26:26] is the sub-list for method output_type
+	26, // [26:26] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_sentinel_v1_events_proto_init() }
@@ -779,7 +985,7 @@ func file_sentinel_v1_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sentinel_v1_events_proto_rawDesc), len(file_sentinel_v1_events_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

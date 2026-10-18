@@ -16,8 +16,9 @@
 // exactly as it does for NMEA receivers, so vessels from both fuse on MMSI.
 // Positions are thinned per vessel (moving vessels every 15 s, stationary
 // ones every 3 min by default); static and voyage reports always pass.
-// When the viewed area is larger than maxAreaSqDeg the area connection
-// keeps running but nothing from it is stored.
+// When the viewed area is larger than maxAreaSqDeg nothing from the area
+// connection is stored; the driver counts distinct vessels per grid cell
+// instead and publishes the counts (density.events) for the map to draw.
 package aisstream
 
 import (
@@ -32,6 +33,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/sentinel/ingest-service/internal/aoi"
+	"github.com/sentinel/ingest-service/internal/obs"
 	"github.com/sentinel/ingest-service/internal/source/decoder"
 	"github.com/sentinel/ingest-service/internal/source/decoder/aismap"
 	"github.com/sentinel/ingest-service/internal/source/driver"
@@ -46,12 +48,15 @@ const (
 	defaultStationary    = 3 * time.Minute
 	defaultStationaryKn  = 0.5
 	defaultMaxAreaSqDeg  = 2500.0
+	defaultCellDeg       = 1.0
+	defaultDensityWindow = 10 * time.Minute
+	defaultDensityEvery  = 15 * time.Second
 	maxWatchlist         = 200
 	frameBuffer          = 10000
 	areaCheckEvery       = 5 * time.Second
 	modeIdle             = "idle"
 	modeDetail           = "detail"
-	modeTooLarge         = "too_large"
+	modeDensity          = "density"
 	connArea             = "area"
 	connWatchlist        = "watchlist"
 	subscriptionKeyField = "apiKey"
@@ -92,6 +97,9 @@ type Config struct {
 	StationaryIntervalSec *int     `json:"stationaryIntervalSec"`
 	StationaryKnots       *float64 `json:"stationaryKnots"`
 	MaxAreaSqDeg          *float64 `json:"maxAreaSqDeg"`
+	DensityCellDeg        float64  `json:"densityCellDeg"`
+	DensityWindowSec      int      `json:"densityWindowSec"`
+	DensityIntervalSec    int      `json:"densityIntervalSec"`
 }
 
 // frame is one message off a connection.
@@ -121,11 +129,19 @@ type Driver struct {
 	areaWake chan struct{}
 	thin     *thinner
 	mapper   *aismap.Mapper
+	counter  *counter
+
+	densityOut   driver.DensityPublisher
+	densityEvery time.Duration
 
 	mu    sync.Mutex
 	area  aoi.Area
 	conns map[string]*connState
 	count counters
+
+	densityErr                   string
+	densityCells, densityVessels int
+	densityAt                    time.Time
 }
 
 // New validates the config and builds the driver.
@@ -151,6 +167,10 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 			return nil, fmt.Errorf("feed %s: unsupported message type %q", spec.FeedID, t)
 		}
 	}
+	cellDeg := cfg.DensityCellDeg
+	if cellDeg <= 0 {
+		cellDeg = defaultCellDeg
+	}
 	logger := deps.Logger
 	if logger == nil {
 		logger = zap.NewNop()
@@ -171,8 +191,11 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 			secondsOr(cfg.StationaryIntervalSec, defaultStationary),
 			floatOr(cfg.StationaryKnots, defaultStationaryKn),
 		),
-		mapper: aismap.NewMapper(ID),
-		conns:  map[string]*connState{},
+		mapper:       aismap.NewMapper(ID),
+		counter:      newCounter(cellDeg, driver.Seconds(cfg.DensityWindowSec, defaultDensityWindow)),
+		densityOut:   deps.Density,
+		densityEvery: driver.Seconds(cfg.DensityIntervalSec, defaultDensityEvery),
+		conns:        map[string]*connState{},
 	}
 	if cfg.URL != "" {
 		d.url = cfg.URL
@@ -230,12 +253,16 @@ func (d *Driver) Run(ctx context.Context, sink driver.Sink) error {
 	wg.Add(1)
 	go func() { defer wg.Done(); d.followArea(ctx) }()
 
+	density := time.NewTicker(d.densityEvery)
+	defer density.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case f := <-d.frames:
 			d.handle(ctx, sink, f)
+		case <-density.C:
+			d.publishDensity()
 		}
 	}
 }
@@ -354,7 +381,7 @@ func (d *Driver) modeLocked(now time.Time) string {
 	case !d.liveLocked(now):
 		return modeIdle
 	case d.maxArea > 0 && d.area.SqDeg() > d.maxArea:
-		return modeTooLarge
+		return modeDensity
 	}
 	return modeDetail
 }
@@ -389,6 +416,12 @@ func (d *Driver) Health() driver.Health {
 		"errors":       d.count.errors,
 		"vesselsKnown": d.mapper.Known(),
 	}
+	if !d.densityAt.IsZero() {
+		detail["density"] = map[string]any{"cells": d.densityCells, "vessels": d.densityVessels, "publishedAt": d.densityAt.UTC().Format(time.RFC3339)}
+	}
+	if d.densityErr != "" {
+		detail["densityError"] = d.densityErr
+	}
 	idle := !d.liveLocked(now) && len(d.watchlist) == 0
 	return driver.Health{Idle: idle, Connected: connected, LastError: lastErr, Detail: detail}
 }
@@ -409,6 +442,11 @@ func (d *Driver) handle(ctx context.Context, sink driver.Sink, f frame) {
 		d.bump(func(c *counters) { c.errors++ })
 		sink.DeadLetter(f.data, "bad_message", err)
 		return
+	}
+	// Every vessel the area connection reports is counted, whatever the
+	// mode, so the grid is current the moment a view grows past the cap.
+	if f.from == connArea && o.HasPosition && o.EntityType == obs.EntityVessel {
+		d.counter.observe(o.SourceEntityID, o.Latitude, o.Longitude, f.at)
 	}
 	if f.from == connArea {
 		switch mode {

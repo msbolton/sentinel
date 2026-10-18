@@ -387,3 +387,44 @@ func TestHandler_OriginPatterns(t *testing.T) {
 		t.Errorf("patterns = %v skip=%v", h.originPatterns, h.skipOrigin)
 	}
 }
+
+func TestBridge_DensityGridsReachClearedClients(t *testing.T) {
+	b, viewer := newTestBridge(t)
+	analyst := newClient("analyst", b.hub, nil, zap.NewNop())
+	analyst.clearance = 2 // SECRET
+	b.hub.register(analyst)
+
+	grid := &sentinelv1.DensityGrid{
+		FeedId: "aisstream", Source: sentinelv1.EntitySource_ENTITY_SOURCE_AIS, EntityType: sentinelv1.EntityType_ENTITY_TYPE_VESSEL,
+		CellDegrees: 1, WindowSeconds: 600, CapSquareDegrees: 2500, Total: 3,
+		GeneratedAt:    timestamppb.New(time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)),
+		Classification: sentinelv1.Classification_CLASSIFICATION_UNCLASSIFIED,
+		Cells:          []*sentinelv1.DensityCell{{Latitude: 50.5, Longitude: -1.5, Count: 2}, {Latitude: 51.5, Longitude: 1.5, Count: 1}},
+	}
+	b.Handle(kafka.TopicDensityEvents, protoBytes(t, grid))
+	for _, c := range []*Client{viewer, analyst} {
+		env := decodeFrame(t, c)
+		var d ClientDensity
+		_ = json.Unmarshal(env.Data, &d)
+		if env.Type != MsgDensity || d.FeedID != "aisstream" || d.Source != "AIS" || d.EntityType != "VESSEL" || d.CapSquareDegrees != 2500 || d.Total != 3 || d.GeneratedAt != "2026-10-18T12:00:00Z" {
+			t.Errorf("%s: density = %s %+v", c.ID, env.Type, d)
+		}
+		if len(d.Cells) != 2 || d.Cells[0] != [3]float64{50.5, -1.5, 2} {
+			t.Errorf("%s: cells = %v", c.ID, d.Cells)
+		}
+	}
+
+	// A grid from a SECRET feed reaches only cleared clients.
+	grid.Classification = sentinelv1.Classification_CLASSIFICATION_SECRET
+	b.Handle(kafka.TopicDensityEvents, protoBytes(t, grid))
+	noFrame(t, viewer)
+	if env := decodeFrame(t, analyst); env.Type != MsgDensity {
+		t.Errorf("analyst frame = %+v", env)
+	}
+
+	// Garbage and grids without a feed are dropped.
+	b.Handle(kafka.TopicDensityEvents, []byte("nope"))
+	b.Handle(kafka.TopicDensityEvents, protoBytes(t, &sentinelv1.DensityGrid{Total: 1}))
+	noFrame(t, viewer)
+	noFrame(t, analyst)
+}
