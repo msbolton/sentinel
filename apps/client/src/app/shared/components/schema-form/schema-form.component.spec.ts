@@ -300,7 +300,8 @@ describe('SchemaFormComponent', () => {
     fixture.componentRef.setInput('problems', [
       { path: '/config/intervalSec', message: 'must be >= 1' },
       { path: '/config/transport/kind', message: 'unknown kind' },
-      { path: '/config/transport', message: "missing properties: 'address'" },
+      { path: '/config/transport/address', message: 'is required' },
+      { path: '/config/transport/tls', message: "additional properties 'certFile' not allowed" },
       { path: '/config/groups/1', message: 'must be non-empty' },
       { path: '/secretRefs/clientSecret', message: 'env var not set' },
       { path: '/config/staleWarnSec', message: 'too low' },
@@ -313,7 +314,10 @@ describe('SchemaFormComponent', () => {
 
     expect(text('/config/intervalSec')).toEqual(['must be >= 1']);
     expect(text('/config/transport/kind')).toEqual(['unknown kind']);
-    expect(text('/config/transport')).toEqual(["missing properties: 'address'"]);
+    // the address field has its own control, so the group around it says nothing about it
+    expect(text('/config/transport/address')).toEqual(['is required']);
+    expect(text('/config/transport/tls')).toEqual(["additional properties 'certFile' not allowed"]);
+    expect(text('/config/transport')).toEqual([]);
     expect(text('/config/groups')).toEqual(['must be non-empty']);
     expect(text('/secretRefs/clientSecret')).toEqual(['env var not set']);
 
@@ -1454,15 +1458,129 @@ describe('SchemaFormComponent', () => {
       render(freeFormSchema, { value: { decoderOptions: { fields: {} } } });
 
       fixture.componentRef.setInput('problems', [
-        { path: '/config/decoderOptions/fields/latitude', message: 'latitude is required' },
+        { path: '/config/decoderOptions/fields/latitude', message: 'is required' },
       ]);
       fixture.detectChanges();
 
       const shown = Array.from(el.querySelectorAll('[data-pointer="/config/decoderOptions"] .sf-error-server')).map((n) =>
         n.textContent?.trim(),
       );
-      expect(shown).toEqual(['latitude is required']);
+      expect(shown).toEqual(['fields/latitude: is required']);
       expect(el.querySelector('.sf-unmatched')).toBeNull();
+    });
+
+    // The server reports what is absent or wrong at that property's own pointer. A JSON field is one control
+    // for everything inside it, and a group may have no field for the property, so the message has to say
+    // which property it is about.
+    describe('a server problem below a JSON field or a group', () => {
+      /** The server messages shown on the control or group at `pointer`, not on the fields inside it. */
+      function serverMessages(pointer: string): string[] {
+        return Array.from(el.querySelectorAll(`[data-pointer="${pointer}"] > .sf-error-server`)).map(
+          (n) => n.textContent?.trim() ?? '',
+        );
+      }
+
+      it('names the property a problem inside a JSON field is about', () => {
+        render(freeFormSchema, { value: { decoderOptions: { name: 7 } } });
+
+        fixture.componentRef.setInput('problems', [
+          { path: '/config/decoderOptions/sourceEntityId', message: 'is required' },
+          { path: '/config/decoderOptions/name', message: 'got number, want string' },
+          { path: '/config/decoderOptions/entityType', message: 'minLength: got 0, want 1' },
+        ]);
+        fixture.detectChanges();
+
+        expect(serverMessages('/config/decoderOptions')).toEqual([
+          'sourceEntityId: is required',
+          'name: got number, want string',
+          'entityType: minLength: got 0, want 1',
+        ]);
+        expect(el.querySelector('.sf-unmatched')).toBeNull();
+      });
+
+      it('names an escaped property by the key it stands for', () => {
+        render(freeFormSchema);
+
+        fixture.componentRef.setInput('problems', [
+          { path: '/config/decoderOptions/a~1b', message: 'x' },
+          { path: '/config/decoderOptions/c~0d', message: 'y' },
+          // ~1 is read before ~0, so this is the key "e~1f" and not "e/f"
+          { path: '/config/decoderOptions/e~01f', message: 'z' },
+        ]);
+        fixture.detectChanges();
+
+        expect(serverMessages('/config/decoderOptions')).toEqual(['a/b: x', 'c~d: y', 'e~1f: z']);
+      });
+
+      it('shows a problem at the JSON field itself as the server wrote it', () => {
+        render(freeFormSchema);
+
+        fixture.componentRef.setInput('problems', [
+          { path: '/config/decoderOptions', message: 'got string, want object' },
+        ]);
+        fixture.detectChanges();
+
+        expect(serverMessages('/config/decoderOptions')).toEqual(['got string, want object']);
+      });
+
+      it('names the property for a problem below a group, and nothing for one at a field of the group', () => {
+        render(keptSchema, { value: { transport: { kind: 'tcpserver', keepalive: 30 } } });
+
+        fixture.componentRef.setInput('problems', [
+          { path: '/config/transport/address', message: 'is required' },
+          { path: '/config/transport/keepalive', message: 'got number, want string' },
+          { path: '/config/transport/tls/legacyCa/pem', message: 'is required' },
+          { path: '/config/transport/tls', message: "additional properties 'legacyCa' not allowed" },
+        ]);
+        fixture.detectChanges();
+
+        expect(serverMessages('/config/transport/address')).toEqual(['is required']);
+        expect(serverMessages('/config/transport')).toEqual(['keepalive: got number, want string']);
+        expect(serverMessages('/config/transport/tls')).toEqual([
+          'legacyCa/pem: is required',
+          "additional properties 'legacyCa' not allowed",
+        ]);
+        expect(el.querySelector('.sf-unmatched')).toBeNull();
+      });
+
+      it('names a property the group requires but has no field for', () => {
+        render({
+          type: 'object',
+          properties: {
+            transport: {
+              type: 'object',
+              required: ['address'],
+              properties: { kind: { type: 'string', enum: ['tcpserver', 'udp'] } },
+            },
+          },
+        });
+
+        fixture.componentRef.setInput('problems', [{ path: '/config/transport/address', message: 'is required' }]);
+        fixture.detectChanges();
+
+        expect(serverMessages('/config/transport')).toEqual(['address: is required']);
+        expect(el.querySelector('.sf-unmatched')).toBeNull();
+      });
+
+      it('leaves the message of a problem inside a list as it is, the list being one control', () => {
+        render({
+          type: 'object',
+          properties: {
+            groups: { type: 'array', items: { type: 'string' } },
+            transport: { type: 'object', properties: { allow: { type: 'array', items: { type: 'string' } } } },
+          },
+        });
+
+        fixture.componentRef.setInput('problems', [
+          { path: '/config/groups/1', message: 'must be non-empty' },
+          { path: '/config/transport/allow/0', message: 'not a CIDR' },
+        ]);
+        fixture.detectChanges();
+
+        expect(serverMessages('/config/groups')).toEqual(['must be non-empty']);
+        expect(serverMessages('/config/transport/allow')).toEqual(['not a CIDR']);
+        expect(serverMessages('/config/transport')).toEqual([]);
+      });
     });
   });
 });

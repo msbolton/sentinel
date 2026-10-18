@@ -140,29 +140,30 @@ export class SchemaFormComponent {
 
   /** Problems resolved to the field (or group) they belong to, else to the form. */
   private readonly resolvedProblems = computed(() => {
-    const pointers = this.allPointers();
+    const fields = this.fieldsByPointer();
     const byPointer = new Map<string, string[]>();
     const unmatched: FeedProblem[] = [];
     for (const problem of this.problems()) {
-      const target = this.resolvePointer(problem.path, pointers);
+      const target = this.resolvePointer(problem.path, fields);
       if (target === null) {
         unmatched.push(problem);
         continue;
       }
-      const list = byPointer.get(target) ?? [];
-      list.push(problem.message);
-      byPointer.set(target, list);
+      const list = byPointer.get(target.pointer) ?? [];
+      list.push(describeProblem(problem, target));
+      byPointer.set(target.pointer, list);
     }
     return { byPointer, unmatched };
   });
 
   readonly unmatchedProblems = computed(() => this.resolvedProblems().unmatched);
 
-  private readonly allPointers = computed(() => {
-    const out: string[] = [];
+  /** Every field and group on the form by its pointer. */
+  private readonly fieldsByPointer = computed(() => {
+    const out = new Map<string, FieldDef>();
     const walk = (defs: FieldDef[]) => {
       for (const def of defs) {
-        out.push(def.pointer);
+        out.set(def.pointer, def);
         if (def.children) {
           walk(def.children);
         }
@@ -730,14 +731,15 @@ export class SchemaFormComponent {
   }
 
   /** Exact pointer, else the longest field pointer the problem sits under. */
-  private resolvePointer(path: string, pointers: string[]): string | null {
-    if (pointers.includes(path)) {
-      return path;
+  private resolvePointer(path: string, fields: ReadonlyMap<string, FieldDef>): FieldDef | null {
+    const exact = fields.get(path);
+    if (exact) {
+      return exact;
     }
-    let best: string | null = null;
-    for (const p of pointers) {
-      if (path.startsWith(p + '/') && (best === null || p.length > best.length)) {
-        best = p;
+    let best: FieldDef | null = null;
+    for (const def of fields.values()) {
+      if (path.startsWith(def.pointer + '/') && (best === null || def.pointer.length > best.pointer.length)) {
+        best = def;
       }
     }
     return best;
@@ -973,4 +975,22 @@ function describeErrors(errors: ValidationErrors): string[] {
     }
   }
   return out;
+}
+
+/**
+ * What a server problem reads as on the field it is shown on. The server reports a problem at the pointer of
+ * the property it is about, so below an object (a JSON field, a group) the rest of the pointer names that
+ * property. A list is one control, and a problem at the field itself needs no naming.
+ */
+function describeProblem(problem: FeedProblem, target: FieldDef): string {
+  if (problem.path === target.pointer || (target.kind !== 'json' && target.kind !== 'group')) {
+    return problem.message;
+  }
+  const rest = problem.path.slice(target.pointer.length + 1).split('/').map(unescapeSegment).join('/');
+  return `${rest}: ${problem.message}`;
+}
+
+/** A JSON Pointer segment as the key it stands for: `~1` is read before `~0`, so `~01` is `~1` and not `/`. */
+function unescapeSegment(segment: string): string {
+  return segment.replace(/~1/g, '/').replace(/~0/g, '~');
 }
