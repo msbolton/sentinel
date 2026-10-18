@@ -99,6 +99,11 @@ VALUES
    'celestrak',
    '{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}'::jsonb,
    '{}'::jsonb,
+   FALSE, TRUE),
+  ('aisstream', 'aisstream.io AIS', 'Worldwide AIS from aisstream.io: vessels over the connected clients'' viewports plus an MMSI watchlist.',
+   'aisstream',
+   '{"maxAreaSqDeg": 2500, "movingIntervalSec": 15, "stationaryIntervalSec": 180, "staleWarnSec": 600, "staleCriticalSec": 1800}'::jsonb,
+   '{"apiKey": "env:AISSTREAM_API_KEY"}'::jsonb,
    FALSE, TRUE)
 ON CONFLICT (id) DO NOTHING;
 

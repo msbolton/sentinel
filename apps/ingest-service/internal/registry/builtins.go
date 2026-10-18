@@ -28,6 +28,12 @@ var Builtins = []Feed{
 		Config:      json.RawMessage(`{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}`),
 		SecretRefs:  map[string]string{},
 	},
+	{
+		ID: "aisstream", Name: "aisstream.io AIS", Driver: "aisstream", Builtin: true,
+		Description: "Worldwide AIS from aisstream.io: vessels over the connected clients' viewports plus an MMSI watchlist.",
+		Config:      json.RawMessage(`{"maxAreaSqDeg": 2500, "movingIntervalSec": 15, "stationaryIntervalSec": 180, "staleWarnSec": 600, "staleCriticalSec": 1800}`),
+		SecretRefs:  map[string]string{"apiKey": "env:AISSTREAM_API_KEY"},
+	},
 }
 
 // EnsureBuiltins inserts any missing built-in feed. Feeds named in
