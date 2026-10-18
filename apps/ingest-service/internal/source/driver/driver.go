@@ -196,6 +196,11 @@ func (d Direction) Valid() bool {
 	return false
 }
 
+// ListenFunc reports whether a feed with this config binds a local port
+// (and which), so it must run on a listener replica and its port must not
+// clash with another connection's.
+type ListenFunc func(config json.RawMessage) (network string, port int, ok bool)
+
 // Definition registers one driver with its catalog information.
 type Definition struct {
 	ID          string
@@ -216,6 +221,8 @@ type Definition struct {
 	// ConfigSchema is the JSON Schema the feed config must satisfy.
 	ConfigSchema json.RawMessage
 	New          Factory
+	// Listen is set by drivers whose feeds may bind a port.
+	Listen ListenFunc
 }
 
 // HasCapability reports whether the definition advertises cap.
@@ -295,4 +302,13 @@ func Seconds(v int, def time.Duration) time.Duration {
 		return time.Duration(v) * time.Second
 	}
 	return def
+}
+
+// ListenOf asks the driver whether a feed with this config listens.
+func ListenOf(driverID string, config json.RawMessage) (string, int, bool) {
+	d, ok := Lookup(driverID)
+	if !ok || d.Listen == nil {
+		return "", 0, false
+	}
+	return d.Listen(config)
 }

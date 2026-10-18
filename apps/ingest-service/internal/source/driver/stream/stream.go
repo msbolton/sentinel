@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -43,6 +45,7 @@ func init() {
 		SecretFields: []string{"password"},
 		ConfigSchema: schema,
 		New:          New,
+		Listen:       listenOf,
 	})
 }
 
@@ -134,6 +137,34 @@ func defaultPolicy(kind string) string {
 		return driver.BackpressureNack
 	}
 	return driver.BackpressureBlock
+}
+
+// listenOf reports the port a listening stream transport binds.
+func listenOf(raw json.RawMessage) (string, int, bool) {
+	var cfg struct {
+		Transport transport.Config `json:"transport"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return "", 0, false
+	}
+	var network string
+	switch cfg.Transport.Kind {
+	case "tcpserver":
+		network = "tcp"
+	case "udp":
+		network = "udp"
+	default:
+		return "", 0, false
+	}
+	_, p, err := net.SplitHostPort(cfg.Transport.Address)
+	if err != nil {
+		return "", 0, false
+	}
+	port, err := strconv.Atoi(p)
+	if err != nil {
+		return "", 0, false
+	}
+	return network, port, true
 }
 
 // Run pumps frames from the transport through the decoder into the sink.
