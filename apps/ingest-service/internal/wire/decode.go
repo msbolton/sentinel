@@ -13,7 +13,8 @@ import (
 // the inverse of ToProto. The fields the ingest service owns
 // (observation_id, feed_id, driver, decoder, received_at, replica_id,
 // fencing_token, raw) are not copied: the decoder and the runner set them.
-// Optional values are copied, never shared with the message.
+// Optional values are copied, never shared with the message, and as sent:
+// NaN and ±Inf pass through, since checking values is the decoder's job.
 func FromProto(m *sentinelv1.Observation) *obs.Observation {
 	o := &obs.Observation{
 		SourceEntityID:    m.GetSourceEntityId(),

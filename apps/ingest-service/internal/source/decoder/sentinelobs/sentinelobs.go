@@ -107,6 +107,7 @@ func (d *Decoder) observation(m *sentinelv1.Observation, contentType string) (*o
 	if o.HasPosition && !(o.Latitude >= -90 && o.Latitude <= 90 && o.Longitude >= -180 && o.Longitude <= 180) {
 		return nil, decoder.Reject("bad_position", fmt.Errorf("position %v, %v is outside WGS84 bounds", o.Latitude, o.Longitude))
 	}
+	dropNonFinite(o)
 	if o.Source == "" {
 		o.Source = d.defaultSource
 	}
