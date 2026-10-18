@@ -41,6 +41,10 @@ describe('routeForShortcut', () => {
     }
   });
 
+  it('opens the geofences panel on G', () => {
+    expect(press('g')).toBe('/geofences');
+  });
+
   it('ignores keys with a modifier held, so browser shortcuts still work', () => {
     expect(press('f', { ctrlKey: true })).toBeNull();
     expect(press('f', { metaKey: true })).toBeNull();

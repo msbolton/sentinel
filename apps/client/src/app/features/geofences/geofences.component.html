@@ -1,0 +1,118 @@
+<div class="panel geofences-panel">
+  <div class="panel-header">
+    <div class="header-left">
+      <h2>Geofences</h2>
+      <span class="count mono">{{ zones().length }} · {{ activeCount() }} active</span>
+    </div>
+    @if (canWrite()) {
+      <button type="button" class="btn btn-primary btn-sm" aria-label="New geofence" (click)="startNew()"><app-icon name="plus" [size]="14" [strokeWidth]="2.5" /> New</button>
+    }
+  </div>
+
+  <div class="panel-content">
+    @if (editing()?.isDraft; as isDraft) {
+      <div class="zone-row draft selected" [style.--zone-color]="color()">
+        <span class="zone-chip" aria-hidden="true"><app-icon [name]="shapeIcon(editing()!.base)" [size]="12" [strokeWidth]="2.5" /></span>
+        <span class="zone-text">
+          <span class="zone-name">New geofence</span>
+          <span class="zone-summary mono draft-note">unsaved · {{ shapeLine(editing()!.base) }}</span>
+        </span>
+      </div>
+      <ng-container *ngTemplateOutlet="editor" />
+    }
+
+    <ul class="zone-list">
+      @for (zone of zones(); track zone.id) {
+        <li class="zone-row" [class.selected]="zone.id === selectedId()" [style.--zone-color]="zone.config.color" (click)="selectZone(zone)">
+          <span class="zone-chip" aria-hidden="true"><app-icon [name]="shapeIcon(zone)" [size]="12" [strokeWidth]="2.5" /></span>
+          <span class="zone-text">
+            <span class="zone-name">{{ zone.name }}</span>
+            <span class="zone-summary mono">{{ service.zoneSummary(zone) }}</span>
+          </span>
+          <button type="button" class="zone-switch" role="switch" [attr.aria-checked]="zone.enabled" [attr.aria-label]="zone.enabled ? 'Enabled' : 'Disabled'" (click)="toggleEnabled(zone, $event)"><span class="knob"></span></button>
+        </li>
+        @if (isEditing(zone)) {
+          <li class="zone-editor-row"><ng-container *ngTemplateOutlet="editor" /></li>
+        }
+      }
+    </ul>
+
+    @if (zones().length === 0 && !editing()) {
+      <div class="empty-state">
+        <app-icon name="hexagon" [size]="32" [strokeWidth]="1.5" />
+        <p>No geofences yet</p>
+        @if (canWrite()) {
+          <p class="text-xs text-muted">Press New, pick a shape and a colour, and draw on the map.</p>
+        }
+      </div>
+    }
+
+    <div class="footer-hint">Zones draw on the map in their colour at any zoom. Click one to select it; drag its points or edge to reshape; press <kbd>G</kbd> for this panel and <kbd>N</kbd> for a new zone.</div>
+  </div>
+</div>
+
+<ng-template #editor>
+  @if (editing(); as e) {
+    <form class="zone-editor" (submit)="$event.preventDefault(); save()">
+      <label class="field">
+        <span class="field-label">Name</span>
+        <input #nameField type="text" aria-label="Name" [value]="name()" (input)="setName(nameField.value)">
+      </label>
+
+      <div class="field">
+        <span class="field-label">Colour</span>
+        <div class="colours" role="group" aria-label="Colour">
+          @for (c of swatches; track c.hex) {
+            <button type="button" class="swatch" [class.active]="c.hex === color()" [style.background]="c.hex" [style.--swatch]="c.hex" [attr.aria-label]="c.name" [attr.aria-pressed]="c.hex === color()" (click)="pickColor(c.hex)"></button>
+          }
+          <label class="hex"><span aria-hidden="true">#</span><input #hexField type="text" aria-label="Custom colour hex" [value]="color().slice(1)" spellcheck="false" (change)="onHex(hexField)"></label>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="field-label">Alert when a track</span>
+        <div class="segmented" role="group" aria-label="Trigger">
+          <button type="button" [class.active]="trigger() === 'ENTRY'" [attr.aria-pressed]="trigger() === 'ENTRY'" (click)="setTrigger('ENTRY')">Enters</button>
+          <button type="button" [class.active]="trigger() === 'EXIT'" [attr.aria-pressed]="trigger() === 'EXIT'" (click)="setTrigger('EXIT')">Leaves</button>
+          <button type="button" [class.active]="trigger() === 'BOTH'" [attr.aria-pressed]="trigger() === 'BOTH'" (click)="setTrigger('BOTH')">Either</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="field-label">Watch</span>
+        <div class="chips" role="group" aria-label="Watch">
+          @for (w of watchable; track w.type) {
+            <button type="button" class="type-chip" [class.active]="types().includes(w.type)" [attr.aria-pressed]="types().includes(w.type)" (click)="toggleType(w.type)">{{ w.label }}</button>
+          }
+          <button type="button" class="type-chip" [class.active]="types().length === 0" [attr.aria-pressed]="types().length === 0" (click)="watchEverything()">Everything</button>
+        </div>
+      </div>
+
+      <div class="two-up">
+        <label class="field">
+          <span class="field-label">Severity</span>
+          <select #severityField aria-label="Severity" [value]="severity()" (change)="setSeverity(severityField.value)">
+            @for (s of severities; track s) {
+              <option [value]="s" [selected]="s === severity()">{{ s.charAt(0) + s.slice(1).toLowerCase() }}</option>
+            }
+          </select>
+        </label>
+        <div class="field">
+          <span class="field-label">Shape</span>
+          <span class="shape-line">{{ shapeLine(e.base) }} <button type="button" class="link" (click)="redraw()">Redraw</button></span>
+        </div>
+      </div>
+
+      <div class="editor-actions">
+        <button type="submit" class="btn btn-primary btn-sm" [disabled]="saving()">Save geofence</button>
+        <button type="button" class="btn btn-ghost btn-sm" (click)="discard()">Discard</button>
+        <span class="spacer"></span>
+        @if (!e.isDraft) {
+          <button type="button" class="btn btn-ghost btn-sm danger" (click)="remove($any(e.base))">Delete</button>
+        } @else {
+          <span class="mono hint">saved as an alert rule</span>
+        }
+      </div>
+    </form>
+  }
+</ng-template>
