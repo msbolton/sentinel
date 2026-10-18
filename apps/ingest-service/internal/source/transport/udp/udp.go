@@ -19,9 +19,24 @@ func init() {
 	})
 }
 
+const (
+	// maxSenders is how many senders State renders.
+	maxSenders = 50
+	// trackedSenders is how many senders are tracked, so distinctSenders can
+	// count past what State renders (a datagram sender is cheap to spoof or
+	// to multiply, and the count is the signal).
+	trackedSenders = 1000
+	// sendersWindow is how long an idle sender stays in the report.
+	sendersWindow = 10 * time.Minute
+)
+
 // Listener is the udp transport.
 type Listener struct {
-	cfg transport.Config
+	cfg     transport.Config
+	allow   transport.Allowlist
+	limit   *transport.Limiter
+	senders *transport.Senders
+	counts  transport.ListenCounters
 	transport.StateTracker
 }
 
@@ -33,22 +48,31 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if _, _, err := net.SplitHostPort(cfg.Address); err != nil {
 		return nil, errors.New("udp: address must be host:port")
 	}
-	return &Listener{cfg: cfg}, nil
+	allow, err := transport.ParseAllowlist(cfg.Allow)
+	if err != nil {
+		return nil, err
+	}
+	return &Listener{cfg: cfg, allow: allow, limit: transport.NewLimiter(cfg.MaxMessagesPerSec), senders: transport.NewSenders(trackedSenders)}, nil
 }
 
 // Run reads datagrams until ctx ends. A datagram holding several newline
 // separated sentences (AIS-catcher batches them) is split into one frame
 // per line when framing is "line"; otherwise the datagram is the frame.
+// Datagrams from outside the allowlist and datagrams over MaxFrameBytes
+// are dropped whole and counted; messages over the rate are dropped and
+// counted one by one.
 func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 	lc := net.ListenConfig{}
 	pc, err := lc.ListenPacket(ctx, "udp", l.cfg.Address)
 	if err != nil {
-		return err
+		return transport.BindError("udp", l.cfg.Address, err)
 	}
 	defer pc.Close()
 	go func() { <-ctx.Done(); pc.Close() }()
 	l.Set(func(s *transport.State) { s.Connected = true; s.LastError = "" })
 
+	// The buffer holds the largest possible datagram, so an oversize one is
+	// measured whole rather than truncated by the OS to look small enough.
 	buf := make([]byte, 65535)
 	for {
 		n, addr, err := pc.ReadFrom(buf)
@@ -62,9 +86,23 @@ func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 			}
 			continue
 		}
-		now := time.Now().UTC()
 		remote := addr.String()
+		if !l.allow.Allows(remote) {
+			l.counts.Rejected.Add(1)
+			continue
+		}
+		if maxBytes := l.cfg.MaxFrameBytes; maxBytes > 0 && n > maxBytes {
+			l.counts.Oversize.Add(1)
+			continue
+		}
+		now := time.Now().UTC()
 		for _, part := range split(buf[:n], l.cfg.Framing) {
+			if !l.limit.Allow() {
+				l.counts.RateLimited.Add(1)
+				continue
+			}
+			l.counts.Accepted.Add(1)
+			l.senders.Seen(remote, now)
 			payload := make([]byte, len(part))
 			copy(payload, part)
 			if err := emit(ctx, transport.Frame{Payload: payload, ReceivedAt: now, Remote: remote}); err != nil && !errors.Is(err, transport.ErrBackpressure) {
@@ -102,5 +140,15 @@ func trimCR(b []byte) []byte {
 	return b
 }
 
-// State reports connectivity.
-func (l *Listener) State() transport.State { return l.Get() }
+// State reports connectivity, counters and the senders seen in the last 10
+// minutes: at most 50 are listed, distinctSenders counts them all.
+func (l *Listener) State() transport.State {
+	st := l.Get()
+	st.Detail = l.counts.Detail()
+	list, n := l.senders.Snapshot(time.Now().UTC(), sendersWindow)
+	if len(list) > maxSenders {
+		list = list[:maxSenders]
+	}
+	st.Detail["senders"], st.Detail["distinctSenders"] = list, n
+	return st
+}
