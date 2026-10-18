@@ -367,3 +367,104 @@ func isTimeout(err error) bool {
 	ne, ok := err.(net.Error)
 	return ok && ne.Timeout()
 }
+
+// tlsServer serves line to every client that completes a TLS handshake
+// with cfg and holds the connection open until the test ends. It returns
+// the port.
+func tlsServer(t *testing.T, cfg *tls.Config, line string) int {
+	t.Helper()
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release); ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				if c.(*tls.Conn).Handshake() != nil {
+					return
+				}
+				_, _ = c.Write([]byte(line + "\n"))
+				<-release
+			}()
+		}
+	}()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// In connect mode serverCa verifies the remote, serverName names the
+// certificate to expect, and tlsCert/tlsKey present a client certificate.
+func TestConnectTLS(t *testing.T) {
+	ca := transporttest.NewCA(t)
+	server := ca.Issue(t, "localhost")
+	serverCert, err := tls.X509KeyPair(server.CertPEM, server.KeyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const line = `{"sourceEntityId":"remote-1","position":{"latitude":3,"longitude":4}}`
+	connect := func(port int, serverName string) map[string]any {
+		return map[string]any{"mode": "connect", "host": "127.0.0.1", "port": port, "encoding": "json", "tls": map[string]any{"enabled": true, "serverName": serverName}}
+	}
+
+	t.Run("serverCa and serverName", func(t *testing.T) {
+		port := tlsServer(t, &tls.Config{Certificates: []tls.Certificate{serverCert}}, line)
+		d, sink := start(t, connect(port, "localhost"), map[string]string{"serverCa": string(ca.CertPEM)})
+		if !transporttest.WaitFor(func() bool { return sink.count() == 1 }, waitTimeout) {
+			t.Fatalf("no observation over TLS: %q", d.Health().LastError)
+		}
+		if h := d.Health().Detail; h["tls"] != true {
+			t.Errorf("tls detail = %v", h["tls"])
+		}
+	})
+
+	for name, tc := range map[string]struct {
+		serverName string
+		secrets    map[string]string
+	}{
+		"wrong CA":          {"localhost", map[string]string{"serverCa": string(transporttest.NewCA(t).CertPEM)}},
+		"missing CA":        {"localhost", nil},
+		"wrong server name": {"elsewhere", map[string]string{"serverCa": string(ca.CertPEM)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			port := tlsServer(t, &tls.Config{Certificates: []tls.Certificate{serverCert}}, line)
+			d, sink := start(t, connect(port, tc.serverName), tc.secrets)
+			if !transporttest.WaitFor(func() bool { return d.Health().LastError != "" }, waitTimeout) {
+				t.Fatal("an unverifiable server reported no error")
+			}
+			if e := d.Health().LastError; !strings.Contains(e, "certificate") {
+				t.Errorf("last error = %q, want a certificate error", e)
+			}
+			if sink.count() != 0 {
+				t.Errorf("observations from an unverified server: %d", sink.count())
+			}
+		})
+	}
+
+	t.Run("client certificate", func(t *testing.T) {
+		roots := x509.NewCertPool()
+		roots.AppendCertsFromPEM(ca.CertPEM)
+		mutual := &tls.Config{Certificates: []tls.Certificate{serverCert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: roots}
+		client := ca.Issue(t, "sentinel")
+
+		port := tlsServer(t, mutual, line)
+		d, sink := start(t, connect(port, "localhost"), map[string]string{"serverCa": string(ca.CertPEM)})
+		if !transporttest.WaitFor(func() bool { return d.Health().LastError != "" }, waitTimeout) {
+			t.Fatal("no error without a client certificate")
+		}
+		if sink.count() != 0 {
+			t.Errorf("observations without a client certificate: %d", sink.count())
+		}
+
+		port = tlsServer(t, mutual, line)
+		d, sink = start(t, connect(port, "localhost"), map[string]string{"serverCa": string(ca.CertPEM), "tlsCert": string(client.CertPEM), "tlsKey": string(client.KeyPEM)})
+		if !transporttest.WaitFor(func() bool { return sink.count() == 1 }, waitTimeout) {
+			t.Fatalf("no observation with a client certificate: %q", d.Health().LastError)
+		}
+	})
+}
