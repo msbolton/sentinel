@@ -19,8 +19,8 @@ import {
   Validators,
 } from '@angular/forms';
 import { Subscription } from 'rxjs';
-import { FeedProblem, JsonSchema } from '../../models/feed.model';
-import { COMMON_OPTIONS_SCHEMA } from './common-options';
+import { FeedProblem, JsonSchema, JsonType } from '../../models/feed.model';
+import { COMMON_OPTION_KEYS, COMMON_OPTIONS_SCHEMA } from './common-options';
 
 /** What the form emits whenever anything changes. */
 export interface SchemaFormChange {
@@ -29,7 +29,7 @@ export interface SchemaFormChange {
   valid: boolean;
 }
 
-export type FieldKind = 'text' | 'url' | 'number' | 'boolean' | 'select' | 'const' | 'array' | 'group' | 'secret';
+export type FieldKind = 'text' | 'url' | 'number' | 'boolean' | 'select' | 'const' | 'array' | 'group' | 'secret' | 'json';
 
 /** One rendered field; groups carry their children. */
 export interface FieldDef {
@@ -49,8 +49,12 @@ export interface FieldDef {
   /** `default` of an enum, named in the empty option. */
   defaultLabel?: string;
   constValue?: unknown;
+  /** `json`: the schema takes a plain string as well as an object. */
+  allowString?: boolean;
   control?: FormControl;
   children?: FieldDef[];
+  /** `group`: stored keys the schema does not describe, kept as they are. */
+  extras?: Record<string, unknown>;
   /** `x-showWhen`: shown only while the sibling `key` has one of `values`. */
   showWhen?: { key: string; values: unknown[] };
   /** The group this field's control lives in (its siblings), for `showWhen`. */
@@ -92,6 +96,8 @@ export class SchemaFormComponent {
   readonly driverFields = signal<FieldDef[]>([]);
   readonly advancedFields = signal<FieldDef[]>([]);
   readonly secretDefs = signal<FieldDef[]>([]);
+  /** Stored top-level keys the form has no field for, kept as they are. */
+  readonly extras = signal<Record<string, unknown>>({});
   readonly advancedOpen = signal(false);
   /** Bumped on every form change so OnPush templates re-read control state. */
   readonly tick = signal(0);
@@ -192,7 +198,7 @@ export class SchemaFormComponent {
   /** Current snapshot, the same shape `changed` emits. */
   snapshot(): SchemaFormChange {
     return {
-      config: this.collect([...this.driverFields(), ...this.advancedFields()]),
+      config: { ...this.extras(), ...this.collect([...this.driverFields(), ...this.advancedFields()]) },
       secretRefs: this.collectSecrets(),
       valid: this.valid,
     };
@@ -245,6 +251,11 @@ export class SchemaFormComponent {
     return this.errorsOf(def).length > 0 || this.problemsOf(def).length > 0;
   }
 
+  /** The names of the stored keys a form or group keeps without showing them. */
+  extraKeys(extras: Record<string, unknown> | undefined): string[] {
+    return Object.keys(extras ?? {});
+  }
+
   /** A field with `x-showWhen` is shown only while its sibling has one of the listed values. */
   isShown(def: FieldDef, siblings: FormGroup | undefined = def.parent): boolean {
     this.tick(); // re-evaluate on every form change (OnPush)
@@ -282,6 +293,10 @@ export class SchemaFormComponent {
     }
 
     this.siblingSchemas.set(this.configGroup, { ...(COMMON_OPTIONS_SCHEMA.properties ?? {}), ...properties });
+
+    // What the schema, the common options, the parent and the secrets do not claim is kept as stored.
+    const claimed = new Set([...Object.keys(properties), ...COMMON_OPTION_KEYS, ...external, ...secretKeys]);
+    this.extras.set(undescribed(value, claimed));
 
     const driverDefs: FieldDef[] = [];
     for (const [key, prop] of Object.entries(properties)) {
@@ -362,9 +377,33 @@ export class SchemaFormComponent {
       return { ...base, kind: 'const', constValue: prop.const };
     }
 
-    const type = prop.type ?? (prop.properties ? 'object' : prop.enum ? 'string' : 'string');
+    const types = typesOf(prop);
 
-    if (type === 'object') {
+    // A required key the value leaves out starts at its schema default: the server applies
+    // no default to a missing required key. A stored value always wins.
+    const start = initial === undefined && required && prop.default !== undefined ? prop.default : initial;
+
+    // An object with no properties (a field map, headers) has no fields to build: it is edited as
+    // JSON text. A schema that also takes a string keeps one as typed.
+    if (types.includes('object') && Object.keys(prop.properties ?? {}).length === 0) {
+      const allowString = types.includes('string');
+      const text = isRecord(start) ? JSON.stringify(start, null, 2) : allowString && typeof start === 'string' ? start : '';
+      const control = new FormControl<string>(text, {
+        nonNullable: true,
+        validators: [jsonValidator(required, allowString)],
+      });
+      parent.addControl(key, control, { emitEvent: false });
+      return {
+        ...base,
+        kind: 'json',
+        allowString,
+        placeholder: JSON.stringify(prop.examples?.[0], null, 2) ?? '{ "key": "value" }',
+        help: prop.description ? `${prop.description} JSON object.` : 'JSON object.',
+        control,
+      };
+    }
+
+    if (types.includes('object')) {
       const group = new FormGroup<Record<string, AbstractControl>>({});
       parent.addControl(key, group, { emitEvent: false });
       this.siblingSchemas.set(group, prop.properties ?? {});
@@ -373,12 +412,11 @@ export class SchemaFormComponent {
       const children = Object.entries(prop.properties ?? {}).map(([childKey, childProp]) =>
         this.buildField(childKey, childProp, nestedRequired.has(childKey), nestedValue[childKey], group, base.pointer, base.id),
       );
-      return { ...base, kind: 'group', children };
+      const extras = undescribed(nestedValue, new Set(Object.keys(prop.properties ?? {})));
+      return { ...base, kind: 'group', children, extras };
     }
 
-    // A required key the value leaves out starts at its schema default: the server applies
-    // no default to a missing required key. A stored value always wins.
-    const start = initial === undefined && required && prop.default !== undefined ? prop.default : initial;
+    const type = types[0];
 
     const validators: ValidatorFn[] = [];
     if (required) {
@@ -496,8 +534,19 @@ export class SchemaFormComponent {
       case 'const':
         return def.constValue;
       case 'group': {
-        const nested = this.collect(def.children ?? []);
+        const nested = { ...def.extras, ...this.collect(def.children ?? []) };
         return Object.keys(nested).length > 0 ? nested : undefined;
+      }
+      case 'json': {
+        const text = textOf(def.control?.value);
+        if (text === '') {
+          return undefined;
+        }
+        const parsed = parseJson(text);
+        if (isRecord(parsed)) {
+          return Object.keys(parsed).length > 0 ? parsed : undefined;
+        }
+        return def.allowString ? text : undefined;
       }
       case 'boolean':
         return def.control?.value === true;
@@ -611,6 +660,30 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/** `type` as a list: a schema names one type or several, and none means an object with properties, else a string. */
+function typesOf(prop: JsonSchema): JsonType[] {
+  return Array.isArray(prop.type) ? prop.type : [prop.type ?? (prop.properties ? 'object' : 'string')];
+}
+
+/** The entries of `value` whose keys are not in `known`. */
+function undescribed(value: Record<string, unknown>, known: ReadonlySet<string>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !known.has(key)));
+}
+
+/** The trimmed text of a text control's value. */
+function textOf(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+/** `text` parsed as JSON, or `undefined` when it is not JSON (a parse never yields `undefined`). */
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
 function isEnumValue(v: unknown, options: Array<string | number>): v is string | number {
   return (typeof v === 'string' || typeof v === 'number') && options.includes(v);
 }
@@ -640,6 +713,24 @@ function exclusiveMinValidator(min: number): ValidatorFn {
       return null;
     }
     return typeof v === 'number' && v > min ? null : { exclusiveMinimum: { min, actual: v } };
+  };
+}
+
+/** A JSON field holds one object. Where a string is allowed too, any other text is that string. */
+function jsonValidator(required: boolean, allowString: boolean): ValidatorFn {
+  return (control) => {
+    const text = textOf(control.value);
+    if (text === '') {
+      return required ? { required: true } : null;
+    }
+    if (allowString) {
+      return null;
+    }
+    const parsed = parseJson(text);
+    if (parsed === undefined) {
+      return { json: true };
+    }
+    return isRecord(parsed) ? null : { jsonObject: true };
   };
 }
 
@@ -677,6 +768,12 @@ function describeErrors(errors: ValidationErrors): string[] {
         break;
       case 'integer':
         out.push('Must be a whole number.');
+        break;
+      case 'json':
+        out.push('Not valid JSON.');
+        break;
+      case 'jsonObject':
+        out.push('Must be a JSON object, like {"key": "value"}.');
         break;
       case 'pattern':
         out.push(

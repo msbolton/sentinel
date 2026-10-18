@@ -12,6 +12,7 @@
               <p class="sf-error sf-error-server">{{ msg }}</p>
             }
             <ng-container *ngTemplateOutlet="fieldList; context: { $implicit: def.children }"></ng-container>
+            <ng-container *ngTemplateOutlet="extrasNote; context: { $implicit: def.extras }"></ng-container>
           </fieldset>
         }
         @case ('const') {
@@ -70,6 +71,24 @@
             <ng-container *ngTemplateOutlet="messages; context: { $implicit: def }"></ng-container>
           </div>
         }
+        @case ('json') {
+          <div class="sf-field" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
+            <label [attr.for]="def.id">{{ def.label }}@if (def.required) {<span class="sf-required" aria-hidden="true">*</span>}</label>
+            <textarea
+              [id]="def.id"
+              [attr.name]="def.key"
+              rows="6"
+              spellcheck="false"
+              [formControl]="def.control!"
+              [attr.placeholder]="def.placeholder ?? null"
+              (blur)="touch()"
+            ></textarea>
+            @if (def.help) {
+              <p class="sf-help">{{ def.help }}</p>
+            }
+            <ng-container *ngTemplateOutlet="messages; context: { $implicit: def }"></ng-container>
+          </div>
+        }
         @default {
           <div class="sf-field" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
             <label [attr.for]="def.id">{{ def.label }}@if (def.required) {<span class="sf-required" aria-hidden="true">*</span>}</label>
@@ -103,6 +122,17 @@
   }
 </ng-template>
 
+<ng-template #extrasNote let-extras>
+  @if (extraKeys(extras).length > 0) {
+    <p class="sf-help sf-extras">
+      Kept as stored (not editable here):
+      @for (key of extraKeys(extras); track key; let last = $last) {
+        <code>{{ key }}</code>@if (!last) {, }
+      }
+    </p>
+  }
+</ng-template>
+
 <div class="schema-form" [class.is-disabled]="disabled()">
   @if (unmatchedProblems().length > 0) {
     <ul class="sf-unmatched" role="alert">
@@ -115,6 +145,7 @@
   @if (driverFields().length > 0) {
     <section class="sf-section sf-section-driver">
       <ng-container *ngTemplateOutlet="fieldList; context: { $implicit: driverFields() }"></ng-container>
+      <ng-container *ngTemplateOutlet="extrasNote; context: { $implicit: extras() }"></ng-container>
     </section>
   } @else {
     <p class="sf-empty">This driver has no options.</p>

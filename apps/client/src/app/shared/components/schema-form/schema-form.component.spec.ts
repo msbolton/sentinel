@@ -551,4 +551,248 @@ describe('SchemaFormComponent', () => {
       expect(last().valid).toBe(true);
     });
   });
+
+  describe('free-form objects', () => {
+    const freeFormSchema: JsonSchema = {
+      type: 'object',
+      properties: {
+        decoderOptions: {
+          type: 'object',
+          title: 'Decoder options',
+          description: 'The field map.',
+          examples: [{ fields: { latitude: 'lat', longitude: 'lon' } }],
+        },
+      },
+    };
+    const fieldMap = { records: 'ac', fields: { latitude: 'lat', longitude: 'lon' } };
+
+    // Describes some of what a listener stores: `host` only in connect mode, `transport` only in part.
+    const keptSchema: JsonSchema = {
+      type: 'object',
+      properties: {
+        mode: { type: 'string', enum: ['listen', 'connect'], default: 'listen' },
+        host: { type: 'string', 'x-showWhen': { mode: 'connect' } },
+        transport: {
+          type: 'object',
+          properties: {
+            kind: { type: 'string', enum: ['tcpserver', 'udp'] },
+            address: { type: 'string' },
+            tls: { type: 'object', properties: { enabled: { type: 'boolean' } } },
+          },
+        },
+      },
+    };
+
+    function textarea(name: string): HTMLTextAreaElement {
+      const found = el.querySelector<HTMLTextAreaElement>(`textarea[name="${name}"]`);
+      if (!found) {
+        throw new Error(`no textarea for ${name}`);
+      }
+      return found;
+    }
+
+    it('edits an object without properties as JSON and keeps the stored value', () => {
+      render(freeFormSchema, { value: { decoderOptions: fieldMap } });
+
+      expect(JSON.parse(textarea('decoderOptions').value)).toEqual(fieldMap);
+      expect(last().config['decoderOptions']).toEqual(fieldMap);
+      expect(el.querySelector('fieldset')).toBeNull();
+    });
+
+    it('offers the schema example as the placeholder and says the field takes JSON', () => {
+      render(freeFormSchema);
+
+      expect(textarea('decoderOptions').value).toBe('');
+      expect(JSON.parse(textarea('decoderOptions').placeholder)).toEqual({ fields: { latitude: 'lat', longitude: 'lon' } });
+      expect(el.querySelector('[data-pointer="/config/decoderOptions"] .sf-help')?.textContent).toBe('The field map. JSON object.');
+
+      render({ type: 'object', properties: { headers: { type: 'object', additionalProperties: { type: 'string' } } } });
+      expect(textarea('headers').placeholder).toBe('{ "key": "value" }');
+      expect(el.querySelector('[data-pointer="/config/headers"] .sf-help')?.textContent).toBe('JSON object.');
+    });
+
+    it('refuses text that is not a JSON object, and leaves an empty one out', () => {
+      render(freeFormSchema, { value: { decoderOptions: fieldMap } });
+      const messages = () => el.querySelector('[data-pointer="/config/decoderOptions"] .sf-error')?.textContent;
+
+      setInput('textarea[name="decoderOptions"]', '[1]');
+      expect(component.control('/config/decoderOptions')?.hasError('jsonObject')).toBe(true);
+      expect(messages()).toContain('Must be a JSON object');
+      expect(last().valid).toBe(false);
+
+      setInput('textarea[name="decoderOptions"]', '{"a": 1}');
+      expect(last().valid).toBe(true);
+      expect(last().config['decoderOptions']).toEqual({ a: 1 });
+
+      setInput('textarea[name="decoderOptions"]', '{"a":');
+      expect(component.control('/config/decoderOptions')?.hasError('json')).toBe(true);
+      expect(messages()).toContain('Not valid JSON.');
+      expect(last().valid).toBe(false);
+
+      for (const empty of ['', '   ', '{}']) {
+        setInput('textarea[name="decoderOptions"]', empty);
+        expect(last().valid).toBe(true);
+        expect('decoderOptions' in last().config).toBe(false);
+      }
+    });
+
+    it('asks for the object when it is required', () => {
+      render({ ...freeFormSchema, required: ['decoderOptions'] });
+      expect(component.control('/config/decoderOptions')?.hasError('required')).toBe(true);
+      expect(last().valid).toBe(false);
+
+      component.markAllTouched();
+      fixture.detectChanges();
+      expect(el.querySelector('[data-pointer="/config/decoderOptions"] .sf-error')?.textContent).toContain('Required.');
+
+      setInput('textarea[name="decoderOptions"]', '{"a": 1}');
+      expect(last().valid).toBe(true);
+    });
+
+    it('starts a required object at its schema default, and keeps a stored one over it', () => {
+      const defaulted: JsonSchema = {
+        type: 'object',
+        required: ['headers'],
+        properties: { headers: { type: 'object', default: { Accept: 'application/json' } } },
+      };
+      render(defaulted);
+      expect(JSON.parse(textarea('headers').value)).toEqual({ Accept: 'application/json' });
+      expect(last().config['headers']).toEqual({ Accept: 'application/json' });
+      expect(last().valid).toBe(true);
+
+      render(defaulted, { value: { headers: { 'X-Key': 'abc' } } });
+      expect(last().config['headers']).toEqual({ 'X-Key': 'abc' });
+    });
+
+    it('accepts a plain string where the schema allows object or string', () => {
+      const bodySchema: JsonSchema = { type: 'object', properties: { body: { type: ['object', 'string'], title: 'POST body' } } };
+      render(bodySchema, { value: { body: { q: 1 } } });
+
+      expect(JSON.parse(textarea('body').value)).toEqual({ q: 1 });
+      expect(last().config['body']).toEqual({ q: 1 });
+
+      setInput('textarea[name="body"]', '  raw\n');
+      expect(component.control('/config/body')?.valid).toBe(true);
+      expect(last().valid).toBe(true);
+      expect(last().config['body']).toBe('raw');
+
+      setInput('textarea[name="body"]', '  ');
+      expect(last().valid).toBe(true);
+      expect('body' in last().config).toBe(false);
+
+      setInput('textarea[name="body"]', '{"q": 2');
+      expect(last().valid).toBe(true);
+      expect(last().config['body']).toBe('{"q": 2');
+
+      render(bodySchema, { value: { body: 'q={lat}' } });
+      expect(textarea('body').value).toBe('q={lat}');
+      expect(last().config['body']).toBe('q={lat}');
+    });
+
+    it('carries keys the schema does not describe through unchanged', () => {
+      fixture.componentRef.setInput('externalKeys', ['classification']);
+      render(keptSchema, {
+        secretFields: ['clientSecret'],
+        value: {
+          mode: 'listen',
+          host: 'stale.example',
+          transport: { kind: 'tcpserver', address: ':4001', allow: ['10.0.0.0/8'], tls: { enabled: true, legacyCa: 'x' } },
+          legacy: { keep: true },
+          classification: 'SECRET',
+          clientSecret: 'plain-text',
+          staleWarnSec: 120,
+        },
+      });
+
+      // allow and legacyCa sit in groups, legacy at the top; host is hidden, classification is the
+      // parent's and clientSecret a secret, so those three stay out
+      expect(last().config).toEqual({
+        mode: 'listen',
+        transport: { kind: 'tcpserver', address: ':4001', allow: ['10.0.0.0/8'], tls: { enabled: true, legacyCa: 'x' } },
+        legacy: { keep: true },
+        staleWarnSec: 120,
+      });
+
+      // a common option is a field of its own, so clearing it takes it out
+      component.control('/config/staleWarnSec')?.setValue(null);
+      fixture.detectChanges();
+      expect('staleWarnSec' in last().config).toBe(false);
+    });
+
+    it('keeps undescribed keys and still drops hidden known keys', () => {
+      render(
+        {
+          type: 'object',
+          required: ['mode'],
+          properties: {
+            mode: { type: 'string', enum: ['listen', 'connect'], default: 'listen' },
+            host: { type: 'string', 'x-showWhen': { mode: 'connect' } },
+            port: { type: 'integer', minimum: 1, maximum: 65535 },
+            allow: { type: 'array', items: { type: 'string' }, 'x-showWhen': { mode: 'listen' } },
+          },
+        },
+        { value: { mode: 'connect', host: 'h', port: 7000, allow: ['10.0.0.0/8'], legacyKey: 1 } },
+      );
+
+      expect(last().config).toEqual({ mode: 'connect', host: 'h', port: 7000, legacyKey: 1 });
+
+      // the hidden key is still known to the form: listening brings it back, and legacyKey stays
+      component.control('/config/mode')?.setValue('listen');
+      fixture.detectChanges();
+      expect(last().config).toEqual({ mode: 'listen', port: 7000, allow: ['10.0.0.0/8'], legacyKey: 1 });
+    });
+
+    it('drops the extras of a hidden group along with it', () => {
+      render(
+        {
+          type: 'object',
+          properties: {
+            format: { type: 'string', enum: ['sentinel', 'json'], default: 'sentinel' },
+            decoderOptions: {
+              type: 'object',
+              properties: { timeField: { type: 'string' } },
+              'x-showWhen': { format: 'json' },
+            },
+          },
+        },
+        { value: { decoderOptions: { timeField: 'ts', legacy: 1 } } },
+      );
+      expect(last().config['decoderOptions']).toBeUndefined();
+
+      component.control('/config/format')?.setValue('json');
+      fixture.detectChanges();
+      expect(last().config['decoderOptions']).toEqual({ timeField: 'ts', legacy: 1 });
+    });
+
+    it('names the kept keys', () => {
+      render(keptSchema, { value: { transport: { kind: 'tcpserver', allow: ['10.0.0.0/8'], keepalive: 30 }, legacy: 1 } });
+
+      const group = el.querySelector('[data-pointer="/config/transport"] > .sf-extras');
+      expect(group?.textContent).toContain('Kept as stored');
+      expect(group?.textContent).toMatch(/allow, keepalive/);
+      expect(group?.textContent).not.toContain('legacy');
+
+      const top = el.querySelector('.sf-section-driver > .sf-extras');
+      expect(top?.textContent).toContain('legacy');
+      expect(top?.textContent).not.toContain('allow');
+
+      render(keptSchema, { value: { transport: { kind: 'udp' } } });
+      expect(el.querySelector('.sf-extras')).toBeNull();
+    });
+
+    it('maps a server problem inside the object to the JSON field', () => {
+      render(freeFormSchema, { value: { decoderOptions: { fields: {} } } });
+
+      fixture.componentRef.setInput('problems', [
+        { path: '/config/decoderOptions/fields/latitude', message: 'latitude is required' },
+      ]);
+      fixture.detectChanges();
+
+      const shown = Array.from(el.querySelectorAll('[data-pointer="/config/decoderOptions"] .sf-error-server')).map((n) =>
+        n.textContent?.trim(),
+      );
+      expect(shown).toEqual(['latitude is required']);
+      expect(el.querySelector('.sf-unmatched')).toBeNull();
+    });
+  });
 });

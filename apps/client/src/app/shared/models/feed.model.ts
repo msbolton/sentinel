@@ -71,19 +71,26 @@ export interface ReplaceFeedRequest {
   enabled: boolean;
 }
 
+export type JsonType = 'object' | 'string' | 'number' | 'integer' | 'boolean' | 'array';
+
 /** The subset of JSON Schema the driver config schemas use. */
 export interface JsonSchema {
   $schema?: string;
   $id?: string;
-  type?: 'object' | 'string' | 'number' | 'integer' | 'boolean' | 'array';
+  /** One type, or several: `["object", "string"]` takes either. */
+  type?: JsonType | JsonType[];
   title?: string;
   description?: string;
   properties?: Record<string, JsonSchema>;
+  /** What keys beyond `properties` may hold: `false` forbids them, a schema types their values. */
+  additionalProperties?: boolean | JsonSchema;
   required?: string[];
   items?: JsonSchema;
   enum?: Array<string | number>;
   const?: string | number | boolean;
   default?: unknown;
+  /** Sample values; the first one is the placeholder of an object edited as JSON. */
+  examples?: unknown[];
   minimum?: number;
   maximum?: number;
   exclusiveMinimum?: number;

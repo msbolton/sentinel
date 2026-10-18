@@ -87,7 +87,8 @@
   }
 
   input,
-  select {
+  select,
+  textarea {
     width: 100%;
     padding: 6px 10px;
     background: var(--bg-primary);
@@ -112,8 +113,14 @@
     cursor: pointer;
   }
 
+  textarea {
+    min-height: 6em;
+    resize: vertical;
+  }
+
   &.has-issue input,
-  &.has-issue select {
+  &.has-issue select,
+  &.has-issue textarea {
     border-color: var(--accent-red);
   }
 }
