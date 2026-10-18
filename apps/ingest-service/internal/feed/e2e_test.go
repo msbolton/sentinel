@@ -253,6 +253,19 @@ func (r *listenerRig) checkDelivered(t *testing.T, w listenerWant) {
 	}
 }
 
+// acceptedOnly lists a supervisor's listeners with only their accepted counter,
+// so the listener collector built on it exports a single series, which
+// testutil.ToFloat64 can read.
+type acceptedOnly struct{ sup *Supervisor }
+
+func (a acceptedOnly) ListenerStats() []metrics.ListenerStat {
+	stats := a.sup.ListenerStats()
+	for i, st := range stats {
+		stats[i].Detail = map[string]any{"accepted": st.Detail["accepted"]}
+	}
+	return stats
+}
+
 // A TCP connection that listens, run for real by the supervisor and the
 // runner: what a sender writes arrives stamped with the feed's provenance, at
 // no less than its classification, and what cannot be decoded is dead-lettered
@@ -263,8 +276,17 @@ func TestTCPListenerEndToEnd(t *testing.T) {
 		`{"mode":"listen","port":%d,"address":"127.0.0.1","encoding":"json","classification":"SECRET","defaultSource":"OSINT"}`, port)))
 	rig.waitListening(t, "site-tcp")
 
-	sender := send(t, "tcp", loopback(port), spoofedMsg, topSecretMsg, identityOnlyMsg, garbageMsg)
+	msgs := []string{spoofedMsg, topSecretMsg, identityOnlyMsg, garbageMsg}
+	sender := send(t, "tcp", loopback(port), msgs...)
 	rig.checkDelivered(t, listenerWant{feedID: "site-tcp", driver: "tcp", port: port, sender: sender, floor: obs.ClassSecret})
+
+	// The listener collector over the same supervisor exports what the status
+	// shows. accepted counts frames, so it equals the messages the sender wrote
+	// on its one connection. ToFloat64 panics unless the collector exports
+	// exactly one series, which also fails the test if the feed is not listed.
+	if n := testutil.ToFloat64(metrics.NewListenerCollector(acceptedOnly{rig.sup})); n != float64(len(msgs)) {
+		t.Errorf("site-tcp: sentinel_ingest_listener_events_total{event=\"accepted\"} = %v, want %d, the messages the sender wrote", n, len(msgs))
+	}
 }
 
 // The same through a UDP connection, one datagram per message.
