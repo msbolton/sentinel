@@ -53,6 +53,9 @@ import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 import { CLUSTER_CONFIG, CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, drawClusterDisc, syncLabelGlyphClusterShow } from './entity-clusters';
 import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine, type GeoPoint } from './drop-line';
 import { formatAltitude } from '../../shared/geo-format';
+import { GeofenceService } from '../../core/services/geofence.service';
+import { GeofenceLayer } from './geofence-layer';
+import { LngLat } from '../../shared/models/geofence.model';
 
 /** Dead-reckoning frame cap: ~30 fps is plenty for gliding markers. */
 const DR_FRAME_INTERVAL_MS = 33;
@@ -182,6 +185,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     { forId: null, path: null, ground: [], footprint: null, builtAtMs: 0, line1: '' };
   /** One clustered data source per type in CLUSTERED_TYPES; see entity-clusters.ts. */
   private clusterSources = new Map<string, any>();
+  /** Saved geofences drawn on the globe; see geofence-layer.ts. */
+  private geofenceLayer: GeofenceLayer | null = null;
   private clusterImageCache = new Map<string, string>();
   private clusterCanvas: HTMLCanvasElement | null = null;
   /** The line from the selected aircraft, drone or satellite down to the ground; see drop-line.ts. */
@@ -208,6 +213,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly layerVisibility: LayerVisibilityService,
     private readonly orbitOverlay: OrbitOverlayService,
     private readonly mapViewport: MapViewportService,
+    private readonly geofences: GeofenceService,
   ) {
     // Entities stay in the viewer when their layer is hidden (show=false) so
     // dead reckoning keeps advancing them; this flips `show` when the user's
@@ -223,6 +229,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       const selected = this.selectedEntity();
       const flags = { path: this.orbitOverlay.showPath(), ground: this.orbitOverlay.showGroundTrack(), footprint: this.orbitOverlay.showFootprint() };
       this.ngZone.runOutsideAngular(() => untracked(() => this.syncOrbitOverlay(selected, flags)));
+    });
+
+    // Saved geofences are drawn on the globe and follow the service's list and selection.
+    effect(() => {
+      const zones = this.geofences.zones();
+      const selectedId = this.geofences.selectedId();
+      this.geofences.anchors();
+      this.ngZone.runOutsideAngular(() => untracked(() => this.geofenceLayer?.sync(zones, selectedId, (id) => this.geofenceAnchorPosition(id))));
     });
 
     // A selected aircraft, drone or satellite shows how high it flies: a line to the ground.
@@ -248,6 +262,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   async ngAfterViewInit(): Promise<void> {
     await this.initCesium();
+    this.geofences.load().subscribe({ error: () => undefined });
     this.setupEventHandlers();
     this.subscribeToEntities();
     this.setupCameraMoveHandler();
@@ -281,6 +296,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.geofenceLayer?.destroy();
+    this.geofenceLayer = null;
     this.clearOrbitOverlay();
     if (this.ageoutConfigTimer) clearInterval(this.ageoutConfigTimer);
     if (this.drFrame !== null) {
@@ -324,6 +341,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.ngZone.runOutsideAngular(() => {
       this.viewer = new Cesium.Viewer(container, viewerOptions);
       this.setupClusterSources();
+      this.geofenceLayer = new GeofenceLayer(this.viewer, Cesium);
+      this.geofenceLayer.sync(this.geofences.zones(), this.geofences.selectedId(), (id) => this.geofenceAnchorPosition(id));
 
       // Set dark atmosphere
       this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
@@ -372,6 +391,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelOrbit) {
         return; // a click on the selected satellite's own overlay keeps the selection
+      }
+      if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelGeofence) {
+        const zoneId = pickedObject.id._sentinelGeofence as string;
+        this.ngZone.run(() => this.geofences.select(zoneId));
+        return;
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelCluster) {
         this.flyToCluster(pickedObject.id._sentinelCluster);
@@ -1059,6 +1083,23 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       duration: 0.8,
       offset: new Cesium.HeadingPitchRange(this.viewer.camera.heading, this.viewer.camera.pitch, range),
     });
+  }
+
+  // --- Geofences ------------------------------------------------------------------
+
+  /** Where a ring's anchor track is drawn now: its live map position, else its last stored fix. */
+  private geofenceAnchorPosition(entityId: string): LngLat | null {
+    const live = this.entityMap.get(entityId)?._sentinelEntity as Entity | undefined;
+    const geo = live ? this.displayedGeoPoint(live, this.wsService.serverNow()) : null;
+    if (geo) return [geo.lon, geo.lat];
+    const stored = this.geofences.anchors().get(entityId);
+    return stored?.position ? [stored.position.longitude, stored.position.latitude] : null;
+  }
+
+  /** The Geofences map control: open the panel and start a new zone in one step. */
+  openGeofences(): void {
+    this.router.navigateByUrl('/geofences');
+    this.geofences.startDrawingRequested.next();
   }
 
   // --- Satellite altitude -------------------------------------------------------
