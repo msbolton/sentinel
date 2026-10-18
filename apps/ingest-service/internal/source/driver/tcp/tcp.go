@@ -41,21 +41,22 @@ func init() {
 
 // Config is the feed configuration.
 type Config struct {
-	Mode              string          `json:"mode"`
-	Host              string          `json:"host"`
-	Port              int             `json:"port"`
-	Address           string          `json:"address"`
-	Format            string          `json:"format"`
-	Encoding          string          `json:"encoding"`
-	Framing           string          `json:"framing"`
-	DecoderOptions    json.RawMessage `json:"decoderOptions"`
-	DefaultSource     string          `json:"defaultSource"`
-	Allow             []string        `json:"allow"`
-	MaxConnections    *int            `json:"maxConnections"`
-	MaxMessageBytes   int             `json:"maxMessageBytes"`
-	MaxMessagesPerSec *int            `json:"maxMessagesPerSec"`
-	ReadTimeoutSec    int             `json:"readTimeoutSec"`
-	TLS               *TLSOptions     `json:"tls"`
+	Mode                       string          `json:"mode"`
+	Host                       string          `json:"host"`
+	Port                       int             `json:"port"`
+	Address                    string          `json:"address"`
+	Format                     string          `json:"format"`
+	Encoding                   string          `json:"encoding"`
+	Framing                    string          `json:"framing"`
+	DecoderOptions             json.RawMessage `json:"decoderOptions"`
+	DefaultSource              string          `json:"defaultSource"`
+	Allow                      []string        `json:"allow"`
+	MaxConnections             *int            `json:"maxConnections"`
+	MaxMessageBytes            int             `json:"maxMessageBytes"`
+	MaxMessagesPerSec          *int            `json:"maxMessagesPerSec"`
+	MaxMessagesPerSecPerSender int             `json:"maxMessagesPerSecPerSender"` // listen mode; 0 = no per-sender limit
+	ReadTimeoutSec             int             `json:"readTimeoutSec"`
+	TLS                        *TLSOptions     `json:"tls"`
 }
 
 // TLSOptions are the TLS settings a feed config carries. Certificates and
@@ -171,6 +172,7 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 			return nil, errors.New("tcp listen: the clientCa secret is set but tls.requireClientCert is off; turn it on (with TLS) to verify senders, or remove the secret")
 		}
 		tcfg.Allow, tcfg.MaxConnections = c.Allow, intOr(c.MaxConnections, stream.DefaultMaxConnections)
+		tcfg.MaxMessagesPerSecPerSender = c.MaxMessagesPerSecPerSender
 		d.detailKey, d.target = "listen", map[string]any{"protocol": "tcp", "host": deps.ListenerHost, "port": c.Port}
 	case "connect":
 		if c.Host == "" || c.Port < 1 || c.Port > 65535 {

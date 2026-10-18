@@ -25,6 +25,7 @@
         "allow": { "type": "array", "items": { "type": "string", "minLength": 1 }, "title": "Allowed senders", "description": "IP addresses or CIDR ranges allowed to send; empty allows anyone who can reach the port. UDP source addresses can be forged.", "x-showWhen": { "kind": ["tcpserver", "udp"] } },
         "maxConnections": { "type": "integer", "minimum": 0, "default": 50, "title": "Max connections", "description": "tcpserver: concurrent connections; 0 = unlimited", "x-showWhen": { "kind": "tcpserver" } },
         "maxMessagesPerSec": { "type": "integer", "minimum": 0, "default": 0, "title": "Max messages per second", "description": "tcpserver and udp: shared by every sender of the listener; 0 = unlimited", "x-showWhen": { "kind": ["tcpserver", "udp"] } },
+        "maxMessagesPerSecPerSender": { "type": "integer", "minimum": 0, "default": 0, "title": "Max messages per second per sender", "description": "tcpserver and udp: how many messages a second one sender IP address may send, within the limit above that all senders share; 0 = no per-sender limit. Senders behind one NAT share a limit.", "x-showWhen": { "kind": ["tcpserver", "udp"] } },
         "tls": {
           "type": "object",
           "title": "TLS",

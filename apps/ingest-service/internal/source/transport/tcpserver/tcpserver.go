@@ -41,12 +41,13 @@ const (
 
 // Server is the tcpserver transport.
 type Server struct {
-	cfg     transport.Config
-	tls     *tls.Config
-	allow   transport.Allowlist
-	limit   *transport.Limiter
-	senders *transport.Senders
-	counts  transport.ListenCounters
+	cfg       transport.Config
+	tls       *tls.Config
+	allow     transport.Allowlist
+	limit     *transport.Limiter       // shared by every sender
+	perSender *transport.SenderLimiter // a bucket for each sender IP; nil when off
+	senders   *transport.Senders       // a row for each connection, named ip:port
+	counts    transport.ListenCounters
 	transport.StateTracker
 }
 
@@ -90,7 +91,12 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{cfg: cfg, tls: t, allow: allow, limit: transport.NewLimiter(cfg.MaxMessagesPerSec), senders: transport.NewSenders(maxSenders)}, nil
+	return &Server{
+		cfg: cfg, tls: t, allow: allow,
+		limit:     transport.NewLimiter(cfg.MaxMessagesPerSec),
+		perSender: transport.NewSenderLimiter(cfg.MaxMessagesPerSecPerSender, transport.SenderLimiterKeys),
+		senders:   transport.NewSenders(maxSenders),
+	}, nil
 }
 
 // hasClientCA reports whether the config names a CA for client certificates,
@@ -103,7 +109,7 @@ func hasClientCA(cfg transport.Config) bool {
 // retried with a pause so a transient error cannot spin the loop. Senders
 // outside the allowlist, connections over the cap, failed TLS handshakes
 // and TLS clients on a plain listener are closed and counted; frames over
-// the rate are dropped.
+// a sender's rate or the listener's are dropped and counted.
 func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(ctx, "tcp", s.cfg.Address)
@@ -113,14 +119,27 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 	defer ln.Close()
 	s.Set(func(st *transport.State) { st.Connected = true; st.LastError = "" })
 
-	guarded := func(ctx context.Context, f transport.Frame) error {
-		if !s.limit.Allow() {
-			s.counts.RateLimited.Add(1)
-			return nil
+	// guarded is the emit for the connection of the sender at host, its IP,
+	// which is the key of its rate limit: every connection of one IP draws on
+	// one bucket, or a sender could multiply its budget by connecting again.
+	// The sender's own bucket is asked before the listener's, so a flooder
+	// spends none of the shared budget. The senders list names the
+	// connection, ip:port.
+	guarded := func(host string) transport.Emit {
+		return func(ctx context.Context, f transport.Frame) error {
+			if !s.perSender.Allow(host, f.ReceivedAt) {
+				s.counts.SenderRateLimited.Add(1)
+				s.senders.RateLimited(f.Remote, f.ReceivedAt)
+				return nil
+			}
+			if !s.limit.Allow() {
+				s.counts.RateLimited.Add(1)
+				return nil
+			}
+			s.counts.Accepted.Add(1)
+			s.senders.Seen(f.Remote, f.ReceivedAt)
+			return emit(ctx, f)
 		}
-		s.counts.Accepted.Add(1)
-		s.senders.Seen(f.Remote, f.ReceivedAt)
-		return emit(ctx, f)
 	}
 
 	var wg sync.WaitGroup
@@ -164,6 +183,7 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 		if ctx.Err() != nil {
 			raw.Close() // the shutdown sweep may have run before the Store
 		}
+		connEmit := guarded(transport.SenderIP(remote))
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -190,7 +210,7 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 			}
 			s.senders.Connect(remote, time.Now().UTC())
 			s.Set(func(st *transport.State) { st.Connections = int(live.Load()) })
-			if err := transport.ScanConn(ctx, conn, s.cfg, guarded); err != nil && ctx.Err() == nil {
+			if err := transport.ScanConn(ctx, conn, s.cfg, connEmit); err != nil && ctx.Err() == nil {
 				if errors.Is(err, errTLSClient) {
 					s.counts.TLSFailed.Add(1) // closed and counted; not a read error worth LastError
 					return

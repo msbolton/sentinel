@@ -23,6 +23,7 @@
     "allow": { "type": "array", "items": { "type": "string", "minLength": 1 }, "title": "Allowed senders", "description": "IP addresses or CIDR ranges allowed to send; empty allows anyone who can reach the port. UDP source addresses can be forged." },
     "maxMessageBytes": { "type": "integer", "minimum": 64, "maximum": 65507, "default": 65507, "title": "Max datagram size (bytes)" },
     "maxMessagesPerSec": { "type": "integer", "minimum": 0, "default": 1000, "title": "Max messages per second", "description": "0 = unlimited" },
+    "maxMessagesPerSecPerSender": { "type": "integer", "minimum": 0, "default": 0, "title": "Max messages per second per sender", "description": "How many messages a second one sender (one IP address, from any port) may send, within the limit above that all senders share. 0 = no per-sender limit. Senders behind one NAT share a limit, and UDP source addresses can be forged." },
     "address": { "type": "string", "title": "Bind address", "description": "Interface to bind (default all)" }
   },
   "allOf": [

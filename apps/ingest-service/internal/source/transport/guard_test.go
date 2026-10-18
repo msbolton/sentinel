@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/netip"
 	"strings"
 	"syscall"
 	"testing"
@@ -57,6 +58,160 @@ func TestLimiter(t *testing.T) {
 	}
 	if allowed < 2 || allowed > 3 {
 		t.Errorf("allowed %d of 10 at 2/s", allowed)
+	}
+}
+
+// A sender's limit is its own: one sender spending its bucket leaves another's
+// whole, a bucket refills with time up to one second's worth, and past its cap
+// the limiter forgets the sender used least recently.
+func TestSenderLimiterPerKeyAndEviction(t *testing.T) {
+	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	// size is how many senders the limiter remembers, counted by each of its
+	// two indexes, which must agree.
+	size := func(l *SenderLimiter) (byKey, byAge int) {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return len(l.m), l.order.Len()
+	}
+
+	t.Run("a rate of 0 or less is no limiter, and no limiter limits nobody", func(t *testing.T) {
+		for _, perSec := range []int{0, -1} {
+			if l := NewSenderLimiter(perSec, 10); l != nil {
+				t.Errorf("NewSenderLimiter(%d, 10) = %v, want nil: no per-sender limit", perSec, l)
+			}
+		}
+		var off *SenderLimiter
+		for range 100 {
+			if !off.Allow("a", t0) {
+				t.Fatal("a nil limiter limited a sender")
+			}
+		}
+	})
+
+	t.Run("each sender has a bucket of one second's worth that refills", func(t *testing.T) {
+		l := NewSenderLimiter(3, 10)
+		sent := func(key string, at time.Time, n int) (allowed int) {
+			for range n {
+				if l.Allow(key, at) {
+					allowed++
+				}
+			}
+			return allowed
+		}
+		if got := sent("a", t0, 10); got != 3 {
+			t.Errorf("a sent 10 at once and %d passed, want its burst of 3", got)
+		}
+		if got := sent("b", t0, 10); got != 3 {
+			t.Errorf("b sent 10 at once and %d passed, want its own burst of 3: a's flood is not b's", got)
+		}
+		if got := sent("a", t0.Add(400*time.Millisecond), 10); got != 1 {
+			t.Errorf("a sent 10 after 0.4 s and %d passed, want the one token that refilled (3 a second)", got)
+		}
+		if got := sent("a", t0.Add(time.Hour), 10); got != 3 {
+			t.Errorf("a sent 10 after an hour and %d passed, want the burst of 3: idle time does not store more", got)
+		}
+	})
+
+	t.Run("at the cap the sender that sent least recently is forgotten", func(t *testing.T) {
+		// A burst of one: a sender is spent after its first message, and a
+		// sender the limiter forgot is told by getting a full bucket again.
+		l := NewSenderLimiter(1, 2)
+		l.Allow("a", t0)
+		l.Allow("b", t0)
+		// Asking about a makes b the least recently used.
+		if l.Allow("a", t0) {
+			t.Fatal("a sent twice in a second and was not limited")
+		}
+		// c is new, and takes b's place.
+		if !l.Allow("c", t0) {
+			t.Fatal("a new sender was refused")
+		}
+		if l.Allow("a", t0) {
+			t.Error("a was forgotten, but it was used more recently than b")
+		}
+		if !l.Allow("b", t0) {
+			t.Error("b was kept, but it was the least recently used: a forgotten sender starts again with a full bucket")
+		}
+		if byKey, byAge := size(l); byKey != 2 || byAge != 2 {
+			t.Errorf("limiter holds %d senders by key and %d by age, want 2 and 2", byKey, byAge)
+		}
+	})
+}
+
+// A flood of spoofed senders must not grow what a listener remembers: the
+// senders table and the per-sender limiter stay at their caps however many
+// distinct senders come. Each spoofed sender is new to the limiter, so its
+// bucket is full and it is never limited on its own; the listener's bucket
+// is what still holds the total down.
+func TestSenderChurnStaysBounded(t *testing.T) {
+	const (
+		churn      = 20000 // distinct senders
+		tableCap   = 1000
+		limiterCap = 4096
+		sharedRate = 100
+	)
+	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	table := NewSenders(tableCap)
+	perSender := NewSenderLimiter(5, limiterCap)
+	shared := NewLimiter(sharedRate)
+	sizes := func() (inTable, inLimiter, inLimiterByAge int) {
+		table.mu.Lock()
+		inTable = len(table.m)
+		table.mu.Unlock()
+		perSender.mu.Lock()
+		inLimiter, inLimiterByAge = len(perSender.m), perSender.order.Len()
+		perSender.mu.Unlock()
+		return inTable, inLimiter, inLimiterByAge
+	}
+
+	start := time.Now()
+	passed := 0
+	for i := range churn {
+		sender := netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}).String()
+		now := t0.Add(time.Duration(i) * time.Millisecond)
+		// Every sender is tracked, as for a listener with no limit of its own;
+		// the listeners ask the shared bucket only of what the sender's own
+		// lets through.
+		table.Seen(sender, now)
+		if perSender.Allow(sender, now) && shared.Allow() {
+			passed++
+		}
+		if inTable, inLimiter, byAge := sizes(); inTable > tableCap || inLimiter > limiterCap || byAge > limiterCap {
+			t.Fatalf("after %d distinct senders: the table holds %d (cap %d), the limiter %d by key and %d by age (cap %d)",
+				i+1, inTable, tableCap, inLimiter, byAge, limiterCap)
+		}
+	}
+
+	// Both filled to their caps, so staying within them was not for want of senders.
+	if inTable, inLimiter, _ := sizes(); inTable != tableCap || inLimiter != limiterCap {
+		t.Errorf("after %d distinct senders: the table holds %d and the limiter %d, want them full at %d and %d", churn, inTable, inLimiter, tableCap, limiterCap)
+	}
+	// None was limited on its own, so the listener's bucket is all that held
+	// the total to its burst plus what it refilled while this ran.
+	if most := sharedRate + int(time.Since(start).Seconds()*sharedRate) + 1; passed > most {
+		t.Errorf("%d of %d spoofed senders' messages passed, want at most %d: the listener's bucket (%d a second) stopped limiting", passed, churn, most, sharedRate)
+	}
+	if passed < sharedRate {
+		t.Errorf("%d messages passed, want at least the listener's burst of %d", passed, sharedRate)
+	}
+}
+
+func TestSenderIP(t *testing.T) {
+	for remote, want := range map[string]string{
+		"10.0.0.5:4000":          "10.0.0.5",
+		"[2001:db8::1]:9":        "2001:db8::1",
+		"[::1]:9":                "::1",
+		"[::ffff:10.0.0.5]:4000": "10.0.0.5", // an IPv4 sender on a dual-stack socket is the IPv4 address
+		"[fe80::1%en0]:9":        "fe80::1%en0",
+		"10.0.0.5":               "10.0.0.5", // a bare address
+		"::ffff:10.0.0.5":        "10.0.0.5",
+		"2001:db8::1":            "2001:db8::1",
+		"sensors/temp":           "sensors/temp", // not an address: as it is
+		"":                       "",
+	} {
+		if got := SenderIP(remote); got != want {
+			t.Errorf("SenderIP(%q) = %q, want %q", remote, got, want)
+		}
 	}
 }
 
@@ -166,6 +321,44 @@ func TestSendersMalformed(t *testing.T) {
 	})
 }
 
+// A message dropped by a sender's own limit is counted against that sender. It
+// was not accepted, so it is not one of the sender's messages and does not make
+// the sender look newer.
+func TestSendersRateLimited(t *testing.T) {
+	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	snapshot := func(s *Senders, now time.Time) map[string]SenderStat {
+		list, _ := s.Snapshot(now, 10*time.Minute)
+		out := map[string]SenderStat{}
+		for _, e := range list {
+			out[e.Remote] = e
+		}
+		return out
+	}
+
+	s := NewSenders(10)
+	s.Seen("a:1", t0)
+	s.RateLimited("a:1", t0.Add(time.Second))
+	s.RateLimited("a:1", t0.Add(2*time.Second))
+	a, ok := snapshot(s, t0.Add(3*time.Second))["a:1"]
+	if !ok || a.RateLimited != 2 || a.Messages != 1 || !a.LastAt.Equal(t0) {
+		t.Errorf("a:1 = %+v (%v), want 2 rate limited, 1 message and lastAt %v", a, ok, t0)
+	}
+	if a.Malformed != 0 {
+		t.Errorf("a:1 malformed = %d, want none: a message dropped for its rate never reached a decoder", a.Malformed)
+	}
+
+	// A sender the table forgot while its bucket lived on is tracked afresh,
+	// with LastAt set, which Snapshot needs to keep it.
+	s.RateLimited("x:1", t0.Add(time.Minute))
+	x, ok := snapshot(s, t0.Add(time.Minute+time.Second))["x:1"]
+	if !ok {
+		t.Fatal("a sender whose only message was rate limited was dropped by Snapshot")
+	}
+	if x.RateLimited != 1 || x.Messages != 0 || !x.Since.Equal(t0.Add(time.Minute)) || !x.LastAt.Equal(t0.Add(time.Minute)) {
+		t.Errorf("x:1 = %+v, want 1 rate limited, no messages, since and lastAt at %v", x, t0.Add(time.Minute))
+	}
+}
+
 // The field names are what the client reads. A sender that has sent nothing
 // yet carries no lastAt, and one with no undecodable message carries no
 // detail beyond its count.
@@ -184,7 +377,7 @@ func TestSenderStatJSON(t *testing.T) {
 	}
 
 	quiet := fields(SenderStat{Remote: "a:1", Since: t0, Connected: true})
-	for _, k := range []string{"remote", "since", "messages", "connected", "malformed"} {
+	for _, k := range []string{"remote", "since", "messages", "connected", "malformed", "rateLimited"} {
 		if _, ok := quiet[k]; !ok {
 			t.Errorf("a sender that has sent nothing lacks %q: %v", k, quiet)
 		}
@@ -196,9 +389,9 @@ func TestSenderStatJSON(t *testing.T) {
 	}
 
 	at := t0.Add(time.Second)
-	bad := fields(SenderStat{Remote: "a:1", Since: t0, LastAt: t0, Messages: 3, Malformed: 2, LastReason: "parse_error", LastError: "bad", LastMalformedAt: &at})
+	bad := fields(SenderStat{Remote: "a:1", Since: t0, LastAt: t0, Messages: 3, Malformed: 2, RateLimited: 7, LastReason: "parse_error", LastError: "bad", LastMalformedAt: &at})
 	for k, want := range map[string]any{
-		"malformed": float64(2), "lastReason": "parse_error", "lastError": "bad",
+		"malformed": float64(2), "rateLimited": float64(7), "lastReason": "parse_error", "lastError": "bad",
 		"lastMalformedAt": at.Format(time.RFC3339Nano), "lastAt": t0.Format(time.RFC3339Nano), "messages": float64(3),
 	} {
 		if bad[k] != want {

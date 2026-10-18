@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -26,7 +27,8 @@ const (
 	maxSenders = 50
 	// trackedSenders is how many senders are tracked, so distinctSenders can
 	// count past what State renders (a datagram sender is cheap to spoof or
-	// to multiply, and the count is the signal).
+	// to multiply, and the count is the signal). A sender is an IP address,
+	// whatever port its datagrams come from.
 	trackedSenders = 1000
 	// sendersWindow is how long an idle sender stays in the report.
 	sendersWindow = 10 * time.Minute
@@ -34,11 +36,12 @@ const (
 
 // Listener is the udp transport.
 type Listener struct {
-	cfg     transport.Config
-	allow   transport.Allowlist
-	limit   *transport.Limiter
-	senders *transport.Senders
-	counts  transport.ListenCounters
+	cfg       transport.Config
+	allow     transport.Allowlist
+	limit     *transport.Limiter       // shared by every sender
+	perSender *transport.SenderLimiter // a bucket for each sender IP; nil when off
+	senders   *transport.Senders       // a row for each sender IP
+	counts    transport.ListenCounters
 	transport.StateTracker
 }
 
@@ -60,15 +63,22 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Listener{cfg: cfg, allow: allow, limit: transport.NewLimiter(cfg.MaxMessagesPerSec), senders: transport.NewSenders(trackedSenders)}, nil
+	return &Listener{
+		cfg: cfg, allow: allow,
+		limit:     transport.NewLimiter(cfg.MaxMessagesPerSec),
+		perSender: transport.NewSenderLimiter(cfg.MaxMessagesPerSecPerSender, transport.SenderLimiterKeys),
+		senders:   transport.NewSenders(trackedSenders),
+	}, nil
 }
 
 // Run reads datagrams until ctx ends. A datagram holding several newline
 // separated sentences (AIS-catcher batches them) is split into one frame
 // per line when framing is "line"; otherwise the datagram is the frame.
 // Datagrams from outside the allowlist and datagrams over MaxFrameBytes
-// are dropped whole and counted; messages over the rate are dropped and
-// counted one by one.
+// are dropped whole and counted; messages over a sender's rate or the
+// listener's are dropped and counted one by one. A sender is told apart by
+// its IP address, in the senders list and for its rate limit; the frame's
+// Remote is the exact ip:port.
 func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 	lc := net.ListenConfig{}
 	pc, err := lc.ListenPacket(ctx, "udp", l.cfg.Address)
@@ -77,13 +87,14 @@ func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 	}
 	defer pc.Close()
 	go func() { <-ctx.Done(); pc.Close() }()
+	conn := pc.(*net.UDPConn) // ListenPacket("udp") always returns one
 	l.Set(func(s *transport.State) { s.Connected = true; s.LastError = "" })
 
 	// The buffer holds the largest possible datagram, so an oversize one is
 	// measured whole rather than truncated by the OS to look small enough.
 	buf := make([]byte, 65535)
 	for {
-		n, addr, err := pc.ReadFrom(buf)
+		n, ap, err := conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -94,7 +105,10 @@ func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 			}
 			continue
 		}
-		remote := addr.String()
+		// A socket bound to every interface reports an IPv4 sender as an
+		// IPv4-mapped IPv6 address; below it is the IPv4 address.
+		ap = netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
+		remote := ap.String()
 		if !l.allow.Allows(remote) {
 			l.counts.Rejected.Add(1)
 			continue
@@ -104,13 +118,21 @@ func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 			continue
 		}
 		now := time.Now().UTC()
+		sender := ap.Addr().String()
 		for _, part := range split(buf[:n], l.cfg.Framing) {
+			// The sender's own bucket is asked before the listener's, so a
+			// flooder spends none of the shared budget.
+			if !l.perSender.Allow(sender, now) {
+				l.counts.SenderRateLimited.Add(1)
+				l.senders.RateLimited(sender, now)
+				continue
+			}
 			if !l.limit.Allow() {
 				l.counts.RateLimited.Add(1)
 				continue
 			}
 			l.counts.Accepted.Add(1)
-			l.senders.Seen(remote, now)
+			l.senders.Seen(sender, now)
 			payload := make([]byte, len(part))
 			copy(payload, part)
 			if err := emit(ctx, transport.Frame{Payload: payload, ReceivedAt: now, Remote: remote}); err != nil && !errors.Is(err, transport.ErrBackpressure) {
@@ -151,12 +173,13 @@ func trimCR(b []byte) []byte {
 var _ transport.MalformedNoter = (*Listener)(nil)
 
 // NoteMalformed counts a message from remote that did not decode against that
-// sender, which State lists.
+// sender, which State lists. remote is a frame's Remote, ip:port, and senders
+// are listed by IP, so the port is dropped to reach the sender's row.
 func (l *Listener) NoteMalformed(remote, reason, errText string) {
-	l.senders.Malformed(remote, reason, errText, time.Now().UTC())
+	l.senders.Malformed(transport.SenderIP(remote), reason, errText, time.Now().UTC())
 }
 
-// State reports connectivity, counters and the senders seen in the last 10
+// State reports connectivity, counters and the sender IPs seen in the last 10
 // minutes: at most 50 are listed, distinctSenders counts them all.
 func (l *Listener) State() transport.State {
 	st := l.Get()

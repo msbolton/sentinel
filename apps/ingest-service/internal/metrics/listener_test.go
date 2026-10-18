@@ -21,7 +21,7 @@ var exposedListeners = listeners{
 	{FeedID: "gate", Driver: "tcp", Detail: map[string]any{
 		"transport": "tcpserver", "connections": 2, "distinctSenders": 3,
 		"accepted": int64(120), "rejected": int64(3), "refused": int64(1),
-		"rateLimited": int64(7), "oversize": int64(2), "tlsFailed": int64(4),
+		"rateLimited": int64(7), "oversize": int64(2), "tlsFailed": int64(4), "senderRateLimited": int64(6),
 		"malformed":  int64(9),             // the same count as decode_errors_total
 		"senders":    []any{"a", "b", "c"}, // not a number
 		"format":     "sentinel",           // not a number
@@ -29,7 +29,7 @@ var exposedListeners = listeners{
 	}},
 	{FeedID: "pier", Driver: "udp", Detail: map[string]any{
 		"transport": "udp", "connections": 0, "distinctSenders": uint64(12),
-		"accepted": uint64(500), "rejected": int32(2), "refused": 0, "rateLimited": float64(9),
+		"accepted": uint64(500), "rejected": int32(2), "refused": 0, "rateLimited": float64(9), "senderRateLimited": uint64(8),
 		"oversize": "many", // a number in the wrong type exports nothing
 		// tlsFailed is absent: no series rather than a zero.
 	}},
@@ -48,11 +48,13 @@ sentinel_ingest_listener_events_total{driver="tcp",event="oversize",feed_id="gat
 sentinel_ingest_listener_events_total{driver="tcp",event="rate_limited",feed_id="gate"} 7
 sentinel_ingest_listener_events_total{driver="tcp",event="refused",feed_id="gate"} 1
 sentinel_ingest_listener_events_total{driver="tcp",event="rejected",feed_id="gate"} 3
+sentinel_ingest_listener_events_total{driver="tcp",event="sender_rate_limited",feed_id="gate"} 6
 sentinel_ingest_listener_events_total{driver="tcp",event="tls_failed",feed_id="gate"} 4
 sentinel_ingest_listener_events_total{driver="udp",event="accepted",feed_id="pier"} 500
 sentinel_ingest_listener_events_total{driver="udp",event="rate_limited",feed_id="pier"} 9
 sentinel_ingest_listener_events_total{driver="udp",event="refused",feed_id="pier"} 0
 sentinel_ingest_listener_events_total{driver="udp",event="rejected",feed_id="pier"} 2
+sentinel_ingest_listener_events_total{driver="udp",event="sender_rate_limited",feed_id="pier"} 8
 # HELP sentinel_ingest_listener_senders Distinct senders connected to a listening feed or heard from in the last 10 minutes, per feed.
 # TYPE sentinel_ingest_listener_senders gauge
 sentinel_ingest_listener_senders{driver="tcp",feed_id="gate"} 3

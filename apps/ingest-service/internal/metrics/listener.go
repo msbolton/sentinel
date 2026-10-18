@@ -23,12 +23,13 @@ type ListenerSource interface {
 // malformed has no row: the stream driver counts it exactly when it
 // dead-letters a frame, which is what decode_errors_total counts.
 var listenerEvents = []struct{ key, event string }{
-	{"accepted", "accepted"},        // frames taken in
-	{"rejected", "rejected"},        // senders outside the allowlist
-	{"refused", "refused"},          // connections over maxConnections
-	{"rateLimited", "rate_limited"}, // frames over maxMessagesPerSec
-	{"oversize", "oversize"},        // frames or datagrams over maxMessageBytes
-	{"tlsFailed", "tls_failed"},     // failed handshakes, and TLS clients on a plain listener
+	{"accepted", "accepted"},                     // frames taken in
+	{"rejected", "rejected"},                     // senders outside the allowlist
+	{"refused", "refused"},                       // connections over maxConnections
+	{"rateLimited", "rate_limited"},              // frames over maxMessagesPerSec, the limit all senders share
+	{"oversize", "oversize"},                     // frames or datagrams over maxMessageBytes
+	{"tlsFailed", "tls_failed"},                  // failed handshakes, and TLS clients on a plain listener
+	{"senderRateLimited", "sender_rate_limited"}, // frames over one sender's maxMessagesPerSecPerSender
 }
 
 // ListenerEventKeys lists the health detail keys the collector exports as

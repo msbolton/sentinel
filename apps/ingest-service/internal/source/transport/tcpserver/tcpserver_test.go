@@ -190,6 +190,109 @@ func TestRateLimitAndSenders(t *testing.T) {
 	}
 }
 
+// handled is how many frames the listener has taken in or dropped for being
+// over a sender's own limit.
+func handled(tr transport.Transport) int64 {
+	st := tr.State()
+	return detailInt(st, "accepted") + detailInt(st, "senderRateLimited")
+}
+
+// A sender over its own limit is counted as senderRateLimited, and against its
+// row in the senders list. rateLimited stays what the limit all senders share
+// dropped: the sender's own bucket is asked first, so a flooder cannot spend
+// the shared budget (here 10 a second against a sender's 3), and only the
+// messages that pass its bucket reach the shared one.
+func TestPerSenderRateLimit(t *testing.T) {
+	addr := transporttest.FreePort(t)
+	tr, err := New(transport.Config{Kind: "tcpserver", Address: addr, Framing: "line", MaxMessagesPerSec: 10, MaxMessagesPerSecPerSender: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	col := &transporttest.Collector{}
+	stop := transporttest.Run(t, tr, col.Emit)
+	defer stop()
+	c := dial(t, addr)
+	defer c.Close()
+	for i := 0; i < 50; i++ {
+		_, _ = c.Write([]byte("m\n"))
+	}
+	if !transporttest.WaitFor(func() bool { return handled(tr) == 50 }, 3*time.Second) {
+		t.Fatalf("accepted + senderRateLimited never reached 50: %+v", tr.State().Detail)
+	}
+	st := tr.State()
+	if a := detailInt(st, "accepted"); a < 3 || a > 4 {
+		t.Errorf("accepted %d of 50 at 3/s for the sender, want its burst of 3 (4 if a token refilled)", a)
+	}
+	if n := detailInt(st, "senderRateLimited"); n < 46 {
+		t.Errorf("senderRateLimited = %d, want the rest of the 50", n)
+	}
+	if n := detailInt(st, "rateLimited"); n != 0 {
+		t.Errorf("rateLimited = %d, want 0: the shared limit only sees what the sender's own passes", n)
+	}
+	if int64(col.Count()) != detailInt(st, "accepted") {
+		t.Errorf("emitted %d frames, accepted %d", col.Count(), detailInt(st, "accepted"))
+	}
+	senders, _ := st.Detail["senders"].([]transport.SenderStat)
+	if len(senders) != 1 {
+		t.Fatalf("senders = %+v", st.Detail["senders"])
+	}
+	if senders[0].RateLimited != detailInt(st, "senderRateLimited") || senders[0].Messages != detailInt(st, "accepted") {
+		t.Errorf("the sender's row = %+v, want %d messages and %d rate limited, as the listener counted", senders[0], detailInt(st, "accepted"), detailInt(st, "senderRateLimited"))
+	}
+}
+
+// A sender is told apart by its IP for the limit, however many connections it
+// opens (or it could multiply its budget), while the senders list keeps one
+// row per connection, named ip:port.
+func TestPerSenderLimitSpansConnections(t *testing.T) {
+	addr := transporttest.FreePort(t)
+	tr, err := New(transport.Config{Kind: "tcpserver", Address: addr, Framing: "line", MaxMessagesPerSecPerSender: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := transporttest.Run(t, tr, (&transporttest.Collector{}).Emit)
+	defer stop()
+	first, second := dial(t, addr), dial(t, addr)
+	defer first.Close()
+	defer second.Close()
+
+	sendAndSettle := func(c net.Conn, n int, total int64) {
+		t.Helper()
+		for i := 0; i < n; i++ {
+			_, _ = c.Write([]byte("m\n"))
+		}
+		if !transporttest.WaitFor(func() bool { return handled(tr) == total }, 3*time.Second) {
+			t.Fatalf("accepted + senderRateLimited never reached %d: %+v", total, tr.State().Detail)
+		}
+	}
+	sendAndSettle(first, 3, 3)
+	sendAndSettle(second, 3, 6)
+
+	st := tr.State()
+	if a := detailInt(st, "accepted"); a < 4 || a > 5 {
+		t.Errorf("accepted %d of 6 over two connections at 4/s for the sender's IP, want its one burst of 4 (5 if a token refilled)", a)
+	}
+	senders, _ := st.Detail["senders"].([]transport.SenderStat)
+	byRemote := map[string]transport.SenderStat{}
+	for _, s := range senders {
+		byRemote[s.Remote] = s
+	}
+	if len(byRemote) != 2 || st.Detail["distinctSenders"] != 2 {
+		t.Fatalf("senders = %+v, want one row for each connection", senders)
+	}
+	var limited int64
+	for _, c := range []net.Conn{first, second} {
+		s, ok := byRemote[c.LocalAddr().String()]
+		if !ok {
+			t.Errorf("no row named %s (the connection's ip:port) in %+v", c.LocalAddr(), senders)
+		}
+		limited += s.RateLimited
+	}
+	if limited != detailInt(st, "senderRateLimited") {
+		t.Errorf("the rows count %d rate limited, the listener %d", limited, detailInt(st, "senderRateLimited"))
+	}
+}
+
 // State renders at most 50 senders however many are connected; the
 // distinct count stays the full number.
 func TestSenderReportIsTruncated(t *testing.T) {

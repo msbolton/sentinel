@@ -622,6 +622,33 @@ func TestTCPServerDefaultsMaxConnections(t *testing.T) {
 	}
 }
 
+// A listening transport takes its per-sender rate from the transport section
+// beside the shared rate, and the two are independent. Absent, it is 0: no
+// per-sender limit.
+func TestListenerReadsMaxMessagesPerSecPerSender(t *testing.T) {
+	cases := []struct {
+		name, transport     string
+		wantShared, wantPer int
+	}{
+		{"tcpserver, absent", `{"kind":"tcpserver","address":"127.0.0.1:0"}`, 0, 0},
+		{"tcpserver, both", `{"kind":"tcpserver","address":"127.0.0.1:0","maxMessagesPerSec":500,"maxMessagesPerSecPerSender":20}`, 500, 20},
+		{"tcpserver, per sender only", `{"kind":"tcpserver","address":"127.0.0.1:0","maxMessagesPerSecPerSender":20}`, 0, 20},
+		{"udp, per sender", `{"kind":"udp","address":"127.0.0.1:0","maxMessagesPerSecPerSender":20}`, 0, 20},
+	}
+	for _, tc := range cases {
+		cfg := `{"transport":` + tc.transport + `,"framing":"line","decoder":{"name":"sbs"}}`
+		d, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		got := d.(*Driver).tcfg
+		if got.MaxMessagesPerSec != tc.wantShared || got.MaxMessagesPerSecPerSender != tc.wantPer {
+			t.Errorf("%s: maxMessagesPerSec = %d, maxMessagesPerSecPerSender = %d; want %d and %d", tc.name, got.MaxMessagesPerSec, got.MaxMessagesPerSecPerSender, tc.wantShared, tc.wantPer)
+		}
+	}
+}
+
 // A client CA verifies only the certificates a listener asks for, so a stream
 // listener that holds the clientCa secret without requireClientCert is
 // refused, as the tcp driver refuses it, instead of accepting every sender

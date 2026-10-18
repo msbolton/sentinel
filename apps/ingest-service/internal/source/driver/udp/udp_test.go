@@ -103,13 +103,9 @@ func newDriver(t *testing.T, cfg map[string]any) (*Driver, error) {
 	return d.(*Driver), nil
 }
 
-// start runs a driver bound to a free loopback port until the test ends and
-// returns it with a connected sender once the socket is bound. The sender is
-// connected only after the bind, so a datagram cannot go to a closed port.
-func start(t *testing.T, cfg map[string]any) (*Driver, *memSink, net.Conn) {
+// run starts a driver until the test ends and waits for it to bind its socket.
+func run(t *testing.T, cfg map[string]any) (*Driver, *memSink) {
 	t.Helper()
-	port := freePort(t)
-	cfg["port"], cfg["address"] = port, "127.0.0.1"
 	d, err := newDriver(t, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -122,6 +118,17 @@ func start(t *testing.T, cfg map[string]any) (*Driver, *memSink, net.Conn) {
 	if !transporttest.WaitFor(func() bool { return d.Health().Connected }, waitTimeout) {
 		t.Fatal("nothing listening")
 	}
+	return d, sink
+}
+
+// start runs a driver bound to a free loopback port until the test ends and
+// returns it with a connected sender once the socket is bound. The sender is
+// connected only after the bind, so a datagram cannot go to a closed port.
+func start(t *testing.T, cfg map[string]any) (*Driver, *memSink, net.Conn) {
+	t.Helper()
+	port := freePort(t)
+	cfg["port"], cfg["address"] = port, "127.0.0.1"
+	d, sink := run(t, cfg)
 	c, err := net.Dial("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
 		t.Fatal(err)
@@ -166,9 +173,10 @@ func TestProtobufDatagramIsOneMessage(t *testing.T) {
 	}
 }
 
-// A datagram nothing can decode is dead-lettered with the sender it came
-// from, and that sender's row in the health detail counts it; a sender whose
-// datagrams decode is not blamed.
+// A datagram nothing can decode is dead-lettered with the exact socket it came
+// from (ip:port), and the sender's row in the health detail counts it. That row
+// is named by the sender's IP, which both sockets here share, so it holds the
+// messages of both and the one that did not decode.
 func TestMalformedDatagramNamesItsSender(t *testing.T) {
 	d, sink, bad := start(t, map[string]any{"encoding": "protobuf"})
 	good, err := net.Dial("udp", bad.RemoteAddr().String())
@@ -193,7 +201,7 @@ func TestMalformedDatagramNamesItsSender(t *testing.T) {
 		t.Errorf("dead letter = %+v, want garbage under parse_error", dl)
 	}
 	if dl.p.Decoder != "sentinel" || dl.p.Sender != bad.LocalAddr().String() {
-		t.Errorf("provenance = %+v, want decoder sentinel and sender %s", dl.p, bad.LocalAddr())
+		t.Errorf("provenance = %+v, want decoder sentinel and sender %s, the exact socket", dl.p, bad.LocalAddr())
 	}
 	if dl.p.ReceivedAt.Before(before) || dl.p.ReceivedAt.After(time.Now()) {
 		t.Errorf("receivedAt = %v, want the time the datagram arrived (after %v)", dl.p.ReceivedAt, before)
@@ -203,17 +211,62 @@ func TestMalformedDatagramNamesItsSender(t *testing.T) {
 	if !ok {
 		t.Fatalf("detail.senders = %T", d.Health().Detail["senders"])
 	}
+	if len(senders) != 1 || senders[0].Remote != "127.0.0.1" {
+		t.Fatalf("senders = %+v, want the one row of the IP both sockets share, and none for the socket's port", senders)
+	}
+	if s := senders[0]; s.Messages != 2 || s.Malformed != 1 || s.LastReason != "parse_error" || s.LastError == "" || s.LastMalformedAt == nil {
+		t.Errorf("the sender = %+v, want 2 messages, 1 of them undecodable, with its reason and error", s)
+	}
+}
+
+// Two senders on different addresses (an IPv4 one reaching a dual-stack socket
+// as an IPv4-mapped IPv6 address, and an IPv6 one): the undecodable datagram is
+// blamed on its own sender's row and on no other.
+func TestMalformedDatagramBlamesOnlyItsSender(t *testing.T) {
+	probe, err := net.ListenPacket("udp", "[::1]:0")
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	port := probe.LocalAddr().(*net.UDPAddr).Port
+	probe.Close()
+	// With no address the driver binds the wildcard: one socket for both families.
+	d, sink := run(t, map[string]any{"encoding": "protobuf", "port": port})
+	bad, err := net.Dial("udp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bad.Close() })
+	good, err := net.Dial("udp6", net.JoinHostPort("::1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = good.Close() })
+
+	if _, err := good.Write(protobufDatagram("ok")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bad.Write([]byte("garbage")); err != nil {
+		t.Fatal(err)
+	}
+	if !transporttest.WaitFor(func() bool { return len(sink.deadLetters()) == 1 && sink.count() == 1 }, waitTimeout) {
+		t.Fatalf("dead letters = %+v, observations = %q, want one of each", sink.deadLetters(), sink.ids())
+	}
+	if got := sink.deadLetters()[0].p.Sender; got != bad.LocalAddr().String() {
+		t.Errorf("dead letter sender = %q, want the exact socket %s", got, bad.LocalAddr())
+	}
+
+	senders, _ := d.Health().Detail["senders"].([]transport.SenderStat)
 	byRemote := map[string]transport.SenderStat{}
 	for _, s := range senders {
 		byRemote[s.Remote] = s
 	}
 	if len(byRemote) != 2 {
-		t.Fatalf("senders = %+v, want both", senders)
+		t.Fatalf("senders = %+v, want 127.0.0.1 and ::1", senders)
 	}
-	if s := byRemote[bad.LocalAddr().String()]; s.Malformed != 1 || s.LastReason != "parse_error" || s.LastError == "" || s.LastMalformedAt == nil {
-		t.Errorf("the sender of the garbage = %+v, want one undecodable datagram with its reason and error", s)
+	if s := byRemote["127.0.0.1"]; s.Messages != 1 || s.Malformed != 1 || s.LastReason != "parse_error" || s.LastError == "" || s.LastMalformedAt == nil {
+		t.Errorf("the sender of the garbage = %+v, want one message, undecodable, with its reason and error", s)
 	}
-	if s := byRemote[good.LocalAddr().String()]; s.Malformed != 0 || s.LastReason != "" || s.LastError != "" || s.LastMalformedAt != nil || s.Messages != 1 {
+	if s := byRemote["::1"]; s.Messages != 1 || s.Malformed != 0 || s.LastReason != "" || s.LastError != "" || s.LastMalformedAt != nil {
 		t.Errorf("the sender of the good datagram = %+v, want one message and nothing malformed", s)
 	}
 }
@@ -289,6 +342,32 @@ func TestMessageRate(t *testing.T) {
 		a, l := counter(d, "accepted"), counter(d, "rateLimited")
 		if !tc.ok(a, l) {
 			t.Errorf("%s: accepted %d, rateLimited %d", name, a, l)
+		}
+	}
+}
+
+// maxMessagesPerSecPerSender reaches the listener: one sender's lines beyond
+// its own rate are dropped and counted apart from the shared limit, and the
+// setting off (absent, the default) limits no sender.
+func TestPerSenderMessageRate(t *testing.T) {
+	line := `{"sourceEntityId":"r"}` + "\n"
+	for name, tc := range map[string]struct {
+		cfg       map[string]any
+		accepted  int64
+		perSender int64
+	}{
+		"off by default": {map[string]any{"encoding": "json"}, 5, 0},
+		"set to 2":       {map[string]any{"encoding": "json", "maxMessagesPerSecPerSender": 2}, 2, 3},
+	} {
+		d, _, c := start(t, tc.cfg)
+		if _, err := c.Write([]byte(strings.Repeat(line, 5))); err != nil {
+			t.Fatal(err)
+		}
+		if !transporttest.WaitFor(func() bool { return counter(d, "accepted")+counter(d, "senderRateLimited") == 5 }, waitTimeout) {
+			t.Fatalf("%s: accepted %d + senderRateLimited %d, want 5 lines", name, counter(d, "accepted"), counter(d, "senderRateLimited"))
+		}
+		if a, l := counter(d, "accepted"), counter(d, "senderRateLimited"); a != tc.accepted || l != tc.perSender || counter(d, "rateLimited") != 0 {
+			t.Errorf("%s: accepted %d, senderRateLimited %d, rateLimited %d; want %d, %d, 0", name, a, l, counter(d, "rateLimited"), tc.accepted, tc.perSender)
 		}
 	}
 }

@@ -3,6 +3,8 @@ package udp
 import (
 	"fmt"
 	"net"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -121,6 +123,188 @@ func TestUDPAllowlistOversizeAndRate(t *testing.T) {
 	}
 }
 
+// sendersOf lists the senders a listener reports, by the name they go under.
+func sendersOf(t *testing.T, tr transport.Transport) map[string]transport.SenderStat {
+	t.Helper()
+	list, ok := tr.State().Detail["senders"].([]transport.SenderStat)
+	if !ok {
+		t.Fatalf("detail.senders = %T", tr.State().Detail["senders"])
+	}
+	out := map[string]transport.SenderStat{}
+	for _, s := range list {
+		out[s.Remote] = s
+	}
+	return out
+}
+
+// A datagram sender is told apart by its IP, not its port: a host that sends
+// from a new socket each time is still one sender. Only the senders list and
+// the limit go by the IP; the frame keeps ip:port, the exact socket, for the
+// sensor id and the dead letter.
+func TestUDPSendersKeyedByIP(t *testing.T) {
+	addr := freeUDPAddr(t)
+	tr, err := New(transport.Config{Kind: "udp", Address: addr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	col := &transporttest.Collector{}
+	stop := transporttest.Run(t, tr, col.Emit)
+	defer stop()
+	if !transporttest.WaitFor(func() bool { return tr.State().Connected }, 2*time.Second) {
+		t.Fatal("listener not up")
+	}
+	var sockets []string
+	for i := 0; i < 2; i++ {
+		c, err := net.Dial("udp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if _, err := c.Write([]byte("hi")); err != nil {
+			t.Fatal(err)
+		}
+		sockets = append(sockets, c.LocalAddr().String())
+	}
+	if !transporttest.WaitFor(func() bool { return col.Count() == 2 }, 2*time.Second) {
+		t.Fatalf("frames = %v", col.Payloads())
+	}
+
+	st := tr.State()
+	senders := sendersOf(t, tr)
+	if st.Detail["distinctSenders"] != 1 || len(senders) != 1 {
+		t.Fatalf("distinctSenders = %v, senders = %+v, want the one address both sockets share", st.Detail["distinctSenders"], senders)
+	}
+	if s, ok := senders["127.0.0.1"]; !ok || s.Messages != 2 {
+		t.Errorf("senders = %+v, want one named 127.0.0.1 with 2 messages", senders)
+	}
+	var remotes []string
+	for _, f := range col.Frames() {
+		remotes = append(remotes, f.Remote)
+	}
+	slices.Sort(remotes)
+	slices.Sort(sockets)
+	if !slices.Equal(remotes, sockets) {
+		t.Errorf("frame remotes = %v, want the senders' sockets %v: Frame.Remote stays ip:port", remotes, sockets)
+	}
+}
+
+// The stream driver notes an undecodable message under the frame's Remote,
+// which is ip:port. The sender's row is kept by IP, so the note must reach it
+// instead of starting a row of its own for the port.
+func TestNoteMalformedCountsAgainstTheSenderIP(t *testing.T) {
+	addr := freeUDPAddr(t)
+	tr, err := New(transport.Config{Kind: "udp", Address: addr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	col := &transporttest.Collector{}
+	stop := transporttest.Run(t, tr, col.Emit)
+	defer stop()
+	if !transporttest.WaitFor(func() bool { return tr.State().Connected }, 2*time.Second) {
+		t.Fatal("listener not up")
+	}
+	c, err := net.Dial("udp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, _ = c.Write([]byte("garbage"))
+	if !transporttest.WaitFor(func() bool { return col.Count() == 1 }, 2*time.Second) {
+		t.Fatal("no frame")
+	}
+	noter, ok := tr.(transport.MalformedNoter)
+	if !ok {
+		t.Fatal("the udp transport does not note undecodable messages")
+	}
+
+	remote := col.Frames()[0].Remote // ip:port, as the driver passes it on
+	noter.NoteMalformed(remote, "parse_error", "bad")
+	senders := sendersOf(t, tr)
+	if len(senders) != 1 {
+		t.Fatalf("senders = %+v, want the one row of the sender's IP: the note made a row for the port", senders)
+	}
+	if s := senders["127.0.0.1"]; s.Messages != 1 || s.Malformed != 1 || s.LastReason != "parse_error" || s.LastError != "bad" || s.LastMalformedAt == nil {
+		t.Errorf("127.0.0.1 = %+v, want its 1 message and the 1 undecodable one", s)
+	}
+
+	// The same address in the other forms a remote takes lands on the same row.
+	noter.NoteMalformed("[::ffff:127.0.0.1]:9", "parse_error", "again")
+	noter.NoteMalformed("127.0.0.1:65000", "parse_error", "again")
+	senders = sendersOf(t, tr)
+	if s := senders["127.0.0.1"]; len(senders) != 1 || s.Malformed != 3 {
+		t.Errorf("senders = %+v, want one row with 3 undecodable messages", senders)
+	}
+}
+
+// A limit is kept per sender IP: 127.0.0.1 and ::1 reach one dual-stack socket
+// and have a bucket each. The flooder's bucket is asked before the shared one,
+// so it spends none of the shared budget (10 a second, a sender's is 3), and
+// the other sender's messages all get through.
+func TestPerSenderLimitIsolatesSenders(t *testing.T) {
+	probe, err := net.ListenPacket("udp", "[::1]:0")
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	port := probe.LocalAddr().(*net.UDPAddr).Port
+	probe.Close()
+	// An address with no host is the wildcard: one socket for both families.
+	tr, err := New(transport.Config{Kind: "udp", Address: ":" + strconv.Itoa(port), MaxMessagesPerSec: 10, MaxMessagesPerSecPerSender: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	col := &transporttest.Collector{}
+	stop := transporttest.Run(t, tr, col.Emit)
+	defer stop()
+	if !transporttest.WaitFor(func() bool { return tr.State().Connected }, 2*time.Second) {
+		t.Fatal("listener not up")
+	}
+	counter := func(key string) int64 { v, _ := tr.State().Detail[key].(int64); return v }
+	handled := func() int64 { return counter("accepted") + counter("senderRateLimited") }
+	flood := func(network, host string, n int, total int64) {
+		t.Helper()
+		c, err := net.Dial(network, net.JoinHostPort(host, strconv.Itoa(port)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		for i := 0; i < n; i++ {
+			_, _ = c.Write([]byte("m"))
+		}
+		if !transporttest.WaitFor(func() bool { return handled() == total }, 3*time.Second) {
+			t.Fatalf("%s: accepted + senderRateLimited = %d, want %d: %+v", host, handled(), total, tr.State().Detail)
+		}
+	}
+	flood("udp4", "127.0.0.1", 20, 20)
+	flood("udp6", "::1", 2, 22)
+
+	if n := counter("rateLimited"); n != 0 {
+		t.Errorf("rateLimited = %d, want 0: the flooder spent none of the shared budget, and the other sender's 2 are within it", n)
+	}
+	senders := sendersOf(t, tr)
+	v4, v6 := senders["127.0.0.1"], senders["::1"]
+	if len(senders) != 2 || tr.State().Detail["distinctSenders"] != 2 {
+		t.Fatalf("senders = %+v, want 127.0.0.1 and ::1 (an IPv4 sender on a dual-stack socket is the IPv4 address)", senders)
+	}
+	if v4.Messages < 3 || v4.Messages > 4 || v4.RateLimited < 16 || v4.Messages+v4.RateLimited != 20 {
+		t.Errorf("127.0.0.1 = %+v, want its burst of 3 (4 if a token refilled) accepted and the rest of its 20 limited", v4)
+	}
+	if v6.Messages != 2 || v6.RateLimited != 0 {
+		t.Errorf("::1 = %+v, want both of its messages accepted and none limited", v6)
+	}
+	if got := counter("senderRateLimited"); got != v4.RateLimited {
+		t.Errorf("senderRateLimited = %d, want the flooder's %d", got, v4.RateLimited)
+	}
+	var fromV6 int
+	for _, f := range col.Frames() {
+		if strings.HasPrefix(f.Remote, "[::1]:") {
+			fromV6++
+		}
+	}
+	if fromV6 != 2 {
+		t.Errorf("%d frames came from ::1, want 2: %v", fromV6, col.Frames())
+	}
+}
+
 func TestUDPBindConflictIsExplained(t *testing.T) {
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -165,7 +349,7 @@ func TestUDPStateTruncatesSendersButCountsThemAll(t *testing.T) {
 	l := tr.(*Listener)
 	now := time.Now().UTC()
 	for i := 0; i < 60; i++ {
-		l.senders.Seen(fmt.Sprintf("10.0.0.%d:5000", i+1), now)
+		l.senders.Seen(fmt.Sprintf("10.0.0.%d", i+1), now)
 	}
 	st := l.State()
 	list, ok := st.Detail["senders"].([]transport.SenderStat)

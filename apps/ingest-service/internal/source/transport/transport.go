@@ -120,9 +120,10 @@ type Config struct {
 	TLS      *TLS   `json:"tls"`
 
 	// Listener protection (tcpserver, udp).
-	Allow             []string `json:"allow"`             // IPs or CIDRs allowed to send; empty = anyone who can reach the port
-	MaxConnections    int      `json:"maxConnections"`    // tcpserver: concurrent connections; 0 = unlimited
-	MaxMessagesPerSec int      `json:"maxMessagesPerSec"` // frames per second for the listener; 0 = unlimited
+	Allow                      []string `json:"allow"`                      // IPs or CIDRs allowed to send; empty = anyone who can reach the port
+	MaxConnections             int      `json:"maxConnections"`             // tcpserver: concurrent connections; 0 = unlimited
+	MaxMessagesPerSec          int      `json:"maxMessagesPerSec"`          // frames per second for the listener; 0 = unlimited
+	MaxMessagesPerSecPerSender int      `json:"maxMessagesPerSecPerSender"` // frames per second for each sender IP, within the listener's; 0 = no per-sender limit
 
 	// TLS material from secret references; never part of the config JSON.
 	CertPEM, KeyPEM, ClientCAPEM, CAPEM []byte `json:"-"`

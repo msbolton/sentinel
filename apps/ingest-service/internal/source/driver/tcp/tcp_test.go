@@ -211,6 +211,51 @@ func TestMalformedMessageNamesItsSender(t *testing.T) {
 	}
 }
 
+// maxMessagesPerSecPerSender limits each sender of a listening connection on
+// its own: lines beyond it are dropped and counted as senderRateLimited, apart
+// from the limit all senders share. Absent, the default, it limits nobody.
+func TestPerSenderMessageRate(t *testing.T) {
+	line := `{"sourceEntityId":"r","position":{"latitude":1,"longitude":2}}` + "\n"
+	for name, tc := range map[string]struct {
+		perSender map[string]any
+		accepted  int64
+		limited   int64
+	}{
+		"off by default": {nil, 5, 0},
+		"set to 2":       {map[string]any{"maxMessagesPerSecPerSender": 2}, 2, 3},
+	} {
+		port := freePort(t)
+		cfg := map[string]any{"mode": "listen", "port": port, "address": "127.0.0.1", "encoding": "json"}
+		for k, v := range tc.perSender {
+			cfg[k] = v
+		}
+		d, sink := start(t, cfg, nil)
+		c := dial(t, port, nil)
+		if _, err := c.Write([]byte(strings.Repeat(line, 5))); err != nil {
+			t.Fatal(err)
+		}
+		counter := func(key string) int64 { n, _ := d.Health().Detail[key].(int64); return n }
+		if !transporttest.WaitFor(func() bool { return counter("accepted")+counter("senderRateLimited") == 5 }, waitTimeout) {
+			t.Fatalf("%s: accepted %d + senderRateLimited %d, want 5 lines", name, counter("accepted"), counter("senderRateLimited"))
+		}
+		if a, l := counter("accepted"), counter("senderRateLimited"); a != tc.accepted || l != tc.limited || counter("rateLimited") != 0 {
+			t.Errorf("%s: accepted %d, senderRateLimited %d, rateLimited %d; want %d, %d, 0", name, a, l, counter("rateLimited"), tc.accepted, tc.limited)
+		}
+		if !transporttest.WaitFor(func() bool { return int64(sink.count()) == tc.accepted }, waitTimeout) {
+			t.Errorf("%s: %d observations, want the %d accepted", name, sink.count(), tc.accepted)
+		}
+	}
+}
+
+// The setting belongs to a listener: a connection Sentinel dials out has no
+// senders to limit, and takes it without complaint.
+func TestConnectIgnoresMaxMessagesPerSecPerSender(t *testing.T) {
+	cfg := map[string]any{"mode": "connect", "host": "127.0.0.1", "port": 7000, "maxMessagesPerSecPerSender": 5}
+	if _, err := newDriver(t, cfg, nil); err != nil {
+		t.Errorf("connect with maxMessagesPerSecPerSender: %v", err)
+	}
+}
+
 func TestListenTLSFromSecrets(t *testing.T) {
 	ca := transporttest.NewCA(t)
 	pair := ca.Issue(t, "localhost")

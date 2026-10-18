@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"container/list"
 	"errors"
 	"fmt"
 	"net"
@@ -77,17 +78,91 @@ func NewLimiter(perSec int) *Limiter {
 // Allow takes one token.
 func (l *Limiter) Allow() bool { return l == nil || l.l.Allow() }
 
+// SenderLimiterKeys is how many senders a listener's SenderLimiter remembers.
+// A bucket costs a few hundred bytes, so a flood of spoofed addresses holds
+// the limiter to about a megabyte; a sender forgotten past the cap starts
+// again with a full bucket.
+const SenderLimiterKeys = 4096
+
+// SenderLimiter gives each key, a sender's IP, a token bucket of its own:
+// perSec messages a second, with a burst of one second's worth, as Limiter
+// has. It remembers at most maxKeys keys and forgets the one used least
+// recently when a new one arrives past that. A nil limiter allows everything.
+type SenderLimiter struct {
+	mu     sync.Mutex
+	perSec int
+	max    int
+	order  *list.List               // senderBucket values, most recently used first
+	m      map[string]*list.Element // key to its place in order
+}
+
+type senderBucket struct {
+	key string
+	lim *rate.Limiter
+}
+
+// NewSenderLimiter returns nil (no per-sender limit) for perSec <= 0. A
+// maxKeys below 1 is taken as 1.
+func NewSenderLimiter(perSec, maxKeys int) *SenderLimiter {
+	if perSec <= 0 {
+		return nil
+	}
+	return &SenderLimiter{perSec: perSec, max: max(maxKeys, 1), order: list.New(), m: map[string]*list.Element{}}
+}
+
+// Allow takes one token from key's bucket, as of now.
+func (l *SenderLimiter) Allow(key string, now time.Time) bool {
+	if l == nil {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	el, ok := l.m[key]
+	if ok {
+		l.order.MoveToFront(el)
+	} else {
+		if len(l.m) >= l.max {
+			oldest := l.order.Back()
+			l.order.Remove(oldest)
+			delete(l.m, oldest.Value.(*senderBucket).key)
+		}
+		el = l.order.PushFront(&senderBucket{key: key, lim: rate.NewLimiter(rate.Limit(l.perSec), l.perSec)})
+		l.m[key] = el
+	}
+	return el.Value.(*senderBucket).lim.AllowN(now, 1)
+}
+
+// SenderIP returns the IP address of the sender that remote names ("host:port"
+// or a bare IP), as canonical text with an IPv4-mapped IPv6 address shown as
+// the IPv4 address it wraps, so one host is one sender however its address
+// reaches a dual-stack socket. It is the key a sender's rate limit is kept
+// under, and the name of its row in a datagram listener's senders list. Text
+// that is not an IP address comes back as it is.
+func SenderIP(remote string) string {
+	if ap, err := netip.ParseAddrPort(remote); err == nil {
+		return ap.Addr().Unmap().String()
+	}
+	if addr, err := netip.ParseAddr(remote); err == nil {
+		return addr.Unmap().String()
+	}
+	return remote
+}
+
 // SenderStat is one sender as health reports it. LastAt is left out until the
 // sender has sent something (a connection that has not yet is listed too).
-// Malformed counts the sender's messages that did not decode; the last of
-// them is described by LastReason, LastError and LastMalformedAt, which are
-// left out until there is one.
+// Messages counts the sender's messages that were taken in; RateLimited counts
+// those dropped for going over the sender's own rate limit. Malformed counts
+// the sender's messages that did not decode; the last of them is described by
+// LastReason, LastError and LastMalformedAt, which are left out until there
+// is one.
 type SenderStat struct {
 	Remote    string    `json:"remote"`
 	Since     time.Time `json:"since"`
 	LastAt    time.Time `json:"lastAt,omitzero"`
 	Messages  int64     `json:"messages"`
 	Connected bool      `json:"connected"`
+
+	RateLimited int64 `json:"rateLimited"`
 
 	Malformed       int64      `json:"malformed"`
 	LastReason      string     `json:"lastReason,omitempty"`
@@ -170,6 +245,21 @@ func (s *Senders) Seen(remote string, now time.Time) {
 	e.LastAt = now
 }
 
+// RateLimited records that a message from remote was dropped for going over
+// the sender's own rate limit. The message was not taken in, so it is not
+// counted by Seen and does not make the sender look newer. A sender evicted
+// while its bucket lived on is tracked afresh, with LastAt set, which Snapshot
+// needs to keep it.
+func (s *Senders) RateLimited(remote string, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.entry(remote, now)
+	e.RateLimited++
+	if e.LastAt.IsZero() {
+		e.LastAt = now
+	}
+}
+
 // Malformed records that a message from remote did not decode: the sender
 // keeps a count and the latest reason, error text (cut to 200 bytes) and
 // time. The message itself was counted by Seen when it arrived. A sender
@@ -220,16 +310,19 @@ func truncateUTF8(s string, n int) string {
 	return strings.Clone(s[:cut])
 }
 
-// ListenCounters are a listener's running totals.
+// ListenCounters are a listener's running totals. RateLimited counts messages
+// dropped by the limit all senders share, SenderRateLimited those dropped by a
+// sender's own limit.
 type ListenCounters struct {
-	Accepted, Rejected, Refused, RateLimited, Oversize, TLSFailed atomic.Int64
+	Accepted, Rejected, Refused, RateLimited, SenderRateLimited, Oversize, TLSFailed atomic.Int64
 }
 
 // Detail renders the counters for health.
 func (c *ListenCounters) Detail() map[string]any {
 	return map[string]any{
 		"accepted": c.Accepted.Load(), "rejected": c.Rejected.Load(), "refused": c.Refused.Load(),
-		"rateLimited": c.RateLimited.Load(), "oversize": c.Oversize.Load(), "tlsFailed": c.TLSFailed.Load(),
+		"rateLimited": c.RateLimited.Load(), "senderRateLimited": c.SenderRateLimited.Load(),
+		"oversize": c.Oversize.Load(), "tlsFailed": c.TLSFailed.Load(),
 	}
 }
 

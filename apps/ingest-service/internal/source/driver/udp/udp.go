@@ -38,15 +38,16 @@ func init() {
 
 // Config is the feed configuration.
 type Config struct {
-	Port              int             `json:"port"`
-	Address           string          `json:"address"`
-	Format            string          `json:"format"`
-	Encoding          string          `json:"encoding"`
-	DecoderOptions    json.RawMessage `json:"decoderOptions"`
-	DefaultSource     string          `json:"defaultSource"`
-	Allow             []string        `json:"allow"`
-	MaxMessageBytes   int             `json:"maxMessageBytes"`
-	MaxMessagesPerSec *int            `json:"maxMessagesPerSec"`
+	Port                       int             `json:"port"`
+	Address                    string          `json:"address"`
+	Format                     string          `json:"format"`
+	Encoding                   string          `json:"encoding"`
+	DecoderOptions             json.RawMessage `json:"decoderOptions"`
+	DefaultSource              string          `json:"defaultSource"`
+	Allow                      []string        `json:"allow"`
+	MaxMessageBytes            int             `json:"maxMessageBytes"`
+	MaxMessagesPerSec          *int            `json:"maxMessagesPerSec"`
+	MaxMessagesPerSecPerSender int             `json:"maxMessagesPerSecPerSender"` // 0 = no per-sender limit
 }
 
 // Driver wraps the stream driver to report where it listens.
@@ -110,7 +111,7 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 		rate = *c.MaxMessagesPerSec
 	}
 	tcfg := transport.Config{Kind: "udp", Address: net.JoinHostPort(c.Address, strconv.Itoa(c.Port)), Allow: c.Allow,
-		MaxFrameBytes: c.MaxMessageBytes, MaxMessagesPerSec: rate}
+		MaxFrameBytes: c.MaxMessageBytes, MaxMessagesPerSec: rate, MaxMessagesPerSecPerSender: c.MaxMessagesPerSecPerSender}
 	if tcfg.MaxFrameBytes == 0 {
 		tcfg.MaxFrameBytes = 65507
 	}
