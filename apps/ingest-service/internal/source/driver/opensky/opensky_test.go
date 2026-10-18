@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -80,6 +81,9 @@ func build(t *testing.T, srv *httptest.Server, cfg string) *Driver {
 		c = map[string]any{}
 	}
 	c["baseUrl"] = srv.URL
+	if _, set := c["backgroundIntervalSec"]; !set {
+		c["backgroundIntervalSec"] = 0 // the tests below count viewport requests
+	}
 	raw, _ := json.Marshal(c)
 	d, err := New(driver.Spec{FeedID: "opensky", Driver: ID, Config: raw}, driver.Deps{Logger: zap.NewNop()})
 	if err != nil {
@@ -271,5 +275,76 @@ func TestOAuthTokenUsedWhenSecretsPresent(t *testing.T) {
 	}
 	if auth != "Bearer tok" {
 		t.Errorf("Authorization = %q", auth)
+	}
+}
+
+func TestBackgroundIntervalDefaults(t *testing.T) {
+	mk := func(cfg string) *Driver {
+		d, err := New(driver.Spec{FeedID: "opensky", Driver: ID, Config: json.RawMessage(cfg)}, driver.Deps{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.(*Driver)
+	}
+	for cfg, want := range map[string]time.Duration{
+		`{}`:                             2 * time.Minute,
+		`{"backgroundIntervalSec": 0}`:   0,
+		`{"backgroundIntervalSec": 30}`:  time.Minute,
+		`{"backgroundIntervalSec": 300}`: 5 * time.Minute,
+		`{"viewportMode": false}`:        0,
+		`{"viewportMode": false, "backgroundIntervalSec": 120}`: 0,
+	} {
+		if got := mk(cfg).background; got != want {
+			t.Errorf("%s: background = %v, want %v", cfg, got, want)
+		}
+	}
+}
+
+func TestBackgroundPollCoversTheGlobeOutsideTheArea(t *testing.T) {
+	srv, _, urls, _ := fixtureServer(t)
+	d := build(t, srv, `{"intervalSec":3600, "backgroundIntervalSec": 120}`)
+	sink := &memSink{}
+
+	// Nobody looking: every aircraft is a background fix, from one global request.
+	d.pollGlobe(context.Background(), sink)
+	if sink.count() != 3 {
+		t.Fatalf("emitted %d", sink.count())
+	}
+	for _, o := range sink.obs {
+		if !o.Background {
+			t.Errorf("%s should be a background fix", o.SourceEntityID)
+		}
+	}
+	if u := urls(); len(u) != 1 || strings.Contains(u[0], "lamin") {
+		t.Errorf("requests = %v, want one global", u)
+	}
+
+	// With a live area, aircraft inside it are left to the full-rate poll.
+	d.sched.SetArea(aoi.Area{Active: true, Boxes: []aoi.BBox{box}, ExpiresAt: time.Now().Add(time.Minute)})
+	sink2 := &memSink{}
+	d.pollGlobe(context.Background(), sink2)
+	if sink2.count() != 2 {
+		t.Fatalf("emitted %d, want the 2 aircraft outside the area", sink2.count())
+	}
+	for _, o := range sink2.obs {
+		if o.SourceEntityID == "ICAO-AB1234" || !o.Background {
+			t.Errorf("unexpected %+v", o)
+		}
+	}
+	h := d.Health()
+	if h.Idle || h.Detail["backgroundPolls"] != int64(2) || h.Detail["backgroundAircraft"] != 2 {
+		t.Errorf("health = %+v", h)
+	}
+}
+
+func TestBackgroundRunsWithoutViewers(t *testing.T) {
+	srv, hits, _, _ := fixtureServer(t)
+	d := build(t, srv, `{"intervalSec":3600, "backgroundIntervalSec": 120}`)
+	sink := start(t, d)
+	if !waitFor(func() bool { return sink.count() == 3 }, 2*time.Second) {
+		t.Fatalf("background poll did not run: %d emitted, %d requests", sink.count(), hits.Load())
+	}
+	if d.Health().Idle || d.Health().Detail["nextBackgroundAt"] == nil {
+		t.Errorf("health = %+v", d.Health())
 	}
 }

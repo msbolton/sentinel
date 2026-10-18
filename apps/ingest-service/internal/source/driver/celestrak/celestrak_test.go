@@ -86,6 +86,9 @@ func waitFor(cond func() bool, timeout time.Duration) bool {
 func newDriver(t *testing.T, srvURL, config string) *Driver {
 	t.Helper()
 	cfg := strings.TrimSuffix(strings.TrimSpace(config), "}")
+	if !strings.Contains(config, "backgroundIntervalSec") {
+		cfg += `, "backgroundIntervalSec": 0` // most tests are about the viewport
+	}
 	cfg += `, "propagationIntervalSec": 1, "baseUrl": "` + srvURL + `/gp.php", "supplementalUrl": "` + srvURL + `/sup-gp.php"}`
 	d, err := New(driver.Spec{FeedID: "celestrak", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
 	if err != nil {
@@ -437,5 +440,44 @@ func TestPinnedObjectsAreAlwaysEmitted(t *testing.T) {
 	}
 	if drv.AreaStatus().Idle {
 		t.Error("idle with a pinned object")
+	}
+}
+
+func TestBackgroundEmitsEverySatelliteSlowly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(fixture(t, "stations.json"))
+	}))
+	defer srv.Close()
+	drv := newDriver(t, srv.URL, `{"groups":["stations"], "backgroundIntervalSec": 600}`)
+	if drv.background != 10*time.Minute {
+		t.Fatalf("background = %v", drv.background)
+	}
+	drv.step = 20 * time.Millisecond
+	drv.background = 300 * time.Millisecond
+	sink := &memSink{}
+	defer run(t, drv, sink)()
+
+	// Nobody looking: both satellites arrive as background fixes, then
+	// nothing more until the background interval has passed.
+	if !waitFor(func() bool { return sink.count() == 2 }, 5*time.Second) {
+		t.Fatalf("emitted %d", sink.count())
+	}
+	time.Sleep(100 * time.Millisecond)
+	sink.mu.Lock()
+	n := len(sink.obs)
+	for _, o := range sink.obs {
+		if !o.Background {
+			t.Errorf("%s should be a background fix", o.SourceEntityID)
+		}
+	}
+	sink.mu.Unlock()
+	if n != 2 {
+		t.Errorf("emitted %d within the background interval, want 2", n)
+	}
+	if h := drv.Health(); h.Idle || drv.AreaStatus().Idle || h.Detail["backgroundEmitted"] != 2 {
+		t.Errorf("health = %+v", h)
+	}
+	if !waitFor(func() bool { return sink.count() == 4 }, 5*time.Second) {
+		t.Errorf("no second background round: %d", sink.count())
 	}
 }

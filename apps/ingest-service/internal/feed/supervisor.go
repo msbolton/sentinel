@@ -73,9 +73,6 @@ type Options struct {
 	ConsumerFactory outbound.ConsumerFactory
 	// Shapes lets exporting drivers read geofences and locations.
 	Shapes driver.ShapeSource
-	// Density builds the density-grid publisher for one feed (nil: drivers
-	// get none and keep their counts to themselves).
-	Density func(feedID, classification string) driver.DensityPublisher
 }
 
 func (o Options) withDefaults() Options {
@@ -562,9 +559,6 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 	common := spec.Common()
 	logger := s.logger.With(zap.String("feed", spec.ID), zap.String("driver", spec.Driver))
 	deps := driver.Deps{Logger: logger, Shapes: s.opts.Shapes}
-	if s.opts.Density != nil {
-		deps.Density = s.opts.Density(spec.ID, common.Classification)
-	}
 	drv, err := s.opts.Factory(driver.Spec{FeedID: spec.ID, Driver: spec.Driver, Config: spec.Config, Secrets: secrets, Backpressure: common.Backpressure}, deps)
 	if err != nil {
 		fail(fmt.Errorf("building driver: %w", err))

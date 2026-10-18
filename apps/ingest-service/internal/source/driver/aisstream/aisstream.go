@@ -1,24 +1,20 @@
 // Package aisstream streams AIS from aisstream.io over a WebSocket.
 //
 // aisstream.io wants a subscription (API key, bounding boxes, optional
-// MMSI and message type filters) within three seconds of connecting, and
-// replaces it when a new one is sent on the same connection, at most once a
-// second. It allows three connections per account, drops consumers that
-// fall behind, and forbids browser use, so the key stays here.
+// MMSI and message type filters) within three seconds of connecting. It
+// allows three connections per account, drops consumers that fall behind,
+// and forbids browser use, so the key stays here.
 //
-// The driver keeps up to two connections. The area connection follows the
-// map clients' viewports pushed by the API gateway and is closed while
-// nobody looks. The watchlist connection, open while the watchlist is not
-// empty, covers the globe filtered to the listed MMSIs, so those vessels
-// are tracked off-screen too.
+// The driver keeps one connection subscribed to the whole world (about 115
+// messages a second in October 2026), so every vessel aisstream.io hears
+// is in the database for search. What the map clients look at decides the
+// rate: vessels inside a viewport pushed by the API gateway, and those on
+// the watchlist, are stored at full rate (moving every 15 s, stationary
+// every 3 min); every other vessel at most every 5 minutes as a background
+// fix, which updates its entity but stays out of track history.
 //
 // Message bodies are go-ais packets as JSON; package aismap maps them,
 // exactly as it does for NMEA receivers, so vessels from both fuse on MMSI.
-// Positions are thinned per vessel (moving vessels every 15 s, stationary
-// ones every 3 min by default); static and voyage reports always pass.
-// When the viewed area is larger than maxAreaSqDeg nothing from the area
-// connection is stored; the driver counts distinct vessels per grid cell
-// instead and publishes the counts (density.events) for the map to draw.
 package aisstream
 
 import (
@@ -33,7 +29,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/sentinel/ingest-service/internal/aoi"
-	"github.com/sentinel/ingest-service/internal/obs"
 	"github.com/sentinel/ingest-service/internal/source/decoder"
 	"github.com/sentinel/ingest-service/internal/source/decoder/aismap"
 	"github.com/sentinel/ingest-service/internal/source/driver"
@@ -47,18 +42,9 @@ const (
 	defaultMoving        = 15 * time.Second
 	defaultStationary    = 3 * time.Minute
 	defaultStationaryKn  = 0.5
-	defaultMaxAreaSqDeg  = 2500.0
-	defaultCellDeg       = 1.0
-	defaultDensityWindow = 10 * time.Minute
-	defaultDensityEvery  = 15 * time.Second
-	maxWatchlist         = 200
+	defaultBackground    = 5 * time.Minute
 	frameBuffer          = 10000
-	areaCheckEvery       = 5 * time.Second
-	modeIdle             = "idle"
-	modeDetail           = "detail"
-	modeDensity          = "density"
-	connArea             = "area"
-	connWatchlist        = "watchlist"
+	connGlobal           = "global"
 	subscriptionKeyField = "apiKey"
 )
 
@@ -78,7 +64,7 @@ var schema []byte
 func init() {
 	driver.Register(driver.Definition{
 		ID: ID, Name: "aisstream.io AIS", Source: "AIS",
-		Description:  "Worldwide AIS from aisstream.io over a WebSocket: vessels over the map clients' viewports plus an MMSI watchlist tracked everywhere. Needs an API key (secretRefs.apiKey).",
+		Description:  "Worldwide AIS from aisstream.io over a WebSocket: every vessel, at full rate over the map clients' viewports and the watchlist and slowly elsewhere. Needs an API key (secretRefs.apiKey).",
 		Capabilities: []string{driver.CapabilityArea},
 		SecretFields: []string{subscriptionKeyField},
 		AreaTTL:      90 * time.Second,
@@ -88,7 +74,7 @@ func init() {
 }
 
 // Config is the feed configuration. Pointers distinguish "unset" from 0,
-// which disables thinning or the area cap.
+// which disables that thinning.
 type Config struct {
 	URL                   string   `json:"url"`
 	WatchlistMMSI         []string `json:"watchlistMmsi"`
@@ -96,22 +82,19 @@ type Config struct {
 	MovingIntervalSec     *int     `json:"movingIntervalSec"`
 	StationaryIntervalSec *int     `json:"stationaryIntervalSec"`
 	StationaryKnots       *float64 `json:"stationaryKnots"`
-	MaxAreaSqDeg          *float64 `json:"maxAreaSqDeg"`
-	DensityCellDeg        float64  `json:"densityCellDeg"`
-	DensityWindowSec      int      `json:"densityWindowSec"`
-	DensityIntervalSec    int      `json:"densityIntervalSec"`
+	BackgroundIntervalSec *int     `json:"backgroundIntervalSec"`
 }
 
-// frame is one message off a connection.
+// frame is one message off the connection.
 type frame struct {
-	from string // connArea or connWatchlist
+	from string
 	data []byte
 	at   time.Time
 }
 
 // counters are the driver's running totals.
 type counters struct {
-	messages, emitted, thinned, outOfArea, notStored, dropped, errors int64
+	messages, emitted, detail, background, thinned, dropped, errors int64
 }
 
 // Driver is one aisstream.io feed.
@@ -119,29 +102,19 @@ type Driver struct {
 	logger    *zap.Logger
 	url       string
 	apiKey    string
-	watchlist []string
+	watchlist map[string]bool
 	types     []string
-	maxArea   float64
 	now       func() time.Time
 	dial      dialFunc
 
-	frames   chan frame
-	areaWake chan struct{}
-	thin     *thinner
-	mapper   *aismap.Mapper
-	counter  *counter
-
-	densityOut   driver.DensityPublisher
-	densityEvery time.Duration
+	frames chan frame
+	thin   *thinner
+	mapper *aismap.Mapper
 
 	mu    sync.Mutex
 	area  aoi.Area
 	conns map[string]*connState
 	count counters
-
-	densityErr                   string
-	densityCells, densityVessels int
-	densityAt                    time.Time
 }
 
 // New validates the config and builds the driver.
@@ -154,9 +127,12 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if key == "" {
 		return nil, fmt.Errorf("feed %s: aisstream needs an API key in secretRefs.%s", spec.FeedID, subscriptionKeyField)
 	}
-	watchlist, err := normalizeWatchlist(cfg.WatchlistMMSI)
-	if err != nil {
-		return nil, fmt.Errorf("feed %s: %w", spec.FeedID, err)
+	watchlist := map[string]bool{}
+	for _, m := range cfg.WatchlistMMSI {
+		if !mmsiRe.MatchString(m) {
+			return nil, fmt.Errorf("feed %s: watchlist MMSI %q is not nine digits", spec.FeedID, m)
+		}
+		watchlist[m] = true
 	}
 	types := cfg.MessageTypes
 	if len(types) == 0 {
@@ -166,10 +142,6 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 		if _, ok := packetTypes[t]; !ok {
 			return nil, fmt.Errorf("feed %s: unsupported message type %q", spec.FeedID, t)
 		}
-	}
-	cellDeg := cfg.DensityCellDeg
-	if cellDeg <= 0 {
-		cellDeg = defaultCellDeg
 	}
 	logger := deps.Logger
 	if logger == nil {
@@ -181,44 +153,22 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 		apiKey:    key,
 		watchlist: watchlist,
 		types:     types,
-		maxArea:   floatOr(cfg.MaxAreaSqDeg, defaultMaxAreaSqDeg),
 		now:       time.Now,
 		dial:      gorillaDial,
 		frames:    make(chan frame, frameBuffer),
-		areaWake:  make(chan struct{}, 1),
 		thin: newThinner(
 			secondsOr(cfg.MovingIntervalSec, defaultMoving),
 			secondsOr(cfg.StationaryIntervalSec, defaultStationary),
+			secondsOr(cfg.BackgroundIntervalSec, defaultBackground),
 			floatOr(cfg.StationaryKnots, defaultStationaryKn),
 		),
-		mapper:       aismap.NewMapper(ID),
-		counter:      newCounter(cellDeg, driver.Seconds(cfg.DensityWindowSec, defaultDensityWindow)),
-		densityOut:   deps.Density,
-		densityEvery: driver.Seconds(cfg.DensityIntervalSec, defaultDensityEvery),
-		conns:        map[string]*connState{},
+		mapper: aismap.NewMapper(ID),
+		conns:  map[string]*connState{},
 	}
 	if cfg.URL != "" {
 		d.url = cfg.URL
 	}
 	return d, nil
-}
-
-func normalizeWatchlist(in []string) ([]string, error) {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(in))
-	for _, m := range in {
-		if !mmsiRe.MatchString(m) {
-			return nil, fmt.Errorf("watchlist MMSI %q is not nine digits", m)
-		}
-		if !seen[m] {
-			seen[m] = true
-			out = append(out, m)
-		}
-	}
-	if len(out) > maxWatchlist {
-		return nil, fmt.Errorf("watchlist has %d MMSIs; aisstream.io allows %d", len(out), maxWatchlist)
-	}
-	return out, nil
 }
 
 func secondsOr(v *int, def time.Duration) time.Duration {
@@ -235,110 +185,29 @@ func floatOr(v *float64, def float64) float64 {
 	return *v
 }
 
-// Run keeps the connections the area and watchlist call for and turns
-// their messages into observations until ctx ends.
+// Run keeps the world subscription open and turns its messages into
+// observations until ctx ends.
 func (d *Driver) Run(ctx context.Context, sink driver.Sink) error {
-	d.logger.Info("aisstream started", zap.Int("watchlist", len(d.watchlist)), zap.Strings("types", d.types), zap.Float64("max_area_sq_deg", d.maxArea))
-	var wg sync.WaitGroup
-	defer wg.Wait()
+	d.logger.Info("aisstream started", zap.Int("watchlist", len(d.watchlist)), zap.Strings("types", d.types), zap.Duration("background", d.thin.background))
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	if len(d.watchlist) > 0 {
-		c := d.newConn(connWatchlist)
-		c.update(d.subscription(globalBoxes(), d.watchlist))
-		wg.Add(1)
-		go func() { defer wg.Done(); c.run(ctx) }()
-	}
-	wg.Add(1)
-	go func() { defer wg.Done(); d.followArea(ctx) }()
-
-	density := time.NewTicker(d.densityEvery)
-	defer density.Stop()
+	c := d.newConn(connGlobal)
+	c.update(d.subscription(globalBoxes(), nil))
+	done := make(chan struct{})
+	go func() { defer close(done); c.run(ctx) }()
+	defer func() { cancel(); <-done }()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case f := <-d.frames:
 			d.handle(ctx, sink, f)
-		case <-density.C:
-			d.publishDensity()
 		}
 	}
 }
 
-// followArea opens, updates and closes the area connection as the pushed
-// area changes or its lease lapses.
-func (d *Driver) followArea(ctx context.Context) {
-	var (
-		c      *conn
-		stop   func()
-		pushed string
-	)
-	open := func() (*conn, func()) {
-		c := d.newConn(connArea)
-		cctx, cancel := context.WithCancel(ctx)
-		done := make(chan struct{})
-		go func() { defer close(done); c.run(cctx) }()
-		return c, func() { cancel(); <-done }
-	}
-	closeConn := func() {
-		if stop != nil {
-			stop()
-			stop, c, pushed = nil, nil, ""
-			d.mu.Lock()
-			delete(d.conns, connArea)
-			d.mu.Unlock()
-		}
-	}
-	defer closeConn()
-	check := time.NewTicker(areaCheckEvery)
-	defer check.Stop()
-	for {
-		boxes := d.wantedBoxes()
-		switch {
-		case len(boxes) == 0:
-			closeConn()
-		default:
-			sub := d.subscription(boxes, nil)
-			if c == nil {
-				c, stop = open()
-				d.logger.Info("aisstream area connection opened", zap.Int("boxes", len(boxes)))
-			}
-			if key := sub.key(); key != pushed {
-				c.update(sub)
-				pushed = key
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-d.areaWake:
-		case <-check.C:
-		}
-	}
-}
-
-// wantedBoxes is what the area connection should subscribe to: the pushed
-// boxes while the area is live, rounded outward to 0.1° so small pans do
-// not resubscribe; nothing otherwise.
-func (d *Driver) wantedBoxes() [][2][2]float64 {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if !d.liveLocked(d.now()) {
-		return nil
-	}
-	out := make([][2][2]float64, 0, len(d.area.Boxes))
-	for _, b := range d.area.Boxes {
-		if b.IsGlobal() {
-			return globalBoxes()
-		}
-		out = append(out, roundBox(b))
-	}
-	return out
-}
-
-// SetAreaOfInterest applies the viewport the gateway pushed.
+// SetAreaOfInterest applies the viewport the gateway pushed: vessels inside
+// it are stored at full rate.
 func (d *Driver) SetAreaOfInterest(a aoi.Area) aoi.Status {
 	d.mu.Lock()
 	changed := !d.area.Equal(a)
@@ -346,16 +215,11 @@ func (d *Driver) SetAreaOfInterest(a aoi.Area) aoi.Status {
 	d.mu.Unlock()
 	if changed {
 		d.logger.Info("aisstream viewport updated", zap.Bool("active", a.Active), zap.Int("clients", a.Clients), zap.Int("boxes", len(a.Boxes)), zap.Float64("area_sq_deg", a.SqDeg()))
-		select {
-		case d.areaWake <- struct{}{}:
-		default:
-		}
 	}
 	return d.AreaStatus()
 }
 
-// AreaStatus reports the area. The feed is idle when nobody is looking and
-// the watchlist is empty.
+// AreaStatus reports the area. The feed is never idle: it streams the world.
 func (d *Driver) AreaStatus() aoi.Status {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -365,7 +229,6 @@ func (d *Driver) AreaStatus() aoi.Status {
 		Boxes:            d.area.Boxes,
 		AreaSqDeg:        d.area.SqDeg(),
 		ExpiresAt:        d.area.ExpiresAt,
-		Idle:             !d.liveLocked(d.now()) && len(d.watchlist) == 0,
 		CreditsRemaining: -1,
 	}
 }
@@ -375,63 +238,41 @@ func (d *Driver) liveLocked(now time.Time) bool {
 	return d.area.Active && len(d.area.Boxes) > 0 && !d.area.Expired(now)
 }
 
-// modeLocked says what happens to messages from the area connection.
-func (d *Driver) modeLocked(now time.Time) string {
-	switch {
-	case !d.liveLocked(now):
-		return modeIdle
-	case d.maxArea > 0 && d.area.SqDeg() > d.maxArea:
-		return modeDensity
-	}
-	return modeDetail
-}
-
-// Health reports the connections and counters.
+// Health reports the connection and counters.
 func (d *Driver) Health() driver.Health {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	now := d.now()
-	conns := map[string]any{}
-	connected := false
-	lastErr := ""
-	for name, c := range d.conns {
-		conns[name] = c.detail()
-		connected = connected || c.connected
-		if c.lastError != "" {
-			lastErr = name + ": " + c.lastError
-		}
+	connected, lastErr := false, ""
+	var conn map[string]any
+	if c := d.conns[connGlobal]; c != nil {
+		conn = c.detail()
+		connected, lastErr = c.connected, c.lastError
 	}
 	detail := map[string]any{
-		"mode":         d.modeLocked(now),
-		"connections":  conns,
-		"watchlist":    len(d.watchlist),
-		"areaSqDeg":    d.area.SqDeg(),
-		"maxAreaSqDeg": d.maxArea,
-		"messages":     d.count.messages,
-		"emitted":      d.count.emitted,
-		"thinned":      d.count.thinned,
-		"outOfArea":    d.count.outOfArea,
-		"notStored":    d.count.notStored,
-		"dropped":      d.count.dropped,
-		"errors":       d.count.errors,
-		"vesselsKnown": d.mapper.Known(),
+		"connection":            conn,
+		"watchlist":             len(d.watchlist),
+		"viewing":               d.liveLocked(d.now()),
+		"backgroundIntervalSec": int(d.thin.background / time.Second),
+		"messages":              d.count.messages,
+		"emitted":               d.count.emitted,
+		"detail":                d.count.detail,
+		"background":            d.count.background,
+		"thinned":               d.count.thinned,
+		"dropped":               d.count.dropped,
+		"errors":                d.count.errors,
+		"vesselsKnown":          d.mapper.Known(),
 	}
-	if !d.densityAt.IsZero() {
-		detail["density"] = map[string]any{"cells": d.densityCells, "vessels": d.densityVessels, "publishedAt": d.densityAt.UTC().Format(time.RFC3339)}
-	}
-	if d.densityErr != "" {
-		detail["densityError"] = d.densityErr
-	}
-	idle := !d.liveLocked(now) && len(d.watchlist) == 0
-	return driver.Health{Idle: idle, Connected: connected, LastError: lastErr, Detail: detail}
+	return driver.Health{Connected: connected, LastError: lastErr, Detail: detail}
 }
 
-// handle turns one message into at most one observation.
+// handle turns one message into at most one observation. A vessel on the
+// watchlist or inside the viewed area is a full-rate fix; anything else is
+// a background fix.
 func (d *Driver) handle(ctx context.Context, sink driver.Sink, f frame) {
 	o, err := d.parse(f)
 	d.mu.Lock()
 	d.count.messages++
-	mode := d.modeLocked(f.at)
+	live := d.liveLocked(f.at)
 	boxes := d.area.Boxes
 	d.mu.Unlock()
 	if err != nil {
@@ -443,25 +284,9 @@ func (d *Driver) handle(ctx context.Context, sink driver.Sink, f frame) {
 		sink.DeadLetter(f.data, "bad_message", err)
 		return
 	}
-	// Every vessel the area connection reports is counted, whatever the
-	// mode, so the grid is current the moment a view grows past the cap.
-	if f.from == connArea && o.HasPosition && o.EntityType == obs.EntityVessel {
-		d.counter.observe(o.SourceEntityID, o.Latitude, o.Longitude, f.at)
-	}
-	if f.from == connArea {
-		switch mode {
-		case modeDetail:
-			if o.HasPosition && !inAnyBox(boxes, o.Latitude, o.Longitude) {
-				d.bump(func(c *counters) { c.outOfArea++ })
-				sink.Skipped("out_of_area")
-				return
-			}
-		default:
-			d.bump(func(c *counters) { c.notStored++ })
-			sink.Skipped("area_" + mode)
-			return
-		}
-	}
+	watched := o.AIS != nil && d.watchlist[o.AIS.MMSI]
+	inView := live && o.HasPosition && inAnyBox(boxes, o.Latitude, o.Longitude)
+	o.Background = !watched && !inView
 	if !d.thin.allow(o, f.at) {
 		d.bump(func(c *counters) { c.thinned++ })
 		sink.Skipped("thinned")
@@ -470,7 +295,14 @@ func (d *Driver) handle(ctx context.Context, sink driver.Sink, f frame) {
 	if err := sink.Emit(ctx, o); err != nil {
 		return
 	}
-	d.bump(func(c *counters) { c.emitted++ })
+	d.bump(func(c *counters) {
+		c.emitted++
+		if o.Background {
+			c.background++
+		} else {
+			c.detail++
+		}
+	})
 	sink.Succeeded(1)
 }
 

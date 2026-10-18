@@ -46,12 +46,12 @@ func TestDefaultCatalogListsDrivers(t *testing.T) {
 func TestValidateAcceptsSeedConfigs(t *testing.T) {
 	c := Default()
 	cases := map[string]string{
-		"opensky":    `{"intervalSec": 10, "viewportTtlSec": 90, "minPollSpacingSec": 3, "maxAreaSqDeg": 400, "maxIntervalSec": 60, "creditFloor": 200, "staleWarnSec": 120, "staleCriticalSec": 300}`,
-		"celestrak":  `{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}`,
+		"opensky":    `{"intervalSec": 10, "viewportTtlSec": 90, "minPollSpacingSec": 3, "maxAreaSqDeg": 400, "maxIntervalSec": 60, "creditFloor": 200, "backgroundIntervalSec": 120, "staleWarnSec": 300, "staleCriticalSec": 900}`,
+		"celestrak":  `{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "backgroundIntervalSec": 600, "staleWarnSec": 900, "staleCriticalSec": 1800}`,
 		"celestrak2": `{"catalogNumbers": [25544], "designators": ["1998-067"], "names": ["ISS (ZARYA)"], "special": ["GPZ"], "supplemental": ["iss"], "tleRefreshHours": 6}`,
 		"intelsky":   `{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}`,
-		"aisstream":  `{"maxAreaSqDeg": 2500, "movingIntervalSec": 15, "stationaryIntervalSec": 180, "staleWarnSec": 600, "staleCriticalSec": 1800}`,
-		"aisstream2": `{"watchlistMmsi": ["235100247", "538005120"], "messageTypes": ["PositionReport", "ShipStaticData"], "maxAreaSqDeg": 0, "movingIntervalSec": 0}`,
+		"aisstream":  `{"movingIntervalSec": 15, "stationaryIntervalSec": 180, "backgroundIntervalSec": 300, "staleWarnSec": 600, "staleCriticalSec": 1800}`,
+		"aisstream2": `{"watchlistMmsi": ["235100247", "538005120"], "messageTypes": ["PositionReport", "ShipStaticData"], "backgroundIntervalSec": 0, "movingIntervalSec": 0}`,
 		"stream":     `{"transport": {"kind": "mqtt", "brokerUrl": "tcp://broker:1883", "topics": ["a/#"]}, "decoder": {"name": "json"}}`,
 		"stream2":    `{"transport": {"kind": "tcpclient", "address": "readsb:30003"}, "framing": "line", "decoder": {"name": "sbs"}, "backpressure": "drop"}`,
 		"stream3":    `{"transport": {"kind": "websocket", "url": "wss://x/y"}, "decoder": {"name": "json", "options": {"records": "ac"}}}`,
@@ -92,6 +92,9 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		{"celestrak", `{"special": ["nope"]}`, "/config/special"},
 		{"celestrak", `{"catalogNumbers": [0]}`, "/config/catalogNumbers"},
 		{"intelsky", `{"intervalSec": 2}`, "/config/intervalSec"},
+		{"opensky", `{"backgroundIntervalSec": -1}`, "/config/backgroundIntervalSec"},
+		{"celestrak", `{"backgroundIntervalSec": -1}`, "/config/backgroundIntervalSec"},
+		{"aisstream", `{"backgroundIntervalSec": -1}`, "/config/backgroundIntervalSec"},
 		{"intelsky", `{"url": "ftp://x"}`, "/config/url"},
 		{"aisstream", `{"watchlistMmsi": ["12345"]}`, "/config/watchlistMmsi/0"},
 		{"aisstream", `{"messageTypes": ["SafetyBroadcastMessage"]}`, "/config/messageTypes/0"},

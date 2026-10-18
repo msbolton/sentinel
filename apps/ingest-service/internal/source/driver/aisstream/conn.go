@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"math/rand/v2"
 	"net/http"
 	"time"
@@ -14,7 +13,6 @@ import (
 	gws "github.com/gorilla/websocket"
 	"go.uber.org/zap"
 
-	"github.com/sentinel/ingest-service/internal/aoi"
 	"github.com/sentinel/ingest-service/internal/source/transport"
 )
 
@@ -55,14 +53,6 @@ func (d *Driver) subscription(boxes [][2][2]float64, mmsi []string) subscription
 
 func globalBoxes() [][2][2]float64 {
 	return [][2][2]float64{{{-90, -180}, {90, 180}}}
-}
-
-// roundBox turns a box into aisstream.io's corner pair, rounded outward to
-// a tenth of a degree.
-func roundBox(b aoi.BBox) [2][2]float64 {
-	down := func(v, lo float64) float64 { return math.Max(lo, math.Floor(v*10)/10) }
-	up := func(v, hi float64) float64 { return math.Min(hi, math.Ceil(v*10)/10) }
-	return [2][2]float64{{down(b.South, -90), down(b.West, -180)}, {up(b.North, 90), up(b.East, 180)}}
 }
 
 // connState is what Health reports about one connection; guarded by
