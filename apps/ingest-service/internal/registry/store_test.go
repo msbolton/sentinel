@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -168,6 +170,144 @@ func TestLiveReplicasReportsRoles(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("live replicas = %+v, want %+v (sorted by id, the expired one left out)", got, want)
+	}
+}
+
+// udpFeed is a udp connection on port, as the management API stores one.
+func udpFeed(id string, port int) Feed {
+	return Feed{ID: id, Name: id, Driver: "udp", CreatedBy: "u1", SecretRefs: map[string]string{},
+		Config: json.RawMessage(fmt.Sprintf(`{"port":%d}`, port))}
+}
+
+// portGuard is the port check the management API hands the store.
+func portGuard(t *testing.T) Guard {
+	t.Helper()
+	reserved, err := ParsePortSet(DefaultReservedPorts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func(f Feed, others []Feed) []Problem { return CheckPorts(f, others, reserved) }
+}
+
+// Saves that choose the same port at the same moment: the port check and the
+// insert are one step under an advisory lock, so exactly one connection is
+// stored and the other is refused for its port.
+func TestConcurrentCreatesCannotShareAPort(t *testing.T) {
+	s, ctx := testStore(t)
+	check := portGuard(t)
+	// The guard dawdles once it has read the feeds: without the lock both
+	// saves would read before either wrote, and both would be stored.
+	guard := func(f Feed, others []Feed) []Problem {
+		time.Sleep(20 * time.Millisecond)
+		return check(f, others)
+	}
+	for round := 0; round < 20; round++ {
+		port := 47000 + round // a port per round: the rows of earlier rounds stay until the test ends
+		ids := []string{fmt.Sprintf("test-race-%d-a", round), fmt.Sprintf("test-race-%d-b", round)}
+		errs := make([]error, len(ids))
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i, id := range ids {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				f := udpFeed(id, port)
+				<-start
+				errs[i] = s.CreateGuarded(ctx, &f, guard)
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		stored := 0
+		for i, err := range errs {
+			if err == nil {
+				stored++
+				continue
+			}
+			var ve *ValidationError
+			if !errors.As(err, &ve) || len(ve.Problems) != 1 || ve.Problems[0].Path != "/config/port" {
+				t.Fatalf("round %d: creating %s failed with %v, want a refusal for /config/port", round, ids[i], err)
+			}
+		}
+		if stored != 1 {
+			t.Fatalf("round %d: %d of %d creates on port %d were stored (%v), want exactly 1", round, stored, len(ids), port, errs)
+		}
+	}
+}
+
+// A guarded save reads the feeds only once it holds the lock, so it sees what
+// the save that held the lock before it committed, and refuses a port that
+// save took. A refused save changes nothing.
+func TestUpdateGuardedSeesCommittedFeeds(t *testing.T) {
+	s, ctx := testStore(t)
+	check := portGuard(t)
+
+	mover := udpFeed("test-sees-mover", 47100)
+	if err := s.Create(ctx, &mover); err != nil {
+		t.Fatal(err)
+	}
+
+	// Another save is midway: it holds the lock and has inserted a connection
+	// on port 47101 that is not committed yet.
+	other, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = other.Rollback(context.Background()) }) // a no-op once committed
+	if _, err := other.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, feedPortsLockKey); err != nil {
+		t.Fatal(err)
+	}
+	taken := udpFeed("test-sees-taken", 47101)
+	if _, err := other.Exec(ctx, `
+		INSERT INTO sentinel.feeds (id, name, driver, config) VALUES ($1, $2, $3, $4)`,
+		taken.ID, taken.Name, taken.Driver, taken.Config); err != nil {
+		t.Fatal(err)
+	}
+
+	// The mover asks for that port. It waits for the lock instead of reading
+	// the feeds without the other save's connection.
+	moved := mover
+	moved.Config = json.RawMessage(`{"port":47101}`)
+	result := make(chan error, 1)
+	go func() { result <- s.UpdateGuarded(ctx, &moved, check) }()
+	select {
+	case err := <-result:
+		t.Fatalf("UpdateGuarded returned (%v) while another save held the lock", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Once the other save commits, the mover sees its connection and is refused.
+	if err := other.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-result:
+	case <-time.After(10 * time.Second):
+		t.Fatal("UpdateGuarded still waiting after the other save committed")
+	}
+	var ve *ValidationError
+	if !errors.As(err, &ve) || len(ve.Problems) != 1 || ve.Problems[0].Path != "/config/port" || !strings.Contains(ve.Problems[0].Message, taken.ID) {
+		t.Fatalf("UpdateGuarded = %v, want a refusal for /config/port naming %s", err, taken.ID)
+	}
+	got, err := s.Get(ctx, mover.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != 1 || !strings.Contains(string(got.Config), "47100") {
+		t.Fatalf("refused save changed the feed: version %d config %s", got.Version, got.Config)
+	}
+
+	// A free port goes through, and so does the port the feed now holds: it
+	// does not clash with itself.
+	moved.Config = json.RawMessage(`{"port":47102}`)
+	for save := 1; save <= 2; save++ {
+		if err := s.UpdateGuarded(ctx, &moved, check); err != nil {
+			t.Fatalf("save %d to port 47102: %v", save, err)
+		}
+		if moved.Version != 1+save {
+			t.Fatalf("version after save %d = %d, want %d", save, moved.Version, 1+save)
+		}
 	}
 }
 

@@ -129,8 +129,28 @@ func (s *Store) Get(ctx context.Context, id string) (Feed, error) {
 	return f, nil
 }
 
+// Guard checks a feed about to be written against every feed in the registry
+// and returns the problems that refuse the write. The feeds include f itself
+// when it is already stored. A guarded write runs it under the advisory lock
+// named by feedPortsLockKey.
+type Guard func(f Feed, others []Feed) []Problem
+
+// feedPortsLockKey names the transaction-level advisory lock a guarded write
+// holds from its check to its commit, so that two connections cannot both be
+// checked for the same port before either is stored. It is hashed with
+// hashtext, as the analytics baseline job hashes its own key.
+const feedPortsLockKey = "sentinel.ingest.feed-ports"
+
 // Create inserts a feed with version 1 and returns the stored row.
 func (s *Store) Create(ctx context.Context, f *Feed) error {
+	return s.CreateGuarded(ctx, f, nil)
+}
+
+// CreateGuarded is Create once g has accepted the feed. g runs in the insert's
+// transaction under the advisory lock on feed ports (see runGuard); its
+// problems come back as a *ValidationError and nothing is stored. A nil g
+// takes no lock.
+func (s *Store) CreateGuarded(ctx context.Context, f *Feed, g Guard) error {
 	if f.SecretRefs == nil {
 		f.SecretRefs = map[string]string{}
 	}
@@ -138,6 +158,9 @@ func (s *Store) Create(ctx context.Context, f *Feed) error {
 		f.Config = json.RawMessage("{}")
 	}
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if err := runGuard(ctx, tx, *f, g); err != nil {
+			return err
+		}
 		_, err := tx.Exec(ctx, `
 			INSERT INTO sentinel.feeds (id, name, description, driver, config, secret_refs, enabled, builtin, created_by)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''))`,
@@ -164,6 +187,12 @@ func (s *Store) Create(ctx context.Context, f *Feed) error {
 // Update replaces the mutable columns, bumps the version, and returns the
 // stored row. Driver and builtin are immutable.
 func (s *Store) Update(ctx context.Context, f *Feed) error {
+	return s.UpdateGuarded(ctx, f, nil)
+}
+
+// UpdateGuarded is Update once g has accepted the feed, checked and refused the
+// way CreateGuarded does.
+func (s *Store) UpdateGuarded(ctx context.Context, f *Feed, g Guard) error {
 	if f.SecretRefs == nil {
 		f.SecretRefs = map[string]string{}
 	}
@@ -171,6 +200,9 @@ func (s *Store) Update(ctx context.Context, f *Feed) error {
 		f.Config = json.RawMessage("{}")
 	}
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if err := runGuard(ctx, tx, *f, g); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `
 			UPDATE sentinel.feeds
 			   SET name = $2, description = $3, config = $4, secret_refs = $5, enabled = $6,
@@ -402,6 +434,42 @@ func (s *Store) listen(ctx context.Context, out chan<- Change) error {
 			return ctx.Err()
 		}
 	}
+}
+
+// runGuard is the check of a guarded write, made inside its transaction: it
+// takes the advisory lock on feed ports, reads every feed and runs g. The lock
+// is held until the transaction ends. Under READ COMMITTED (the pgx default)
+// the read starts only once the lock is granted, so it sees what the writer
+// that held the lock before committed. Problems refuse the write as a
+// *ValidationError, which the management API maps to 422. A nil g checks
+// nothing and takes no lock.
+func runGuard(ctx context.Context, tx pgx.Tx, f Feed, g Guard) error {
+	if g == nil {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, feedPortsLockKey); err != nil {
+		return fmt.Errorf("locking feed ports: %w", err)
+	}
+	rows, err := tx.Query(ctx, `SELECT id, name, driver, config, enabled FROM sentinel.feeds ORDER BY created_at, id`)
+	if err != nil {
+		return fmt.Errorf("reading feeds to check: %w", err)
+	}
+	defer rows.Close()
+	var others []Feed
+	for rows.Next() {
+		var o Feed
+		if err := rows.Scan(&o.ID, &o.Name, &o.Driver, &o.Config, &o.Enabled); err != nil {
+			return fmt.Errorf("scanning feed to check: %w", err)
+		}
+		others = append(others, o)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("reading feeds to check: %w", err)
+	}
+	if problems := g(f, others); len(problems) > 0 {
+		return &ValidationError{Problems: problems}
+	}
+	return nil
 }
 
 func notify(ctx context.Context, tx pgx.Tx, channel, payload string) error {

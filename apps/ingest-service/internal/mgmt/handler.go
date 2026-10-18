@@ -31,8 +31,8 @@ const maxBoxes = 4
 type FeedStore interface {
 	List(ctx context.Context) ([]registry.Feed, error)
 	Get(ctx context.Context, id string) (registry.Feed, error)
-	Create(ctx context.Context, f *registry.Feed) error
-	Update(ctx context.Context, f *registry.Feed) error
+	CreateGuarded(ctx context.Context, f *registry.Feed, g registry.Guard) error
+	UpdateGuarded(ctx context.Context, f *registry.Feed, g registry.Guard) error
 	SetEnabled(ctx context.Context, id string, enabled bool) (registry.Feed, error)
 	Delete(ctx context.Context, id string) error
 	GetArea(ctx context.Context, id string) (registry.Area, error)
@@ -261,14 +261,11 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	if problems, err := h.portProblems(r.Context(), f); err != nil {
-		h.fail(w, err)
-		return
-	} else if len(problems) > 0 {
+	if problems := h.portProblems(f); len(problems) > 0 {
 		h.fail(w, &registry.ValidationError{Problems: problems})
 		return
 	}
-	if err := h.store.Create(r.Context(), &f); err != nil {
+	if err := h.store.CreateGuarded(r.Context(), &f, h.portGuard(f)); err != nil {
 		h.fail(w, err)
 		return
 	}
@@ -364,14 +361,11 @@ func (h *Handler) saveUpdate(w http.ResponseWriter, r *http.Request, f *registry
 		h.fail(w, err)
 		return
 	}
-	if problems, err := h.portProblems(r.Context(), *f); err != nil {
-		h.fail(w, err)
-		return
-	} else if len(problems) > 0 {
+	if problems := h.portProblems(*f); len(problems) > 0 {
 		h.fail(w, &registry.ValidationError{Problems: problems})
 		return
 	}
-	if err := h.store.Update(r.Context(), f); err != nil {
+	if err := h.store.UpdateGuarded(r.Context(), f, h.portGuard(*f)); err != nil {
 		h.fail(w, err)
 		return
 	}
@@ -379,17 +373,23 @@ func (h *Handler) saveUpdate(w http.ResponseWriter, r *http.Request, f *registry
 	writeJSON(w, http.StatusOK, toFeedDTO(*f, h.catalog))
 }
 
-// portProblems checks the feed's allowlist, and its listening port against
-// every other feed.
-func (h *Handler) portProblems(ctx context.Context, f registry.Feed) ([]registry.Problem, error) {
-	if problems := registry.CheckAllow(f); len(problems) > 0 {
-		return problems, nil
+// portProblems checks the feed's allowlist, which needs no other feed. Its
+// listening port is checked against every other feed by portGuard.
+func (h *Handler) portProblems(f registry.Feed) []registry.Problem {
+	return registry.CheckAllow(f)
+}
+
+// portGuard is the port check the store makes when it saves the proposed feed,
+// under a lock so that two saves cannot take the same port. It is nil for a
+// connection that does not listen: it has no port to check, and the lock is
+// not worth taking.
+func (h *Handler) portGuard(proposed registry.Feed) registry.Guard {
+	if _, _, listens := driver.ListenOf(proposed.Driver, proposed.Config); !listens {
+		return nil
 	}
-	others, err := h.store.List(ctx)
-	if err != nil {
-		return nil, err
+	return func(f registry.Feed, others []registry.Feed) []registry.Problem {
+		return registry.CheckPorts(f, others, h.Reserved)
 	}
-	return registry.CheckPorts(f, others, h.Reserved), nil
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,10 +20,15 @@ import (
 )
 
 type memStore struct {
+	// mu stands in for the real store's advisory lock: a save's guard check
+	// and write are one step. It also keeps concurrent requests off the maps.
+	mu          sync.Mutex
 	feeds       map[string]registry.Feed
 	areas       map[string]registry.Area
 	replicas    []registry.Replica
 	replicasErr error
+	// guards records, for each create and update, whether it came with a port guard.
+	guards []bool
 }
 
 func newMemStore() *memStore {
@@ -37,6 +43,8 @@ func newMemStore() *memStore {
 }
 
 func (s *memStore) List(context.Context) ([]registry.Feed, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	out := []registry.Feed{}
 	for _, f := range s.feeds {
 		out = append(out, f)
@@ -44,13 +52,39 @@ func (s *memStore) List(context.Context) ([]registry.Feed, error) {
 	return out, nil
 }
 func (s *memStore) Get(_ context.Context, id string) (registry.Feed, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	f, ok := s.feeds[id]
 	if !ok {
 		return registry.Feed{}, registry.ErrNotFound
 	}
 	return f, nil
 }
-func (s *memStore) Create(_ context.Context, f *registry.Feed) error {
+
+// check runs a save's guard against every stored feed, the way the real store
+// does under its lock, and refuses the save with the problems it reports. The
+// caller holds mu.
+func (s *memStore) check(f registry.Feed, g registry.Guard) error {
+	s.guards = append(s.guards, g != nil)
+	if g == nil {
+		return nil
+	}
+	others := make([]registry.Feed, 0, len(s.feeds))
+	for _, o := range s.feeds {
+		others = append(others, o)
+	}
+	if problems := g(f, others); len(problems) > 0 {
+		return &registry.ValidationError{Problems: problems}
+	}
+	return nil
+}
+
+func (s *memStore) CreateGuarded(_ context.Context, f *registry.Feed, g registry.Guard) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.check(*f, g); err != nil {
+		return err
+	}
 	if _, exists := s.feeds[f.ID]; exists {
 		return registry.ErrConflict
 	}
@@ -58,7 +92,12 @@ func (s *memStore) Create(_ context.Context, f *registry.Feed) error {
 	s.feeds[f.ID] = *f
 	return nil
 }
-func (s *memStore) Update(_ context.Context, f *registry.Feed) error {
+func (s *memStore) UpdateGuarded(_ context.Context, f *registry.Feed, g registry.Guard) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.check(*f, g); err != nil {
+		return err
+	}
 	if _, ok := s.feeds[f.ID]; !ok {
 		return registry.ErrNotFound
 	}
@@ -67,6 +106,8 @@ func (s *memStore) Update(_ context.Context, f *registry.Feed) error {
 	return nil
 }
 func (s *memStore) SetEnabled(_ context.Context, id string, enabled bool) (registry.Feed, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	f, ok := s.feeds[id]
 	if !ok {
 		return registry.Feed{}, registry.ErrNotFound
@@ -76,6 +117,8 @@ func (s *memStore) SetEnabled(_ context.Context, id string, enabled bool) (regis
 	return f, nil
 }
 func (s *memStore) Delete(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, ok := s.feeds[id]; !ok {
 		return registry.ErrNotFound
 	}
@@ -83,6 +126,8 @@ func (s *memStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 func (s *memStore) GetArea(_ context.Context, id string) (registry.Area, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	a, ok := s.areas[id]
 	if !ok {
 		return registry.Area{FeedID: id, Boxes: []registry.Box{}}, nil
@@ -93,6 +138,8 @@ func (s *memStore) LiveReplicas(context.Context) ([]registry.Replica, error) {
 	return s.replicas, s.replicasErr
 }
 func (s *memStore) SetArea(_ context.Context, a registry.Area) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, ok := s.feeds[a.FeedID]; !ok {
 		return registry.ErrNotFound
 	}
@@ -504,6 +551,104 @@ func TestListeningPortChecksRunOnUpdate(t *testing.T) {
 	}
 	if resp, out := do(t, srv, "PATCH", "/feeds/dock-ais", `{"config":{"transport":{"kind":"udp","address":":10112"}}}`, operator); resp.StatusCode != 200 {
 		t.Errorf("free port: %d %s", resp.StatusCode, out)
+	}
+}
+
+// The store takes its lock and runs the port check only for a save whose new
+// config listens; a connection that binds no port has nothing to check.
+func TestOnlyListeningSavesCarryAPortGuard(t *testing.T) {
+	srv, store, _ := newServer(t, "")
+	const (
+		client = `{"kind":"tcpclient","address":"ais.example:4001"}`
+		udp    = `{"kind":"udp","address":":47000"}`
+	)
+	steps := []struct {
+		what, method, path, body string
+		guarded                  bool
+	}{
+		{"create a client", "POST", "/feeds", `{"name":"Site","driver":"stream","config":{"transport":` + client + `,"decoder":{"name":"nmea-ais"}}}`, false},
+		{"patch it onto a port", "PATCH", "/feeds/site", `{"config":{"transport":` + udp + `}}`, true},
+		{"patch a listener's description", "PATCH", "/feeds/site", `{"description":"quay side"}`, true},
+		{"replace the listener", "PUT", "/feeds/site", `{"name":"Site","config":{"transport":` + udp + `,"decoder":{"name":"nmea-ais"}},"enabled":false}`, true},
+		{"patch it back to a client", "PATCH", "/feeds/site", `{"config":{"transport":` + client + `}}`, false},
+		{"create a udp connection", "POST", "/feeds", `{"name":"Pier","driver":"udp","config":{"port":47001}}`, true},
+	}
+	for _, st := range steps {
+		store.guards = nil
+		if resp, out := do(t, srv, st.method, st.path, st.body, operator); resp.StatusCode/100 != 2 {
+			t.Fatalf("%s: %d %s", st.what, resp.StatusCode, out)
+		}
+		if len(store.guards) != 1 || store.guards[0] != st.guarded {
+			t.Errorf("%s: the store saw guards %v, want [%v]", st.what, store.guards, st.guarded)
+		}
+	}
+}
+
+// sendTogether sends each {path, body} request at the same moment and returns
+// their status codes in order (0 for a request that got no response).
+func sendTogether(srv *httptest.Server, method string, reqs [][2]string) []int {
+	codes := make([]int, len(reqs))
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, r := range reqs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req, err := http.NewRequest(method, srv.URL+r[0], strings.NewReader(r[1]))
+			if err != nil {
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(middleware.HeaderUserRoles, operator.roles)
+			req.Header.Set(middleware.HeaderUserID, operator.user)
+			<-start
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return
+			}
+			resp.Body.Close()
+			codes[i] = resp.StatusCode
+		}()
+	}
+	close(start)
+	wg.Wait()
+	return codes
+}
+
+// Saves that arrive together and choose the same port: the handler leaves the
+// check to the store, which makes it and writes as one step, so exactly one is
+// stored and the rest are refused.
+func TestConcurrentSavesCannotShareAPort(t *testing.T) {
+	srv, _, _ := newServer(t, "")
+	count := func(codes []int, status int) (n int) {
+		for _, c := range codes {
+			if c == status {
+				n++
+			}
+		}
+		return n
+	}
+
+	var creates [][2]string
+	for _, name := range []string{"Dock 1", "Dock 2", "Dock 3", "Dock 4", "Dock 5", "Dock 6"} {
+		creates = append(creates, [2]string{"/feeds", `{"name":"` + name + `","driver":"udp","config":{"port":47000}}`})
+	}
+	if codes := sendTogether(srv, "POST", creates); count(codes, 201) != 1 || count(codes, 422) != len(creates)-1 {
+		t.Fatalf("creates on one port: statuses %v, want one 201 and the rest 422", codes)
+	}
+
+	// Two connections move onto the same free port.
+	for _, body := range []string{
+		`{"name":"Pier A","driver":"udp","config":{"port":47001}}`,
+		`{"name":"Pier B","driver":"udp","config":{"port":47002}}`,
+	} {
+		if resp, out := do(t, srv, "POST", "/feeds", body, operator); resp.StatusCode != 201 {
+			t.Fatalf("create %s: %d %s", body, resp.StatusCode, out)
+		}
+	}
+	moves := [][2]string{{"/feeds/pier-a", `{"config":{"port":47010}}`}, {"/feeds/pier-b", `{"config":{"port":47010}}`}}
+	if codes := sendTogether(srv, "PATCH", moves); count(codes, 200) != 1 || count(codes, 422) != 1 {
+		t.Fatalf("moves onto one port: statuses %v, want one 200 and one 422", codes)
 	}
 }
 
