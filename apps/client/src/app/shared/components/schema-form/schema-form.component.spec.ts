@@ -530,6 +530,42 @@ describe('SchemaFormComponent', () => {
       expect(el.querySelector('[data-pointer="/config/mode"] .sf-error')?.textContent).toContain('Required.');
     });
 
+    it('shows a required select with nothing chosen as a prompt that cannot be picked back', () => {
+      render({
+        type: 'object',
+        required: ['kind'],
+        properties: { kind: { type: 'string', enum: ['tcpclient', 'udp'], title: 'Kind' } },
+      });
+
+      const select = el.querySelector<HTMLSelectElement>('select[name="kind"]')!;
+      expect(component.control('/config/kind')?.value).toBe('');
+      expect(select.selectedIndex).toBe(0);
+      expect(select.options[0].disabled).toBe(true);
+      expect(select.options[0].textContent?.trim()).toBe('Select…');
+      expect(last().valid).toBe(false);
+    });
+
+    it('keeps the empty option of an optional select enabled, with or without a default', () => {
+      render({
+        type: 'object',
+        properties: {
+          scope: { type: 'string', enum: ['mil', 'area'], default: 'mil' },
+          kind: { type: 'string', enum: ['tcpclient', 'udp'] },
+        },
+      });
+
+      for (const [name, empty] of [
+        ['scope', 'Default (mil)'],
+        ['kind', '—'],
+      ]) {
+        const select = el.querySelector<HTMLSelectElement>(`select[name="${name}"]`)!;
+        expect(select.selectedIndex).toBe(0);
+        expect(select.options[0].disabled).toBe(false);
+        expect(select.options[0].textContent?.trim()).toBe(empty);
+      }
+      expect(last().valid).toBe(true);
+    });
+
     it('starts any required field the value leaves out at its default', () => {
       render({
         type: 'object',
