@@ -118,7 +118,10 @@ func (d *Decoder) Decode(f transport.Frame) ([]*obs.Observation, error) {
 
 // decodeArray decodes a line that is a JSON array of observations. The array
 // is all-or-nothing, and an error says which element it is about, numbered
-// from 0 as in jq's .[n]. A nested array is a bad element, not a batch.
+// from 0 as in jq's .[n]. A nested array is a bad element, not a batch. Each
+// observation keeps its own element as its raw payload: the stream driver
+// stamps the whole frame only on observations whose decoder left Raw empty, so
+// a batch does not repeat its line on each of up to 100 observations.
 func (d *Decoder) decodeArray(line []byte) ([]*obs.Observation, error) {
 	elements, err := splitArray(line)
 	if err != nil {
@@ -135,6 +138,7 @@ func (d *Decoder) decodeArray(line []byte) ([]*obs.Observation, error) {
 			// %w keeps a Reject's reason, which the dead letter is filed under.
 			return nil, fmt.Errorf("element %d: %w", i, err)
 		}
+		o.Raw = raw
 		out = append(out, o)
 	}
 	return out, nil

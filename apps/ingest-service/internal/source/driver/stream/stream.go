@@ -384,7 +384,11 @@ func (d *Driver) decodeOne(ctx context.Context, f transport.Frame, sink driver.S
 		if o.RawContentType == "" {
 			o.RawContentType = d.ddef.ContentType
 		}
-		o.Raw = f.Payload
+		// An observation is the whole frame's unless its decoder kept the part
+		// it came from (an element of a JSON array).
+		if len(o.Raw) == 0 {
+			o.Raw = f.Payload
+		}
 		if err := sink.Emit(ctx, o); err != nil {
 			return
 		}

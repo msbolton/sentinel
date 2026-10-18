@@ -550,6 +550,31 @@ func TestJSONArrayThatIsNotWellFormed(t *testing.T) {
 	}
 }
 
+// Each observation of a batch keeps its own element as its raw payload, not
+// the line it came from: the stream driver gives the whole frame only to an
+// observation whose decoder left Raw empty.
+func TestJSONArrayElementsKeepTheirOwnRaw(t *testing.T) {
+	a := jsonObservation(t, named("truck-7"))
+	b := jsonObservation(t, named("truck-8"))
+	d := newDecoder(t, `{"encoding": "json"}`)
+	for name, payload := range map[string][]byte{
+		"compact": jsonArray(a, b),
+		"padded":  []byte("  [ " + string(a) + " ,\t" + string(b) + " ]\r\n"),
+	} {
+		out, err := d.Decode(transport.Frame{Payload: payload})
+		if err != nil || len(out) != 2 {
+			t.Fatalf("%s: out %v err %v", name, out, err)
+		}
+		// The element's own bytes: no brackets, commas or padding of the line.
+		if !bytes.Equal(out[0].Raw, a) || !bytes.Equal(out[1].Raw, b) {
+			t.Errorf("%s: raw = %q, %q; want the element bytes %q, %q", name, out[0].Raw, out[1].Raw, a, b)
+		}
+		if out[0].RawContentType != "application/json" || out[1].RawContentType != "application/json" {
+			t.Errorf("%s: content types = %q, %q", name, out[0].RawContentType, out[1].RawContentType)
+		}
+	}
+}
+
 // Binary protobuf is unchanged: a feed that sends protobuf does not unpack
 // an array out of its frames.
 func TestProtobufFramesAreNotReadAsArrays(t *testing.T) {
