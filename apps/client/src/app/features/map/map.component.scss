@@ -148,6 +148,19 @@
   flex: 1;
 }
 
+// --- Geofence draw toolbar ---
+.draw-toolbar {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+}
+
+.map-container.drawing .cesium-viewer {
+  cursor: crosshair;
+}
+
 // --- Flying Indicator ---
 .flying-indicator {
   position: absolute;

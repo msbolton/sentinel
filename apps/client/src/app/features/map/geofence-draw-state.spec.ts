@@ -1,4 +1,4 @@
-import { addPoint, canFinish, finishShape, liveMeasure, newSession, previewRing, setAnchor, setCursor, setRadius } from './geofence-draw-state';
+import { addPoint, canFinish, draftFromSession, finishShape, liveMeasure, newSession, previewRing, setAnchor, setCursor, setRadius } from './geofence-draw-state';
 import { geodesicDistanceM } from './geofence-geometry';
 import { LngLat } from '../../shared/models/geofence.model';
 
@@ -59,5 +59,18 @@ describe('geofence draw session', () => {
     expect(liveMeasure(s)).toBe('3.8 km');
     expect(previewRing(s)).toEqual([A, [55.0378, 25.0]]);
     expect(liveMeasure(setCursor(s, null))).toBe('');
+  });
+
+  it('turns a finished session into a draft with the defaults', () => {
+    const s = addPoint(addPoint(addPoint(newSession('polygon', '#f97316'), A), B), C);
+    expect(draftFromSession(s)).toEqual({
+      name: 'New geofence',
+      ruleType: 'GEOFENCE',
+      config: { shape: 'polygon', polygon: [A, B, C], color: '#f97316', triggerOn: 'ENTRY' },
+      monitoredEntityTypes: [],
+      severity: 'HIGH',
+      enabled: true,
+    });
+    expect(draftFromSession(s, 'Anchorage').name).toBe('Anchorage');
   });
 });

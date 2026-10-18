@@ -55,10 +55,18 @@ import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine, type GeoPoint } from '
 import { formatAltitude } from '../../shared/geo-format';
 import { GeofenceService } from '../../core/services/geofence.service';
 import { GeofenceLayer } from './geofence-layer';
-import { LngLat } from '../../shared/models/geofence.model';
+import { GeofenceDrawTool } from './geofence-draw';
+import { GeofenceToolbarComponent } from './geofence-toolbar.component';
+import { DrawSession, addPoint, canFinish, draftFromSession, newSession, setAnchor, setCursor, setRadius } from './geofence-draw-state';
+import { GeofenceShape, LngLat } from '../../shared/models/geofence.model';
 
 /** Dead-reckoning frame cap: ~30 fps is plenty for gliding markers. */
 const DR_FRAME_INTERVAL_MS = 33;
+/** Two positions a double click produced from the same spot. */
+function samePoint(a: LngLat, b: LngLat): boolean {
+  return Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6;
+}
+
 /** Whether a #rrggbb colour is light enough to need dark text on it. */
 function isLightColor(hex: string): boolean {
   const h = hex.replace('#', '');
@@ -136,7 +144,7 @@ interface LayerConfig {
   selector: 'app-map',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, IconComponent],
+  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, IconComponent, GeofenceToolbarComponent],
   templateUrl: './map.component.html',
   styleUrls: ['./map.component.scss'],
 })
@@ -187,6 +195,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private clusterSources = new Map<string, any>();
   /** Saved geofences drawn on the globe; see geofence-layer.ts. */
   private geofenceLayer: GeofenceLayer | null = null;
+  /** The geofence being drawn, or null; see geofence-draw-state.ts and geofence-draw.ts. */
+  readonly drawSession = signal<DrawSession | null>(null);
+  private drawTool: GeofenceDrawTool | null = null;
   private clusterImageCache = new Map<string, string>();
   private clusterCanvas: HTMLCanvasElement | null = null;
   /** The line from the selected aircraft, drone or satellite down to the ground; see drop-line.ts. */
@@ -229,6 +240,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       const selected = this.selectedEntity();
       const flags = { path: this.orbitOverlay.showPath(), ground: this.orbitOverlay.showGroundTrack(), footprint: this.orbitOverlay.showFootprint() };
       this.ngZone.runOutsideAngular(() => untracked(() => this.syncOrbitOverlay(selected, flags)));
+    });
+
+    // The panel's New button and the map control ask for a new zone here.
+    this.subscriptions.add(this.geofences.startDrawingRequested.subscribe(() => this.startDrawing()));
+    effect(() => {
+      const session = this.drawSession();
+      this.ngZone.runOutsideAngular(() => {
+        if (session) this.drawTool?.render(session);
+        else this.drawTool?.clear();
+      });
     });
 
     // Saved geofences are drawn on the globe and follow the service's list and selection.
@@ -342,6 +363,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.viewer = new Cesium.Viewer(container, viewerOptions);
       this.setupClusterSources();
       this.geofenceLayer = new GeofenceLayer(this.viewer, Cesium);
+      this.drawTool = new GeofenceDrawTool(this.viewer, Cesium);
       this.geofenceLayer.sync(this.geofences.zones(), this.geofences.selectedId(), (id) => this.geofenceAnchorPosition(id));
 
       // Set dark atmosphere
@@ -389,6 +411,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     handler.setInputAction((click: any) => {
       const pickedObject = this.viewer.scene.pick(click.position);
 
+      if (this.drawSession()) {
+        this.drawClick(click.position, pickedObject);
+        return;
+      }
+
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelOrbit) {
         return; // a click on the selected satellite's own overlay keeps the selection
       }
@@ -414,6 +441,24 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         });
       }
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+    // Drawing: a double click closes a polygon; the mouse carries the trailing edge.
+    handler.setInputAction(() => {
+      const session = this.drawSession();
+      if (!session || session.shape !== 'polygon') return;
+      // the two single clicks of a double click added the same point twice
+      const points = session.points.length >= 2 && samePoint(session.points[session.points.length - 1], session.points[session.points.length - 2])
+        ? session.points.slice(0, -1)
+        : session.points;
+      const trimmed = { ...session, points };
+      if (canFinish(trimmed).ok) this.ngZone.run(() => { this.drawSession.set(trimmed); this.finishDrawing(); });
+    }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+    handler.setInputAction((move: any) => {
+      const session = this.drawSession();
+      if (!session) return;
+      const p = this.pickLngLat(move.endPosition);
+      this.drawSession.set(setCursor(session, p));
+    }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
   }
 
   private setupCameraMoveHandler(): void {
@@ -1100,6 +1145,70 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   openGeofences(): void {
     this.router.navigateByUrl('/geofences');
     this.geofences.startDrawingRequested.next();
+  }
+
+  /** Enter draw mode with the last-used colour; a session in progress is replaced. */
+  startDrawing(shape: GeofenceShape = 'polygon'): void {
+    this.selectedEntity.set(null);
+    this.geofences.select(null);
+    this.drawSession.set(newSession(shape, this.geofences.lastColor()));
+  }
+
+  setDrawShape(shape: GeofenceShape): void {
+    const s = this.drawSession();
+    if (s) this.drawSession.set(newSession(shape, s.color, s.radiusM));
+  }
+
+  setDrawColor(color: string): void {
+    const s = this.drawSession();
+    if (s) this.drawSession.set({ ...s, color });
+  }
+
+  setDrawRadius(radiusM: number): void {
+    const s = this.drawSession();
+    if (s) this.drawSession.set(setRadius(s, radiusM));
+  }
+
+  cancelDrawing(): void {
+    this.drawSession.set(null);
+  }
+
+  /** Finish turns the shape into a draft the panel's editor opens; draw mode ends. */
+  finishDrawing(): void {
+    const s = this.drawSession();
+    if (!s || !canFinish(s).ok) return;
+    const draft = draftFromSession(s);
+    this.geofences.rememberColor(s.color);
+    this.geofences.setDraft(draft);
+    this.drawSession.set(null);
+    this.router.navigateByUrl('/geofences');
+  }
+
+  /** A click while drawing: a vertex, the radius, or the anchor track for a ring. */
+  private drawClick(position: any, pickedObject: any): void {
+    const session = this.drawSession();
+    if (!session) return;
+    if (session.shape === 'ring') {
+      const entity = pickedObject?.id?._sentinelEntity as Entity | undefined;
+      if (!entity) return;
+      const geo = this.displayedGeoPoint(entity, this.wsService.serverNow());
+      if (!geo) return;
+      this.ngZone.run(() => this.drawSession.set(setAnchor(session, { entityId: entity.id, entityName: entity.name, position: [geo.lon, geo.lat] })));
+      return;
+    }
+    const p = this.pickLngLat(position);
+    if (!p) return;
+    this.ngZone.run(() => this.drawSession.set(addPoint(session, p)));
+  }
+
+  /** The globe position under a screen point, or null when the point misses the globe. */
+  private pickLngLat(screen: any): LngLat | null {
+    const Cesium = this.Cesium;
+    const ray = this.viewer.camera.getPickRay(screen);
+    const cartesian = (ray && this.viewer.scene.globe.pick(ray, this.viewer.scene)) || this.viewer.camera.pickEllipsoid(screen, this.viewer.scene.globe.ellipsoid);
+    if (!cartesian) return null;
+    const carto = Cesium.Cartographic.fromCartesian(cartesian);
+    return [Cesium.Math.toDegrees(carto.longitude), Cesium.Math.toDegrees(carto.latitude)];
   }
 
   // --- Satellite altitude -------------------------------------------------------

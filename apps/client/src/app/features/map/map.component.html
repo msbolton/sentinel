@@ -1,4 +1,4 @@
-<div class="map-container">
+<div class="map-container" [class.drawing]="drawSession()">
   <div #cesiumContainer class="cesium-viewer"></div>
 
   <!-- Map Controls -->
@@ -65,6 +65,19 @@
       <div class="loading-spinner"></div>
       <span>Flying to {{ flyingTo() }}...</span>
     </div>
+  }
+
+  <!-- Geofence drawing -->
+  @if (drawSession(); as session) {
+    <app-geofence-toolbar
+      class="draw-toolbar"
+      [session]="session"
+      (shapeChange)="setDrawShape($event)"
+      (colorChange)="setDrawColor($event)"
+      (radiusChange)="setDrawRadius($event)"
+      (finish)="finishDrawing()"
+      (cancel)="cancelDrawing()"
+    />
   }
 
   <!-- Entity Detail Panel -->

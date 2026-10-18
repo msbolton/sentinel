@@ -1,4 +1,4 @@
-import { GeofenceConfig, GeofenceShape, LngLat } from '../../shared/models/geofence.model';
+import { GeofenceConfig, GeofenceDraft, GeofenceShape, LngLat } from '../../shared/models/geofence.model';
 import {
   circlePolygon,
   crossesAntimeridian,
@@ -150,4 +150,16 @@ function finalRing(s: DrawSession): LngLat[] {
     case 'circle': return s.points[0] && s.radiusM > 0 ? circlePolygon(s.points[0], s.radiusM) : [];
     default: return [];
   }
+}
+
+/** The unsaved rule a finished session becomes; the panel's editor fills in the rest. */
+export function draftFromSession(s: DrawSession, name = 'New geofence'): GeofenceDraft {
+  return {
+    name,
+    ruleType: 'GEOFENCE',
+    config: { ...finishShape(s), triggerOn: 'ENTRY' },
+    monitoredEntityTypes: [],
+    severity: 'HIGH',
+    enabled: true,
+  };
 }
