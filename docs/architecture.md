@@ -132,7 +132,7 @@ sequenceDiagram
 
 1. **Desired state** is a row in `sentinel.feeds`: id, driver, validated `config`, `secret_refs`, `enabled`, `version`. The operator's Connections page and the management API write it; Postgres LISTEN/NOTIFY tells every ingest replica.
 2. **Ownership.** Each enabled feed runs on exactly one replica, chosen by rendezvous hashing over the live replicas (or pinned). The owner renews a `feed_leases` row; acquisition bumps a fencing token that travels on every observation and guards status writes.
-3. **Driver.** The supervisor builds the driver from the catalog, wraps it in a runner and starts it. Pollers (`opensky`, `adsblol`, `celestrak`, `httpjson`) call an API on a schedule; `aisstream` keeps WebSocket subscriptions that follow the viewports and a watchlist; `stream` composes a transport, a framer and a decoder from config; `tak` owns one session to a TAK Server.
+3. **Driver.** The supervisor builds the driver from the catalog, wraps it in a runner and starts it. Pollers (`opensky`, `intelsky`, `celestrak`, `httpjson`) call an API on a schedule; `aisstream` keeps WebSocket subscriptions that follow the viewports and a watchlist; `stream` composes a transport, a framer and a decoder from config; `tak` owns one session to a TAK Server.
 4. **Runner.** Stamps provenance (feed id, driver, receive time, lease token) and the feed's classification (a decoder may only raise it), guarantees an identity, bounds the raw payload, suppresses repeated fixes, computes a deterministic observation id and publishes to `observations.raw` keyed by identity. Undecodable payloads go to `observations.dlq` with the reason in headers.
 5. **Area of interest.** Drivers with the `area` capability poll, or in CelesTrak's case emit, only what connected map clients can see. The gateway aggregates client viewports and pushes them to every such feed with a 90 s lease, so polling stops when nobody is looking or the gateway dies.
 6. **Fusion.** The entity service resolves the observation's identities to an entity (creating one when needed), applies the newest-fix-wins rule across feeds, replicas and out-of-order delivery, keeps the highest classification any feed reported, records the contributing feed in `entity_sources`, and emits one typed event per change on `entities.events`.
@@ -366,13 +366,13 @@ source/
 ├── transport/     moves bytes: tcpclient, tcpserver, udp, websocket, mqtt, stomp;
 │                  framing/ splits streams into messages; transporttest/ for tests
 ├── decoder/       one message into observations: beast, sbs, nmeaais, nmeagps, cot,
-│                  link16, openskystates, adsblol, tlesgp4, jsonmapped; aismap maps AIS
+│                  link16, openskystates, readsb, tlesgp4, jsonmapped; aismap maps AIS
 │                  packets for nmeaais and aisstream
 ├── encoder/       the reverse direction: cot
 ├── httppoll/      shared scheduler for API pollers
 ├── driver/        what a feed row names:
 │   ├── stream/    any transport + framer + decoder composed from config
-│   ├── opensky/, adsblol/, celestrak/, httpjson/   pollers
+│   ├── opensky/, intelsky/, celestrak/, httpjson/   pollers
 │   ├── aisstream/ AIS over WebSocket subscriptions that follow the viewports
 │   └── tak/       one two-way CoT session; uses the cot decoder and encoder
 └── all/           imports every driver so registration happens by side effect
