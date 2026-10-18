@@ -72,8 +72,9 @@ func New(cfg transport.Config) (transport.Transport, error) {
 
 // Run listens until ctx ends. A bind failure is fatal; accept errors are
 // retried with a pause so a transient error cannot spin the loop. Senders
-// outside the allowlist, connections over the cap and failed TLS
-// handshakes are closed and counted; frames over the rate are dropped.
+// outside the allowlist, connections over the cap, failed TLS handshakes
+// and TLS clients on a plain listener are closed and counted; frames over
+// the rate are dropped.
 func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(ctx, "tcp", s.cfg.Address)
@@ -155,10 +156,16 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 					return
 				}
 				conn = tc
+			} else {
+				conn = &sniffConn{Conn: raw}
 			}
 			s.senders.Connect(remote, time.Now().UTC())
 			s.Set(func(st *transport.State) { st.Connections = int(live.Load()) })
 			if err := transport.ScanConn(ctx, conn, s.cfg, guarded); err != nil && ctx.Err() == nil {
+				if errors.Is(err, errTLSClient) {
+					s.counts.TLSFailed.Add(1) // closed and counted; not a read error worth LastError
+					return
+				}
 				if errors.Is(err, bufio.ErrTooLong) || errors.Is(err, framing.ErrFrameTooLong) {
 					s.counts.Oversize.Add(1)
 				}

@@ -331,6 +331,89 @@ func TestPlainClientAgainstTLSListener(t *testing.T) {
 	}
 }
 
+func TestTLSClientAgainstPlainListener(t *testing.T) {
+	addr := transporttest.FreePort(t)
+	tr, err := New(transport.Config{Kind: "tcpserver", Address: addr, Framing: "line"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	col := &transporttest.Collector{}
+	stop := transporttest.Run(t, tr, col.Emit)
+	defer stop()
+	dial(t, addr).Close() // wait for the listener
+
+	// The ClientHello would otherwise reach the line framer, and any 0x0a in
+	// it would emit a garbage frame; the server must close the connection.
+	d := &net.Dialer{Deadline: time.Now().Add(3 * time.Second)}
+	if c, err := tls.DialWithDialer(d, "tcp", addr, &tls.Config{InsecureSkipVerify: true}); err == nil { //nolint:gosec // the handshake is meant to fail
+		c.Close()
+		t.Error("a TLS handshake against a plain listener succeeded")
+	}
+	if !transporttest.WaitFor(func() bool { return detailInt(tr.State(), "tlsFailed") >= 1 }, 2*time.Second) {
+		t.Errorf("the TLS client was not counted: %+v", tr.State())
+	}
+	if !transporttest.WaitFor(func() bool { return tr.State().Connections == 0 }, 2*time.Second) {
+		t.Errorf("the TLS client's connection was left open: %+v", tr.State())
+	}
+	if st := tr.State(); col.Count() != 0 || detailInt(st, "accepted") != 0 || st.LastError != "" {
+		t.Errorf("the ClientHello was treated as data: frames %d, state %+v", col.Count(), st)
+	}
+
+	// The listener keeps accepting.
+	c := dial(t, addr)
+	defer c.Close()
+	_, _ = c.Write([]byte("after\n"))
+	if !transporttest.WaitFor(func() bool { return col.Count() == 1 }, 2*time.Second) {
+		t.Fatalf("the listener stopped delivering after a TLS client: %v", col.Payloads())
+	}
+	if got := col.Payloads()[0]; got != "after" {
+		t.Errorf("payload = %q", got)
+	}
+}
+
+// The TLS check must neither lose nor reorder a plain sender's bytes, nor
+// hold back a short message to wait for a third byte it will never get.
+func TestPlainSenderIsNotMistakenForTLS(t *testing.T) {
+	cases := []struct {
+		name   string
+		writes []string
+		want   string
+	}{
+		{"short message", []string{"a\n"}, "a"},
+		{"split across reads", []string{"a", "b", "c\n"}, "abc"},
+		{"starts like a record header", []string{"\x16\x03\x09near miss\n"}, "\x16\x03\x09near miss"},
+		{"record header split across reads", []string{"\x16", "\x03", "\x05rest\n"}, "\x16\x03\x05rest"},
+		{"one byte of a header then text", []string{"\x16", "x\n"}, "\x16x"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			addr := transporttest.FreePort(t)
+			tr, err := New(transport.Config{Kind: "tcpserver", Address: addr, Framing: "line"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			col := &transporttest.Collector{}
+			stop := transporttest.Run(t, tr, col.Emit)
+			defer stop()
+			c := dial(t, addr)
+			defer c.Close()
+			for _, w := range tc.writes {
+				_, _ = c.Write([]byte(w))
+				time.Sleep(10 * time.Millisecond) // lets the server see separate reads; the assertion does not depend on it
+			}
+			if !transporttest.WaitFor(func() bool { return col.Count() == 1 }, 2*time.Second) {
+				t.Fatalf("frames = %q, want %q", col.Payloads(), tc.want)
+			}
+			if got := col.Payloads()[0]; got != tc.want {
+				t.Errorf("payload = %q, want %q", got, tc.want)
+			}
+			if n := detailInt(tr.State(), "tlsFailed"); n != 0 {
+				t.Errorf("tlsFailed = %d for plain text", n)
+			}
+		})
+	}
+}
+
 func TestBindConflictIsExplained(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
