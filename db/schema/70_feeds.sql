@@ -7,6 +7,10 @@
 -- release. Column names are camelCase (quoted) where the Go stores use
 -- camelCase. Extensions (postgis, timescaledb, age) are enabled by
 -- config/postgres/init-extensions.sql at database initialisation.
+--
+-- The ingest service checks at startup that the columns it depends on exist
+-- and refuses to start without them: a column added below with ALTER TABLE
+-- must also be listed in apps/ingest-service/internal/registry/schema.go.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------

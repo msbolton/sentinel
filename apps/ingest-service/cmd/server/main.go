@@ -94,6 +94,15 @@ func main() {
 		logger.Fatal("failed to connect to postgres for the feed registry", zap.Error(err))
 	}
 	defer reg.Close()
+	// db/schema is applied outside the service. Refuse to run against one older
+	// than this code: a missing column otherwise fails quietly (the listener
+	// replica never registers, for one).
+	schemaCtx, schemaCancel := context.WithTimeout(ctx, 10*time.Second)
+	err = reg.CheckSchema(schemaCtx)
+	schemaCancel()
+	if err != nil {
+		logger.Fatal("database schema is out of date", zap.Error(err))
+	}
 	if err := reg.EnsureBuiltins(ctx, cfg.FeedsBootstrapEnabled); err != nil {
 		logger.Fatal("failed to ensure built-in feeds", zap.Error(err))
 	}
