@@ -248,7 +248,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     });
 
     // The panel's New button and the map control ask for a new zone here.
-    this.subscriptions.add(this.geofences.startDrawingRequested.subscribe(() => this.startDrawing()));
+    this.subscriptions.add(this.geofences.startDrawingRequested.subscribe(() => { if (this.geofences.canWrite()) this.startDrawing(); }));
     effect(() => {
       const session = this.drawSession();
       this.ngZone.runOutsideAngular(() => {
@@ -1181,7 +1181,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   /** The Geofences map control: open the panel and start a new zone in one step. */
   openGeofences(): void {
     this.router.navigateByUrl('/geofences');
-    this.geofences.startDrawingRequested.next();
+    if (this.geofences.canWrite()) this.geofences.startDrawingRequested.next();
   }
 
   /** Enter draw mode with the last-used colour; redrawing a zone starts from its shape and colour. */

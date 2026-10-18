@@ -4,6 +4,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { of, throwError } from 'rxjs';
 import { GeofenceService } from './geofence.service';
 import { EntityService } from './entity.service';
+import { AuthService } from './auth.service';
 import { GeofenceDraft } from '../../shared/models/geofence.model';
 
 const seeded = {
@@ -23,12 +24,13 @@ describe('GeofenceService', () => {
   let service: GeofenceService;
   let http: HttpTestingController;
   const entities = { getEntity: jest.fn() };
+  const auth = { hasAnyRole: jest.fn().mockReturnValue(true) };
 
   beforeEach(() => {
     localStorage.clear();
     entities.getEntity.mockReset();
     TestBed.configureTestingModule({
-      providers: [provideHttpClient(), provideHttpClientTesting(), { provide: EntityService, useValue: entities }],
+      providers: [provideHttpClient(), provideHttpClientTesting(), { provide: EntityService, useValue: entities }, { provide: AuthService, useValue: auth }],
     });
     service = TestBed.inject(GeofenceService);
     http = TestBed.inject(HttpTestingController);
@@ -101,5 +103,11 @@ describe('GeofenceService', () => {
     service.rememberColor('#06b6d4');
     expect(service.lastColor()).toBe('#06b6d4');
     expect(localStorage.getItem('sentinel-geofence-color')).toBe('#06b6d4');
+  });
+
+  it('lets operators, analysts and admins write zones', () => {
+    auth.hasAnyRole.mockReturnValue(false);
+    expect(service.canWrite()).toBe(false);
+    expect(auth.hasAnyRole).toHaveBeenCalledWith('sentinel-operator', 'sentinel-analyst', 'sentinel-admin');
   });
 });

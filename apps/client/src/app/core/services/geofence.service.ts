@@ -1,7 +1,8 @@
-import { Injectable, inject, signal } from '@angular/core';
+import { Injectable, computed, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, Subject, forkJoin, map, of, tap, catchError } from 'rxjs';
 import { EntityService } from './entity.service';
+import { AuthService } from './auth.service';
 import { Entity } from '../../shared/models/entity.model';
 import {
   DEFAULT_GEOFENCE_COLOR,
@@ -20,10 +21,17 @@ const RULES_URL = '/api/v1/alerts/rules';
  * of them: the list, the selection, the draft being drawn, and the anchor
  * entities range rings follow.
  */
+/** The roles that may write zones, matching the gateway's rule policies. */
+export const WRITER_ROLES = ['sentinel-operator', 'sentinel-analyst', 'sentinel-admin'];
+
 @Injectable({ providedIn: 'root' })
 export class GeofenceService {
   private readonly http = inject(HttpClient);
   private readonly entities = inject(EntityService);
+  private readonly auth = inject(AuthService);
+
+  /** Whether this user may create, edit and delete zones; everyone who sees alerts may view them. */
+  readonly canWrite = computed(() => this.auth.hasAnyRole(...WRITER_ROLES));
 
   readonly zones = signal<GeofenceRule[]>([]);
   readonly selectedId = signal<string | null>(null);

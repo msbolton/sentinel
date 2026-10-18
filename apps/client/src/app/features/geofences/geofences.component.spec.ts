@@ -68,6 +68,10 @@ describe('GeofencesComponent', () => {
     expect(el.querySelector('.zone-editor')).toBeNull();
     expect(button('Delete')).toBeUndefined();
     expect(service.selectedId()).toBe('r1');
+    expect(el.querySelector<HTMLButtonElement>('.zone-switch')!.disabled).toBe(true);
+    const hint = el.querySelector('.footer-hint')!.textContent!;
+    expect(hint).not.toMatch(/reshape|new zone/);
+    expect(hint).toContain('Click one to select it');
   });
 
   it('opens the editor for the selected zone and saves only what changed', async () => {

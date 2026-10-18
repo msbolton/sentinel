@@ -1,6 +1,5 @@
 import { ChangeDetectionStrategy, Component, ElementRef, HostListener, OnInit, afterRenderEffect, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
-import { AuthService } from '../../core/services/auth.service';
 import { GeofenceService } from '../../core/services/geofence.service';
 import { IconComponent, IconName } from '../../shared/components/icon.component';
 import {
@@ -14,7 +13,6 @@ import {
 } from '../../shared/models/geofence.model';
 import { formatDistance, normalizeHex } from '../map/geofence-geometry';
 
-const WRITER_ROLES = ['sentinel-operator', 'sentinel-analyst', 'sentinel-admin'];
 const SHAPE_ICONS: Record<GeofenceShape, IconName> = { polygon: 'hexagon', rectangle: 'rectangle', circle: 'circle-dot', ring: 'ring' };
 const SWATCH_NAMES = ['Red', 'Orange', 'Yellow', 'Green', 'Cyan', 'Blue', 'Purple'];
 
@@ -38,11 +36,10 @@ interface Editing {
 })
 export class GeofencesComponent implements OnInit {
   protected readonly service = inject(GeofenceService);
-  private readonly auth = inject(AuthService);
 
   protected readonly zones = this.service.zones;
   protected readonly selectedId = this.service.selectedId;
-  protected readonly canWrite = computed(() => this.auth.hasAnyRole(...WRITER_ROLES));
+  protected readonly canWrite = this.service.canWrite;
   protected readonly activeCount = computed(() => this.zones().filter((z) => z.enabled).length);
   protected readonly swatches = GEOFENCE_COLORS.map((hex, i) => ({ hex, name: SWATCH_NAMES[i] }));
   protected readonly watchable = WATCHABLE_TYPES;

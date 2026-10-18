@@ -108,6 +108,11 @@
     background: var(--accent-green);
     .knob { left: 16px; background: #fff; }
   }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
 }
 
 .zone-editor-row {

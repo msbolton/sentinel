@@ -29,7 +29,7 @@
             <span class="zone-name">{{ zone.name }}</span>
             <span class="zone-summary mono">{{ service.zoneSummary(zone) }}</span>
           </span>
-          <button type="button" class="zone-switch" role="switch" [attr.aria-checked]="zone.enabled" [attr.aria-label]="zone.enabled ? 'Enabled' : 'Disabled'" (click)="toggleEnabled(zone, $event)"><span class="knob"></span></button>
+          <button type="button" class="zone-switch" role="switch" [disabled]="!canWrite()" [attr.aria-checked]="zone.enabled" [attr.aria-label]="zone.enabled ? 'Enabled' : 'Disabled'" (click)="toggleEnabled(zone, $event)"><span class="knob"></span></button>
         </li>
         @if (isEditing(zone)) {
           <li class="zone-editor-row"><ng-container *ngTemplateOutlet="editor" /></li>
@@ -47,7 +47,12 @@
       </div>
     }
 
-    <div class="footer-hint">Zones draw on the map in their colour at any zoom. Click one to select it; drag its points or edge to reshape; press <kbd>G</kbd> for this panel and <kbd>N</kbd> for a new zone.</div>
+    <div class="footer-hint">
+      Zones draw on the map in their colour at any zoom. Click one to select it; press <kbd>G</kbd> for this panel.
+      @if (canWrite()) {
+        Drag a selected zone's points or edge to reshape it; press <kbd>N</kbd> for a new zone.
+      }
+    </div>
   </div>
 </div>
 
