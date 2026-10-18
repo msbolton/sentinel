@@ -53,6 +53,10 @@ check GET /api/v1/drivers/stream 200
 check GET /api/v1/drivers/nope 404
 check GET /api/v1/drivers/celestrak 200
 grep -q '"catalogNumbers"' /tmp/smoke-body && echo "  ok   celestrak schema lists catalogNumbers" || { echo "  FAIL celestrak schema: $(head -c 120 /tmp/smoke-body)"; fail=1; }
+check GET /api/v1/drivers/intelsky 200
+grep -q '"intervalSec"' /tmp/smoke-body && echo "  ok   intelsky schema lists intervalSec" || { echo "  FAIL intelsky schema: $(head -c 120 /tmp/smoke-body)"; fail=1; }
+check GET /api/v1/drivers/adsblol 404
+check GET /api/v1/aircraft/zzz/path 400
 check GET /api/v1/drivers/aisstream 200
 grep -q '"watchlistMmsi"' /tmp/smoke-body && echo "  ok   aisstream schema lists watchlistMmsi" || { echo "  FAIL aisstream schema: $(head -c 120 /tmp/smoke-body)"; fail=1; }
 check GET /api/v1/feeds/aisstream 200

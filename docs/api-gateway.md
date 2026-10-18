@@ -40,6 +40,7 @@ Listens on port **3000** (`PORT`).
 | `VIEWPORT_SYNC_DEBOUNCE_MS` | `1000` | Trailing debounce after viewport changes before pushing |
 | `ENTITY_SERVICE_URL`, `TRACK_SERVICE_URL`, `SEARCH_SERVICE_URL`, `LINK_ANALYSIS_SERVICE_URL`, `ALERT_SERVICE_URL`, `INGEST_SERVICE_URL` | `http://localhost:300x` | Upstreams |
 | `INGEST_SERVICE_TOKEN` | | Shared secret presented to the ingest management API as `X-Sentinel-Service-Token` on every proxied feed request and area push; required when the ingest service runs in production |
+| `INTELSKY_BASE_URL` | `https://intelsky.org` | Where flight paths come from |
 | `DB_HOST` … or `DATABASE_URL` | | PostgreSQL for the locations table |
 
 ## REST API
@@ -96,6 +97,14 @@ A finding that reaches HIGH, or is confirmed, becomes an alert on `alerts.events
 | DELETE | `/api/v1/locations/:id` | `sentinel-admin` | Delete (204) |
 
 Unknown body fields are rejected with 400, matching the former NestJS validation pipe.
+
+### Flight paths (IntelSky, owned by the gateway)
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| GET | `/api/v1/aircraft/{hex}/path?days=1\|3\|7` | any | Where a military aircraft has flown: today (`days=1`, the default) from IntelSky's `stats/map.php?ajax_history=1`, or a range of UTC days from `stats/stats.php?ajax_track=1`. Answers `{hex, source: "INTELSKY", days, points: [{lat, lon, altFt, ts}] (oldest first), meta?}`, `meta` (callsign, registration, type, operator, description, firstSeen, lastSeen in IntelSky's local time) for ranges only. 400 for a hex that is not six hex digits or days outside 1 to 7; 503 with `Retry-After` when IntelSky or the gateway's own budget (100 a minute, half of IntelSky's limit) says wait; 502 when IntelSky fails; 200 with `points: []` when it knows nothing |
+
+Answers are cached per aircraft and range (a minute for today, ten minutes for ranges, 500 entries) and concurrent misses share one request.
 
 ### Registration and user administration
 
@@ -208,6 +217,7 @@ apps/api-gateway/
 │   ├── proxy/                    # Reverse proxy with identity header propagation
 │   ├── server/                   # Router, health endpoints, role policy table
 │   ├── locations/                # pgx store + handler for sentinel.locations
+│   ├── flightpath/               # IntelSky flight paths: cached, rate-budgeted proxy for /api/v1/aircraft/{hex}/path
 │   ├── registration/             # Keycloak Admin client, SMTP mailer, rate limiter, /auth handler
 │   └── stream/                   # WebSocket hub, client, batcher, Kafka bridge, viewport aggregation and feed area sync
 ├── Dockerfile

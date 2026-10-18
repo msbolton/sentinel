@@ -158,6 +158,17 @@ curl -s http://localhost:3000/api/v1/feeds/celestrak | jq '.status.state, .statu
 
 `detail` shows `satellites`, `pinned`, `fetchedAt` and `nextFetchAt`. The state is `idle` until a map client is connected: satellites are emitted only over the clients' viewports, except pinned objects, which are emitted always. Open the map, pan to the Atlantic, and the ISS moves smoothly (the client propagates it between the server's once-a-minute fixes); click it for its orbit path, ground track and footprint. CelesTrak needs no key but enforces a usage policy; keep `refreshHours` at 2 and prefer a group over many catalog numbers (`docs/feeds.md`).
 
+### Military aircraft (IntelSky)
+
+The built-in `intelsky` feed is seeded disabled and needs no key:
+
+```bash
+curl -s -X POST http://localhost:3000/api/v1/feeds/intelsky/enable
+curl -s http://localhost:3000/api/v1/feeds/intelsky | jq '.status.state, .status.detail'
+```
+
+`detail` shows `aircraft` (about 75 worldwide), `lastStatus` 200, `fetchedAt` and `nextFetchAt`; the feed polls every 10 s whether or not a map is open. Military aircraft appear in orange. Select one: Aircraft Details opens with today's path drawn as a dashed orange line, and the Flight path control switches to 3 or 7 days or off (`GET /api/v1/aircraft/{hex}/path?days=`). To check against the live service without the stack: `cd apps/ingest-service && go test -tags live -run TestLivePoll -v ./internal/source/driver/intelsky/` and `cd apps/api-gateway && go test -tags live -run TestLivePaths -v ./internal/flightpath/`.
+
 ### Ships (aisstream.io)
 
 The built-in `aisstream` feed is seeded disabled and reads its key from `AISSTREAM_API_KEY` (a free account at aisstream.io). Compose passes the variable to the ingest service:
@@ -180,7 +191,7 @@ To check the driver against the live service without the stack: `cd apps/ingest-
 
 ### Local receivers and other sources
 
-Every source is a feed created through `POST /api/v1/feeds` (or the Feeds page). The built-in drivers are `opensky`, `adsblol`, `celestrak`, `httpjson` (any JSON API, field-mapped) and `stream` (a transport, a framer and a decoder). Pull from site receivers rather than opening ports: a feed that listens (`tcpserver`, `udp`) must be pinned to one replica.
+Every source is a feed created through `POST /api/v1/feeds` (or the Feeds page). The built-in drivers are `opensky`, `intelsky`, `celestrak`, `aisstream`, `httpjson` (any JSON API, field-mapped) and `stream` (a transport, a framer and a decoder). Pull from site receivers rather than opening ports: a feed that listens (`tcpserver`, `udp`) must be pinned to one replica.
 
 ```jsonc
 // readsb / dump1090 SBS (port 30003): the simplest receiver feed
