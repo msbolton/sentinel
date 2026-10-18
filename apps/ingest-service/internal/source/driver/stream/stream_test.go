@@ -361,6 +361,44 @@ func TestURLCredentialsStayOutOfDeadLetterProvenance(t *testing.T) {
 	}
 }
 
+// An observation whose message names no sensor is attributed to the remote its
+// frame came from, which for a WebSocket feed is the URL it is configured
+// with, key and all. The default drops the credentials, as the dead-letter
+// sender does; a sensor id the message supplies is the sender's own and is
+// kept as sent.
+func TestSensorIDDefaultsToTheRedactedRemote(t *testing.T) {
+	for name, tc := range map[string]struct{ remote, sensorID, want string }{
+		"a URL remote loses its key":            {"wss://feed.example.com:443/stream?key=abc", "", "wss://feed.example.com:443/stream"},
+		"a URL remote loses its user as well":   {"wss://user:tok@feed.example.com/stream?key=abc#top", "", "wss://feed.example.com/stream"},
+		"a peer address is kept":                {"10.0.0.5:4000", "", "10.0.0.5:4000"},
+		"a topic is kept":                       {"sensors/ais/1", "", "sensors/ais/1"},
+		"a sensor id the message names is kept": {"wss://feed.example.com/stream?key=abc", "wss://rx.example.com/s?site=7", "wss://rx.example.com/s?site=7"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr := &originTransport{frame: transport.Frame{Payload: []byte("x"), ReceivedAt: time.Now().UTC(), Remote: tc.remote}}
+			dec := decoder.Stateless(func(transport.Frame) ([]*obs.Observation, error) {
+				o := &obs.Observation{SourceEntityID: "a", SensorID: tc.sensorID}
+				o.SetPosition(1, 1)
+				return []*obs.Observation{o}, nil
+			})
+			d := newFakeDriver(driver.BackpressureBlock, tr, dec)
+			sink := newSink()
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() { defer close(done); _ = d.Run(ctx, sink) }()
+			defer func() { cancel(); <-done }()
+			if !waitFor(func() bool { return sink.count() == 1 }, time.Second) {
+				t.Fatal("no observation")
+			}
+			sink.mu.Lock()
+			defer sink.mu.Unlock()
+			if got := sink.obs[0].SensorID; got != tc.want {
+				t.Errorf("sensor id = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // originTransport emits one frame as given.
 type originTransport struct{ frame transport.Frame }
 

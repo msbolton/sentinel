@@ -334,6 +334,10 @@ func (d *Driver) decodeLoop(ctx context.Context, frames <-chan transport.Frame, 
 
 func (d *Driver) decodeOne(ctx context.Context, f transport.Frame, sink driver.Sink) {
 	out, err := d.safeDecode(f)
+	// A WebSocket feed's remote is its URL, which can carry an API key, so
+	// wherever the remote is recorded (the sender of a dead letter, the sensor
+	// an observation defaults to) it is in its redacted form.
+	remote := transport.RedactRemote(f.Remote)
 	if err != nil {
 		if reason := decoder.SkipReason(err); reason != "" {
 			sink.Skipped(reason)
@@ -351,14 +355,11 @@ func (d *Driver) decodeOne(ctx context.Context, f transport.Frame, sink driver.S
 			reason = "panic"
 		}
 		d.malformed.Add(1)
-		// A WebSocket feed's remote is its URL, which can carry an API key, so
-		// the sender is noted and reported in its redacted form.
-		sender := transport.RedactRemote(f.Remote)
 		if d.noter != nil {
-			d.noter.NoteMalformed(sender, reason, msg)
+			d.noter.NoteMalformed(remote, reason, msg)
 		}
 		if ps, ok := sink.(driver.ProvenanceSink); ok {
-			ps.DeadLetterFrom(f.Payload, reason, err, driver.Provenance{Decoder: d.ddef.Name, Sender: sender, ReceivedAt: f.ReceivedAt})
+			ps.DeadLetterFrom(f.Payload, reason, err, driver.Provenance{Decoder: d.ddef.Name, Sender: remote, ReceivedAt: f.ReceivedAt})
 		} else {
 			sink.DeadLetter(f.Payload, reason, err)
 		}
@@ -375,7 +376,7 @@ func (d *Driver) decodeOne(ctx context.Context, f transport.Frame, sink driver.S
 			o.ReceivedAt = f.ReceivedAt
 		}
 		if o.SensorID == "" {
-			o.SensorID = f.Remote
+			o.SensorID = remote
 		}
 		if o.RawContentType == "" {
 			o.RawContentType = d.ddef.ContentType

@@ -27,10 +27,10 @@ type Frame struct {
 // secret: the user and password, the query and the fragment. A remote is
 // normally a peer address, a topic or a queue, and comes back as it is; a
 // WebSocket feed's is the URL it is configured with, which can carry a token.
-// Anything that leaves the process (the dead-letter topic, the health detail)
-// should pass a Frame.Remote through it first. Only text that parses as a URL
-// with a scheme is touched, and one with nothing to strip is returned exactly
-// as written.
+// Anything that records a Frame.Remote (the dead-letter topic, the health
+// detail, an observation's sensor id) should pass it through first. Only text
+// that parses as a URL with a scheme is touched, and one with nothing to strip
+// is returned exactly as written.
 func RedactRemote(remote string) string {
 	u, err := url.Parse(remote)
 	if err != nil || u.Scheme == "" {
