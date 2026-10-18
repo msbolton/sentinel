@@ -47,6 +47,7 @@ import {
 } from './cesium-config';
 import { CircularBuffer, decimateTrail, TrailPoint } from './trail-utils';
 import { isGlobalBounds, rectangleToBounds } from './viewport-bounds';
+import { vesselColor, vesselHeading } from './vessel-style';
 import { bucketCells, bucketDegrees, densityApplies, densityDiscSize, densityLabel } from './density-overlay';
 import { DensityGrid } from '../../shared/models/density.model';
 import { DeadReckoningTracker } from './dead-reckoning';
@@ -724,7 +725,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const layer = this.layers.find((l) => l.entityType === entity.entityType);
     if (layer && !layer.visible) return;
 
-    const cesiumColor = this.getCesiumColor(entity.entityType);
+    const cesiumColor = this.entityColor(entity);
     const isStale = this.isEntityStale(entity);
     const billboardAlpha = isStale ? 0.4 : 1.0;
     const trailAlpha = isStale ? TRACK_TRAIL_CONFIG.trailOpacity * 0.4 : TRACK_TRAIL_CONFIG.trailOpacity;
@@ -746,10 +747,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       ? Cesium.HeightReference.NONE
       : Cesium.HeightReference.CLAMP_TO_GROUND;
 
-    const shouldRotate = HEADING_ROTATED_TYPES.has(entity.entityType);
-    const rotation = shouldRotate && entity.heading != null
-      ? -Cesium.Math.toRadians(entity.heading)
-      : 0;
+    // Vessels point along their heading only while moving or when they report a true heading.
+    const headingDeg = entity.entityType === EntityType.VESSEL
+      ? vesselHeading(entity)
+      : HEADING_ROTATED_TYPES.has(entity.entityType) ? entity.heading ?? null : null;
+    const rotation = headingDeg != null ? -Cesium.Math.toRadians(headingDeg) : 0;
 
     const existing = this.entityMap.get(entity.id);
     const shown = this.layerVisibility.isVisible(entity);
@@ -1621,6 +1623,18 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       return elapsed > this.getStaleThresholdForSource(entity.source);
     }
     return false;
+  }
+
+  /** The pin colour for one entity: vessels by ship type category, everything else by type. */
+  private entityColor(entity: Entity): any {
+    if (entity.entityType !== EntityType.VESSEL || !this.Cesium) return this.getCesiumColor(entity.entityType);
+    const css = vesselColor(entity);
+    let cached = this.cesiumColorCache.get(css);
+    if (!cached) {
+      cached = this.Cesium.Color.fromCssColorString(css);
+      this.cesiumColorCache.set(css, cached);
+    }
+    return cached;
   }
 
   private getCesiumColor(entityType: EntityType): any {

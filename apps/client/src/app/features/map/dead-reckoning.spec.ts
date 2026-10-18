@@ -55,8 +55,10 @@ describe('fixFromEntity', () => {
     expect(reported).toEqual(expect.objectContaining({ vNorth: 5, vEast: -7, vUp: 2 }));
   });
 
-  it('rejects non-aircraft, positionless, stationary, and directionless entities', () => {
-    expect(fixFromEntity(aircraft({ entityType: 'VESSEL' } as Partial<Entity>), T0)).toBeNull();
+  it('rejects untracked types, positionless, stationary, and directionless entities', () => {
+    expect(fixFromEntity(aircraft({ entityType: 'PERSON' } as Partial<Entity>), T0)).toBeNull();
+    // Moving vessels are extrapolated too: their fixes are thinned to one every 15 s.
+    expect(fixFromEntity(aircraft({ entityType: 'VESSEL' } as Partial<Entity>), T0)).not.toBeNull();
     expect(fixFromEntity(aircraft({ position: undefined }), T0)).toBeNull();
     expect(fixFromEntity(aircraft({ speedKnots: 0.5 }), T0)).toBeNull();
     expect(fixFromEntity(aircraft({ heading: undefined, course: undefined }), T0)).toBeNull();
@@ -148,7 +150,7 @@ describe('DeadReckoningTracker', () => {
   it('tracks eligible entities, steps them, and evicts expired ones', () => {
     const tracker = new DeadReckoningTracker();
     expect(tracker.upsert(aircraft(), T0)).toBe(true);
-    expect(tracker.upsert(aircraft({ id: 'boat', entityType: 'VESSEL' } as Partial<Entity>), T0)).toBe(false);
+    expect(tracker.upsert(aircraft({ id: 'walker', entityType: 'PERSON' } as Partial<Entity>), T0)).toBe(false);
     expect(tracker.size).toBe(1);
 
     const stepped = tracker.step(T0 + 10_000);
