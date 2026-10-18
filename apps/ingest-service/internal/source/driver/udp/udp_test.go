@@ -348,7 +348,9 @@ func TestMessageRate(t *testing.T) {
 
 // maxMessagesPerSecPerSender reaches the listener: one sender's lines beyond
 // its own rate are dropped and counted apart from the shared limit, and the
-// setting off (absent, the default) limits no sender.
+// setting off (absent, the default) limits no sender. The lines are one
+// datagram, which the listener asks of the sender's bucket at a single
+// instant, so the counts are exact however slow the machine.
 func TestPerSenderMessageRate(t *testing.T) {
 	line := `{"sourceEntityId":"r"}` + "\n"
 	for name, tc := range map[string]struct {

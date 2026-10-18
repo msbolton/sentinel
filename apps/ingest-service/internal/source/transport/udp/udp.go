@@ -117,7 +117,11 @@ func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 			l.counts.Oversize.Add(1)
 			continue
 		}
-		now := time.Now().UTC()
+		// The sender's bucket is asked on received, whose monotonic reading
+		// survives a step of the wall clock; frames and rows are stamped with
+		// its UTC form, which has none (see SenderLimiter.Allow).
+		received := time.Now()
+		now := received.UTC()
 		sender := ap.Addr().String()
 		parts := split(buf[:n], l.cfg.Framing)
 		for i, part := range parts {
@@ -125,7 +129,7 @@ func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 			// flooder spends none of the shared budget. The datagram's
 			// messages are all asked at the one instant, so once one is
 			// refused the rest are too, and are counted together.
-			if !l.perSender.Allow(sender, now) {
+			if !l.perSender.Allow(sender, received) {
 				dropped := int64(len(parts) - i)
 				l.counts.SenderRateLimited.Add(dropped)
 				l.senders.RateLimited(sender, dropped)

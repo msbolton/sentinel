@@ -2,6 +2,7 @@ package tcpserver
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"net"
@@ -290,6 +291,45 @@ func TestPerSenderLimitSpansConnections(t *testing.T) {
 	}
 	if limited != detailInt(st, "senderRateLimited") {
 		t.Errorf("the rows count %d rate limited, the listener %d", limited, detailInt(st, "senderRateLimited"))
+	}
+}
+
+// A sender's bucket runs on the clock the listener reads itself, not on the
+// stamps of its frames. The stamps are wall-clock readings, and a step of the
+// wall clock back (an NTP correction, a virtual machine resumed) would put
+// every later stamp behind the bucket's last reading and hold a spent bucket
+// shut until the clock caught up. Here the stamps step back an hour once the
+// sender has spent its bucket, and 50 ms later (5 tokens at 100 a second) its
+// frames pass again.
+func TestPerSenderLimitSurvivesAStepBackOfTheWallClock(t *testing.T) {
+	tr, err := New(transport.Config{Kind: "tcpserver", Address: "127.0.0.1:0", Framing: "line", MaxMessagesPerSecPerSender: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	col := &transporttest.Collector{}
+	emit := tr.(*Server).guard("10.0.0.1", col.Emit)
+	send := func(stamp time.Time) {
+		t.Helper()
+		if err := emit(context.Background(), transport.Frame{Payload: []byte("m"), ReceivedAt: stamp, Remote: "10.0.0.1:5000"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stamp := time.Now().UTC()
+	for i := 0; i < 1000; i++ {
+		send(stamp)
+	}
+	spent := col.Count()
+	if spent < 100 || spent > 150 {
+		t.Fatalf("%d of 1000 frames passed, want the burst of 100 (a few more if the loop was slow): the bucket is not spent", spent)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	for i := 0; i < 20; i++ {
+		send(stamp.Add(-time.Hour))
+	}
+	if col.Count() == spent {
+		t.Error("no frame passed 50 ms after the bucket was spent, with the stamps an hour behind: the bucket follows the frames' wall-clock stamps and stays shut until they catch up")
 	}
 }
 

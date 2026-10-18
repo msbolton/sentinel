@@ -119,29 +119,6 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 	defer ln.Close()
 	s.Set(func(st *transport.State) { st.Connected = true; st.LastError = "" })
 
-	// guarded is the emit for the connection of the sender at host, its IP,
-	// which is the key of its rate limit: every connection of one IP draws on
-	// one bucket, or a sender could multiply its budget by connecting again.
-	// The sender's own bucket is asked before the listener's, so a flooder
-	// spends none of the shared budget. The senders list names the
-	// connection, ip:port.
-	guarded := func(host string) transport.Emit {
-		return func(ctx context.Context, f transport.Frame) error {
-			if !s.perSender.Allow(host, f.ReceivedAt) {
-				s.counts.SenderRateLimited.Add(1)
-				s.senders.RateLimited(f.Remote, 1)
-				return nil
-			}
-			if !s.limit.Allow() {
-				s.counts.RateLimited.Add(1)
-				return nil
-			}
-			s.counts.Accepted.Add(1)
-			s.senders.Seen(f.Remote, f.ReceivedAt)
-			return emit(ctx, f)
-		}
-	}
-
 	var wg sync.WaitGroup
 	var conns sync.Map
 	var live atomic.Int64
@@ -183,7 +160,7 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 		if ctx.Err() != nil {
 			raw.Close() // the shutdown sweep may have run before the Store
 		}
-		connEmit := guarded(transport.SenderIP(remote))
+		connEmit := s.guard(transport.SenderIP(remote), emit)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -229,6 +206,29 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 	wg.Wait()
 	s.Set(func(st *transport.State) { st.Connected = false })
 	return nil
+}
+
+// guard is the emit for the connection of the sender at host, its IP, which is
+// the key of its rate limit: every connection of one IP draws on one bucket, or
+// a sender could multiply its budget by connecting again. The sender's own
+// bucket is asked before the listener's, so a flooder spends none of the
+// shared budget; it is asked on time.Now(), not on the frame's UTC stamp (see
+// SenderLimiter.Allow). The senders list names the connection, ip:port.
+func (s *Server) guard(host string, emit transport.Emit) transport.Emit {
+	return func(ctx context.Context, f transport.Frame) error {
+		if !s.perSender.Allow(host, time.Now()) {
+			s.counts.SenderRateLimited.Add(1)
+			s.senders.RateLimited(f.Remote, 1)
+			return nil
+		}
+		if !s.limit.Allow() {
+			s.counts.RateLimited.Add(1)
+			return nil
+		}
+		s.counts.Accepted.Add(1)
+		s.senders.Seen(f.Remote, f.ReceivedAt)
+		return emit(ctx, f)
+	}
 }
 
 var _ transport.MalformedNoter = (*Server)(nil)

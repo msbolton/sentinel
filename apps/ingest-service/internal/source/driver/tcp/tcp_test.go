@@ -213,16 +213,18 @@ func TestMalformedMessageNamesItsSender(t *testing.T) {
 
 // maxMessagesPerSecPerSender limits each sender of a listening connection on
 // its own: lines beyond it are dropped and counted as senderRateLimited, apart
-// from the limit all senders share. Absent, the default, it limits nobody.
+// from the limit all senders share. Absent, the default, it limits nobody. The
+// lines of a TCP connection arrive one at a time on a real clock, so a token
+// may refill while they do: the bucket's burst of 2 may become 3, never more.
 func TestPerSenderMessageRate(t *testing.T) {
 	line := `{"sourceEntityId":"r","position":{"latitude":1,"longitude":2}}` + "\n"
 	for name, tc := range map[string]struct {
 		perSender map[string]any
-		accepted  int64
-		limited   int64
+		burst     int64 // lines accepted when no token refills; one more when one does
+		spare     int64 // tokens that may refill in the time the lines take
 	}{
 		"off by default": {nil, 5, 0},
-		"set to 2":       {map[string]any{"maxMessagesPerSecPerSender": 2}, 2, 3},
+		"set to 2":       {map[string]any{"maxMessagesPerSecPerSender": 2}, 2, 1},
 	} {
 		port := freePort(t)
 		cfg := map[string]any{"mode": "listen", "port": port, "address": "127.0.0.1", "encoding": "json"}
@@ -238,11 +240,13 @@ func TestPerSenderMessageRate(t *testing.T) {
 		if !transporttest.WaitFor(func() bool { return counter("accepted")+counter("senderRateLimited") == 5 }, waitTimeout) {
 			t.Fatalf("%s: accepted %d + senderRateLimited %d, want 5 lines", name, counter("accepted"), counter("senderRateLimited"))
 		}
-		if a, l := counter("accepted"), counter("senderRateLimited"); a != tc.accepted || l != tc.limited || counter("rateLimited") != 0 {
-			t.Errorf("%s: accepted %d, senderRateLimited %d, rateLimited %d; want %d, %d, 0", name, a, l, counter("rateLimited"), tc.accepted, tc.limited)
+		accepted := counter("accepted")
+		if accepted < tc.burst || accepted > tc.burst+tc.spare || counter("rateLimited") != 0 {
+			t.Errorf("%s: accepted %d, senderRateLimited %d, rateLimited %d; want %d to %d accepted, the rest limited by the sender's own bucket and none by the shared one",
+				name, accepted, counter("senderRateLimited"), counter("rateLimited"), tc.burst, tc.burst+tc.spare)
 		}
-		if !transporttest.WaitFor(func() bool { return int64(sink.count()) == tc.accepted }, waitTimeout) {
-			t.Errorf("%s: %d observations, want the %d accepted", name, sink.count(), tc.accepted)
+		if !transporttest.WaitFor(func() bool { return int64(sink.count()) == accepted }, waitTimeout) {
+			t.Errorf("%s: %d observations, want the %d accepted", name, sink.count(), accepted)
 		}
 	}
 }

@@ -110,7 +110,12 @@ func NewSenderLimiter(perSec, maxKeys int) *SenderLimiter {
 	return &SenderLimiter{perSec: perSec, max: max(maxKeys, 1), order: list.New(), m: map[string]*list.Element{}}
 }
 
-// Allow takes one token from key's bucket, as of now.
+// Allow takes one token from key's bucket, as of now. Callers pass time.Now(),
+// monotonic reading and all: a bucket measures time from the last reading it
+// was given, so a wall-clock time that steps back (an NTP correction; the
+// UTC() and Round(0) forms of a time have lost the monotonic reading that
+// would absorb it) puts every later reading behind that one and holds a spent
+// bucket shut until the clock has caught up.
 func (l *SenderLimiter) Allow(key string, now time.Time) bool {
 	if l == nil {
 		return true
