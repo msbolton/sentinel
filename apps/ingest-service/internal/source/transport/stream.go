@@ -12,6 +12,16 @@ import (
 	"github.com/sentinel/ingest-service/internal/source/transport/framing"
 )
 
+// initialBuffer is the size a connection's scanner buffer starts at: the frame
+// limit plus the room for a delimited token's varint prefix, capped at 64 KiB.
+// A listener keeps one buffer per connection, so a small limit must not cost
+// 64 KiB each. The scanner doubles the buffer up to the same bound when a
+// larger frame arrives. The buffer never starts above that bound, because
+// bufio would then take its capacity as the token limit.
+func initialBuffer(cfg Config) int {
+	return min(64<<10, cfg.MaxFrame()+binary.MaxVarintLen64)
+}
+
 // ScanConn reads frames from conn with the configured framer and emits each
 // one until the connection ends, ctx is done, or emit refuses. The caller
 // owns conn; ScanConn does not close it. readTimeout resets per read.
@@ -23,7 +33,7 @@ func ScanConn(ctx context.Context, conn net.Conn, cfg Config, emit Emit) error {
 	sc := bufio.NewScanner(conn)
 	// A delimited token carries its varint prefix, so the bound leaves room
 	// for it; the framers enforce the frame limit themselves.
-	sc.Buffer(make([]byte, 0, 64*1024), cfg.MaxFrame()+binary.MaxVarintLen64)
+	sc.Buffer(make([]byte, 0, initialBuffer(cfg)), cfg.MaxFrame()+binary.MaxVarintLen64)
 	sc.Split(split)
 	remote := ""
 	if conn.RemoteAddr() != nil {
