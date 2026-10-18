@@ -57,7 +57,7 @@ import { footprintRadiusM, sampleOrbit, splitAtAntimeridian } from './orbit-geom
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 import { FlightPathService, FlightPathState } from '../../core/services/flight-path.service';
 import { pathRuns } from './flight-path';
-import { CLUSTER_CONFIG, CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, drawClusterDisc, syncLabelGlyphClusterShow } from './entity-clusters';
+import { CLUSTER_CONFIG, CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, drawClusterDisc, syncLabelGlyphClusterShow, syncTrailClusterShow } from './entity-clusters';
 import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine, type GeoPoint } from './drop-line';
 import { formatAltitude } from '../../shared/geo-format';
 import { GeofenceService } from '../../core/services/geofence.service';
@@ -1193,12 +1193,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // Vessel counts for views too large to show vessels (see syncDensity).
     this.densitySource = new Cesium.CustomDataSource('sentinel-vessel-density');
     this.viewer.dataSources.add(this.densitySource);
-    // Clustered labels need their glyphs brought in line after each frame;
-    // see syncLabelGlyphClusterShow.
+    // After each frame, clustered labels' glyphs and clustered entities'
+    // trails follow their billboard: see syncLabelGlyphClusterShow and
+    // syncTrailClusterShow.
     this.viewer.scene.postRender.addEventListener(() => {
       let changed = false;
       for (const source of this.clusterSources.values()) {
         changed = syncLabelGlyphClusterShow(source.clustering._labelCollection) || changed;
+        changed = syncTrailClusterShow(source.clustering._billboardCollection) || changed;
       }
       if (changed) this.scheduleRender();
     });

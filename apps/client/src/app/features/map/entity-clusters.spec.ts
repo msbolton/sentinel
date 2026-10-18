@@ -1,5 +1,5 @@
 import { EntityType } from '../../shared/models/entity.model';
-import { CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, syncLabelGlyphClusterShow } from './entity-clusters';
+import { CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, syncLabelGlyphClusterShow, syncTrailClusterShow } from './entity-clusters';
 
 describe('clusterGroupFor', () => {
   it('routes aircraft, vessels and vehicles to their own cluster group', () => {
@@ -55,5 +55,29 @@ describe('syncLabelGlyphClusterShow', () => {
   it('reports no change when every glyph already agrees', () => {
     expect(syncLabelGlyphClusterShow(collection([label(false, [false, false], false), label(true, [true])]))).toBe(false);
     expect(syncLabelGlyphClusterShow(undefined)).toBe(false);
+  });
+});
+
+describe('syncTrailClusterShow', () => {
+  const collection = (items: { id?: any; clusterShow: boolean }[]) => ({ length: items.length, get: (i: number) => items[i] });
+
+  it('hides the trail of an entity drawn inside a cluster and brings it back when it leaves', () => {
+    const clustered = { polyline: { show: true as unknown } };
+    const alone = { polyline: { show: true as unknown } };
+    const noTrail = {};
+    const items = [{ id: clustered, clusterShow: false }, { id: alone, clusterShow: true }, { id: noTrail, clusterShow: false }, { clusterShow: false }];
+
+    expect(syncTrailClusterShow(collection(items))).toBe(true);
+    expect(clustered.polyline.show).toBe(false);
+    expect(alone.polyline.show).toBe(true);
+    expect(syncTrailClusterShow(collection(items))).toBe(false); // nothing to do
+
+    items[0].clusterShow = true;
+    expect(syncTrailClusterShow(collection(items))).toBe(true);
+    expect(clustered.polyline.show).toBe(true);
+  });
+
+  it('tolerates a source with no billboards yet', () => {
+    expect(syncTrailClusterShow(undefined)).toBe(false);
   });
 });

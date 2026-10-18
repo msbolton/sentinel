@@ -93,3 +93,32 @@ export function syncLabelGlyphClusterShow(labels: LabelCollectionLike | undefine
   }
   return changed;
 }
+
+/** The parts of a clustered entity billboard the trail sync touches. */
+interface TrailedEntityLike { polyline?: { show: unknown }; _trailClusterShow?: boolean }
+interface ClusterBillboardLike { id?: TrailedEntityLike; clusterShow: boolean }
+interface BillboardCollectionLike { length: number; get(index: number): ClusterBillboardLike }
+
+/**
+ * Cesium's EntityCluster hides a clustered entity's billboard and label but
+ * not its polyline, so trails would stick out of the cluster disc. Run after
+ * each render: an entity's trail is shown exactly when its billboard is drawn
+ * on its own. Returns whether anything changed, so the caller can request
+ * one more frame.
+ */
+export function syncTrailClusterShow(billboards: BillboardCollectionLike | undefined): boolean {
+  if (!billboards) return false;
+  let changed = false;
+  for (let i = 0; i < billboards.length; i++) {
+    const billboard = billboards.get(i);
+    const entity = billboard.id;
+    if (!entity?.polyline) continue;
+    const want = billboard.clusterShow;
+    if (entity._trailClusterShow !== want) {
+      entity.polyline.show = want;
+      entity._trailClusterShow = want;
+      changed = true;
+    }
+  }
+  return changed;
+}

@@ -1048,8 +1048,8 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
 
       &.active {
         color: #fff;
-        background: #f97316;
-        border-color: #f97316;
+        background: #22c55e;
+        border-color: #22c55e;
       }
     }
 
