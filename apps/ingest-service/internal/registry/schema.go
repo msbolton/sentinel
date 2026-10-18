@@ -50,8 +50,8 @@ func (e *SchemaError) Error() string {
 	}
 	return "database schema is older than this ingest-service: missing " + strings.Join(missing, ", ") +
 		" (" + strings.Join(files, ", ") + "). Apply db/schema in name order, every file is idempotent: " +
-		"compose `docker compose up db-schema` or `make db-schema`; on Helm the dbSchema Job applies it " +
-		"on install and upgrade (`dbSchema.enabled`, default true); otherwise " +
+		"compose `docker compose up db-schema` or `make db-schema`; on Helm `helm upgrade` runs the " +
+		"dbSchema Job that applies it (`dbSchema.enabled`, default true); otherwise " +
 		"`psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f <file>` for each file"
 }
 

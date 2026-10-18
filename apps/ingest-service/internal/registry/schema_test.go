@@ -26,8 +26,8 @@ func TestSchemaErrorNamesColumnsFileAndCommands(t *testing.T) {
 		"docker compose up db-schema",
 		"make db-schema",
 		"Helm",
+		"helm upgrade",
 		"dbSchema.enabled",
-		"install and upgrade",
 		"psql",
 	} {
 		if !strings.Contains(msg, want) {
