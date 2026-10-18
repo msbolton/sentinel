@@ -729,6 +729,20 @@ describe('SchemaFormComponent', () => {
       fixture.detectChanges();
       expect(messagesOf('/config/decoderOptions')).toEqual(['Required.']);
 
+      // text that is not a JSON object has a message of its own, and is not also reported as missing
+      setInput('textarea[name="decoderOptions"]', '{"sourceEntityId":');
+      expect(messagesOf('/config/decoderOptions')).toEqual(['Not valid JSON.']);
+      expect(last().valid).toBe(false);
+
+      setInput('textarea[name="decoderOptions"]', '[1]');
+      expect(messagesOf('/config/decoderOptions')).toEqual(['Must be a JSON object, like {"key": "value"}.']);
+      expect(last().valid).toBe(false);
+
+      // an empty object is a valid object that says nothing, so it is still missing
+      setInput('textarea[name="decoderOptions"]', '{}');
+      expect(messagesOf('/config/decoderOptions')).toEqual(['Required.']);
+      expect(last().valid).toBe(false);
+
       // what is inside the object is the server's to check
       setInput('textarea[name="decoderOptions"]', '{"name": "Truck 1"}');
       expect(last().valid).toBe(true);

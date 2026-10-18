@@ -683,7 +683,8 @@ export class SchemaFormComponent {
       return null;
     }
     const errors: ValidationErrors = {};
-    if (rules.some((rule) => rule.required) && this.isEmpty(def)) {
+    // a field with an error of its own (JSON that does not parse, say) is not reported as missing as well
+    if (rules.some((rule) => rule.required) && !def.control?.errors && this.isEmpty(def)) {
       errors['required'] = true;
     }
     const value = def.control?.value;
