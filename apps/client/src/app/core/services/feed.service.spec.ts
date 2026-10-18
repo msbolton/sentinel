@@ -141,6 +141,59 @@ describe('FeedService', () => {
     expect(service.listenPorts()).toBeNull();
   });
 
+  describe('loadPorts() when it is called again before the first call is answered', () => {
+    /** Two calls with nothing answered yet: the earlier request and the later one. */
+    function twoCalls() {
+      service.loadPorts().subscribe({ error: () => undefined });
+      service.loadPorts().subscribe({ error: () => undefined });
+      const [first, second] = http.match('/api/v1/feeds/ports');
+      expect(first).toBeDefined();
+      expect(second).toBeDefined();
+      return { first, second };
+    }
+    const older = { ...listenPorts, suggested: { tcp: 6001 } };
+    const newer = { ...listenPorts, suggested: { tcp: 6002 } };
+
+    it('keeps the answer to the latest call when the earlier request answers after it', () => {
+      const { first, second } = twoCalls();
+      expect(service.listenPorts()).toBeNull();
+
+      second.flush(newer);
+      first.flush(older);
+
+      expect(service.listenPorts()?.suggested).toEqual({ tcp: 6002 });
+    });
+
+    it('keeps the answer to the latest call when the earlier request fails after it', () => {
+      const { first, second } = twoCalls();
+
+      second.flush(newer);
+      first.flush({ error: 'gone' }, { status: 502, statusText: 'Bad Gateway' });
+
+      expect(service.listenPorts()?.suggested).toEqual({ tcp: 6002 });
+    });
+
+    it('holds no answer when the latest call fails, whatever the earlier one says later', () => {
+      const { first, second } = twoCalls();
+
+      second.flush({ error: 'gone' }, { status: 502, statusText: 'Bad Gateway' });
+      first.flush(older);
+
+      expect(service.listenPorts()).toBeNull();
+    });
+
+    it('ignores the earlier answer even when it comes first, as the question now is the latest call\'s', () => {
+      const { first, second } = twoCalls();
+
+      first.flush(older);
+      // the question is still open, so there is no answer to give yet
+      expect(service.listenPorts()).toBeNull();
+
+      second.flush(newer);
+      expect(service.listenPorts()?.suggested).toEqual({ tcp: 6002 });
+    });
+  });
+
   it('setEnabled() posts to enable/disable and updates the feed in place', () => {
     service.load().subscribe();
     http.expectOne('/api/v1/feeds').flush([makeFeed('opensky', { enabled: false }), makeFeed('celestrak')]);

@@ -766,6 +766,52 @@ describe('ConnectionFormComponent', () => {
       flushPorts();
     });
 
+    // The drawer can be walked back to the list of drivers while the question about the ports is still out.
+    describe('when the driver changes before the ports are answered', () => {
+      function pickTcpThenGoBack(): void {
+        open('create');
+        component.selectDriver('tcp');
+        fixture.detectChanges();
+        component.back();
+        fixture.detectChanges();
+      }
+
+      it('asks once, and the next driver\'s hints come from that answer', () => {
+        pickTcpThenGoBack();
+        component.selectDriver('udp');
+        fixture.detectChanges();
+
+        const requests = httpMock.match('/api/v1/feeds/ports');
+        expect(requests).toHaveLength(1);
+        requests[0].flush(portsBody);
+        fixture.detectChanges();
+
+        expect(text(hintAt('/config/port'))).toBe('Port 10111 is not used by Sentinel or another UDP connection. Use 10111');
+        expect(text(hintAt('/config/allow'))).toContain('UDP source addresses can be forged');
+        httpMock.expectNone('/api/v1/feeds/ports');
+      });
+
+      it('shows no hint for a driver that cannot listen', () => {
+        pickTcpThenGoBack();
+        component.selectDriver('opensky');
+        fixture.detectChanges();
+
+        const requests = httpMock.match('/api/v1/feeds/ports');
+        expect(requests).toHaveLength(1);
+        requests[0].flush(portsBody);
+        fixture.detectChanges();
+
+        expect(el.querySelector('app-schema-form .sf-hint')).toBeNull();
+        // and coming back to a listener uses the answer it already has
+        component.back();
+        fixture.detectChanges();
+        component.selectDriver('udp');
+        fixture.detectChanges();
+        httpMock.expectNone('/api/v1/feeds/ports');
+        expect(text(hintAt('/config/port'))).toContain('Port 10111 is not used by Sentinel or another UDP connection.');
+      });
+    });
+
     it('stops waiting for the ports when the form closes', () => {
       open('create');
       component.selectDriver('tcp');

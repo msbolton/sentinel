@@ -31,6 +31,8 @@ export class FeedService {
   private readonly loadingState = signal(false);
   private readonly errorState = signal<string | null>(null);
   private loaded = false;
+  /** Counts the calls of `loadPorts`, so that only the latest one may answer. */
+  private portsCalls = 0;
   private pollers = 0;
   private pollSub: Subscription | null = null;
 
@@ -73,16 +75,23 @@ export class FeedService {
   }
 
   /**
-   * Asks which ports listening connections hold, which Sentinel keeps for itself and which one to suggest. An
-   * earlier answer is dropped as soon as the question is asked, and a failure leaves none: what is in
-   * `listenPorts` is always the latest answer. A failure is the caller's to ignore, as the server checks the
-   * port when a connection is saved.
+   * Asks which ports listening connections hold, which Sentinel keeps for itself and which one to suggest.
+   * `listenPorts` holds the answer to the latest call and to no other: asking again drops what it held, an
+   * earlier call that is answered late is ignored (its own subscriber still gets the reply), and a failure
+   * leaves none. A failure is the caller's to ignore, as the server checks the port when a connection is saved.
    */
   loadPorts(): Observable<ListenPorts> {
     return defer(() => {
+      const call = ++this.portsCalls;
       this.listenPortsState.set(null);
-      return this.http.get<ListenPorts>(this.portsUrl);
-    }).pipe(tap((ports) => this.listenPortsState.set(ports)));
+      return this.http.get<ListenPorts>(this.portsUrl).pipe(
+        tap((ports) => {
+          if (call === this.portsCalls) {
+            this.listenPortsState.set(ports);
+          }
+        }),
+      );
+    });
   }
 
   driver(id: string): FeedDriver | undefined {
