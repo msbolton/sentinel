@@ -14,6 +14,11 @@ export interface ListenInfo {
   allowPath: string;
   /** IP addresses and CIDR ranges allowed to send; empty is open to anyone who can reach the port. */
   allow: string[];
+  /**
+   * TLS that asks senders for a certificate, which the tcp driver and a stream tcpserver can: a sender without one
+   * the client CA signed does not get in, whatever its address.
+   */
+  mutualTls: boolean;
 }
 
 function recordOf(v: unknown): Record<string, unknown> {
@@ -49,6 +54,7 @@ export function listenOf(driverId: string | undefined, config: Record<string, un
         portPath: '/config/transport/address',
         allowPath: '/config/transport/allow',
         allow: stringsOf(transport['allow']),
+        mutualTls: kind === 'tcpserver' && clientCertsRequired(transport['tls']),
       };
     }
     default:
@@ -66,7 +72,14 @@ function flatListen(protocol: 'tcp' | 'udp', c: Record<string, unknown>): Listen
     portPath: '/config/port',
     allowPath: '/config/allow',
     allow: stringsOf(c['allow']),
+    mutualTls: protocol === 'tcp' && clientCertsRequired(c['tls']),
   };
+}
+
+/** Whether a `tls` setting asks senders for a certificate, as the server's tcpserver reads it: on, and required. */
+function clientCertsRequired(tls: unknown): boolean {
+  const t = recordOf(tls);
+  return t['enabled'] === true && t['requireClientCert'] === true;
 }
 
 /**

@@ -111,6 +111,19 @@ function freeFrom(view: PortView, from: number): number | null {
 }
 
 /**
+ * The port to offer when none is set: the server's suggestion if it is free here too. A suggestion that is a port
+ * but is not free here (the server's view differs) leads to the next free one after it; anything that could not be
+ * a port leads to the first free one from the base.
+ */
+function suggestion(view: PortView, suggested: unknown): number | null {
+  const { min, max } = view.bounds;
+  if (typeof suggested === 'number' && Number.isInteger(suggested) && suggested >= min && suggested <= max) {
+    return isFree(view, suggested) ? suggested : freeFrom(view, suggested + 1);
+  }
+  return freeFrom(view, PORT_BASE);
+}
+
+/**
  * What to say about the port, in the order the server checks it: out of bounds, reserved, taken. A port that is
  * free gets no remark, and neither does one the field's own schema already refuses (tcp and udp keep the port in a
  * number field with a minimum and a maximum; a stream keeps it in an address, which is free text).
@@ -130,9 +143,7 @@ function portHint(
     free === null ? undefined : { label: `Use ${free}`, value: inAddress ? joinHostPort(listen.host, free) : free };
 
   if (port === null) {
-    const suggested = ports.suggested?.[listen.protocol];
-    // the server's word if it is good, else the first free port from the base
-    const free = typeof suggested === 'number' && isFree(view, suggested) ? suggested : freeFrom(view, PORT_BASE);
+    const free = suggestion(view, ports.suggested?.[listen.protocol]);
     if (free === null) {
       return null;
     }
@@ -167,14 +178,26 @@ function portHint(
 }
 
 function takenMessage(holder: ListenPort): string {
-  const message = `Port ${holder.port}/${holder.protocol} is already used by ${holder.feedName} (${holder.feedId}).`;
+  // a connection the server sent no name for is known by its id
+  const named = typeof holder.feedName === 'string' && holder.feedName.trim() !== '';
+  const name = named ? `${holder.feedName} (${holder.feedId})` : holder.feedId;
+  const message = `Port ${holder.port}/${holder.protocol} is already used by ${name}.`;
   return holder.enabled === false ? `${message} Disabled connections keep their port.` : message;
 }
 
-/** An allowlist left empty lets in anyone who can reach the port; for UDP, whoever can forge an address too. */
+/**
+ * An allowlist left empty lets in anyone who can reach the port; for UDP, whoever can forge an address too. Under
+ * mutual TLS the certificate is the gate, so an open list is information, not a risk.
+ */
 function allowlistHint(listen: ListenInfo): FieldHint | null {
   if (listen.allow.length > 0) {
     return null;
+  }
+  if (listen.mutualTls) {
+    const message =
+      'Empty: any address can attempt a connection, ' +
+      'but only senders with a certificate signed by the client CA get in.';
+    return { path: listen.allowPath, level: 'info', message };
   }
   const where = listen.port === null ? 'the port' : `port ${listen.port}`;
   let message = `Empty: anyone who can reach ${where} can connect. List the senders' IP addresses or CIDR ranges.`;

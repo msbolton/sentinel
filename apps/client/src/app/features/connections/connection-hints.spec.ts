@@ -1,5 +1,5 @@
 import { connectionHints, nextFreePort, PORT_BASE } from './connection-hints';
-import { ListenPorts } from '../../shared/models/feed.model';
+import { ListenPort, ListenPorts } from '../../shared/models/feed.model';
 
 /**
  * What `GET /api/v1/feeds/ports` answers. Its suggestions differ from what the form would work out for itself
@@ -123,6 +123,69 @@ describe('connectionHints', () => {
     expect(connectionHints({ driverId: 'udp', config: { port: 6001, allow }, ports })).toEqual([]);
   });
 
+  it('names a connection by its id when the server sent no name for it', () => {
+    const holder = (feedName: unknown, enabled = true): ListenPorts => ({
+      ...ports,
+      taken: [{ protocol: 'tcp', port: 6001, feedId: 'radar', feedName, enabled } as unknown as ListenPort],
+    });
+    const message = (feedName: unknown, enabled?: boolean) =>
+      connectionHints({ driverId: 'tcp', config: { mode: 'listen', port: 6001, allow }, ports: holder(feedName, enabled) })[0]
+        .message;
+
+    for (const missing of [undefined, null, '', '   ']) {
+      expect(message(missing)).toBe('Port 6001/tcp is already used by radar.');
+    }
+    expect(message(undefined, false)).toBe('Port 6001/tcp is already used by radar. Disabled connections keep their port.');
+    // a name that is there is still shown with the id
+    expect(message('Radar feed')).toBe('Port 6001/tcp is already used by Radar feed (radar).');
+  });
+
+  it('treats an empty allowlist as information under mutual TLS, where the certificate is the gate', () => {
+    const mutual = { enabled: true, requireClientCert: true };
+    const message =
+      'Empty: any address can attempt a connection, but only senders with a certificate signed by the client CA get in.';
+    const allowHints = (driverId: string, config: Record<string, unknown>) =>
+      connectionHints({ driverId, config, ports: null }).filter((h) => h.path.endsWith('/allow'));
+
+    expect(allowHints('tcp', { mode: 'listen', port: 6100, tls: mutual })).toEqual([
+      { path: '/config/allow', level: 'info', message },
+    ]);
+    expect(allowHints('stream', { transport: { kind: 'tcpserver', address: ':6100', tls: mutual } })).toEqual([
+      { path: '/config/transport/allow', level: 'info', message },
+    ]);
+    // an allowlist is still not worth a word
+    expect(allowHints('tcp', { mode: 'listen', port: 6100, tls: mutual, allow })).toEqual([]);
+
+    // TLS alone authenticates the listener to the sender, not the sender to the listener
+    for (const tls of [
+      { enabled: true },
+      { enabled: true, requireClientCert: false },
+      { enabled: false, requireClientCert: true },
+      { requireClientCert: true },
+      { enabled: 'true', requireClientCert: true },
+      'on',
+    ]) {
+      expect(allowHints('tcp', { mode: 'listen', port: 6100, tls })).toEqual([
+        expect.objectContaining({ level: 'warn', message: expect.stringContaining('anyone who can reach port 6100') }),
+      ]);
+    }
+    expect(allowHints('tcp', { mode: 'listen', port: 6100 })[0].level).toBe('warn');
+
+    // datagrams have no TLS, so a stray setting changes nothing, and the note about forged addresses stays
+    for (const [driver, config] of [
+      ['udp', { port: 6100, tls: mutual }],
+      ['stream', { transport: { kind: 'udp', address: ':6100', tls: mutual } }],
+    ] as const) {
+      expect(allowHints(driver, config)).toEqual([
+        expect.objectContaining({ level: 'warn', message: expect.stringContaining('UDP source addresses can be forged') }),
+      ]);
+    }
+    // a connection that dials out listens for nobody
+    expect(connectionHints({ driverId: 'tcp', config: { mode: 'connect', host: 'h', port: 7000, tls: mutual }, ports: null })).toEqual(
+      [],
+    );
+  });
+
   it('suggests a free port when none is set', () => {
     expect(connectionHints({ driverId: 'tcp', config: { mode: 'listen', allow }, ports })).toEqual([
       {
@@ -143,17 +206,38 @@ describe('connectionHints', () => {
   });
 
   it('works out a suggestion itself when the server offers none that is free', () => {
-    const suggest = (suggested: ListenPorts['suggested']) =>
-      connectionHints({ driverId: 'tcp', config: { mode: 'listen', allow }, ports: { ...ports, suggested } })[0].action?.value;
+    const suggest = (suggested: ListenPorts['suggested'], answer: ListenPorts = ports) =>
+      connectionHints({ driverId: 'tcp', config: { mode: 'listen', allow }, ports: { ...answer, suggested } })[0].action?.value;
 
-    // from the base, past what is taken
+    // nothing offered: from the base, past what is taken
     expect(PORT_BASE).toBe(6001);
     expect(suggest({})).toBe(6003);
     expect(suggest({ udp: 10111 })).toBe(6003);
-    // nothing usable: zero (none free), not a number, out of range, reserved, taken
-    for (const bad of [0, -1, 1.5, 80, 70000, 3002, 6001, '6500', null]) {
+    // nothing that could be a port: the same
+    for (const bad of [0, -1, 1.5, 80, 70000, '6500', null]) {
       expect(suggest({ tcp: bad as unknown as number })).toBe(6003);
     }
+  });
+
+  it('searches on from a suggestion that is a port but is not free here, not from the base', () => {
+    const suggest = (suggested: number, answer: ListenPorts = ports) =>
+      connectionHints({ driverId: 'tcp', config: { mode: 'listen', allow }, ports: { ...answer, suggested: { tcp: suggested } } })[0]
+        .action?.value;
+
+    // reserved: past the range
+    expect(suggest(3002)).toBe(3006);
+    // taken: past it, and past whatever follows it
+    expect(suggest(6001)).toBe(6003);
+    // the base is free in this answer, and is not where the search goes back to
+    const busy: ListenPorts = { ...ports, taken: [{ protocol: 'tcp', port: 6500, feedId: 'radar', feedName: 'Radar', enabled: true }] };
+    expect(suggest(6500, busy)).toBe(6501);
+    expect(suggest(6500, { ...busy, taken: [] })).toBe(6500);
+    // at the top it goes round to the bottom
+    const top: ListenPorts = { ...ports, taken: [{ protocol: 'tcp', port: 65535, feedId: 'radar', feedName: 'Radar', enabled: true }] };
+    expect(suggest(65535, top)).toBe(1024);
+    // and with nothing free at all there is nothing to offer
+    const full: ListenPorts = { ...ports, reserved: [{ from: 1024, to: 65535 }] };
+    expect(connectionHints({ driverId: 'tcp', config: { mode: 'listen', allow }, ports: full })).toEqual([]);
   });
 
   it('shows no port hint without an answer from the server, and keeps the allowlist warning', () => {

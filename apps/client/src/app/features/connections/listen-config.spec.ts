@@ -9,6 +9,7 @@ describe('listenOf', () => {
       portPath: '/config/port',
       allowPath: '/config/allow',
       allow: ['10.0.0.0/8', '192.168.1.5'],
+      mutualTls: false,
     });
     expect(listenOf('tcp', { mode: 'connect', host: 'feeds.example', port: 7000 })).toBeNull();
     // Like the server, a config with no mode at all does not listen.
@@ -23,6 +24,7 @@ describe('listenOf', () => {
       portPath: '/config/port',
       allowPath: '/config/allow',
       allow: [],
+      mutualTls: false,
     });
     // Even before a port is chosen.
     expect(listenOf('udp', {})).toEqual(expect.objectContaining({ protocol: 'udp', port: null }));
@@ -30,7 +32,7 @@ describe('listenOf', () => {
 
   it('stream listens for tcpserver and udp, reading the port from the address (IPv6 too)', () => {
     const stream = (transport: Record<string, unknown>) => listenOf('stream', { transport, decoder: { name: 'json' } });
-    const paths = { portPath: '/config/transport/address', allowPath: '/config/transport/allow' };
+    const paths = { portPath: '/config/transport/address', allowPath: '/config/transport/allow', mutualTls: false };
 
     expect(stream({ kind: 'tcpserver', address: ':4001', allow: ['10.0.0.0/8'] })).toEqual({
       protocol: 'tcp',
@@ -70,6 +72,36 @@ describe('listenOf', () => {
   it('ignores a malformed allowlist and non-string entries', () => {
     expect(listenOf('udp', { port: 1, allow: 'anyone' })!.allow).toEqual([]);
     expect(listenOf('udp', { port: 1, allow: ['10.0.0.1', 5, null] })!.allow).toEqual(['10.0.0.1']);
+  });
+});
+
+describe('listenOf and mutual TLS', () => {
+  const mutual = { enabled: true, requireClientCert: true };
+
+  it('is on for a tcp listener and a stream tcpserver that have TLS and require client certificates', () => {
+    expect(listenOf('tcp', { mode: 'listen', port: 6001, tls: mutual })!.mutualTls).toBe(true);
+    expect(listenOf('stream', { transport: { kind: 'tcpserver', address: ':4001', tls: mutual } })!.mutualTls).toBe(true);
+  });
+
+  it('is off without TLS, without the requirement, or where there is no TLS to have', () => {
+    const notMutual = [
+      undefined,
+      {},
+      { enabled: true },
+      { requireClientCert: true },
+      { enabled: false, requireClientCert: true },
+      { enabled: 1, requireClientCert: 1 },
+      'on',
+    ];
+    for (const tls of notMutual) {
+      expect(listenOf('tcp', { mode: 'listen', port: 6001, tls })!.mutualTls).toBe(false);
+      expect(listenOf('stream', { transport: { kind: 'tcpserver', address: ':4001', tls } })!.mutualTls).toBe(false);
+    }
+    // datagrams carry no TLS, whatever a stray setting says
+    expect(listenOf('udp', { port: 6001, tls: mutual })!.mutualTls).toBe(false);
+    expect(listenOf('stream', { transport: { kind: 'udp', address: ':4001', tls: mutual } })!.mutualTls).toBe(false);
+    // and a connection that dials out does not listen at all
+    expect(listenOf('tcp', { mode: 'connect', host: 'h', port: 7000, tls: mutual })).toBeNull();
   });
 });
 

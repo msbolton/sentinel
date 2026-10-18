@@ -83,6 +83,19 @@ const tcpDriver: FeedDriver = {
       host: { type: 'string', minLength: 1, title: 'Host', 'x-showWhen': { mode: 'connect' } },
       port: { type: 'integer', minimum: 1, maximum: 65535, title: 'Port' },
       allow: { type: 'array', items: { type: 'string' }, title: 'Allowed senders', 'x-showWhen': { mode: 'listen' } },
+      tls: {
+        type: 'object',
+        title: 'TLS',
+        properties: {
+          enabled: { type: 'boolean', default: false, title: 'Use TLS' },
+          requireClientCert: {
+            type: 'boolean',
+            default: false,
+            title: 'Require client certificates',
+            'x-showWhen': { enabled: true },
+          },
+        },
+      },
     },
   },
   secretFields: [],
@@ -665,6 +678,29 @@ describe('ConnectionFormComponent', () => {
       expect(el.querySelector('app-schema-form .sf-hint')).toBeNull();
     });
 
+    it('treats an open allowlist as information once TLS asks the senders for certificates', () => {
+      open('create');
+      component.selectDriver('tcp');
+      fixture.detectChanges();
+      flushPorts();
+      type(portInput, '6100');
+      const note = () => hintAt('/config/allow');
+      expect(note()?.classList.contains('sf-hint-warn')).toBe(true);
+
+      // TLS alone proves the listener to the sender, not the sender to the listener
+      setConfig('/config/tls/enabled', true);
+      expect(note()?.classList.contains('sf-hint-warn')).toBe(true);
+
+      setConfig('/config/tls/requireClientCert', true);
+      expect(note()?.classList.contains('sf-hint-warn')).toBe(false);
+      expect(text(note())).toBe(
+        'Empty: any address can attempt a connection, but only senders with a certificate signed by the client CA get in.',
+      );
+
+      setConfig('/config/tls/requireClientCert', false);
+      expect(note()?.classList.contains('sf-hint-warn')).toBe(true);
+    });
+
     it('udp: asks at once, suggests a UDP port and warns that senders can be forged', () => {
       open('create');
       component.selectDriver('udp');
@@ -855,7 +891,12 @@ describe('ConnectionFormComponent', () => {
 
       const save = httpMock.expectOne('/api/v1/feeds');
       expect(save.request.method).toBe('POST');
-      expect(save.request.body.config).toEqual({ mode: 'listen', port: 6100, classification: 'UNCLASSIFIED' });
+      expect(save.request.body.config).toEqual({
+        mode: 'listen',
+        port: 6100,
+        tls: { enabled: false },
+        classification: 'UNCLASSIFIED',
+      });
     });
   });
 
