@@ -6,20 +6,34 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"time"
 
 	"github.com/sentinel/ingest-service/internal/source/transport/framing"
 )
 
-// initialBuffer is the size a connection's scanner buffer starts at: the frame
-// limit plus the room for a delimited token's varint prefix, capped at 64 KiB.
-// A listener keeps one buffer per connection, so a small limit must not cost
-// 64 KiB each. The scanner doubles the buffer up to the same bound when a
-// larger frame arrives. The buffer never starts above that bound, because
-// bufio would then take its capacity as the token limit.
+// initialBuffer is the size a connection's scanner buffer starts at: scanBound
+// capped at 64 KiB. A listener keeps one buffer per connection, so a small
+// limit must not cost 64 KiB each. When a larger frame arrives the scanner
+// doubles the buffer up to scanBound, which is the frame limit plus the varint
+// allowance, not 64 KiB. Taking the minimum with scanBound is what keeps the
+// buffer from starting above it: bufio would take a larger capacity as the
+// token limit.
 func initialBuffer(cfg Config) int {
-	return min(64<<10, cfg.MaxFrame()+binary.MaxVarintLen64)
+	return min(64<<10, scanBound(cfg))
+}
+
+// scanBound is the largest token a connection's scanner may hold: the frame
+// limit plus the room for a delimited token's varint prefix. It stops at
+// math.MaxInt rather than wrapping negative, as the plain sum would for a limit
+// within a varint of the int ceiling; sizing the buffer from a negative bound
+// panics.
+func scanBound(cfg Config) int {
+	if m := cfg.MaxFrame(); m <= math.MaxInt-binary.MaxVarintLen64 {
+		return m + binary.MaxVarintLen64
+	}
+	return math.MaxInt
 }
 
 // ScanConn reads frames from conn with the configured framer and emits each
@@ -31,9 +45,11 @@ func ScanConn(ctx context.Context, conn net.Conn, cfg Config, emit Emit) error {
 		return err
 	}
 	sc := bufio.NewScanner(conn)
-	// A delimited token carries its varint prefix, so the bound leaves room
-	// for it; the framers enforce the frame limit themselves.
-	sc.Buffer(make([]byte, 0, initialBuffer(cfg)), cfg.MaxFrame()+binary.MaxVarintLen64)
+	// The bound leaves room for the varint prefix a delimited token carries.
+	// The delimited and length-prefix framers enforce the frame limit
+	// themselves; for the others (line, xmlevent, beast) this bound is the
+	// limit.
+	sc.Buffer(make([]byte, 0, initialBuffer(cfg)), scanBound(cfg))
 	sc.Split(split)
 	remote := ""
 	if conn.RemoteAddr() != nil {
