@@ -120,6 +120,27 @@ ingestService:
     limits:
       cpu: 4000m
       memory: 512Mi
+  # Both ingest Deployments (the listener runs the same image) run as 10001, the
+  # user of apps/ingest-service/Dockerfile, with every capability dropped: the
+  # service binds only ports from 1024 up. fsGroup makes the Secret files
+  # mounted with mode 0440 (secretFiles) readable by the group. A platform that
+  # assigns the ids itself needs runAsUser, runAsGroup and fsGroup dropped: set
+  # each to null, as in
+  # --set ingestService.podSecurityContext.runAsUser=null.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    # false until a full run on a read-only root has been seen working. The
+    # service writes no file of its own, so true is expected to work.
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: [ALL]
   # Secret holding INGEST_SERVICE_TOKEN (and optional OPENSKY_CLIENT_ID /
   # OPENSKY_CLIENT_SECRET). Leave existingSecret empty to have the chart
   # create one from the values below.

@@ -13,6 +13,12 @@ RUN CGO_ENABLED=1 GOOS=linux go build -tags dynamic -o /ingest-service ./cmd/ser
 # keep the runtime Alpine release aligned with the golang builder image.
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates librdkafka
+# Not root: 10001 is also the id of the Helm chart's securityContext, and a
+# numeric USER lets the kubelet check runAsNonRoot. The service writes no files
+# (it only reads those secretRefs name) and binds ports from 1024 up, so it
+# needs no writable path and no capability. The binary below stays root-owned.
+RUN addgroup -S -g 10001 sentinel && adduser -S -D -H -u 10001 -G sentinel sentinel
 COPY --from=builder /ingest-service /ingest-service
+USER 10001:10001
 EXPOSE 4000
 CMD ["/ingest-service"]

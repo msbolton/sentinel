@@ -37,10 +37,18 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       nodeSelector:
         {{- toYaml .Values.ingestListener.nodeSelector | nindent 8 }}
+      {{- with .Values.ingestService.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: ingest-listener
           image: "{{ .Values.ingestService.image.repository }}:{{ .Values.ingestService.image.tag }}"
           imagePullPolicy: {{ .Values.ingestService.image.pullPolicy | default "IfNotPresent" }}
+          {{- with .Values.ingestService.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 4010
