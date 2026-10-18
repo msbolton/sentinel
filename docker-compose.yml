@@ -796,7 +796,9 @@ services:
     environment:
       APP_ENV: development
       # 4000 is the other ingest replicas' port; on the host's network this one needs its own.
-      HTTP_ADDR: ":4010"
+      # Loopback only: the healthcheck runs here and the gateway never calls it, so the
+      # token-guarded management API stays off the LAN.
+      HTTP_ADDR: "127.0.0.1:4010"
       REPLICA_ID: ingest-listener
       INGEST_LISTENER: "true"
       # The address senders use, shown in each connection's send guide.
@@ -822,7 +824,7 @@ services:
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:4010/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4010/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5

@@ -254,7 +254,7 @@ Rules and safeguards, in short (details and the counters are in `docs/feeds.md`)
 
   The certificate files go in `./secrets/tak` like the TAK ones (the folder is mounted read-only into the ingest containers, including the listener).
 - **Limits** per connection: `maxConnections` (50), `maxMessagesPerSec` (1000), `maxMessageBytes` (64 KiB for TCP, 65507 for UDP). What they refuse is counted in the connection's status.
-- **The listener's own port.** Under host networking the listener's management API on `:4010` binds every interface of the machine and is guarded only by `INGEST_SERVICE_TOKEN` (default `dev-ingest-token`). That is fine on a laptop; anywhere else change the token and keep `:4010` closed to the network. The gateway does not use it (it talks to `ingest-service` on `:4000`), so it can be firewalled.
+- **The listener's own port.** The listener's management API binds loopback only (`127.0.0.1:4010`): its healthcheck uses it and nothing else needs to, since the gateway talks to `ingest-service` on `:4000`. It is guarded by `INGEST_SERVICE_TOKEN` too (default `dev-ingest-token`, change it anywhere but a laptop).
 - With no listener running, an enabled listening connection shows `unassigned` with the error `no listener replica`; start the profile above.
 
 ### TAK connection

@@ -30,7 +30,7 @@ SENTINEL uses two Compose files:
 | Link Analysis | 3004 | Go |
 | Alert Service | 3005 | Go |
 | Ingest Service | 4000 (not published; reached through the gateway) | Go, `--scale ingest-service=N` |
-| Ingest Listener | 4010, plus every port a TCP/UDP connection listens on, on the host's own network | Go, profile `inbound`, one replica (below) |
+| Ingest Listener | 4010 (loopback only), plus every port a TCP/UDP connection listens on, on the host's own network | Go, profile `inbound`, one replica (below) |
 | Analytics Service | 5000 | Go |
 | Web UI | 4200 | Angular |
 
@@ -63,10 +63,10 @@ External systems that send to Sentinel (the `tcp` driver in listen mode and the 
 
 ### Docker Compose
 
-- The service is `ingest-listener` in the `inbound` profile, so `docker compose up -d` leaves it out: `docker compose --profile inbound up -d ingest-listener`. It runs with `network_mode: host`, which Compose does not combine with `networks:` or published ports, so it reaches Kafka and Postgres through the host ports they publish (`localhost:9092`, `localhost:5432`), serves its health and management API on `:4010`, and cannot be scaled.
+- The service is `ingest-listener` in the `inbound` profile, so `docker compose up -d` leaves it out: `docker compose --profile inbound up -d ingest-listener`. It runs with `network_mode: host`, which Compose does not combine with `networks:` or published ports, so it reaches Kafka and Postgres through the host ports they publish (`localhost:9092`, `localhost:5432`), serves its health and management API on `127.0.0.1:4010` only (the healthcheck runs on the host and the gateway never calls it), and cannot be scaled.
 - **Docker Desktop (Mac, Windows)** needs host networking turned on: Settings › Resources › Network › Enable host networking (Docker Desktop 4.34 or later). **Linux** needs nothing.
 - `INGEST_LISTENER_HOST` (default `localhost`) is the address senders use, shown in each connection's send guide; set it to the machine's name or IP when senders are on other machines. `INGEST_RESERVED_PORTS` (blank means the default list) names the ports a connection may not take; `INGEST_SERVICE_TOKEN` guards the management API.
-- Every port a connection listens on is open on every interface of the machine. Use the host firewall and each connection's allowlist, and keep `:4010` closed to the network: it is guarded only by `INGEST_SERVICE_TOKEN` (default `dev-ingest-token`, change it outside development) and the gateway does not need it.
+- Every port a connection listens on is open on every interface of the machine. Use the host firewall and each connection's allowlist. The listener's management API is not among them: it binds loopback only, and is guarded by `INGEST_SERVICE_TOKEN` as well (default `dev-ingest-token`, change it outside development).
 
 ### Kubernetes (Helm)
 
@@ -79,7 +79,7 @@ The chart's `ingestListener` values:
 | `ingestListener.nodeSelector` | `sentinel.io/ingest-listener: "true"` | Which node runs it |
 | `ingestListener.resources` | 250m / 128Mi requested, 2000m / 512Mi limit | |
 
-The Deployment `<release>-ingest-listener` has one replica, `hostNetwork: true` (with `dnsPolicy: ClusterFirstWithHostNet`) and health on `:4010`. It reads the same Secret as the ingest service for `INGEST_SERVICE_TOKEN` and takes `ingestService.env`, `ingestService.lease` and the TAK certificate mount from the ingest values.
+The Deployment `<release>-ingest-listener` has one replica, `hostNetwork: true` (with `dnsPolicy: ClusterFirstWithHostNet`) and health on `:4010`, bound on every interface of the node so the kubelet probes reach it (unlike Compose, which binds it to loopback). It reads the same Secret as the ingest service for `INGEST_SERVICE_TOKEN` and takes `ingestService.env`, `ingestService.lease` and the TAK certificate mount from the ingest values.
 
 - **Label a node first**, or the Pod stays Pending: `kubectl label node <node> sentinel.io/ingest-listener=true`. Choose a node whose address senders can reach and that you will keep; senders use the node address (or `ingestListener.host`), there is no Service or load balancer in front of it.
 - **Rollouts drop inbound traffic.** The Deployment uses `strategy: Recreate`: a hostNetwork pod's ports count as taken on its node, so a surge pod could never schedule beside the old one. Each rollout therefore briefly stops inbound TCP and UDP; TCP senders reconnect, and datagrams sent in the gap are lost. Roll it out in a quiet window.
