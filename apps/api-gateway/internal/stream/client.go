@@ -88,16 +88,19 @@ func (c *Client) unsubscribe(entityID string) {
 	c.mu.Unlock()
 }
 
-// filter returns the events this client should receive.
-func (c *Client) filter(events []PositionedEvent) []EntityEvent {
+// filter returns the events this client should receive: those in its
+// viewport, unless the viewport is wider than detailMax (then the map draws
+// counts), and those it subscribed to, whatever its viewport.
+func (c *Client) filter(events []PositionedEvent, detailMax float64) []EntityEvent {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	inDetail := isDetail(c.viewport, detailMax)
 	var out []EntityEvent
 	for _, e := range events {
 		if e.Rank > c.clearance {
 			continue
 		}
-		if _, subscribed := c.subs[e.Event.Entity.ID]; subscribed || c.viewport.Contains(e.Lat, e.Lng) {
+		if _, subscribed := c.subs[e.Event.Entity.ID]; subscribed || (inDetail && c.viewport.Contains(e.Lat, e.Lng)) {
 			out = append(out, e.Event)
 		}
 	}

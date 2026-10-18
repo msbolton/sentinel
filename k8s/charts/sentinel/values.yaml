@@ -240,9 +240,6 @@ kafka:
       - name: alerts.events
         partitions: 3
         replicationFactor: 3
-      - name: density.events
-        partitions: 1
-        replicationFactor: 3
 
 opensearch:
   enabled: true

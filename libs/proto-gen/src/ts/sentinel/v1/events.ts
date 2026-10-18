@@ -113,7 +113,11 @@ export interface EntityEvent {
   restored?: EntityRestored | undefined;
 }
 
-/** DensityCell is how many distinct objects a feed saw in one grid cell. */
+/**
+ * DensityCell is how many distinct objects a feed saw in one grid cell.
+ * Deprecated: wide views read counts from the entity service
+ * (GET /api/v1/entities/density); nothing produces these any more.
+ */
 export interface DensityCell {
   /** cell centre */
   latitude: number;
@@ -123,6 +127,8 @@ export interface DensityCell {
 }
 
 /**
+ * Deprecated: see DensityCell.
+ *
  * DensityGrid counts the objects a feed sees over an area too large to
  * store them one by one, produced to the density.events topic keyed by
  * feed_id. Clients draw the counts while their view is larger than

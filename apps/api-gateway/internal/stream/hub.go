@@ -23,6 +23,9 @@ type Hub struct {
 	logger  *zap.Logger
 
 	viewportListener func() // called when the set of client viewports may have changed
+	// detailMax is the largest viewport (sq deg) that gets live positions
+	// and steers ingestion; 0 means no limit.
+	detailMax float64
 }
 
 // NewHub creates an empty hub.
@@ -67,6 +70,41 @@ func (h *Hub) viewportsChanged() {
 	}
 }
 
+// SetDetailMaxArea sets the largest viewport, in square degrees, that gets
+// live entity positions and steers ingestion; 0 removes the limit. A wider
+// view (a continent or the globe) draws counts from the entity service.
+func (h *Hub) SetDetailMaxArea(sqDeg float64) {
+	h.mu.Lock()
+	h.detailMax = sqDeg
+	h.mu.Unlock()
+}
+
+// DetailMaxArea returns the limit set by SetDetailMaxArea.
+func (h *Hub) DetailMaxArea() float64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.detailMax
+}
+
+// isDetail reports whether a viewport is small enough for live positions.
+func isDetail(b Bounds, max float64) bool {
+	return max <= 0 || BoundsAreaSqDeg(b) <= max
+}
+
+// DetailViewports returns the viewports small enough to steer ingestion:
+// one client looking at the globe must not turn every feed into a global
+// full-rate poll.
+func (h *Hub) DetailViewports() []Bounds {
+	max := h.DetailMaxArea()
+	var out []Bounds
+	for _, b := range h.Viewports() {
+		if isDetail(b, max) {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
 // Viewports returns the bounds of every client that has sent one.
 func (h *Hub) Viewports() []Bounds {
 	var out []Bounds
@@ -102,8 +140,9 @@ func (h *Hub) BroadcastBatch(events []PositionedEvent) {
 		return
 	}
 	sent := 0
+	max := h.DetailMaxArea()
 	for _, c := range h.snapshot() {
-		matching := c.filter(events)
+		matching := c.filter(events, max)
 		if len(matching) == 0 {
 			continue
 		}

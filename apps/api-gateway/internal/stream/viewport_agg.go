@@ -212,3 +212,9 @@ func ShouldPush(prev *IngestViewport, next IngestViewport) bool {
 	}
 	return next.RawAreaSqDeg < shrinkPushRatio*prev.RawAreaSqDeg
 }
+
+// BoundsAreaSqDeg is a viewport's area in square degrees, across the
+// antimeridian when it wraps.
+func BoundsAreaSqDeg(b Bounds) float64 {
+	return math.Max(0, b.North-b.South) * lonSpanOf(b)
+}

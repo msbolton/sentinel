@@ -261,7 +261,7 @@ func (s *ViewportSync) sync(force bool) (time.Duration, error) {
 		return 0, fmt.Errorf("listing area feeds: %w", err)
 	}
 
-	next := Aggregate(s.hub.Viewports(), s.opts.PadFrac, s.opts.PadMinDeg)
+	next := Aggregate(s.hub.DetailViewports(), s.opts.PadFrac, s.opts.PadMinDeg)
 	next.Clients = s.hub.ClientCount()
 
 	listed := map[string]bool{}

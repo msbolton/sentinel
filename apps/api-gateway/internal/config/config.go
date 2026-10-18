@@ -52,6 +52,10 @@ type Config struct {
 	// only through the gateway.
 	IngestServiceToken string
 
+	// DetailMaxAreaSqDeg is the largest viewport that gets live entity
+	// positions and steers ingestion; wider views draw counts.
+	DetailMaxAreaSqDeg float64
+
 	// IntelSkyBaseURL is where flight paths for military aircraft come from.
 	IntelSkyBaseURL string
 }
@@ -113,6 +117,7 @@ func Load() Config {
 		IngestServiceURL:       commonCfg.EnvOrDefault("INGEST_SERVICE_URL", "http://localhost:4000"),
 		IngestServiceToken:     commonCfg.EnvOrDefault("INGEST_SERVICE_TOKEN", ""),
 		IntelSkyBaseURL:        commonCfg.EnvOrDefault("INTELSKY_BASE_URL", "https://intelsky.org"),
+		DetailMaxAreaSqDeg:     float64(commonCfg.EnvOrDefaultInt("DETAIL_MAX_AREA_SQ_DEG", 2500)),
 	}
 }
 
