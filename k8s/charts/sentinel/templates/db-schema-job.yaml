@@ -46,10 +46,18 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       restartPolicy: OnFailure
+      {{- with .Values.dbSchema.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: db-schema
           image: {{ .Values.dbSchema.image | quote }}
           imagePullPolicy: IfNotPresent
+          {{- with .Values.dbSchema.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           # Waits for the database, then runs the files in name order as the
           # db-schema Compose job does. pg_isready exits 3 when it made no
           # attempt (an invalid DATABASE_URL), which waiting cannot fix, so the

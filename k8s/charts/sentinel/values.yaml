@@ -174,6 +174,11 @@ ingestService:
     mountPath: /etc/sentinel/secrets
   # A Secret whose keys become environment variables of the ingest and listener
   # pods, for secretRefs to name as env:KEY (env above takes plain values only).
+  # Every key of it reaches both pods, through envFrom, and can set any
+  # configuration the chart leaves unset (INGEST_LISTENER_SHARED or
+  # LEASE_ENABLED, for example). So the keys should be secret material, named
+  # for the INGEST_SECRET_ENV_ALLOW policy of the ingest service (default
+  # OPENSKY_*,AISSTREAM_*,SENTINEL_SECRET_*), and nothing else.
   # Leave existingSecret empty to add none.
   secretEnv:
     existingSecret: ""
@@ -318,6 +323,22 @@ dbSchema:
     limits:
       cpu: 500m
       memory: 256Mi
+  # Not root, with the hardening of the ingest pods (no fsGroup: its one volume
+  # is a ConfigMap, readable by all). The id is the chart's 10001, not the
+  # image's own postgres user (70 in the Alpine tags, 999 in the Debian ones):
+  # that way the chart names one id, whatever image is set above. psql and
+  # pg_isready need no passwd entry, home directory or writable path, only a
+  # DATABASE_URL that names its user. Set a key to null to drop it.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
 
 kafka:
   enabled: true
