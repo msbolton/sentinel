@@ -3,12 +3,15 @@ package feed
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/registry"
@@ -313,5 +316,72 @@ func TestTwoReplicasSplitFeedsAndShutdownLeaves(t *testing.T) {
 	}
 	if len(l.left) != 1 || l.left[0] != "r2" {
 		t.Errorf("shutdown must leave the replica set: %v", l.left)
+	}
+}
+
+// stallingLeaser is a leaser whose Acquire hangs, as a database stall does,
+// until its context ends.
+type stallingLeaser struct {
+	*replicaLeaser
+	entered chan struct{} // told when an Acquire starts
+	release chan struct{} // closed when the test ends, so a regression fails the test instead of leaking the call
+}
+
+func (l *stallingLeaser) Acquire(ctx context.Context, _ string) (int64, bool, error) {
+	select {
+	case l.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return 0, false, ctx.Err()
+	case <-l.release:
+		return 0, false, errors.New("released by the test")
+	}
+}
+
+// Reconcile takes a feed's lease with the supervisor's lock held, so a database
+// that stalls there must not hold up what needs the lock: the scrape of the
+// listener metrics, the status reads and the management API. The acquire gives
+// up after one lease TTL, past which the lease would have expired anyway, and
+// the feed is skipped this round.
+func TestStalledLeaseAcquireDoesNotBlockTheSupervisor(t *testing.T) {
+	reg := newFakeRegistry()
+	reg.set(feedSpec("a", 1, true))
+	l := newFakeLeaser("r1") // a 50 ms TTL
+	stall := &stallingLeaser{replicaLeaser: &replicaLeaser{fakeLeaser: l, me: "r1"}, entered: make(chan struct{}, 1), release: make(chan struct{})}
+	t.Cleanup(func() { close(stall.release) })
+	core, logs := observer.New(zapcore.WarnLevel)
+	sup := New(reg, &memPublisher{}, zap.New(core), metrics.New(nil), Options{
+		ReplicaID: "r1", Leaser: stall, Preferred: preferAlways("r1"),
+		Factory: func(driver.Spec, driver.Deps) (driver.Driver, error) { return newMockDriver(), nil },
+	})
+
+	reconciled := make(chan struct{})
+	go func() { defer close(reconciled); sup.Reconcile(context.Background()) }()
+	select {
+	case <-stall.entered: // Reconcile is inside Acquire, holding the lock
+	case <-time.After(5 * time.Second):
+		t.Fatal("Reconcile never asked for the lease")
+	}
+
+	scraped := make(chan struct{})
+	go func() { defer close(scraped); sup.ListenerStats() }()
+	select {
+	case <-scraped:
+	case <-time.After(time.Second):
+		t.Fatal("ListenerStats was still blocked 1 s into a stalled lease acquire")
+	}
+	select {
+	case <-reconciled:
+	case <-time.After(time.Second):
+		t.Fatal("Reconcile was still in a stalled lease acquire after 1 s; it must give up after one lease TTL")
+	}
+	if sup.Running("a") {
+		t.Error("a feed whose lease could not be taken must not run")
+	}
+	failed := logs.FilterMessage("lease acquire failed").All()
+	if len(failed) != 1 || failed[0].ContextMap()["error"] != context.DeadlineExceeded.Error() {
+		t.Errorf("warnings = %+v, want one \"lease acquire failed\" for the deadline", failed)
 	}
 }

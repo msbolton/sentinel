@@ -433,7 +433,13 @@ func (s *Supervisor) owns(ctx context.Context, spec registry.Feed, now time.Time
 			return 0, false
 		}
 	}
-	token, got, err := s.opts.Leaser.Acquire(ctx, spec.ID)
+	// Reconcile holds s.mu here, so a database that stalls must not stall the
+	// supervisor with it: ListenerStats, Snapshot and the management API wait on
+	// the same lock. Past one lease TTL the lease would have expired anyway; the
+	// feed is skipped this round and the warning below says why.
+	acquireCtx, cancel := context.WithTimeout(ctx, s.opts.Leaser.TTL())
+	defer cancel()
+	token, got, err := s.opts.Leaser.Acquire(acquireCtx, spec.ID)
 	if err != nil {
 		s.logger.Warn("lease acquire failed", zap.String("feed", spec.ID), zap.Error(err))
 		return 0, false
