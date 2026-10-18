@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/sentinel/ingest-service/internal/aoi"
+	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/registry"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 )
@@ -114,7 +115,7 @@ func feedSpec(id string, version int, enabled bool) registry.Feed {
 }
 
 func newSupervisor(reg *fakeRegistry, factory func(driver.Spec) (driver.Driver, error)) *Supervisor {
-	return New(reg, &memPublisher{}, zap.NewNop(), nil, Options{
+	return New(reg, &memPublisher{}, zap.NewNop(), metrics.New(nil), Options{
 		ReplicaID: "r1", RetryMin: 10 * time.Millisecond, RetryMax: 20 * time.Millisecond,
 		Factory: func(spec driver.Spec, _ driver.Deps) (driver.Driver, error) { return factory(spec) },
 	})
@@ -169,6 +170,28 @@ func TestReconcileStartsStopsAndRestartsOnVersion(t *testing.T) {
 	sup.Reconcile(ctx)
 	if sup.Running("a") || built[1].stopped.Load() != 1 || reg.status("a").State != registry.StateStopped {
 		t.Fatalf("disable: running=%v stopped=%d status=%+v", sup.Running("a"), built[1].stopped.Load(), reg.status("a"))
+	}
+}
+
+// Metrics are optional: a supervisor built without them still starts a feed
+// and stops it when it loses the lease.
+func TestSupervisorRunsWithoutMetrics(t *testing.T) {
+	reg := newFakeRegistry()
+	reg.set(feedSpec("a", 1, true))
+	l := newFakeLeaser("r1")
+	sup := New(reg, &memPublisher{}, zap.NewNop(), nil, Options{
+		ReplicaID: "r1", Leaser: &replicaLeaser{fakeLeaser: l, me: "r1"}, Preferred: preferAlways("r1"),
+		Factory: func(driver.Spec, driver.Deps) (driver.Driver, error) { return newMockDriver(), nil },
+	})
+	ctx := context.Background()
+	sup.Reconcile(ctx)
+	if !sup.Running("a") {
+		t.Fatal("feed should run without metrics")
+	}
+	l.steal("a", "r9")
+	sup.Reconcile(ctx)
+	if sup.Running("a") {
+		t.Fatal("a lost lease must stop the feed without metrics")
 	}
 }
 

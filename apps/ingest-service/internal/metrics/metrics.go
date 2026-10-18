@@ -75,6 +75,8 @@ func New(reg *prometheus.Registry) *Metrics {
 		FeedEntityCount:            gauge("feed_entities_count", "Observations produced by the last poll, per feed.", "feed_id"),
 		FeedErrorsTotal:            counter("feed_errors_total", "Poll, connection and start errors, per feed.", "feed_id"),
 		FeedRestarts:               counter("feed_restarts_total", "Driver restarts after a failure, per feed.", "feed_id"),
+		LeasesLost:                 counter("leases_lost_total", "Feeds this replica stopped because another replica took the lease, per feed.", "feed_id"),
+		LeaseHandovers:             counter("lease_handovers_total", "Feeds this replica handed to their preferred replica, per feed.", "feed_id"),
 		ObservationsPublished:      counter("observations_published_total", "Observations handed to the Kafka producer, per feed.", "feed_id"),
 		ObservationsDeliveryFailed: counter("observations_delivery_failed_total", "Observations Kafka reported as undelivered, per feed.", "feed_id"),
 		DeadLetterTotal:            counter("deadletter_total", "Payloads sent to the dead-letter topic, per feed and reason.", "feed_id", "reason"),
