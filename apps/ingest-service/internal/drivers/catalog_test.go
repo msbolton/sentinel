@@ -21,7 +21,7 @@ func TestDefaultCatalogListsDrivers(t *testing.T) {
 			t.Errorf("%s schema is not JSON: %v", d.ID, err)
 		}
 	}
-	for _, want := range []string{"opensky", "adsblol", "celestrak", "stream", "httpjson"} {
+	for _, want := range []string{"opensky", "adsblol", "celestrak", "aisstream", "stream", "httpjson"} {
 		if !ids[want] {
 			t.Errorf("missing driver %s", want)
 		}
@@ -35,23 +35,28 @@ func TestDefaultCatalogListsDrivers(t *testing.T) {
 	if a, _ := c.Get("adsblol"); !a.HasCapability(CapabilityArea) {
 		t.Errorf("adsblol should take an area: %+v", a)
 	}
+	if a, _ := c.Get("aisstream"); !a.HasCapability(CapabilityArea) || a.AreaTTL == 0 || len(a.SecretFields) != 1 || a.SecretFields[0] != "apiKey" {
+		t.Errorf("aisstream info = %+v", a)
+	}
 }
 
 func TestValidateAcceptsSeedConfigs(t *testing.T) {
 	c := Default()
 	cases := map[string]string{
-		"opensky":   `{"intervalSec": 10, "viewportTtlSec": 90, "minPollSpacingSec": 3, "maxAreaSqDeg": 400, "maxIntervalSec": 60, "creditFloor": 200, "staleWarnSec": 120, "staleCriticalSec": 300}`,
-		"adsblol":   `{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}`,
-		"celestrak": `{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}`,
+		"opensky":    `{"intervalSec": 10, "viewportTtlSec": 90, "minPollSpacingSec": 3, "maxAreaSqDeg": 400, "maxIntervalSec": 60, "creditFloor": 200, "staleWarnSec": 120, "staleCriticalSec": 300}`,
+		"adsblol":    `{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}`,
+		"celestrak":  `{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}`,
 		"celestrak2": `{"catalogNumbers": [25544], "designators": ["1998-067"], "names": ["ISS (ZARYA)"], "special": ["GPZ"], "supplemental": ["iss"], "tleRefreshHours": 6}`,
-		"stream":    `{"transport": {"kind": "mqtt", "brokerUrl": "tcp://broker:1883", "topics": ["a/#"]}, "decoder": {"name": "json"}}`,
-		"stream2":   `{"transport": {"kind": "tcpclient", "address": "readsb:30003"}, "framing": "line", "decoder": {"name": "sbs"}, "backpressure": "drop"}`,
-		"stream3":   `{"transport": {"kind": "websocket", "url": "wss://x/y"}, "decoder": {"name": "json", "options": {"records": "ac"}}}`,
-		"stream4":   `{"transport": {"kind": "tcpclient", "address": "readsb:30005"}, "framing": "beast", "decoder": {"name": "beast"}}`,
-		"stream5":   `{"transport": {"kind": "udp", "address": ":10110"}, "decoder": {"name": "nmea-ais"}, "pinnedReplica": "site-1"}`,
-		"httpjson":  `{"url": "https://api.example.com/v2/point/{lat}/{lon}/{radius_nm}", "intervalSec": 15, "requireArea": true, "decoder": {"options": {"records": "ac", "identityType": "ICAO24", "fields": {"id": "hex", "latitude": "lat", "longitude": "lon"}}}}`,
-		"tak":       `{"address": "tak.example.org:8089", "siteId": "east", "direction": "both", "tls": {"enabled": true, "serverName": "tak.example.org"}, "heartbeatSec": 30, "tracks": {"staleSec": 120}, "alerts": {"emergencyMinSeverity": "CRITICAL"}, "shapes": {"enabled": true, "refreshSec": 60}, "policy": {"entityTypes": ["AIRCRAFT", "VESSEL"], "feeds": ["opensky"], "boxes": [{"north": 40, "south": 35, "east": -74, "west": -80}], "classificationCeiling": "UNCLASSIFIED", "alerts": {"enabled": true, "minSeverity": "MEDIUM"}}, "outbound": {"perEntityMinSec": 5, "maxEventsPerSec": 100}}`,
-		"empty":     ``,
+		"aisstream":  `{"maxAreaSqDeg": 2500, "movingIntervalSec": 15, "stationaryIntervalSec": 180, "staleWarnSec": 600, "staleCriticalSec": 1800}`,
+		"aisstream2": `{"watchlistMmsi": ["235100247", "538005120"], "messageTypes": ["PositionReport", "ShipStaticData"], "maxAreaSqDeg": 0, "movingIntervalSec": 0}`,
+		"stream":     `{"transport": {"kind": "mqtt", "brokerUrl": "tcp://broker:1883", "topics": ["a/#"]}, "decoder": {"name": "json"}}`,
+		"stream2":    `{"transport": {"kind": "tcpclient", "address": "readsb:30003"}, "framing": "line", "decoder": {"name": "sbs"}, "backpressure": "drop"}`,
+		"stream3":    `{"transport": {"kind": "websocket", "url": "wss://x/y"}, "decoder": {"name": "json", "options": {"records": "ac"}}}`,
+		"stream4":    `{"transport": {"kind": "tcpclient", "address": "readsb:30005"}, "framing": "beast", "decoder": {"name": "beast"}}`,
+		"stream5":    `{"transport": {"kind": "udp", "address": ":10110"}, "decoder": {"name": "nmea-ais"}, "pinnedReplica": "site-1"}`,
+		"httpjson":   `{"url": "https://api.example.com/v2/point/{lat}/{lon}/{radius_nm}", "intervalSec": 15, "requireArea": true, "decoder": {"options": {"records": "ac", "identityType": "ICAO24", "fields": {"id": "hex", "latitude": "lat", "longitude": "lon"}}}}`,
+		"tak":        `{"address": "tak.example.org:8089", "siteId": "east", "direction": "both", "tls": {"enabled": true, "serverName": "tak.example.org"}, "heartbeatSec": 30, "tracks": {"staleSec": 120}, "alerts": {"emergencyMinSeverity": "CRITICAL"}, "shapes": {"enabled": true, "refreshSec": 60}, "policy": {"entityTypes": ["AIRCRAFT", "VESSEL"], "feeds": ["opensky"], "boxes": [{"north": 40, "south": 35, "east": -74, "west": -80}], "classificationCeiling": "UNCLASSIFIED", "alerts": {"enabled": true, "minSeverity": "MEDIUM"}}, "outbound": {"perEntityMinSec": 5, "maxEventsPerSec": 100}}`,
+		"empty":      ``,
 	}
 	for driver, cfg := range cases {
 		d := driver
@@ -62,6 +67,8 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 			d = "stream"
 		case "celestrak2":
 			d = "celestrak"
+		case "aisstream2":
+			d = "aisstream"
 		}
 		if problems := c.Validate(d, json.RawMessage(cfg)); len(problems) != 0 {
 			t.Errorf("%s: unexpected problems %+v", driver, problems)
@@ -81,6 +88,9 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		{"celestrak", `{"refreshHours": 1}`, "/config/refreshHours"},
 		{"celestrak", `{"special": ["nope"]}`, "/config/special"},
 		{"celestrak", `{"catalogNumbers": [0]}`, "/config/catalogNumbers"},
+		{"aisstream", `{"watchlistMmsi": ["12345"]}`, "/config/watchlistMmsi/0"},
+		{"aisstream", `{"messageTypes": ["SafetyBroadcastMessage"]}`, "/config/messageTypes/0"},
+		{"aisstream", `{"movingIntervalSec": -1}`, "/config/movingIntervalSec"},
 		{"adsblol", `{"scope": "all"}`, "/config/scope"},
 		{"stream", `{"transport": {"kind": "mqtt"}, "decoder": {"name": "json"}}`, "/config/transport"},
 		{"stream", `{"transport": {"kind": "tcpserver", "address": ":4001"}, "decoder": {"name": "xml"}}`, "/config/decoder/name"},

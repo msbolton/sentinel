@@ -174,7 +174,7 @@ func TestListAndFilters(t *testing.T) {
 		t.Fatalf("status %d: %s", resp.StatusCode, body)
 	}
 	var feeds []feedDTO
-	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 3 {
+	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != len(registry.Builtins) {
 		t.Fatalf("feeds = %s err %v", body, err)
 	}
 	for _, f := range feeds {
@@ -186,7 +186,7 @@ func TestListAndFilters(t *testing.T) {
 		}
 	}
 	_, body = do(t, srv, "GET", "/feeds?capability=area", "", reqOpts{})
-	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 3 {
+	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != len(registry.Builtins) {
 		t.Fatalf("area filter = %s", body)
 	}
 	for _, f := range feeds {
