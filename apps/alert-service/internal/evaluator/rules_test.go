@@ -92,3 +92,34 @@ func TestEvaluateSpeedRule(t *testing.T) {
 		t.Error("non-numeric threshold must be ignored")
 	}
 }
+
+func TestRingConfig(t *testing.T) {
+	id, radius, ok := ringConfig(cfg(t, `{"shape":"ring","ring":{"entityId":"e1","entityName":"MV X","radiusM":8000}}`))
+	if !ok || id != "e1" || radius != 8000 {
+		t.Fatalf("ringConfig = %q, %v, %v; want e1, 8000, true", id, radius, ok)
+	}
+	for _, raw := range []string{
+		`{"polygon":[[1,2],[3,4],[5,6]]}`,
+		`{"ring":{"entityId":"e1"}}`,
+		`{"ring":{"entityId":"e1","radiusM":0}}`,
+		`{"ring":{"entityId":"","radiusM":100}}`,
+	} {
+		if _, _, ok := ringConfig(cfg(t, raw)); ok {
+			t.Fatalf("ringConfig(%s) ok; want not ok", raw)
+		}
+	}
+}
+
+func TestWithinRing(t *testing.T) {
+	// one degree of longitude at 25.2°N is about 100.7 km
+	anchorLat, anchorLng := 25.2048, 55.2708
+	if !withinRing(anchorLat, anchorLng, 25.2048, 56.2708, 101_000) {
+		t.Fatal("a point 100.7 km away should be inside a 101 km ring")
+	}
+	if withinRing(anchorLat, anchorLng, 25.2048, 56.2708, 100_000) {
+		t.Fatal("a point 100.7 km away should be outside a 100 km ring")
+	}
+	if !withinRing(anchorLat, anchorLng, anchorLat, anchorLng, 1) {
+		t.Fatal("the anchor position itself is inside any ring")
+	}
+}

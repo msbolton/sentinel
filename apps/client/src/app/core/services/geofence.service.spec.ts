@@ -87,12 +87,12 @@ describe('GeofenceService', () => {
     expect(entities.getEntity).toHaveBeenCalledTimes(1);
     expect(entities.getEntity).toHaveBeenCalledWith('e9');
     expect(service.anchors().get('e9')).toBeNull();
-    expect(service.zoneSummary(service.zones()[0])).toBe('anything within 8.0 km · MEDIUM · follows track · track lost · not evaluated yet');
+    expect(service.zoneSummary(service.zones()[0])).toBe('anything within 8.0 km · MEDIUM · follows track · track lost');
     entities.getEntity.mockReturnValue(of({ id: 'e9', name: 'MV HORIZON STAR' }));
     service.load().subscribe();
     http.expectOne('/api/v1/alerts/rules').flush([ring]);
     expect(service.anchors().get('e9')).toEqual({ id: 'e9', name: 'MV HORIZON STAR' });
-    expect(service.zoneSummary(service.zones()[0])).toBe('anything within 8.0 km · MEDIUM · follows track · not evaluated yet');
+    expect(service.zoneSummary(service.zones()[0])).toBe('anything within 8.0 km · MEDIUM · follows track');
   });
 
   it('remembers the last colour', () => {

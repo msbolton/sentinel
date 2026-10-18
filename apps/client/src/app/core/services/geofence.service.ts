@@ -102,7 +102,6 @@ export class GeofenceService {
     if (c.shape === 'ring' && c.ring) {
       const parts = [`anything within ${formatDistance(c.ring.radiusM)}`, zone.severity, 'follows track'];
       if (this.anchors().get(c.ring.entityId) === null) parts.push('track lost');
-      parts.push('not evaluated yet');
       return parts.join(' · ');
     }
     const trigger = c.triggerOn === 'EXIT' ? 'leave' : c.triggerOn === 'BOTH' ? 'enter or leave' : 'enter';
