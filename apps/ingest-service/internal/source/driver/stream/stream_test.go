@@ -698,9 +698,10 @@ func TestSchemaDefaultMatchesDefaultMaxConnections(t *testing.T) {
 // is not always governed by tls.enabled (a wss:// URL or an ssl:// broker turns
 // it on too), so no secret is hidden or required by it, with one exception: only
 // a tcpserver that requires client certificates reads a client CA. It refuses
-// one it would not check, and cannot start without one when it asks for client
-// certificates, so the form offers clientCa to that listener alone, and asks
-// for it there.
+// one it would not check, so the form offers clientCa to that listener alone.
+// It does not require it there: the listener may take its client CA from
+// tls.clientCaFile, which the form neither shows nor checks, so a requirement
+// would block saving a valid config.
 func TestSchemaTitlesTheTLSSecrets(t *testing.T) {
 	var doc struct {
 		Secrets map[string]map[string]json.RawMessage `json:"x-secrets"`
@@ -729,17 +730,18 @@ func TestSchemaTitlesTheTLSSecrets(t *testing.T) {
 		}
 		for _, condition := range []string{"showWhen", "requiredWhen"} {
 			var got map[string]any
-			if raw, has := meta[condition]; has {
+			raw, has := meta[condition]
+			if has {
 				if err := json.Unmarshal(raw, &got); err != nil {
 					t.Errorf("x-secrets.%s %s is not an object: %v", name, condition, err)
 				}
 			}
-			var want map[string]any // nil: every other secret is always offered and never required
-			if name == "clientCa" {
+			var want map[string]any // nil: absent, as for every secret but clientCa's showWhen
+			if name == "clientCa" && condition == "showWhen" {
 				want = mutualTLS
 			}
-			if !maps.Equal(got, want) {
-				t.Errorf("x-secrets.%s %s = %v, want %v", name, condition, got, want)
+			if has != (want != nil) || !maps.Equal(got, want) {
+				t.Errorf("x-secrets.%s %s = %v (present: %v), want %v (present: %v)", name, condition, got, has, want, want != nil)
 			}
 		}
 	}
