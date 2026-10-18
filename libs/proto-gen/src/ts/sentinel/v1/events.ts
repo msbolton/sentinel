@@ -8,7 +8,16 @@
 import Long from "long";
 import _m0 from "protobufjs/minimal";
 import { Timestamp, Timestamp as Timestamp1 } from "../../google/protobuf/timestamp";
-import { AgeoutState, ageoutStateFromJSON, ageoutStateToJSON, ageoutStateToNumber } from "./common";
+import {
+  AgeoutState,
+  ageoutStateFromJSON,
+  ageoutStateToJSON,
+  ageoutStateToNumber,
+  Classification,
+  classificationFromJSON,
+  classificationToJSON,
+  classificationToNumber,
+} from "./common";
 import {
   Entity,
   EntitySource,
@@ -98,6 +107,41 @@ export interface EntityEvent {
   stale?: EntityAgeout | undefined;
   agedOut?: EntityAgeout | undefined;
   restored?: EntityRestored | undefined;
+}
+
+/** DensityCell is how many distinct objects a feed saw in one grid cell. */
+export interface DensityCell {
+  /** cell centre */
+  latitude: number;
+  /** cell centre */
+  longitude: number;
+  count: number;
+}
+
+/**
+ * DensityGrid counts the objects a feed sees over an area too large to
+ * store them one by one, produced to the density.events topic keyed by
+ * feed_id. Clients draw the counts while their view is larger than
+ * cap_square_degrees and the objects themselves once zoomed in below it.
+ */
+export interface DensityGrid {
+  feedId: string;
+  source: EntitySource;
+  entityType: EntityType;
+  cellDegrees: number;
+  /** an object counts while seen this recently */
+  windowSeconds: number;
+  /** the view size above which the feed counts instead of storing */
+  capSquareDegrees: number;
+  generatedAt?:
+    | string
+    | undefined;
+  /** the feed's level; clients below it get no grid */
+  classification: Classification;
+  /** non-empty cells only */
+  cells: DensityCell[];
+  /** distinct objects across all cells */
+  total: number;
 }
 
 function createBaseObservationRef(): ObservationRef {
@@ -981,6 +1025,302 @@ export const EntityEvent = {
     message.restored = (object.restored !== undefined && object.restored !== null)
       ? EntityRestored.fromPartial(object.restored)
       : undefined;
+    return message;
+  },
+};
+
+function createBaseDensityCell(): DensityCell {
+  return { latitude: 0, longitude: 0, count: 0 };
+}
+
+export const DensityCell = {
+  encode(message: DensityCell, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.latitude !== 0) {
+      writer.uint32(9).double(message.latitude);
+    }
+    if (message.longitude !== 0) {
+      writer.uint32(17).double(message.longitude);
+    }
+    if (message.count !== 0) {
+      writer.uint32(24).uint32(message.count);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): DensityCell {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseDensityCell();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          if (tag !== 9) {
+            break;
+          }
+
+          message.latitude = reader.double();
+          continue;
+        case 2:
+          if (tag !== 17) {
+            break;
+          }
+
+          message.longitude = reader.double();
+          continue;
+        case 3:
+          if (tag !== 24) {
+            break;
+          }
+
+          message.count = reader.uint32();
+          continue;
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skipType(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): DensityCell {
+    return {
+      latitude: isSet(object.latitude) ? globalThis.Number(object.latitude) : 0,
+      longitude: isSet(object.longitude) ? globalThis.Number(object.longitude) : 0,
+      count: isSet(object.count) ? globalThis.Number(object.count) : 0,
+    };
+  },
+
+  toJSON(message: DensityCell): unknown {
+    const obj: any = {};
+    if (message.latitude !== 0) {
+      obj.latitude = message.latitude;
+    }
+    if (message.longitude !== 0) {
+      obj.longitude = message.longitude;
+    }
+    if (message.count !== 0) {
+      obj.count = Math.round(message.count);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<DensityCell>, I>>(base?: I): DensityCell {
+    return DensityCell.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<DensityCell>, I>>(object: I): DensityCell {
+    const message = createBaseDensityCell();
+    message.latitude = object.latitude ?? 0;
+    message.longitude = object.longitude ?? 0;
+    message.count = object.count ?? 0;
+    return message;
+  },
+};
+
+function createBaseDensityGrid(): DensityGrid {
+  return {
+    feedId: "",
+    source: EntitySource.UNSPECIFIED,
+    entityType: EntityType.UNKNOWN,
+    cellDegrees: 0,
+    windowSeconds: 0,
+    capSquareDegrees: 0,
+    generatedAt: undefined,
+    classification: Classification.UNSPECIFIED,
+    cells: [],
+    total: 0,
+  };
+}
+
+export const DensityGrid = {
+  encode(message: DensityGrid, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.feedId !== "") {
+      writer.uint32(10).string(message.feedId);
+    }
+    if (message.source !== EntitySource.UNSPECIFIED) {
+      writer.uint32(16).int32(entitySourceToNumber(message.source));
+    }
+    if (message.entityType !== EntityType.UNKNOWN) {
+      writer.uint32(24).int32(entityTypeToNumber(message.entityType));
+    }
+    if (message.cellDegrees !== 0) {
+      writer.uint32(33).double(message.cellDegrees);
+    }
+    if (message.windowSeconds !== 0) {
+      writer.uint32(40).uint32(message.windowSeconds);
+    }
+    if (message.capSquareDegrees !== 0) {
+      writer.uint32(49).double(message.capSquareDegrees);
+    }
+    if (message.generatedAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.generatedAt), writer.uint32(58).fork()).ldelim();
+    }
+    if (message.classification !== Classification.UNSPECIFIED) {
+      writer.uint32(64).int32(classificationToNumber(message.classification));
+    }
+    for (const v of message.cells) {
+      DensityCell.encode(v!, writer.uint32(74).fork()).ldelim();
+    }
+    if (message.total !== 0) {
+      writer.uint32(80).uint32(message.total);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): DensityGrid {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseDensityGrid();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          if (tag !== 10) {
+            break;
+          }
+
+          message.feedId = reader.string();
+          continue;
+        case 2:
+          if (tag !== 16) {
+            break;
+          }
+
+          message.source = entitySourceFromJSON(reader.int32());
+          continue;
+        case 3:
+          if (tag !== 24) {
+            break;
+          }
+
+          message.entityType = entityTypeFromJSON(reader.int32());
+          continue;
+        case 4:
+          if (tag !== 33) {
+            break;
+          }
+
+          message.cellDegrees = reader.double();
+          continue;
+        case 5:
+          if (tag !== 40) {
+            break;
+          }
+
+          message.windowSeconds = reader.uint32();
+          continue;
+        case 6:
+          if (tag !== 49) {
+            break;
+          }
+
+          message.capSquareDegrees = reader.double();
+          continue;
+        case 7:
+          if (tag !== 58) {
+            break;
+          }
+
+          message.generatedAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+          continue;
+        case 8:
+          if (tag !== 64) {
+            break;
+          }
+
+          message.classification = classificationFromJSON(reader.int32());
+          continue;
+        case 9:
+          if (tag !== 74) {
+            break;
+          }
+
+          message.cells.push(DensityCell.decode(reader, reader.uint32()));
+          continue;
+        case 10:
+          if (tag !== 80) {
+            break;
+          }
+
+          message.total = reader.uint32();
+          continue;
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skipType(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): DensityGrid {
+    return {
+      feedId: isSet(object.feedId) ? globalThis.String(object.feedId) : "",
+      source: isSet(object.source) ? entitySourceFromJSON(object.source) : EntitySource.UNSPECIFIED,
+      entityType: isSet(object.entityType) ? entityTypeFromJSON(object.entityType) : EntityType.UNKNOWN,
+      cellDegrees: isSet(object.cellDegrees) ? globalThis.Number(object.cellDegrees) : 0,
+      windowSeconds: isSet(object.windowSeconds) ? globalThis.Number(object.windowSeconds) : 0,
+      capSquareDegrees: isSet(object.capSquareDegrees) ? globalThis.Number(object.capSquareDegrees) : 0,
+      generatedAt: isSet(object.generatedAt) ? globalThis.String(object.generatedAt) : undefined,
+      classification: isSet(object.classification)
+        ? classificationFromJSON(object.classification)
+        : Classification.UNSPECIFIED,
+      cells: globalThis.Array.isArray(object?.cells) ? object.cells.map((e: any) => DensityCell.fromJSON(e)) : [],
+      total: isSet(object.total) ? globalThis.Number(object.total) : 0,
+    };
+  },
+
+  toJSON(message: DensityGrid): unknown {
+    const obj: any = {};
+    if (message.feedId !== "") {
+      obj.feedId = message.feedId;
+    }
+    if (message.source !== EntitySource.UNSPECIFIED) {
+      obj.source = entitySourceToJSON(message.source);
+    }
+    if (message.entityType !== EntityType.UNKNOWN) {
+      obj.entityType = entityTypeToJSON(message.entityType);
+    }
+    if (message.cellDegrees !== 0) {
+      obj.cellDegrees = message.cellDegrees;
+    }
+    if (message.windowSeconds !== 0) {
+      obj.windowSeconds = Math.round(message.windowSeconds);
+    }
+    if (message.capSquareDegrees !== 0) {
+      obj.capSquareDegrees = message.capSquareDegrees;
+    }
+    if (message.generatedAt !== undefined) {
+      obj.generatedAt = message.generatedAt;
+    }
+    if (message.classification !== Classification.UNSPECIFIED) {
+      obj.classification = classificationToJSON(message.classification);
+    }
+    if (message.cells?.length) {
+      obj.cells = message.cells.map((e) => DensityCell.toJSON(e));
+    }
+    if (message.total !== 0) {
+      obj.total = Math.round(message.total);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<DensityGrid>, I>>(base?: I): DensityGrid {
+    return DensityGrid.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<DensityGrid>, I>>(object: I): DensityGrid {
+    const message = createBaseDensityGrid();
+    message.feedId = object.feedId ?? "";
+    message.source = object.source ?? EntitySource.UNSPECIFIED;
+    message.entityType = object.entityType ?? EntityType.UNKNOWN;
+    message.cellDegrees = object.cellDegrees ?? 0;
+    message.windowSeconds = object.windowSeconds ?? 0;
+    message.capSquareDegrees = object.capSquareDegrees ?? 0;
+    message.generatedAt = object.generatedAt ?? undefined;
+    message.classification = object.classification ?? Classification.UNSPECIFIED;
+    message.cells = object.cells?.map((e) => DensityCell.fromPartial(e)) || [];
+    message.total = object.total ?? 0;
     return message;
   },
 };

@@ -19,8 +19,8 @@ func voyage(dest string) ais.ShipStaticData {
 	return ais.ShipStaticData{
 		Header: ais.Header{MessageID: 5, UserID: mmsi}, Valid: true,
 		ImoNumber: 9811000, CallSign: "PDAB@@@", Name: "EVER EXAMPLE@@@@", Type: 71,
-		Dimension: ais.FieldDimension{A: 300, B: 99, C: 30, D: 29},
-		Eta:       ais.FieldETA{Month: 10, Day: 20, Hour: 6, Minute: 30},
+		Dimension:            ais.FieldDimension{A: 300, B: 99, C: 30, D: 29},
+		Eta:                  ais.FieldETA{Month: 10, Day: 20, Hour: 6, Minute: 30},
 		MaximumStaticDraught: 14.5, Destination: dest,
 	}
 }

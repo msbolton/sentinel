@@ -14,6 +14,8 @@ import (
 
 	gws "github.com/gorilla/websocket"
 
+	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
+
 	"github.com/sentinel/ingest-service/internal/aoi"
 	"github.com/sentinel/ingest-service/internal/obs"
 	"github.com/sentinel/ingest-service/internal/source/driver"
@@ -417,10 +419,10 @@ func TestOnlyVesselsInsideAModestViewAreStored(t *testing.T) {
 
 	// A view larger than the cap: nothing from the area is stored.
 	d.SetAreaOfInterest(area(aoi.BBox{North: 70, South: 20, East: 40, West: -30}))
-	waitFor(t, "too large", func() bool { return d.Health().Detail["mode"] == modeTooLarge })
+	waitFor(t, "too large", func() bool { return d.Health().Detail["mode"] == modeDensity })
 	c.send(t, fixture(t, "PositionReport"))
 	c.send(t, fixture(t, "ShipStaticData"))
-	waitFor(t, "not stored", func() bool { return sink.skips("area_too_large") == 2 })
+	waitFor(t, "not stored", func() bool { return sink.skips("area_density") == 2 })
 	if sink.count() != 0 {
 		t.Errorf("stored %d observations", sink.count())
 	}
@@ -497,5 +499,97 @@ func TestAFullBufferDropsInsteadOfBlocking(t *testing.T) {
 	d.enqueue(frame{})
 	if got := d.Health().Detail["dropped"]; got != int64(1) {
 		t.Errorf("dropped = %v", got)
+	}
+}
+
+type gridSink struct {
+	mu    sync.Mutex
+	grids []*sentinelv1.DensityGrid
+}
+
+func (g *gridSink) PublishDensity(grid *sentinelv1.DensityGrid) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.grids = append(g.grids, grid)
+	return nil
+}
+
+func (g *gridSink) last() *sentinelv1.DensityGrid {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.grids) == 0 {
+		return nil
+	}
+	return g.grids[len(g.grids)-1]
+}
+
+func TestCounterCountsDistinctVesselsPerCell(t *testing.T) {
+	c := newCounter(1, 10*time.Minute)
+	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	c.observe("a", 50.2, -1.5, t0)
+	c.observe("a", 50.3, -1.4, t0.Add(time.Minute)) // the same vessel again: counted once
+	c.observe("b", 50.9, -1.1, t0)
+	c.observe("c", 51.5, 1.5, t0)
+	c.observe("old", 50.5, -1.5, t0.Add(-11*time.Minute))
+	c.observe("far", -6, 111, t0)
+
+	cells, total := c.grid(t0.Add(time.Minute), []aoi.BBox{{North: 55, South: 45, East: 5, West: -5}})
+	if total != 3 || len(cells) != 2 {
+		t.Fatalf("total %d, cells %v", total, cells)
+	}
+	if cells[0].Latitude != 50.5 || cells[0].Longitude != -1.5 || cells[0].Count != 2 {
+		t.Errorf("cell 0 = %v", cells[0])
+	}
+	if cells[1].Latitude != 51.5 || cells[1].Longitude != 1.5 || cells[1].Count != 1 {
+		t.Errorf("cell 1 = %v", cells[1])
+	}
+	if _, kept := c.seen["old"]; kept {
+		t.Error("a sighting older than the window must be forgotten")
+	}
+}
+
+func TestWideViewsAreCountedNotStored(t *testing.T) {
+	f := newFakeServer(t)
+	d := newDriver(t, f.url, `{"watchlistMmsi": ["232015630"]}`)
+	grids := &gridSink{}
+	d.densityOut, d.densityEvery = grids, 50*time.Millisecond
+	sink := start(t, d)
+	watch := f.conn(t, 0)
+	watch.nextSub(t)
+
+	// Western Europe: well over the 2 500 sq deg cap.
+	d.SetAreaOfInterest(area(aoi.BBox{North: 70, South: 20, East: 40, West: -30}))
+	c := f.conn(t, 1)
+	c.nextSub(t)
+	c.send(t, fixture(t, "PositionReport"))
+	c.send(t, fixture(t, "StandardClassBPositionReport"))
+	c.send(t, fixture(t, "ExtendedClassBPositionReport")) // off Java: outside the view
+	waitFor(t, "a grid with both vessels", func() bool { g := grids.last(); return g != nil && g.Total == 2 })
+	g := grids.last()
+	if g.Source != sentinelv1.EntitySource_ENTITY_SOURCE_AIS || g.EntityType != sentinelv1.EntityType_ENTITY_TYPE_VESSEL || g.CellDegrees != 1 || g.WindowSeconds != 600 || g.CapSquareDegrees != 2500 || len(g.Cells) != 2 {
+		t.Errorf("grid = %+v", g)
+	}
+	if sink.count() != 0 {
+		t.Errorf("stored %d observations from a wide view", sink.count())
+	}
+
+	// The watchlist is stored whatever the view.
+	watch.send(t, fixture(t, "PositionReport"))
+	waitFor(t, "watchlist observation", func() bool { return sink.count() == 1 })
+
+	// Zoomed in: no more grids.
+	d.SetAreaOfInterest(area(channel))
+	waitFor(t, "detail mode", func() bool { return d.Health().Detail["mode"] == modeDetail })
+	grids.mu.Lock()
+	n := len(grids.grids)
+	grids.mu.Unlock()
+	time.Sleep(200 * time.Millisecond)
+	grids.mu.Lock()
+	defer grids.mu.Unlock()
+	if len(grids.grids) > n+1 {
+		t.Errorf("grids kept coming in detail mode: %d -> %d", n, len(grids.grids))
+	}
+	if d.Health().Detail["density"] == nil {
+		t.Error("health should report the last grid")
 	}
 }

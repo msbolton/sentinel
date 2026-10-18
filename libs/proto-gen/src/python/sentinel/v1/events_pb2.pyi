@@ -106,3 +106,37 @@ class EntityEvent(_message.Message):
     aged_out: EntityAgeout
     restored: EntityRestored
     def __init__(self, event_id: _Optional[str] = ..., event_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., entity_id: _Optional[str] = ..., producer: _Optional[str] = ..., created: _Optional[_Union[EntityCreated, _Mapping]] = ..., updated: _Optional[_Union[EntityUpdated, _Mapping]] = ..., position: _Optional[_Union[EntityPosition, _Mapping]] = ..., deleted: _Optional[_Union[EntityDeleted, _Mapping]] = ..., stale: _Optional[_Union[EntityAgeout, _Mapping]] = ..., aged_out: _Optional[_Union[EntityAgeout, _Mapping]] = ..., restored: _Optional[_Union[EntityRestored, _Mapping]] = ...) -> None: ...
+
+class DensityCell(_message.Message):
+    __slots__ = ("latitude", "longitude", "count")
+    LATITUDE_FIELD_NUMBER: _ClassVar[int]
+    LONGITUDE_FIELD_NUMBER: _ClassVar[int]
+    COUNT_FIELD_NUMBER: _ClassVar[int]
+    latitude: float
+    longitude: float
+    count: int
+    def __init__(self, latitude: _Optional[float] = ..., longitude: _Optional[float] = ..., count: _Optional[int] = ...) -> None: ...
+
+class DensityGrid(_message.Message):
+    __slots__ = ("feed_id", "source", "entity_type", "cell_degrees", "window_seconds", "cap_square_degrees", "generated_at", "classification", "cells", "total")
+    FEED_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    ENTITY_TYPE_FIELD_NUMBER: _ClassVar[int]
+    CELL_DEGREES_FIELD_NUMBER: _ClassVar[int]
+    WINDOW_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    CAP_SQUARE_DEGREES_FIELD_NUMBER: _ClassVar[int]
+    GENERATED_AT_FIELD_NUMBER: _ClassVar[int]
+    CLASSIFICATION_FIELD_NUMBER: _ClassVar[int]
+    CELLS_FIELD_NUMBER: _ClassVar[int]
+    TOTAL_FIELD_NUMBER: _ClassVar[int]
+    feed_id: str
+    source: _entity_pb2.EntitySource
+    entity_type: _entity_pb2.EntityType
+    cell_degrees: float
+    window_seconds: int
+    cap_square_degrees: float
+    generated_at: _timestamp_pb2.Timestamp
+    classification: _common_pb2.Classification
+    cells: _containers.RepeatedCompositeFieldContainer[DensityCell]
+    total: int
+    def __init__(self, feed_id: _Optional[str] = ..., source: _Optional[_Union[_entity_pb2.EntitySource, str]] = ..., entity_type: _Optional[_Union[_entity_pb2.EntityType, str]] = ..., cell_degrees: _Optional[float] = ..., window_seconds: _Optional[int] = ..., cap_square_degrees: _Optional[float] = ..., generated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., classification: _Optional[_Union[_common_pb2.Classification, str]] = ..., cells: _Optional[_Iterable[_Union[DensityCell, _Mapping]]] = ..., total: _Optional[int] = ...) -> None: ...
