@@ -191,7 +191,7 @@ To check the driver against the live service without the stack: `cd apps/ingest-
 
 ### Local receivers and other sources
 
-Every source is a feed created through `POST /api/v1/feeds` (or the Feeds page). The built-in drivers are `opensky`, `intelsky`, `celestrak`, `aisstream`, `httpjson` (any JSON API, field-mapped) and `stream` (a transport, a framer and a decoder). Pull from site receivers rather than opening ports: a feed that listens (`tcpserver`, `udp`) must be pinned to one replica.
+Every source is a feed created through `POST /api/v1/feeds` (or the Feeds page). The built-in drivers are `opensky`, `intelsky`, `celestrak`, `aisstream`, `httpjson` (any JSON API, field-mapped), `stream` (a transport, a framer and a decoder), and `tcp` and `udp` (external systems that send to Sentinel, below). Pull from site receivers (`tcpclient`) where you can, so any replica can own the feed; a connection that opens a port runs on the listener replica (see "External systems sending to Sentinel"), and `pinnedReplica` is optional.
 
 ```jsonc
 // readsb / dump1090 SBS (port 30003): the simplest receiver feed
@@ -202,9 +202,9 @@ Every source is a feed created through `POST /api/v1/feeds` (or the Feeds page).
 {"id":"roof-beast","name":"Roof receiver (Beast)","driver":"stream","enabled":true,
  "config":{"transport":{"kind":"tcpclient","address":"readsb.local:30005"},"framing":"beast","decoder":{"name":"beast"}}}
 
-// AIS-catcher sending NMEA over UDP to this replica (AIS-catcher -u <ingest-host> 10110)
-{"id":"pier-ais","name":"Pier AIS","driver":"stream","enabled":true,
- "config":{"transport":{"kind":"udp","address":":10110"},"decoder":{"name":"nmea-ais"},"pinnedReplica":"<REPLICA_ID>"}}
+// AIS-catcher sending NMEA over UDP to the listener replica (AIS-catcher -u <listener-host> 10110)
+{"id":"pier-ais","name":"Pier AIS","driver":"udp","enabled":true,
+ "config":{"port":10110,"format":"nmea-ais"}}
 
 // TAK server CoT stream over TLS (port 8089, client certificate)
 {"id":"tak","name":"TAK server","driver":"stream","enabled":true,
@@ -217,6 +217,45 @@ Every source is a feed created through `POST /api/v1/feeds` (or the Feeds page).
            "decoder":{"options":{"records":"ac","identityType":"ICAO24","entityType":"aircraft","source":"ADS_B","altitudeUnit":"ft",
                       "fields":{"id":"hex","latitude":"lat","longitude":"lon","altitude":"alt_baro","speed":"gs","heading":"track","callsign":"flight"}}}}}
 ```
+
+### External systems sending to Sentinel
+
+The `tcp` and `udp` drivers open a port that another system sends to; `tcp` can also dial out to the sender (`mode: connect`). The default format is `sentinel.v1.Observation` (binary protobuf, or its JSON form with `encoding: json`), and the device formats (`nmea-ais`, `cot`, `sbs`, ...) work through `format`. Listening connections run on the *listener replica*, a second ingest container on the host's network so that any port you pick is reachable without editing Compose. Create a UDP connection, send it one JSON observation with netcat, and find the entity:
+
+```bash
+# Docker Desktop (Mac, Windows): Settings > Resources > Network > Enable host networking (4.34+).
+# Linux needs nothing.
+docker compose --profile inbound up -d ingest-listener
+curl -s -X POST http://localhost:3000/api/v1/feeds -H 'content-type: application/json' \
+  -d '{"id":"test-udp","name":"Test UDP","driver":"udp","enabled":true,"config":{"port":6001,"encoding":"json"}}'
+sleep 6   # the listener picks the connection up at once; its status row is written every 5 s
+curl -s http://localhost:3000/api/v1/feeds/test-udp | jq '{state: .status.state, listen: .status.detail.listen}'
+echo '{"sourceEntityId":"test-1","entityType":"ENTITY_TYPE_VEHICLE","position":{"latitude":51.5,"longitude":-0.12}}' | nc -u -w1 localhost 6001
+sleep 5   # the observation reaches the search index through Kafka and the entity service
+curl -s 'http://localhost:3000/api/v1/search?q=test-1' | jq '.hits[0].name'
+curl -s -X DELETE http://localhost:3000/api/v1/feeds/test-udp
+```
+
+The calls go through the gateway like the rest of this page: with `AUTH_DEV_BYPASS=true` (the Compose and `nx serve` default) they need nothing more, otherwise add `-H "Authorization: Bearer $TOKEN"` from an operator or admin login. The listener's address is `INGEST_LISTENER_HOST` (default `localhost`, set it to the machine's name or IP when senders are elsewhere); `listen` shows the host and port senders use once the connection runs. The same connection is on the Connections page, whose send guide shows the endpoint, the netcat line, Go and Python senders, the `.proto` downloads and a table of who is sending.
+
+Binary protobuf over TCP is a stream of length-delimited messages (a varint length, then the message), which `nc` cannot produce: use the Go snippet in the connection's send guide (`protodelim.MarshalTo`), or the Python one. UDP binary needs no framing, one message per datagram.
+
+Rules and safeguards, in short (details and the counters are in `docs/feeds.md`):
+
+- **Ports** must be 1024-65535, unique per protocol, and not Sentinel's own (`INGEST_RESERVED_PORTS`, blank means the default list of the stack's published ports); the API answers 422 otherwise. Check the port is free on the host, since the listener shares its network.
+- **Allowlist.** `allow` takes IPs and CIDRs. An empty list is open to anyone who can reach the port. UDP source addresses can be spoofed, so on an untrusted network use TCP with mutual TLS:
+
+  ```bash
+  curl -s -X POST http://localhost:3000/api/v1/feeds -H 'content-type: application/json' -d '{
+    "id":"site-tcp","name":"Site gateway","driver":"tcp","enabled":true,
+    "config":{"mode":"listen","port":6002,"allow":["10.20.0.0/16"],"tls":{"enabled":true,"requireClientCert":true}},
+    "secretRefs":{"tlsCert":"file:/etc/sentinel/tak/server.pem","tlsKey":"file:/etc/sentinel/tak/server.key","clientCa":"file:/etc/sentinel/tak/clients-ca.pem"}}'
+  ```
+
+  The certificate files go in `./secrets/tak` like the TAK ones (the folder is mounted read-only into the ingest containers, including the listener).
+- **Limits** per connection: `maxConnections` (50), `maxMessagesPerSec` (1000), `maxMessageBytes` (64 KiB for TCP, 65507 for UDP). What they refuse is counted in the connection's status.
+- **The listener's own port.** Under host networking the listener's management API on `:4010` binds every interface of the machine and is guarded only by `INGEST_SERVICE_TOKEN` (default `dev-ingest-token`). That is fine on a laptop; anywhere else change the token and keep `:4010` closed to the network. The gateway does not use it (it talks to `ingest-service` on `:4000`), so it can be firewalled.
+- With no listener running, an enabled listening connection shows `unassigned` with the error `no listener replica`; start the profile above.
 
 ### TAK connection
 
@@ -265,7 +304,7 @@ The finding appears in the Findings panel and in the entity's Behaviour section;
 
 ### Several ingest replicas
 
-Every enabled feed runs on exactly one replica: replicas heartbeat `sentinel.ingest_replicas`, a feed's preferred owner is chosen by rendezvous hashing over the live replicas (or `config.pinnedReplica`), and the owner holds a `sentinel.feed_leases` row it renews every `LEASE_TICK_SEC` (2 s) with a `LEASE_TTL_SEC` (15 s) expiry. `docker compose up -d --scale ingest-service=3` starts three; `GET /api/v1/feeds` shows each feed's `status.owner`, a replica that stops reporting renders its feeds as `unassigned` until another one takes them (within one TTL), and every observation carries the lease's fencing token in the `x-fence` header. Feeds whose transport binds a port (`tcpserver`, `udp`) must set `pinnedReplica`. `LEASE_ENABLED=false` runs every feed on one replica (local development with a single process).
+Every enabled feed runs on exactly one replica: replicas heartbeat `sentinel.ingest_replicas`, a feed's preferred owner is chosen by rendezvous hashing over the live replicas (or `config.pinnedReplica`; connections that open a port go to the listener replicas), and the owner holds a `sentinel.feed_leases` row it renews every `LEASE_TICK_SEC` (2 s) with a `LEASE_TTL_SEC` (15 s) expiry. `docker compose up -d --scale ingest-service=3` starts three; `GET /api/v1/feeds` shows each feed's `status.owner`, a replica that stops reporting renders its feeds as `unassigned` until another one takes them (within one TTL), and every observation carries the lease's fencing token in the `x-fence` header. Connections that bind a port (`tcp` in listen mode, `udp`, `stream` with a `tcpserver` or `udp` transport) run on a listener replica (`INGEST_LISTENER=true`, the `ingest-listener` service described above) and need no `pinnedReplica`; with none live they render as `unassigned`. `LEASE_ENABLED=false` runs every feed on one replica (local development with a single process).
 
 See `docs/architecture.md` (OpenSky viewport-driven polling) for the contract, the credit budget, and the environment variables.
 

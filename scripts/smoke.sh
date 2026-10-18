@@ -92,6 +92,14 @@ check POST /api/v1/feeds 422 '{"name":"Smoke bad ceiling","driver":"tak","config
 check POST /api/v1/feeds 422 '{"name":"Smoke policy on a source","driver":"opensky","config":{"policy":{"entityTypes":["AIRCRAFT"]}}}'
 check GET "/api/v1/feeds?direction=out" 200
 
+echo "== inbound tcp/udp"
+check GET /api/v1/drivers/tcp 200
+grep -q '"x-showWhen"' /tmp/smoke-body && echo "  ok   tcp schema has conditional fields" || { echo "  FAIL tcp schema: $(head -c 120 /tmp/smoke-body)"; fail=1; }
+check GET /api/v1/drivers/udp 200
+# The management API answers validation problems with 422; a low port and one of Sentinel's own are refused.
+check POST /api/v1/feeds 422 '{"name":"smoke low port","driver":"udp","config":{"port":80}}'
+check POST /api/v1/feeds 422 '{"name":"smoke reserved port","driver":"udp","config":{"port":5432}}'
+
 echo "== export"
 check GET "/api/v1/export/entities.geojson?limit=1" 200
 grep -q '"type":"FeatureCollection"' /tmp/smoke-body && echo "  ok   geojson FeatureCollection" || { echo "  FAIL geojson body: $(head -c 120 /tmp/smoke-body)"; fail=1; }

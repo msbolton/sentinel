@@ -82,7 +82,7 @@ The feed registry (see `docs/feeds.md`).
 | `feed_status` | Observed state written by the owning replica: `owner`, `state`, `health`, `last_error`, `last_message_at`, `last_success_at`, `messages_total`, `entities_last`, `errors_total`, `applied_version`, `detail` (JSONB), `updated_at` |
 | `feed_areas` | The area of interest pushed by the gateway: `active`, `clients`, `boxes` (JSONB), `expires_at` |
 | `feed_leases` | Which replica owns the feed: `owner_id`, `fencing_token`, `acquired_at`, `heartbeat_at`, `expires_at` |
-| `ingest_replicas` | Live replicas by heartbeat: `replica_id`, `started_at`, `heartbeat_at`, `expires_at` |
+| `ingest_replicas` | Live replicas by heartbeat: `replica_id`, `started_at`, `heartbeat_at`, `expires_at`, `listener` (takes the connections that bind a port) and `listener_host` (the address senders use) |
 
 ### sentinel.feed_ageout_config
 
