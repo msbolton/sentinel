@@ -11,7 +11,9 @@ import (
 // TLSConfig builds a crypto/tls config from the options, or nil when TLS
 // is off. PEM material set from secret references wins over file paths.
 // The same config serves both directions: RootCAs verify a server we
-// dial, ClientCAs and ClientAuth verify clients a listener accepts.
+// dial, ClientCAs verify clients a listener accepts. It never sets
+// ClientAuth: RequireClientCert is a listener setting that tcpserver acts
+// on, and every transport that dials ignores it.
 func (c Config) TLSConfig() (*tls.Config, error) {
 	if c.TLS == nil || !c.TLS.Enabled {
 		return nil, nil
@@ -52,12 +54,6 @@ func (c Config) TLSConfig() (*tls.Config, error) {
 		if t.ClientCAs, err = pool(clientCA, "client CA"); err != nil {
 			return nil, err
 		}
-	}
-	if c.TLS.RequireClientCert {
-		if t.ClientCAs == nil {
-			return nil, errors.New("requiring client certificates needs a client CA")
-		}
-		t.ClientAuth = tls.RequireAndVerifyClientCert
 	}
 	return t, nil
 }

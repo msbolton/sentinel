@@ -144,7 +144,7 @@ type TLS struct {
 	CertFile           string `json:"certFile"`
 	KeyFile            string `json:"keyFile"`
 	ClientCAFile       string `json:"clientCaFile"`      // tcpserver: CA that signs accepted client certificates
-	RequireClientCert  bool   `json:"requireClientCert"` // tcpserver: mutual TLS
+	RequireClientCert  bool   `json:"requireClientCert"` // tcpserver only: mutual TLS; transports that dial ignore it
 }
 
 // MaxFrame returns the configured frame bound or the default.

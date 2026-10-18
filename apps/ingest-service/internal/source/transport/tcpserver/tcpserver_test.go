@@ -278,6 +278,10 @@ func TestMutualTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The listener asks for the certificates: the shared TLS builder leaves ClientAuth alone.
+	if got := tr.(*Server).tls.ClientAuth; got != tls.RequireAndVerifyClientCert {
+		t.Errorf("ClientAuth = %v, want RequireAndVerifyClientCert", got)
+	}
 	col := &transporttest.Collector{}
 	stop := transporttest.Run(t, tr, col.Emit)
 	defer stop()
@@ -318,6 +322,19 @@ func TestMutualTLS(t *testing.T) {
 	}
 	if col.Count() != 1 {
 		t.Errorf("frames = %d, want only the signed sender's", col.Count())
+	}
+}
+
+// requireClientCert is a listener setting, and a listener that demands client
+// certificates can check them only against a client CA: asked for with none, it
+// is refused at build time instead of failing every sender's handshake.
+func TestMutualTLSNeedsAClientCA(t *testing.T) {
+	server := transporttest.NewCA(t).Issue(t, "localhost")
+	_, err := New(transport.Config{Kind: "tcpserver", Address: "127.0.0.1:0", Framing: "line",
+		TLS: &transport.TLS{Enabled: true, RequireClientCert: true}, CertPEM: server.CertPEM, KeyPEM: server.KeyPEM})
+	const want = "tcpserver: requiring client certificates needs a client CA"
+	if err == nil || err.Error() != want {
+		t.Errorf("err = %v, want %q", err, want)
 	}
 }
 

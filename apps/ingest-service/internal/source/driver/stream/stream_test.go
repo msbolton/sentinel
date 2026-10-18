@@ -22,6 +22,8 @@ import (
 
 	_ "github.com/sentinel/ingest-service/internal/source/decoder/sbs"
 	_ "github.com/sentinel/ingest-service/internal/source/decoder/sentinelobs"
+	_ "github.com/sentinel/ingest-service/internal/source/transport/stomp"
+	_ "github.com/sentinel/ingest-service/internal/source/transport/tcpclient"
 	_ "github.com/sentinel/ingest-service/internal/source/transport/tcpserver"
 	_ "github.com/sentinel/ingest-service/internal/source/transport/udp"
 )
@@ -645,6 +647,23 @@ func TestStreamRefusesClientCAWithoutRequireClientCert(t *testing.T) {
 	}
 	if err := build(`,"tls":{"enabled":true,"requireClientCert":true}`); err != nil {
 		t.Errorf("mutual TLS with a client CA: %v", err)
+	}
+}
+
+// requireClientCert is a listener setting: a transport that dials out has no
+// senders to ask for certificates and ignores the flag, so with TLS on and no
+// client CA it builds like any other. tcpclient and stomp build their TLS
+// config in New, so they are the dialers this can check there; websocket and
+// mqtt build theirs when they start.
+func TestDialersIgnoreRequireClientCert(t *testing.T) {
+	for kind, c := range map[string]struct{ transport, framing string }{
+		"tcpclient": {`{"kind":"tcpclient","address":"127.0.0.1:30003","tls":{"enabled":true,"requireClientCert":true}}`, "line"},
+		"stomp":     {`{"kind":"stomp","brokerUrl":"127.0.0.1:61613","queue":"/queue/x","tls":{"enabled":true,"requireClientCert":true}}`, "message"},
+	} {
+		cfg := `{"transport":` + c.transport + `,"framing":"` + c.framing + `","decoder":{"name":"sbs"}}`
+		if _, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()}); err != nil {
+			t.Errorf("%s with requireClientCert and no client CA: %v", kind, err)
+		}
 	}
 }
 

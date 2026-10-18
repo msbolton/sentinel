@@ -400,6 +400,16 @@ func TestClientCAWithoutRequireClientCert(t *testing.T) {
 	}
 }
 
+// requireClientCert is a listener setting. A connection Sentinel dials out has
+// no senders to ask for certificates, so it ignores the flag: with TLS on and
+// no clientCa it builds like any other.
+func TestConnectIgnoresRequireClientCert(t *testing.T) {
+	cfg := map[string]any{"mode": "connect", "host": "127.0.0.1", "port": 7000, "tls": map[string]any{"enabled": true, "requireClientCert": true}}
+	if _, err := newDriver(t, cfg, nil); err != nil {
+		t.Errorf("connect with requireClientCert and no client CA: %v", err)
+	}
+}
+
 // The driver takes its maxConnections default from the stream package, and
 // the schema states it to the form: they must stay one number.
 func TestSchemaDefaultMatchesDefaultMaxConnections(t *testing.T) {

@@ -18,12 +18,18 @@ func TestTLSConfigFromPEM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Certificates) != 1 || c.ClientCAs == nil || c.ClientAuth != tls.RequireAndVerifyClientCert {
+	// The client CA is built into the config; whether to ask for client
+	// certificates is the listener's decision (tcpserver sets ClientAuth), since
+	// this config serves dialers too.
+	if len(c.Certificates) != 1 || c.ClientCAs == nil || c.ClientAuth != tls.NoClientCert {
 		t.Errorf("tls config = %+v", c)
 	}
+	// requireClientCert is a listener setting: with no client CA the config
+	// still builds, and asks for nothing.
 	cfg.ClientCAPEM = nil
-	if _, err := cfg.TLSConfig(); err == nil {
-		t.Error("requiring client certificates without a client CA must fail")
+	c, err = cfg.TLSConfig()
+	if err != nil || c.ClientAuth != tls.NoClientCert {
+		t.Errorf("requireClientCert without a client CA: err = %v, config = %+v; want it to build and ask for no client certificate", err, c)
 	}
 	cfg = transport.Config{TLS: &transport.TLS{Enabled: true}, CAPEM: ca.CertPEM}
 	if c, err := cfg.TLSConfig(); err != nil || c.RootCAs == nil {

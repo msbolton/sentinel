@@ -74,6 +74,15 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Asking senders for certificates is this listener's decision, not the
+	// shared TLS builder's, which dialers use too. It can check them only
+	// against a client CA.
+	if mutualTLS {
+		if t.ClientCAs == nil {
+			return nil, errors.New("tcpserver: requiring client certificates needs a client CA")
+		}
+		t.ClientAuth = tls.RequireAndVerifyClientCert
+	}
 	if t != nil && len(t.Certificates) == 0 {
 		return nil, errors.New("tcpserver: TLS needs a certificate and key")
 	}

@@ -30,7 +30,7 @@
           "title": "TLS",
           "properties": {
             "enabled": { "type": "boolean", "default": false },
-            "requireClientCert": { "type": "boolean", "default": false, "title": "Require client certificates", "description": "tcpserver: mutual TLS, verified against the clientCa secret", "x-showWhen": { "enabled": true } },
+            "requireClientCert": { "type": "boolean", "default": false, "title": "Require client certificates", "description": "Mutual TLS, verified against the clientCa secret. It applies to kind tcpserver only; the other kinds ignore it.", "x-showWhen": { "enabled": true } },
             "insecureSkipVerify": { "type": "boolean", "default": false },
             "serverName": { "type": "string" },
             "caFile": { "type": "string" },

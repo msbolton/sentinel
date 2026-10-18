@@ -33,7 +33,7 @@
       "description": "Certificates and keys come from the tlsCert, tlsKey, clientCa and serverCa secrets, never from file paths.",
       "properties": {
         "enabled": { "type": "boolean", "default": false, "title": "Use TLS" },
-        "requireClientCert": { "type": "boolean", "default": false, "title": "Require client certificates", "description": "listen: mutual TLS, verified against the clientCa secret", "x-showWhen": { "enabled": true } },
+        "requireClientCert": { "type": "boolean", "default": false, "title": "Require client certificates", "description": "Mutual TLS, verified against the clientCa secret. It applies in listen mode only; connect mode ignores it.", "x-showWhen": { "enabled": true } },
         "serverName": { "type": "string", "title": "Server name", "description": "connect: name to verify on the remote certificate", "x-showWhen": { "enabled": true } },
         "insecureSkipVerify": { "type": "boolean", "default": false, "title": "Skip certificate verification", "description": "connect: testing only", "x-showWhen": { "enabled": true } }
       }
