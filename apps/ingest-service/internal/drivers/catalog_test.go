@@ -21,7 +21,7 @@ func TestDefaultCatalogListsDrivers(t *testing.T) {
 			t.Errorf("%s schema is not JSON: %v", d.ID, err)
 		}
 	}
-	for _, want := range []string{"opensky", "celestrak", "aisstream", "intelsky", "stream", "httpjson", "tcp"} {
+	for _, want := range []string{"opensky", "celestrak", "aisstream", "intelsky", "stream", "httpjson", "tcp", "udp"} {
 		if !ids[want] {
 			t.Errorf("missing driver %s", want)
 		}
@@ -61,6 +61,8 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 		"tak":        `{"address": "tak.example.org:8089", "siteId": "east", "direction": "both", "tls": {"enabled": true, "serverName": "tak.example.org"}, "heartbeatSec": 30, "tracks": {"staleSec": 120}, "alerts": {"emergencyMinSeverity": "CRITICAL"}, "shapes": {"enabled": true, "refreshSec": 60}, "policy": {"entityTypes": ["AIRCRAFT", "VESSEL"], "feeds": ["opensky"], "boxes": [{"north": 40, "south": 35, "east": -74, "west": -80}], "classificationCeiling": "UNCLASSIFIED", "alerts": {"enabled": true, "minSeverity": "MEDIUM"}}, "outbound": {"perEntityMinSec": 5, "maxEventsPerSec": 100}}`,
 		"tcp":        `{"mode": "listen", "port": 6000}`,
 		"tcp2":       `{"mode": "connect", "host": "feeds.example", "port": 7000, "format": "cot", "tls": {"enabled": true}}`,
+		"udp":        `{"port": 10110, "format": "nmea-ais"}`,
+		"udp2":       `{"port": 10111, "encoding": "json", "allow": ["10.0.0.0/8", "192.0.2.7"], "maxMessageBytes": 1500, "maxMessagesPerSec": 0}`,
 		"empty":      ``,
 	}
 	for driver, cfg := range cases {
@@ -74,6 +76,8 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 			d = "celestrak"
 		case "tcp2":
 			d = "tcp"
+		case "udp2":
+			d = "udp"
 		case "aisstream2":
 			d = "aisstream"
 		}
@@ -118,6 +122,12 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		{"tcp", `{"mode": "listen", "port": 6000, "format": "xml"}`, "/config/format"},
 		{"tcp", `{"mode": "listen", "port": 6000, "tls": {"enabled": true, "certFile": "/x"}}`, "/config/tls"},
 		{"tcp", `{"mode": "listen", "port": 6000, "tls": {"enabled": true, "requireClientCrt": true}}`, "/config/tls"},
+		{"udp", `{}`, "/config"},
+		{"udp", `{"port": 80}`, "/config/port"},
+		{"udp", `{"port": 70000}`, "/config/port"},
+		{"udp", `{"port": 10110, "format": "beast"}`, "/config/format"},
+		{"udp", `{"port": 10110, "allow": "oops"}`, "/config/allow"},
+		{"udp", `{"port": 10110, "maxMessageBytes": 70000}`, "/config/maxMessageBytes"},
 	}
 	for _, tc := range cases {
 		problems := c.Validate(tc.driver, json.RawMessage(tc.cfg))
