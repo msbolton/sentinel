@@ -8,6 +8,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/registry"
 	_ "github.com/sentinel/ingest-service/internal/source/all"
 	"github.com/sentinel/ingest-service/internal/source/driver"
@@ -29,7 +30,7 @@ func udpFeed(id string) registry.Feed {
 func newListenerTestSupervisor(t *testing.T, me string, listener bool, listeners []string) *Supervisor {
 	t.Helper()
 	l := newFakeLeaser("r-listen", "r-plain")
-	sup := New(newFakeRegistry(), &memPublisher{}, zap.NewNop(), nil, Options{
+	sup := New(newFakeRegistry(), &memPublisher{}, zap.NewNop(), metrics.New(nil), Options{
 		ReplicaID: me, Listener: listener, Preferred: defaultPreferred,
 		Leaser: &listenerLeaser{replicaLeaser: &replicaLeaser{fakeLeaser: l, me: me}, listeners: listeners},
 	})
@@ -79,7 +80,7 @@ func TestReconcilePlacesListeningFeedsOnListeners(t *testing.T) {
 	l := newFakeLeaser("r-listen", "r-plain")
 	hosts := map[string]string{}
 	mk := func(me string, listener bool, host string) *Supervisor {
-		return New(reg, &memPublisher{}, zap.NewNop(), nil, Options{
+		return New(reg, &memPublisher{}, zap.NewNop(), metrics.New(nil), Options{
 			ReplicaID: me, Listener: listener, ListenerHost: host, Preferred: defaultPreferred,
 			Leaser: &listenerLeaser{replicaLeaser: &replicaLeaser{fakeLeaser: l, me: me}, listeners: []string{"r-listen"}},
 			Factory: func(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
@@ -121,7 +122,7 @@ func TestListeningFeedWaitsForAListener(t *testing.T) {
 	reg := newFakeRegistry()
 	reg.set(udpFeed("pier"))
 	l := newFakeLeaser("r-plain")
-	plain := New(reg, &memPublisher{}, zap.NewNop(), nil, Options{
+	plain := New(reg, &memPublisher{}, zap.NewNop(), metrics.New(nil), Options{
 		ReplicaID: "r-plain", Preferred: defaultPreferred,
 		Leaser:  &listenerLeaser{replicaLeaser: &replicaLeaser{fakeLeaser: l, me: "r-plain"}},
 		Factory: func(driver.Spec, driver.Deps) (driver.Driver, error) { return newMockDriver(), nil },
