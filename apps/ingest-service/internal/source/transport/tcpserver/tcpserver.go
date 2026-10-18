@@ -4,14 +4,17 @@
 package tcpserver
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sentinel/ingest-service/internal/source/transport"
+	"github.com/sentinel/ingest-service/internal/source/transport/framing"
 )
 
 func init() {
@@ -22,10 +25,26 @@ func init() {
 	})
 }
 
+const (
+	// handshakeTimeout bounds a TLS handshake, so a silent peer cannot hold
+	// a connection slot.
+	handshakeTimeout = 10 * time.Second
+	// maxSenders is how many senders State renders (and Senders tracks).
+	// Connected senders are never evicted, so with MaxConnections above this
+	// the tracker can hold more; State truncates, distinctSenders does not.
+	maxSenders = 50
+	// sendersWindow is how long an idle sender stays in the report.
+	sendersWindow = 10 * time.Minute
+)
+
 // Server is the tcpserver transport.
 type Server struct {
-	cfg transport.Config
-	tls *tls.Config
+	cfg     transport.Config
+	tls     *tls.Config
+	allow   transport.Allowlist
+	limit   *transport.Limiter
+	senders *transport.Senders
+	counts  transport.ListenCounters
 	transport.StateTracker
 }
 
@@ -42,27 +61,41 @@ func New(cfg transport.Config) (transport.Transport, error) {
 		return nil, err
 	}
 	if t != nil && len(t.Certificates) == 0 {
-		return nil, errors.New("tcpserver: TLS needs certFile and keyFile")
+		return nil, errors.New("tcpserver: TLS needs a certificate and key")
 	}
-	return &Server{cfg: cfg, tls: t}, nil
+	allow, err := transport.ParseAllowlist(cfg.Allow)
+	if err != nil {
+		return nil, err
+	}
+	return &Server{cfg: cfg, tls: t, allow: allow, limit: transport.NewLimiter(cfg.MaxMessagesPerSec), senders: transport.NewSenders(maxSenders)}, nil
 }
 
 // Run listens until ctx ends. A bind failure is fatal; accept errors are
-// retried with a pause so a transient error cannot spin the loop.
+// retried with a pause so a transient error cannot spin the loop. Senders
+// outside the allowlist, connections over the cap and failed TLS
+// handshakes are closed and counted; frames over the rate are dropped.
 func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(ctx, "tcp", s.cfg.Address)
 	if err != nil {
-		return err
-	}
-	if s.tls != nil {
-		ln = tls.NewListener(ln, s.tls)
+		return transport.BindError("tcp", s.cfg.Address, err)
 	}
 	defer ln.Close()
 	s.Set(func(st *transport.State) { st.Connected = true; st.LastError = "" })
 
+	guarded := func(ctx context.Context, f transport.Frame) error {
+		if !s.limit.Allow() {
+			s.counts.RateLimited.Add(1)
+			return nil
+		}
+		s.counts.Accepted.Add(1)
+		s.senders.Seen(f.Remote, f.ReceivedAt)
+		return emit(ctx, f)
+	}
+
 	var wg sync.WaitGroup
 	var conns sync.Map
+	var live atomic.Int64
 	go func() {
 		<-ctx.Done()
 		ln.Close()
@@ -70,7 +103,7 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 	}()
 
 	for {
-		conn, err := ln.Accept()
+		raw, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				break
@@ -85,17 +118,50 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 			}
 			continue
 		}
-		conns.Store(conn, conn)
-		s.Set(func(st *transport.State) { st.Connections++ })
+		remote := raw.RemoteAddr().String()
+		if !s.allow.Allows(remote) {
+			s.counts.Rejected.Add(1)
+			raw.Close()
+			continue
+		}
+		if s.cfg.MaxConnections > 0 && live.Load() >= int64(s.cfg.MaxConnections) {
+			s.counts.Refused.Add(1)
+			raw.Close()
+			continue
+		}
+		live.Add(1)
+		conns.Store(raw, raw)
+		if ctx.Err() != nil {
+			raw.Close() // the shutdown sweep may have run before the Store
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() {
-				conn.Close()
-				conns.Delete(conn)
-				s.Set(func(st *transport.State) { st.Connections-- })
+				raw.Close()
+				conns.Delete(raw)
+				live.Add(-1)
+				s.senders.Disconnect(remote)
+				s.Set(func(st *transport.State) { st.Connections = int(live.Load()) })
 			}()
-			if err := transport.ScanConn(ctx, conn, s.cfg, emit); err != nil && ctx.Err() == nil {
+			conn := raw
+			if s.tls != nil {
+				tc := tls.Server(raw, s.tls)
+				hctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+				err := tc.HandshakeContext(hctx)
+				cancel()
+				if err != nil {
+					s.counts.TLSFailed.Add(1)
+					return
+				}
+				conn = tc
+			}
+			s.senders.Connect(remote, time.Now().UTC())
+			s.Set(func(st *transport.State) { st.Connections = int(live.Load()) })
+			if err := transport.ScanConn(ctx, conn, s.cfg, guarded); err != nil && ctx.Err() == nil {
+				if errors.Is(err, bufio.ErrTooLong) || errors.Is(err, framing.ErrFrameTooLong) {
+					s.counts.Oversize.Add(1)
+				}
 				s.Set(func(st *transport.State) { st.LastError = err.Error() })
 			}
 		}()
@@ -105,5 +171,14 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 	return nil
 }
 
-// State reports connectivity.
-func (s *Server) State() transport.State { return s.Get() }
+// State reports connectivity, counters and senders.
+func (s *Server) State() transport.State {
+	st := s.Get()
+	st.Detail = s.counts.Detail()
+	list, n := s.senders.Snapshot(time.Now().UTC(), sendersWindow)
+	if len(list) > maxSenders {
+		list = list[:maxSenders]
+	}
+	st.Detail["senders"], st.Detail["distinctSenders"] = list, n
+	return st
+}
