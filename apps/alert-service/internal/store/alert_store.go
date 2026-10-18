@@ -315,7 +315,7 @@ func (s *AlertStore) ResolveAlert(ctx context.Context, id string) error {
 		UPDATE sentinel.alerts
 		SET "resolvedAt" = NOW()
 		WHERE id = $1
-	`, id, )
+	`, id)
 	if err != nil {
 		return fmt.Errorf("resolve alert: %w", err)
 	}
@@ -417,6 +417,19 @@ func (s *AlertStore) UpdateRule(ctx context.Context, id string, p UpdateRulePara
 
 	row := s.pool.QueryRow(ctx, query, args...)
 	return scanRule(row)
+}
+
+// DeleteRule removes a rule outright. Alerts it raised keep their ruleId;
+// nothing references the row. A missing id is reported as not found.
+func (s *AlertStore) DeleteRule(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM sentinel.alert_rules WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete rule: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("rule not found")
+	}
+	return nil
 }
 
 // GetEnabledRules returns enabled rules of a given type, optionally filtered by entity type.

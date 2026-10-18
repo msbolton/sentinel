@@ -34,6 +34,7 @@ func (h *AlertHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/alerts/rules", h.handleCreateRule)
 	mux.HandleFunc("GET /api/v1/alerts/rules", h.handleGetRules)
 	mux.HandleFunc("PUT /api/v1/alerts/rules/{id}", h.handleUpdateRule)
+	mux.HandleFunc("DELETE /api/v1/alerts/rules/{id}", h.handleDeleteRule)
 }
 
 // ceilingOf is the caller's clearance as propagated by the gateway; a
@@ -227,6 +228,20 @@ func (h *AlertHandler) handleUpdateRule(w http.ResponseWriter, r *http.Request) 
 	}
 
 	httputil.JSON(w, http.StatusOK, rule)
+}
+
+func (h *AlertHandler) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := h.store.DeleteRule(r.Context(), id); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			httputil.Error(w, http.StatusNotFound, "Rule not found")
+			return
+		}
+		h.logger.Error("delete rule failed", zap.String("ruleId", id), zap.Error(err))
+		httputil.Error(w, http.StatusInternalServerError, "Failed to delete rule")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func parseIntDefault(s string, def int) int {
