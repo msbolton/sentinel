@@ -57,6 +57,12 @@ check GET /api/v1/drivers/intelsky 200
 grep -q '"intervalSec"' /tmp/smoke-body && echo "  ok   intelsky schema lists intervalSec" || { echo "  FAIL intelsky schema: $(head -c 120 /tmp/smoke-body)"; fail=1; }
 check GET /api/v1/drivers/adsblol 404
 check GET /api/v1/aircraft/zzz/path 400
+check GET /api/v1/aircraft/zzz/route 400
+check GET "/api/v1/entities/density?north=70&south=20&east=40&west=-30&cell=10" 200
+grep -q '"cells"' /tmp/smoke-body && echo "  ok   density answers cells" || { echo "  FAIL density: $(head -c 120 /tmp/smoke-body)"; fail=1; }
+check GET "/api/v1/entities/density?north=70" 400
+check GET /api/v1/drivers/opensky 200
+grep -q '"backgroundIntervalSec"' /tmp/smoke-body && echo "  ok   opensky schema lists backgroundIntervalSec" || { echo "  FAIL opensky schema: $(head -c 120 /tmp/smoke-body)"; fail=1; }
 check GET /api/v1/drivers/aisstream 200
 grep -q '"watchlistMmsi"' /tmp/smoke-body && echo "  ok   aisstream schema lists watchlistMmsi" || { echo "  FAIL aisstream schema: $(head -c 120 /tmp/smoke-body)"; fail=1; }
 check GET /api/v1/feeds/aisstream 200

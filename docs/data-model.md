@@ -46,7 +46,7 @@ Indexes: GiST on `position`; B-tree on `"entityType"`, `source`, `classification
 
 ### sentinel.observations
 
-One row per report from any feed, accepted or not; a TimescaleDB hypertable on `"observedAt"` (6-hour chunks, compressed after a day, dropped after seven) when the extension is present.
+One row per report from any feed, accepted or not, except background fixes (`Observation.background`: slow refreshes of objects outside every detail viewport, which only update the entity); a TimescaleDB hypertable on `"observedAt"` (6-hour chunks, compressed after a day, dropped after seven) when the extension is present.
 
 | Column | Description |
 |--------|-------------|
@@ -63,7 +63,7 @@ Indexes on `("entityId", "observedAt" DESC)` and `("feedId", "sourceEntityId", "
 
 ### sentinel.track_points
 
-Accepted fixes as a time series, written by the track service from `entities.events`; a TimescaleDB hypertable on `"timestamp"` when available, with no primary key (the service never looks points up by id).
+Accepted fixes as a time series, written by the track service from `entities.events` (position events whose `ObservationRef.background` is set are skipped, so history is full-rate for what someone was watching); a TimescaleDB hypertable on `"timestamp"` when available, with no primary key (the service never looks points up by id).
 
 | Column | Description |
 |--------|-------------|

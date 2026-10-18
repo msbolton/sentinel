@@ -41,6 +41,8 @@ Listens on port **3000** (`PORT`).
 | `ENTITY_SERVICE_URL`, `TRACK_SERVICE_URL`, `SEARCH_SERVICE_URL`, `LINK_ANALYSIS_SERVICE_URL`, `ALERT_SERVICE_URL`, `INGEST_SERVICE_URL` | `http://localhost:300x` | Upstreams |
 | `INGEST_SERVICE_TOKEN` | | Shared secret presented to the ingest management API as `X-Sentinel-Service-Token` on every proxied feed request and area push; required when the ingest service runs in production |
 | `INTELSKY_BASE_URL` | `https://intelsky.org` | Where flight paths come from |
+| `ADSBDB_BASE_URL` | `https://api.adsbdb.com` | Where scheduled routes by callsign come from |
+| `DETAIL_MAX_AREA_SQ_DEG` | `2500` | Largest viewport that receives live entity positions and steers the area-aware feeds; wider views draw counts. Sent to clients in `connection:ack` |
 | `DB_HOST` … or `DATABASE_URL` | | PostgreSQL for the locations table |
 
 ## REST API
@@ -60,7 +62,7 @@ Everything below requires a bearer token (or the dev bypass). The gateway forwar
 
 | Prefix | Upstream | Write roles |
 |--------|----------|-------------|
-| `/api/v1/entities/**` (incl. `/entities/ageout-config`) | entity-service | POST/PATCH/PUT: `sentinel-analyst`, `sentinel-admin`. DELETE: `sentinel-admin` with SECRET clearance. Ageout config PUT/DELETE: `sentinel-operator`, `sentinel-admin` |
+| `/api/v1/entities/**` (incl. `/entities/ageout-config`) | entity-service | POST/PATCH/PUT: `sentinel-analyst`, `sentinel-admin`. DELETE: `sentinel-admin` with SECRET clearance. Ageout config PUT/DELETE: `sentinel-operator`, `sentinel-admin`. `GET /entities/density?north&south&east&west&cell=` counts live entities per type and grid cell for wide views |
 | `/api/v1/tracks/**` (incl. `/tracks/timeline`) | track-service | read only |
 | `/api/v1/alerts/**` | alert-service | PATCH acknowledge/resolve and rule writes: `sentinel-analyst`, `sentinel-admin` |
 | `/api/v1/links/**` | link-analysis-service | POST/DELETE: `sentinel-analyst`, `sentinel-admin` |
@@ -106,6 +108,10 @@ Unknown body fields are rejected with 400, matching the former NestJS validation
 
 Answers are cached per aircraft and range (a minute for today, ten minutes for ranges, 500 entries) and concurrent misses share one request.
 
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| GET | `/api/v1/aircraft/{hex}/route?callsign=&source=` | any | Departure and arrival: `{hex, callsign, provider, airline?, departure?, arrival?}`, places with `icao`, `iata`, `name`, `municipality`, `country`, `lat`, `lon`. adsbdb maps the callsign to its scheduled route (`provider: "adsbdb"`; cached 6 h, unknown callsigns 1 h; at most 30 lookups a minute, then 503 with `Retry-After`; 502 when adsbdb fails). With `source=INTELSKY` and no scheduled route, the departure is the first point IntelSky saw the aircraft at today (`provider: "intelsky"`, `name: "First seen today"`, `time`). 400 for a bad hex or a callsign that is not 2 to 8 letters and digits |
+
 ### Registration and user administration
 
 | Method | Path | Auth | Description |
@@ -138,7 +144,7 @@ Every frame is a JSON envelope: `{ "type": string, "data": object, "ts": RFC3339
 |------|------|-------------|
 | `connection:ack` | `{ clientId, viewport, serverTime }` | Sent on connect; the initial viewport is the whole globe |
 | `viewport:updated`, `entity:subscribed`, `entity:unsubscribed` | | Acknowledgements |
-| `entity:batch` | `EntityEvent[]` | Created, updated and position events coalesced over 200 ms, filtered per client; every entity carries `feedId`, `ageoutState`, `identities` and `lastObservedAt` |
+| `entity:batch` | `EntityEvent[]` | Created, updated and position events coalesced over 200 ms, filtered per client; every entity carries `feedId`, `ageoutState`, `identities` and `lastObservedAt`. A client whose viewport is wider than `DETAIL_MAX_AREA_SQ_DEG` gets only the entities it subscribed to |
 | `entity:deleted` | `EntityEvent` | Broadcast to all clients; `bulk` and `count` are set for a clear-all |
 | `events.entity.stale`, `events.entity.agedout`, `events.entity.restored` | `{ id, feedId, ageoutState, lastSeenAt }[]` | Broadcast to all clients, coalesced into one array frame per type per 200 ms flush (the ageout pass can emit a thousand per cycle) |
 | `alert:new` | `Alert` | New alert from `alerts.events`, whichever service produced it |
@@ -150,7 +156,7 @@ Every frame is a JSON envelope: `{ "type": string, "data": object, "ts": RFC3339
 
 The gateway is the only component that knows what every connected client is looking at, so it also decides which area the area-aware feeds poll (`internal/stream/viewport_agg.go`, `viewport_sync.go`, `feed_directory.go`). Every 30 s it asks ingest-service for the enabled feeds whose driver advertises the `area` capability (`GET /feeds?capability=area&enabled=true`) and pushes to each of them; a 404 or 409 evicts a feed from the set until the next refresh.
 
-1. Every `viewport:update` and every disconnect notifies the `ViewportSync` loop. Clients that have not sent a viewport yet are ignored, so a fresh connection does not widen the area to the globe.
+1. Every `viewport:update` and every disconnect notifies the `ViewportSync` loop. Clients that have not sent a viewport yet are ignored, so a fresh connection does not widen the area to the globe. Viewports wider than `DETAIL_MAX_AREA_SQ_DEG` are left out as well, so one client looking at the globe does not turn every feed into a global full-rate poll (the feeds ingest the rest of the world at their background rate anyway).
 2. After a 1 s debounce the loop pads each client viewport by 10 % of its span (at least 0.25°), takes the smallest box covering all of them with the longitude union computed on the circle, and splits it at the antimeridian into at most two boxes. A padded extent covering 90 % of the globe becomes the global box.
 3. It pushes `PUT {INGEST_SERVICE_URL}/feeds/{id}/area` with `{ active, clients, boxes }` only when the change matters: the first time, when the unpadded extent leaves the last pushed padded one, when the area shrinks below 70 % of the previous one, or when the client count crosses zero. Small pans stay inside the padding and cost nothing. Pushes are at least 2 s apart.
 4. Every 30 s it re-pushes while clients are connected; the area lease stored in `feed_areas` expires after 90 s without a push, so a dead gateway stops the polling and a restarted or newly elected ingest replica recovers within one heartbeat. Shutdown pushes `active: false`.
@@ -217,7 +223,7 @@ apps/api-gateway/
 │   ├── proxy/                    # Reverse proxy with identity header propagation
 │   ├── server/                   # Router, health endpoints, role policy table
 │   ├── locations/                # pgx store + handler for sentinel.locations
-│   ├── flightpath/               # IntelSky flight paths: cached, rate-budgeted proxy for /api/v1/aircraft/{hex}/path
+│   ├── flightpath/               # Flight paths (IntelSky) and routes (adsbdb): cached, rate-budgeted proxies under /api/v1/aircraft/{hex}/
 │   ├── registration/             # Keycloak Admin client, SMTP mailer, rate limiter, /auth handler
 │   └── stream/                   # WebSocket hub, client, batcher, Kafka bridge, viewport aggregation and feed area sync
 ├── Dockerfile
