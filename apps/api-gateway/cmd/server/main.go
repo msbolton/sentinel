@@ -96,6 +96,7 @@ func main() {
 
 	// Real-time entity stream: Kafka -> hub -> websocket clients.
 	hub := stream.NewHub(logger)
+	hub.SetDetailMaxArea(cfg.DetailMaxAreaSqDeg)
 	batcher := stream.NewBatcher(hub, 200*time.Millisecond)
 	batcher.Start()
 	bridge, err := stream.NewBridge(cfg.KafkaBrokers, cfg.WSConsumerGroup, hub, batcher, logger)

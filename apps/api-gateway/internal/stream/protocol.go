@@ -29,7 +29,6 @@ const (
 	MsgEntityAgedOut      = "events.entity.agedout"
 	MsgEntityRestored     = "events.entity.restored"
 	MsgAlertNew           = "alert:new"
-	MsgDensity            = "density:grid"
 	MsgError              = "error"
 	MsgPong               = "pong"
 )
@@ -118,21 +117,4 @@ type EntityEvent struct {
 type ErrorData struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
-}
-
-// ClientDensity is a feed's density grid as the map client draws it: the
-// number of distinct objects per cell, sent while views are too large to
-// store the objects one by one. Cells are [latitude, longitude, count]
-// triples at the cell centre.
-type ClientDensity struct {
-	FeedID           string       `json:"feedId"`
-	Source           string       `json:"source"`
-	EntityType       string       `json:"entityType"`
-	CellDegrees      float64      `json:"cellDegrees"`
-	WindowSeconds    uint32       `json:"windowSeconds"`
-	CapSquareDegrees float64      `json:"capSquareDegrees"`
-	GeneratedAt      string       `json:"generatedAt"`
-	Classification   string       `json:"classification"`
-	Total            uint32       `json:"total"`
-	Cells            [][3]float64 `json:"cells"`
 }

@@ -658,6 +658,8 @@ func (*EntityEvent_AgedOut) isEntityEvent_Event() {}
 func (*EntityEvent_Restored) isEntityEvent_Event() {}
 
 // DensityCell is how many distinct objects a feed saw in one grid cell.
+// Deprecated: wide views read counts from the entity service
+// (GET /api/v1/entities/density); nothing produces these any more.
 type DensityCell struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Latitude      float64                `protobuf:"fixed64,1,opt,name=latitude,proto3" json:"latitude,omitempty"`   // cell centre
@@ -718,6 +720,8 @@ func (x *DensityCell) GetCount() uint32 {
 	return 0
 }
 
+// Deprecated: see DensityCell.
+//
 // DensityGrid counts the objects a feed sees over an area too large to
 // store them one by one, produced to the density.events topic keyed by
 // feed_id. Clients draw the counts while their view is larger than

@@ -20,7 +20,7 @@ import (
 )
 
 // Topics the bridge subscribes to.
-var bridgeTopics = []string{kafka.TopicEntityEvents, kafka.TopicAlertEvents, kafka.TopicDensityEvents}
+var bridgeTopics = []string{kafka.TopicEntityEvents, kafka.TopicAlertEvents}
 
 // Bridge consumes the typed entity and alert streams and forwards them to
 // websocket clients in the client's JSON shape. It is the one place the
@@ -104,13 +104,6 @@ func (b *Bridge) Handle(topic string, value []byte) {
 			return
 		}
 		b.hub.BroadcastRanked(MsgAlertNew, alertFromProto(&ev), auth.ClassificationRank(enumOrEmpty(ev.Alert.Classification)))
-	case kafka.TopicDensityEvents:
-		var g sentinelv1.DensityGrid
-		if err := proto.Unmarshal(value, &g); err != nil || g.FeedId == "" {
-			b.logger.Debug("bad density grid", zap.Error(err))
-			return
-		}
-		b.hub.BroadcastRanked(MsgDensity, densityFromProto(&g), auth.ClassificationRank(enumOrEmpty(g.Classification)))
 	default:
 		b.logger.Warn("unhandled topic", zap.String("topic", topic))
 	}
@@ -344,17 +337,4 @@ func orNow(ts string) string {
 		return ts
 	}
 	return time.Now().UTC().Format(time.RFC3339)
-}
-
-func densityFromProto(g *sentinelv1.DensityGrid) ClientDensity {
-	d := ClientDensity{
-		FeedID: g.FeedId, Source: enumOrEmpty(g.Source), EntityType: enumOrEmpty(g.EntityType),
-		CellDegrees: g.CellDegrees, WindowSeconds: g.WindowSeconds, CapSquareDegrees: g.CapSquareDegrees,
-		GeneratedAt: orNow(tsString(g.GeneratedAt)), Classification: enumOrEmpty(g.Classification),
-		Total: g.Total, Cells: make([][3]float64, 0, len(g.Cells)),
-	}
-	for _, c := range g.Cells {
-		d.Cells = append(d.Cells, [3]float64{c.Latitude, c.Longitude, float64(c.Count)})
-	}
-	return d
 }

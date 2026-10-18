@@ -77,6 +77,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"clientId":   client.ID,
 		"viewport":   GlobalBounds,
 		"serverTime": time.Now().UTC().Format(time.RFC3339),
+		// Wider views get counts instead of live positions.
+		"detailMaxAreaSqDeg": h.hub.DetailMaxArea(),
 	})
 	client.readLoop(ctx)
 	client.close(websocket.StatusNormalClosure, "bye")
