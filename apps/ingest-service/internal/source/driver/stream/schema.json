@@ -40,12 +40,12 @@
         }
       },
       "allOf": [
-        { "if": { "properties": { "kind": { "const": "tcpclient" } } }, "then": { "required": ["address"] } },
-        { "if": { "properties": { "kind": { "const": "tcpserver" } } }, "then": { "required": ["address"] } },
-        { "if": { "properties": { "kind": { "const": "udp" } } }, "then": { "required": ["address"] } },
-        { "if": { "properties": { "kind": { "const": "websocket" } } }, "then": { "required": ["url"] } },
-        { "if": { "properties": { "kind": { "const": "mqtt" } } }, "then": { "required": ["brokerUrl", "topics"] } },
-        { "if": { "properties": { "kind": { "const": "stomp" } } }, "then": { "required": ["brokerUrl", "queue"] } }
+        { "if": { "properties": { "kind": { "const": "tcpclient" } }, "required": ["kind"] }, "then": { "required": ["address"] } },
+        { "if": { "properties": { "kind": { "const": "tcpserver" } }, "required": ["kind"] }, "then": { "required": ["address"] } },
+        { "if": { "properties": { "kind": { "const": "udp" } }, "required": ["kind"] }, "then": { "required": ["address"] } },
+        { "if": { "properties": { "kind": { "const": "websocket" } }, "required": ["kind"] }, "then": { "required": ["url"] } },
+        { "if": { "properties": { "kind": { "const": "mqtt" } }, "required": ["kind"] }, "then": { "required": ["brokerUrl", "topics"] } },
+        { "if": { "properties": { "kind": { "const": "stomp" } }, "required": ["kind"] }, "then": { "required": ["brokerUrl", "queue"] } }
       ]
     },
     "framing": { "type": "string", "enum": ["line", "delimited", "lengthprefix", "beast", "xmlevent", "message"], "title": "Framing", "description": "How a byte stream is split into frames (stream transports); message transports deliver whole messages." },

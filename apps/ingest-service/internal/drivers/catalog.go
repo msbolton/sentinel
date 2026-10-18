@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 
@@ -175,15 +176,42 @@ func (c *Catalog) Validate(driverID string, config json.RawMessage) []Problem {
 	return problems
 }
 
+// flatten reduces a validation error tree to one Problem per leaf. A leaf
+// that names absent properties becomes one Problem per property, each at the
+// property's own pointer, so a form can put the message on the field.
 func flatten(ve *jsonschema.ValidationError, out *[]Problem) {
 	if len(ve.Causes) == 0 {
-		*out = append(*out, Problem{
-			Path:    "/config/" + strings.Join(ve.InstanceLocation, "/"),
-			Message: ve.ErrorKind.LocalizedString(printer),
-		})
+		at := "/config"
+		for _, segment := range ve.InstanceLocation {
+			at += "/" + pointerEscaper.Replace(segment)
+		}
+		if missing := missingProperties(ve.ErrorKind); len(missing) > 0 {
+			for _, name := range missing {
+				*out = append(*out, Problem{Path: at + "/" + pointerEscaper.Replace(name), Message: "is required"})
+			}
+			return
+		}
+		*out = append(*out, Problem{Path: at, Message: ve.ErrorKind.LocalizedString(printer)})
 		return
 	}
 	for _, cause := range ve.Causes {
 		flatten(cause, out)
 	}
+}
+
+// pointerEscaper escapes one JSON-pointer segment (RFC 6901).
+var pointerEscaper = strings.NewReplacer("~", "~0", "/", "~1")
+
+// missingProperties lists the properties an error says are absent: the ones
+// required, or required because another property is present.
+func missingProperties(k jsonschema.ErrorKind) []string {
+	switch k := k.(type) {
+	case *kind.Required:
+		return k.Missing
+	case *kind.DependentRequired:
+		return k.Missing
+	case *kind.Dependency:
+		return k.Missing
+	}
+	return nil
 }

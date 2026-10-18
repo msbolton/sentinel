@@ -2,10 +2,12 @@ package drivers
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
 	_ "github.com/sentinel/ingest-service/internal/source/all"
+	"github.com/sentinel/ingest-service/internal/source/driver"
 )
 
 func TestDefaultCatalogListsDrivers(t *testing.T) {
@@ -105,29 +107,29 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		{"aisstream", `{"watchlistMmsi": ["12345"]}`, "/config/watchlistMmsi/0"},
 		{"aisstream", `{"messageTypes": ["SafetyBroadcastMessage"]}`, "/config/messageTypes/0"},
 		{"aisstream", `{"movingIntervalSec": -1}`, "/config/movingIntervalSec"},
-		{"stream", `{"transport": {"kind": "mqtt"}, "decoder": {"name": "json"}}`, "/config/transport"},
+		{"stream", `{"transport": {"kind": "mqtt"}, "decoder": {"name": "json"}}`, "/config/transport/brokerUrl"},
 		{"stream", `{"transport": {"kind": "tcpserver", "address": ":4001"}, "decoder": {"name": "xml"}}`, "/config/decoder/name"},
 		{"stream", `{"transport": {"kind": "ftp", "address": ":4001"}, "decoder": {"name": "sbs"}}`, "/config/transport/kind"},
-		{"stream", `{"transport": {"kind": "websocket"}, "decoder": {"name": "json"}}`, "/config/transport"},
-		{"stream", `{"decoder": {"name": "json"}}`, "/config/"},
+		{"stream", `{"transport": {"kind": "websocket"}, "decoder": {"name": "json"}}`, "/config/transport/url"},
+		{"stream", `{"decoder": {"name": "json"}}`, "/config/transport"},
 		{"stream", `{"transport": {"kind": "tcpserver", "address": ":4001", "maxConnections": -1}, "decoder": {"name": "json"}}`, "/config/transport/maxConnections"},
 		{"stream", `{"transport": {"kind": "udp", "address": ":4001", "maxMessagesPerSec": -1}, "decoder": {"name": "json"}}`, "/config/transport/maxMessagesPerSec"},
 		{"stream", `{"transport": {"kind": "udp", "address": ":4001", "allow": "oops"}, "decoder": {"name": "json"}}`, "/config/transport/allow"},
 		{"stream", `{"transport": {"kind": "tcpserver", "address": ":4001", "tls": {"enabled": true, "requireClientCert": "yes"}}, "decoder": {"name": "json"}}`, "/config/transport/tls/requireClientCert"},
 		{"nope", `{}`, "/driver"},
 		{"intelsky", `{not json`, "/config"},
-		{"tak", `{"siteId": "east"}`, "/config/"},
+		{"tak", `{"siteId": "east"}`, "/config/address"},
 		{"tak", `{"address": "h:1", "protocol": "protobuf"}`, "/config/protocol"},
 		{"tak", `{"address": "h:1", "policy": {"boxes": [{"north": 1, "south": 0, "east": 0, "west": 0, "depth": 1}]}}`, "/config/policy/boxes/0"},
 		{"tak", `{"address": "h:1", "policy": {"classificationCeiling": "ULTRA"}}`, "/config/policy/classificationCeiling"},
 		{"tak", `{"address": "h:1", "outbound": {"queueMax": 1}}`, "/config/outbound/queueMax"},
-		{"tcp", `{"mode": "listen"}`, "/config/"},
+		{"tcp", `{"mode": "listen"}`, "/config/port"},
 		{"tcp", `{"mode": "listen", "port": 80}`, "/config/port"},
-		{"tcp", `{"mode": "connect", "port": 7000}`, "/config/"},
+		{"tcp", `{"mode": "connect", "port": 7000}`, "/config/host"},
 		{"tcp", `{"mode": "listen", "port": 6000, "format": "xml"}`, "/config/format"},
 		{"tcp", `{"mode": "listen", "port": 6000, "tls": {"enabled": true, "certFile": "/x"}}`, "/config/tls"},
 		{"tcp", `{"mode": "listen", "port": 6000, "tls": {"enabled": true, "requireClientCrt": true}}`, "/config/tls"},
-		{"udp", `{}`, "/config"},
+		{"udp", `{}`, "/config/port"},
 		{"udp", `{"port": 80}`, "/config/port"},
 		{"udp", `{"port": 70000}`, "/config/port"},
 		{"udp", `{"port": 10110, "format": "beast"}`, "/config/format"},
@@ -148,6 +150,109 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("%s %s: problems %+v lack path %s", tc.driver, tc.cfg, problems, tc.wantPath)
+		}
+	}
+}
+
+// problemPaths lists the paths of problems in sorted order, so a test can
+// compare the exact set a config is refused at.
+func problemPaths(problems []Problem) []string {
+	paths := make([]string, 0, len(problems))
+	for _, p := range problems {
+		paths = append(paths, p.Path)
+	}
+	slices.Sort(paths)
+	return paths
+}
+
+// A missing property is reported at the property itself rather than at the
+// object that lacks it, so a form can put the message on the field.
+func TestValidateRequiredPointsAtTheField(t *testing.T) {
+	c := Default()
+	cases := []struct {
+		name, driver, cfg string
+		want              []string
+	}{
+		{"tcp listen without a port", "tcp", `{"mode": "listen"}`, []string{"/config/port"}},
+		{"tcp connect without a host", "tcp", `{"mode": "connect", "port": 7000}`, []string{"/config/host"}},
+		{"tcp without a mode", "tcp", `{}`, []string{"/config/mode"}},
+		{"udp without a port", "udp", `{}`, []string{"/config/port"}},
+		{"stream without a transport", "stream", `{"decoder": {"name": "json"}}`, []string{"/config/transport"}},
+		{"stream without transport or decoder", "stream", `{}`, []string{"/config/decoder", "/config/transport"}},
+		{"mqtt without a broker or topics", "stream", `{"transport": {"kind": "mqtt"}, "decoder": {"name": "json"}}`, []string{"/config/transport/brokerUrl", "/config/transport/topics"}},
+		{"websocket without a url", "stream", `{"transport": {"kind": "websocket"}, "decoder": {"name": "json"}}`, []string{"/config/transport/url"}},
+		{"tak without an address", "tak", `{"siteId": "east"}`, []string{"/config/address"}},
+		{"transport and decoder with nothing in them", "stream", `{"transport": {}, "decoder": {}}`, []string{"/config/decoder/name", "/config/transport/kind"}},
+		{"sharing box without its corners", "tak", `{"address": "h:1", "policy": {"boxes": [{"north": 1}]}}`, []string{"/config/policy/boxes/0/east", "/config/policy/boxes/0/south", "/config/policy/boxes/0/west"}},
+	}
+	for _, tc := range cases {
+		problems := c.Validate(tc.driver, json.RawMessage(tc.cfg))
+		if got := problemPaths(problems); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: problem paths = %v, want %v (%+v)", tc.name, got, tc.want, problems)
+		}
+		for _, p := range problems {
+			if p.Message != "is required" {
+				t.Errorf("%s: message at %s = %q, want %q", tc.name, p.Path, p.Message, "is required")
+			}
+		}
+	}
+}
+
+// Each keyword that names absent properties reports them at the properties,
+// whatever depth they sit at, and a name holding "/" or "~" is escaped as
+// RFC 6901 says.
+func TestValidateRequiredPointsForEveryKeyword(t *testing.T) {
+	cases := []struct {
+		name, schema, cfg string
+		want              []string
+	}{
+		{"required",
+			`{"type": "object", "required": ["a/b", "c~d"], "properties": {"e/f": {"type": "object", "required": ["g~h"]}}}`,
+			`{"e/f": {}}`,
+			[]string{"/config/a~1b", "/config/c~0d", "/config/e~1f/g~0h"}},
+		{"dependentRequired",
+			`{"type": "object", "dependentRequired": {"user": ["password", "realm/id"]}, "properties": {"auth": {"type": "object", "dependentRequired": {"user": ["pass~word"]}}}}`,
+			`{"user": "u", "auth": {"user": "u"}}`,
+			[]string{"/config/auth/pass~0word", "/config/password", "/config/realm~1id"}},
+		{"dependencies",
+			`{"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "dependencies": {"user": ["password", "realm/id"]}}`,
+			`{"user": "u"}`,
+			[]string{"/config/password", "/config/realm~1id"}},
+	}
+	for _, tc := range cases {
+		c, err := Build([]driver.Definition{{ID: "probe", ConfigSchema: json.RawMessage(tc.schema)}})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		problems := c.Validate("probe", json.RawMessage(tc.cfg))
+		if got := problemPaths(problems); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: problem paths = %v, want %v (%+v)", tc.name, got, tc.want, problems)
+		}
+		for _, p := range problems {
+			if p.Message != "is required" {
+				t.Errorf("%s: message at %s = %q, want %q", tc.name, p.Path, p.Message, "is required")
+			}
+		}
+	}
+}
+
+// Every problem path is a JSON pointer: the config itself is /config, not
+// /config/, and a name holding "/" or "~" is escaped.
+func TestValidateProblemPathsAreJSONPointers(t *testing.T) {
+	cases := []struct {
+		name, schema, cfg, want string
+	}{
+		{"the config itself", `{"type": "object", "additionalProperties": false}`, `{"x": 1}`, "/config"},
+		{"a name holding a slash", `{"type": "object", "properties": {"a/b": {"type": "integer"}}}`, `{"a/b": "x"}`, "/config/a~1b"},
+		{"a name holding a tilde", `{"type": "object", "properties": {"a~b": {"type": "object", "properties": {"c/d": {"type": "integer"}}}}}`, `{"a~b": {"c/d": "x"}}`, "/config/a~0b/c~1d"},
+	}
+	for _, tc := range cases {
+		c, err := Build([]driver.Definition{{ID: "probe", ConfigSchema: json.RawMessage(tc.schema)}})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := problemPaths(c.Validate("probe", json.RawMessage(tc.cfg))); !slices.Equal(got, []string{tc.want}) {
+			t.Errorf("%s: problem paths = %v, want [%s]", tc.name, got, tc.want)
 		}
 	}
 }
