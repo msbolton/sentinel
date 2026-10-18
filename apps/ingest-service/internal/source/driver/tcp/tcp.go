@@ -170,7 +170,7 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 		if spec.Secrets["clientCa"] != "" && (c.TLS == nil || !c.TLS.Enabled || !c.TLS.RequireClientCert) {
 			return nil, errors.New("tcp listen: the clientCa secret is set but tls.requireClientCert is off; turn it on (with TLS) to verify senders, or remove the secret")
 		}
-		tcfg.Allow, tcfg.MaxConnections = c.Allow, intOr(c.MaxConnections, 50)
+		tcfg.Allow, tcfg.MaxConnections = c.Allow, intOr(c.MaxConnections, stream.DefaultMaxConnections)
 		d.detailKey, d.target = "listen", map[string]any{"protocol": "tcp", "host": deps.ListenerHost, "port": c.Port}
 	case "connect":
 		if c.Host == "" || c.Port < 1 || c.Port > 65535 {

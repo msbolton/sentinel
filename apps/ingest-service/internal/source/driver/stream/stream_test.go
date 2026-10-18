@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,10 +17,12 @@ import (
 	"github.com/sentinel/ingest-service/internal/source/decoder"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 	"github.com/sentinel/ingest-service/internal/source/transport"
+	"github.com/sentinel/ingest-service/internal/source/transport/transporttest"
 
 	_ "github.com/sentinel/ingest-service/internal/source/decoder/sbs"
 	_ "github.com/sentinel/ingest-service/internal/source/decoder/sentinelobs"
 	_ "github.com/sentinel/ingest-service/internal/source/transport/tcpserver"
+	_ "github.com/sentinel/ingest-service/internal/source/transport/udp"
 )
 
 type memSink struct {
@@ -340,5 +344,125 @@ func TestApplySecretsAndMalformedCount(t *testing.T) {
 	d.decodeOne(context.Background(), transport.Frame{Payload: []byte{0xff, 0xff, 0xff}}, sink)
 	if d.Health().Detail["malformed"] != int64(1) || len(sink.deadLetters()) != 1 {
 		t.Errorf("detail = %+v, dlq = %v", d.Health().Detail, sink.deadLetters())
+	}
+}
+
+// A tcpserver feed that sets no maxConnections caps its connections at
+// DefaultMaxConnections, as the tcp driver does; a value it does set, 0
+// (unlimited) included, is kept. New decides this from the raw config,
+// because the parsed config cannot tell an absent key from 0. Only a
+// tcpserver has connections to cap.
+func TestTCPServerDefaultsMaxConnections(t *testing.T) {
+	cases := []struct {
+		name, transport string
+		want            int
+	}{
+		{"tcpserver, absent", `{"kind":"tcpserver","address":"127.0.0.1:0"}`, 50},
+		{"tcpserver, null", `{"kind":"tcpserver","address":"127.0.0.1:0","maxConnections":null}`, 50},
+		{"tcpserver, explicit 0 is unlimited", `{"kind":"tcpserver","address":"127.0.0.1:0","maxConnections":0}`, 0},
+		{"tcpserver, explicit 5", `{"kind":"tcpserver","address":"127.0.0.1:0","maxConnections":5}`, 5},
+		{"udp, absent", `{"kind":"udp","address":"127.0.0.1:0"}`, 0},
+	}
+	for _, tc := range cases {
+		cfg := `{"transport":` + tc.transport + `,"framing":"line","decoder":{"name":"sbs"}}`
+		d, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		if got := d.(*Driver).tcfg.MaxConnections; got != tc.want {
+			t.Errorf("%s: maxConnections = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A client CA verifies only the certificates a listener asks for, so a stream
+// listener that holds the clientCa secret without requireClientCert is
+// refused, as the tcp driver refuses it, instead of accepting every sender
+// unchecked.
+func TestStreamRefusesClientCAWithoutRequireClientCert(t *testing.T) {
+	ca := transporttest.NewCA(t)
+	pair := ca.Issue(t, "localhost")
+	secrets := map[string]string{"tlsCert": string(pair.CertPEM), "tlsKey": string(pair.KeyPEM), "clientCa": string(ca.CertPEM)}
+	build := func(tlsSection string) error {
+		cfg := `{"transport":{"kind":"tcpserver","address":"127.0.0.1:0"` + tlsSection + `},"framing":"line","decoder":{"name":"sbs"}}`
+		_, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg), Secrets: secrets}, driver.Deps{Logger: zap.NewNop()})
+		return err
+	}
+	for name, tlsSection := range map[string]string{
+		"no tls section":        ``,
+		"TLS off":               `,"tls":{"enabled":false,"requireClientCert":true}`,
+		"requireClientCert off": `,"tls":{"enabled":true}`,
+	} {
+		err := build(tlsSection)
+		if err == nil || !strings.Contains(err.Error(), "clientCa") || !strings.Contains(err.Error(), "requireClientCert") {
+			t.Errorf("%s: err = %v, want one naming clientCa and requireClientCert", name, err)
+		}
+	}
+	if err := build(`,"tls":{"enabled":true,"requireClientCert":true}`); err != nil {
+		t.Errorf("mutual TLS with a client CA: %v", err)
+	}
+}
+
+// The schema's maxConnections default is what the form shows a tcpserver feed
+// will use when it sets none, and New applies DefaultMaxConnections: they must
+// stay one number.
+func TestSchemaDefaultMatchesDefaultMaxConnections(t *testing.T) {
+	var doc struct {
+		Properties struct {
+			Transport struct {
+				Properties struct {
+					MaxConnections struct {
+						Default *int `json:"default"`
+					} `json:"maxConnections"`
+				} `json:"properties"`
+			} `json:"transport"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schema, &doc); err != nil {
+		t.Fatal(err)
+	}
+	def := doc.Properties.Transport.Properties.MaxConnections.Default
+	if def == nil {
+		t.Fatalf("the schema gives transport.maxConnections no default, want DefaultMaxConnections (%d)", DefaultMaxConnections)
+	}
+	if *def != DefaultMaxConnections {
+		t.Errorf("schema transport.maxConnections default = %d, want DefaultMaxConnections (%d)", *def, DefaultMaxConnections)
+	}
+}
+
+// The form titles each TLS secret from the schema's x-secrets and puts no
+// condition on any: a stream's TLS is not always governed by tls.enabled (a
+// wss:// URL or an ssl:// broker turns it on too), so each secret is always
+// offered.
+func TestSchemaTitlesTheTLSSecretsWithoutConditions(t *testing.T) {
+	var doc struct {
+		Secrets map[string]map[string]json.RawMessage `json:"x-secrets"`
+	}
+	if err := json.Unmarshal(schema, &doc); err != nil {
+		t.Fatal(err)
+	}
+	def, ok := driver.Lookup(ID)
+	if !ok {
+		t.Fatal("the stream driver is not registered")
+	}
+	for _, name := range []string{"tlsCert", "tlsKey", "clientCa", "serverCa"} {
+		if _, ok := doc.Secrets[name]; !ok {
+			t.Errorf("x-secrets has no entry for %s", name)
+		}
+	}
+	for name, meta := range doc.Secrets {
+		if !slices.Contains(def.SecretFields, name) {
+			t.Errorf("x-secrets describes %s, which is not one of the driver's secret fields %v", name, def.SecretFields)
+		}
+		var title string
+		if err := json.Unmarshal(meta["title"], &title); err != nil || title == "" {
+			t.Errorf("x-secrets.%s has no title", name)
+		}
+		for _, condition := range []string{"showWhen", "requiredWhen"} {
+			if _, has := meta[condition]; has {
+				t.Errorf("x-secrets.%s has %s, but a stream's TLS secrets are always offered", name, condition)
+			}
+		}
 	}
 }

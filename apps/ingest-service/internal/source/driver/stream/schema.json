@@ -24,7 +24,7 @@
         "readTimeoutSec": { "type": "integer", "minimum": 0, "default": 0, "title": "Read timeout (s)", "description": "Close an idle stream connection after this long; 0 disables." },
         "allow": { "type": "array", "items": { "type": "string", "minLength": 1 }, "title": "Allowed senders", "description": "IP addresses or CIDR ranges allowed to send; empty allows anyone who can reach the port. UDP source addresses can be forged.", "x-showWhen": { "kind": ["tcpserver", "udp"] } },
         "maxConnections": { "type": "integer", "minimum": 0, "default": 50, "title": "Max connections", "description": "tcpserver: concurrent connections; 0 = unlimited", "x-showWhen": { "kind": "tcpserver" } },
-        "maxMessagesPerSec": { "type": "integer", "minimum": 0, "default": 0, "title": "Max messages per second", "description": "tcpserver and udp: shared by every sender of the listener; 0 = unlimited" },
+        "maxMessagesPerSec": { "type": "integer", "minimum": 0, "default": 0, "title": "Max messages per second", "description": "tcpserver and udp: shared by every sender of the listener; 0 = unlimited", "x-showWhen": { "kind": ["tcpserver", "udp"] } },
         "tls": {
           "type": "object",
           "title": "TLS",
@@ -58,5 +58,11 @@
         "options": { "type": "object", "title": "Decoder options" }
       }
     }
+  },
+  "x-secrets": {
+    "tlsCert": { "title": "TLS certificate (PEM)" },
+    "tlsKey": { "title": "TLS private key (PEM)" },
+    "clientCa": { "title": "Client CA (PEM)" },
+    "serverCa": { "title": "Server CA (PEM)" }
   }
 }

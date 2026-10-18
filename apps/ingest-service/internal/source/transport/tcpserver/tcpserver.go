@@ -64,6 +64,12 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if p, err := strconv.Atoi(port); err != nil || p < 0 || p > 65535 {
 		return nil, fmt.Errorf("tcpserver: address port must be a number from 0 to 65535, not %q", port)
 	}
+	// A client CA verifies only the certificates a listener asks for: set
+	// without requireClientCert it would leave every sender unchecked.
+	mutualTLS := cfg.TLS != nil && cfg.TLS.Enabled && cfg.TLS.RequireClientCert
+	if hasClientCA(cfg) && !mutualTLS {
+		return nil, errors.New("tcpserver: a client CA is set (the clientCa secret or tls.clientCaFile) but tls.requireClientCert is off; turn it on (with TLS) to verify senders, or remove the client CA")
+	}
 	t, err := cfg.TLSConfig()
 	if err != nil {
 		return nil, err
@@ -76,6 +82,12 @@ func New(cfg transport.Config) (transport.Transport, error) {
 		return nil, err
 	}
 	return &Server{cfg: cfg, tls: t, allow: allow, limit: transport.NewLimiter(cfg.MaxMessagesPerSec), senders: transport.NewSenders(maxSenders)}, nil
+}
+
+// hasClientCA reports whether the config names a CA for client certificates,
+// as PEM (the clientCa secret) or as a file.
+func hasClientCA(cfg transport.Config) bool {
+	return len(cfg.ClientCAPEM) > 0 || (cfg.TLS != nil && cfg.TLS.ClientCAFile != "")
 }
 
 // Run listens until ctx ends. A bind failure is fatal; accept errors are

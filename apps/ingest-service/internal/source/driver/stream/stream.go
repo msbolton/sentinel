@@ -38,6 +38,13 @@ var FrameBuffer = 1024
 
 const mqttBlockFor = 2 * time.Second
 
+// DefaultMaxConnections is how many connections a tcpserver transport accepts
+// at once when the config sets no maxConnections; an explicit 0 means
+// unlimited. Each connection costs a descriptor, a goroutine and a frame
+// buffer, which is why a listener is capped unless told otherwise. The tcp
+// driver uses the same number, and both schemas state it as the default.
+const DefaultMaxConnections = 50
+
 func init() {
 	driver.Register(driver.Definition{
 		ID: ID, Name: "Message stream",
@@ -85,11 +92,28 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A tcpserver is capped unless the config says otherwise. This is decided
+	// here, not in NewFromParts, because only the raw config can tell an
+	// absent maxConnections from an explicit 0 (unlimited).
+	if tcfg.Kind == "tcpserver" && !hasKey(cfg.Transport, "maxConnections") {
+		tcfg.MaxConnections = DefaultMaxConnections
+	}
 	d, err := NewFromParts(spec, deps, tcfg, cfg.Framing, cfg.Decoder)
 	if err != nil {
 		return nil, err // not d: a nil *Driver would be a non-nil driver.Driver
 	}
 	return d, nil
+}
+
+// hasKey reports whether the JSON object raw sets key to a value. A key set
+// to null counts as unset, as it does for the tcp driver's pointer fields.
+func hasKey(raw json.RawMessage, key string) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return false
+	}
+	v, ok := fields[key]
+	return ok && string(v) != "null"
 }
 
 // NewFromParts builds a stream driver from an already parsed transport

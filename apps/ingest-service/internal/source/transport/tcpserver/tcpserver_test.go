@@ -5,6 +5,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -316,6 +318,54 @@ func TestMutualTLS(t *testing.T) {
 	}
 	if col.Count() != 1 {
 		t.Errorf("frames = %d, want only the signed sender's", col.Count())
+	}
+}
+
+// A client CA verifies only the certificates a listener asks for, so one set
+// without requireClientCert is refused, whether it came as PEM (the clientCa
+// secret) or as the clientCaFile path: the listener would let every sender in
+// unchecked. Mutual TLS, and TLS with no client CA, still build.
+func TestClientCANeedsRequireClientCert(t *testing.T) {
+	ca := transporttest.NewCA(t)
+	server := ca.Issue(t, "localhost")
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caFile, ca.CertPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name        string
+		tls         *transport.TLS
+		clientCAPEM []byte
+		refused     bool
+	}{
+		{"secret, no tls section", nil, ca.CertPEM, true},
+		{"secret, TLS off", &transport.TLS{RequireClientCert: true}, ca.CertPEM, true},
+		{"secret, requireClientCert off", &transport.TLS{Enabled: true}, ca.CertPEM, true},
+		{"file, TLS off", &transport.TLS{RequireClientCert: true, ClientCAFile: caFile}, nil, true},
+		{"file, requireClientCert off", &transport.TLS{Enabled: true, ClientCAFile: caFile}, nil, true},
+		{"secret, mutual TLS", &transport.TLS{Enabled: true, RequireClientCert: true}, ca.CertPEM, false},
+		{"file, mutual TLS", &transport.TLS{Enabled: true, RequireClientCert: true, ClientCAFile: caFile}, nil, false},
+		{"no client CA, TLS without client certificates", &transport.TLS{Enabled: true}, nil, false},
+	}
+	for _, tc := range cases {
+		_, err := New(transport.Config{Kind: "tcpserver", Address: "127.0.0.1:0", Framing: "line", TLS: tc.tls,
+			CertPEM: server.CertPEM, KeyPEM: server.KeyPEM, ClientCAPEM: tc.clientCAPEM})
+		if !tc.refused {
+			if err != nil {
+				t.Errorf("%s: %v", tc.name, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("%s: a client CA without requireClientCert was accepted", tc.name)
+			continue
+		}
+		// The message names both ways to set a client CA, and the setting to turn on.
+		for _, want := range []string{"clientCa secret", "tls.clientCaFile", "requireClientCert"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: err = %q, want it to name %q", tc.name, err, want)
+			}
+		}
 	}
 }
 

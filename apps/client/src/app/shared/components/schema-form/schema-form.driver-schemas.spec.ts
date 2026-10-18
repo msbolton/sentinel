@@ -170,7 +170,7 @@ describe('SchemaFormComponent with the driver schemas', () => {
 
     expect(shownFor('tcpserver', settings)).toEqual(['allow', 'maxConnections', 'maxMessagesPerSec']);
     expect(shownFor('udp', settings)).toEqual(['allow', 'maxMessagesPerSec']);
-    expect(shownFor('mqtt', ['allow', 'maxConnections'])).toEqual([]);
+    expect(shownFor('mqtt', settings)).toEqual([]);
 
     // mutual TLS is offered once TLS is on
     render('stream', { transport: { kind: 'tcpserver', tls: { enabled: false } } });

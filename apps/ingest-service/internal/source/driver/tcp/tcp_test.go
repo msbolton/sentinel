@@ -20,6 +20,7 @@ import (
 
 	"github.com/sentinel/ingest-service/internal/obs"
 	"github.com/sentinel/ingest-service/internal/source/driver"
+	"github.com/sentinel/ingest-service/internal/source/driver/stream"
 	"github.com/sentinel/ingest-service/internal/source/transport/transporttest"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
@@ -330,6 +331,28 @@ func TestClientCAWithoutRequireClientCert(t *testing.T) {
 	cfg := map[string]any{"mode": "listen", "port": 6000, "tls": map[string]any{"enabled": true, "requireClientCert": true}}
 	if _, err := newDriver(t, cfg, secrets); err != nil {
 		t.Errorf("mutual TLS with a client CA: %v", err)
+	}
+}
+
+// The driver takes its maxConnections default from the stream package, and
+// the schema states it to the form: they must stay one number.
+func TestSchemaDefaultMatchesDefaultMaxConnections(t *testing.T) {
+	var doc struct {
+		Properties struct {
+			MaxConnections struct {
+				Default *int `json:"default"`
+			} `json:"maxConnections"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schema, &doc); err != nil {
+		t.Fatal(err)
+	}
+	def := doc.Properties.MaxConnections.Default
+	if def == nil {
+		t.Fatalf("the schema gives maxConnections no default, want stream.DefaultMaxConnections (%d)", stream.DefaultMaxConnections)
+	}
+	if *def != stream.DefaultMaxConnections {
+		t.Errorf("schema maxConnections default = %d, want stream.DefaultMaxConnections (%d)", *def, stream.DefaultMaxConnections)
 	}
 }
 
