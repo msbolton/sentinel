@@ -1,0 +1,61 @@
+@if (target(); as t) {
+  <section class="send-guide">
+    @if (t.mode === 'listen') {
+      <h4>Send to <code>{{ endpoint() }}</code></h4>
+      <p class="muted">
+        {{ t.protocol === 'tcp' ? 'TCP' : 'UDP' }}, format <code>{{ t.format }}</code>
+        @if (encodingNote(); as note) { ({{ note }}) }.
+        @if (t.tls) { TLS required{{ t.requireClientCert ? ', with a client certificate signed by the configured CA' : '' }}. }
+      </p>
+      @if (!t.host) {
+        <p class="warn">{{ lastError() || 'Not running on a listener replica yet.' }}</p>
+      }
+      @if (allowOpen()) {
+        <p class="warn">No allowlist: anyone who can reach this port can send.</p>
+      }
+      @if (netcat(); as nc) {
+        <p class="label">Try it</p>
+        <pre class="mono">{{ nc }}</pre>
+      }
+      @if (showExamples()) {
+        <details>
+          <summary>Sender examples (Go, Python)</summary>
+          <pre class="mono">{{ go() }}</pre>
+          <pre class="mono">{{ python() }}</pre>
+        </details>
+      }
+    } @else {
+      <h4>Connects to <code>{{ endpoint() }}</code></h4>
+      @if (lastError(); as err) {
+        <p class="warn">{{ err }}</p>
+      }
+    }
+    <p class="label">Protocol definitions</p>
+    <p class="protos">
+      @for (f of protoFiles; track f) {
+        <a [href]="'assets/proto/sentinel/v1/' + f" [attr.download]="f">{{ f }}</a>{{ $last ? '' : ' · ' }}
+      }
+    </p>
+    @if (senders().length > 0) {
+      <table class="senders">
+        <thead>
+          <tr><th>Sender</th><th>Messages</th><th>Last</th></tr>
+        </thead>
+        <tbody>
+          @for (s of senders(); track s.remote) {
+            <tr>
+              <td class="mono">{{ s.remote }}{{ s.connected ? ' (connected)' : '' }}</td>
+              <td>{{ s.messages }}</td>
+              <td>{{ s.lastAt | date: 'HH:mm:ss' }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+    <p class="counters mono">
+      @for (c of counters(); track c.key) {
+        <span>{{ c.key }} {{ c.value }}</span>
+      }
+    </p>
+  </section>
+}

@@ -1,0 +1,77 @@
+:host {
+  display: block;
+}
+
+.send-guide {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+
+  h4 {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--text-primary);
+  }
+
+  p {
+    margin: 0;
+  }
+
+  .muted {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+
+  .warn {
+    color: var(--accent-yellow);
+    font-size: 0.8rem;
+  }
+
+  .label {
+    margin-top: 4px;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .protos a {
+    color: var(--accent-blue);
+  }
+
+  pre {
+    margin: 0;
+    padding: 8px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    overflow-x: auto;
+    font-size: 0.75rem;
+    white-space: pre-wrap;
+  }
+
+  .senders {
+    border-collapse: collapse;
+    font-size: 0.78rem;
+
+    td,
+    th {
+      padding: 2px 8px 2px 0;
+      text-align: left;
+    }
+
+    th {
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+  }
+
+  .counters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+  }
+}

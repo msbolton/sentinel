@@ -223,6 +223,74 @@ describe('ConnectionsComponent', () => {
     expect(detail?.textContent).toContain('3900');
   });
 
+  it('shows where a TCP/UDP connection listens, under its name and in a send guide', () => {
+    flushInitial([
+      makeFeed({
+        id: 'sensor-udp',
+        driver: 'udp',
+        config: { port: 10110, encoding: 'json' },
+        status: {
+          ...makeFeed({ id: 'x' }).status,
+          detail: {
+            listen: { protocol: 'udp', host: 'h', port: 10110 },
+            accepted: 7,
+            senders: [{ remote: '10.0.0.5:4000', since: '2026-10-18T10:00:00Z', lastAt: '2026-10-18T10:00:05Z', messages: 3, connected: false }],
+          },
+        },
+      }),
+      makeFeed({ id: 'sky' }),
+    ]);
+
+    expect(rowOf('sensor-udp').querySelector('.endpoint')?.textContent?.trim()).toBe('h:10110/udp');
+    expect(rowOf('sky').querySelector('.endpoint')).toBeNull();
+
+    rowOf('sensor-udp').querySelector<HTMLButtonElement>('.expand-btn')?.click();
+    rowOf('sky').querySelector<HTMLButtonElement>('.expand-btn')?.click();
+    fixture.detectChanges();
+
+    const guides = Array.from(el.querySelectorAll('tr.detail-row app-send-guide'));
+    expect(guides.length).toBe(2);
+    const guide = guides[0];
+    expect(guide.querySelector('h4')?.textContent).toContain('h:10110/udp');
+    expect(guide.querySelector('pre')?.textContent).toContain('nc -u -w1 h 10110');
+    expect(Array.from(guide.querySelectorAll('a')).map((a) => a.getAttribute('href'))).toContain(
+      'assets/proto/sentinel/v1/observation.proto',
+    );
+    expect(guide.querySelector('.senders')?.textContent).toContain('10.0.0.5:4000');
+    expect(guide.querySelector('.counters')?.textContent).toContain('accepted 7');
+    // JSON is tried with netcat; the Go and Python senders write binary protobuf.
+    expect(guide.querySelector('details')).toBeNull();
+    // Other drivers get no guide.
+    expect(guides[1].querySelector('.send-guide')).toBeNull();
+  });
+
+  it('guides a listening connection that no listener replica has taken yet', () => {
+    flushInitial([
+      makeFeed({
+        id: 'waiting',
+        driver: 'tcp',
+        config: { mode: 'listen', port: 6000 },
+        status: {
+          ...makeFeed({ id: 'x' }).status,
+          owner: '',
+          state: 'unassigned',
+          lastError: 'no listener replica (run the ingest listener: INGEST_LISTENER=true)',
+          detail: {},
+        },
+      }),
+    ]);
+
+    expect(rowOf('waiting').querySelector('.endpoint')?.textContent?.trim()).toBe('listener:6000/tcp');
+    rowOf('waiting').querySelector<HTMLButtonElement>('.expand-btn')?.click();
+    fixture.detectChanges();
+
+    const guide = el.querySelector('tr.detail-row app-send-guide')!;
+    expect(guide.querySelector('.warn')?.textContent).toContain('INGEST_LISTENER=true');
+    expect(guide.textContent).toContain('No allowlist');
+    expect(guide.querySelector('details')?.textContent).toContain('LISTENER_HOST:6000');
+    expect(guide.querySelector('.counters')?.textContent?.trim()).toBe('');
+  });
+
   it('toggles enabled optimistically and rolls back on error', () => {
     flushInitial([makeFeed({ id: 'a', name: 'Feed A' })]);
 

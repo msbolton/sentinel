@@ -68,6 +68,9 @@
                   }
                 </div>
                 <div class="feed-id mono">{{ row.feed.id }}</div>
+                @if (endpointOf(row.feed); as ep) {
+                  <div class="mono muted endpoint">{{ ep }}</div>
+                }
                 @if (row.feed.description) {
                   <div class="feed-description">{{ row.feed.description }}</div>
                 }
@@ -220,6 +223,7 @@
                       }
                     </div>
                   </div>
+                  <app-send-guide [feed]="row.feed" />
                 </td>
               </tr>
             }

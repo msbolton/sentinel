@@ -14,6 +14,8 @@ import {
   sinkDetailOf,
 } from '../../shared/models/feed.model';
 import { ConnectionFormComponent } from './connection-form.component';
+import { SendGuideComponent } from './send-guide.component';
+import { endpointLabel, sendTarget } from './send-guide';
 
 export type DrawerState = { mode: 'create' } | { mode: 'edit'; feed: Feed };
 
@@ -63,7 +65,7 @@ const HEALTH_LABELS: Record<FeedHealthLevel, string> = {
 @Component({
   selector: 'app-connections',
   standalone: true,
-  imports: [DecimalPipe, ConnectionFormComponent],
+  imports: [DecimalPipe, ConnectionFormComponent, SendGuideComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './connections.component.html',
   styleUrl: './connections.component.scss',
@@ -129,6 +131,12 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
   }
 
   // --- presentation -----------------------------------------------------
+
+  /** "host:port/protocol" for a TCP or UDP connection, null for the other drivers. */
+  endpointOf(feed: Feed): string | null {
+    const target = sendTarget(feed);
+    return target ? endpointLabel(target) : null;
+  }
 
   stateLabel(state: FeedState): string {
     return STATE_LABELS[state] ?? state;
