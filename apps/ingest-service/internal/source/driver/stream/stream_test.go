@@ -17,6 +17,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/source/transport"
 
 	_ "github.com/sentinel/ingest-service/internal/source/decoder/sbs"
+	_ "github.com/sentinel/ingest-service/internal/source/decoder/sentinelobs"
 	_ "github.com/sentinel/ingest-service/internal/source/transport/tcpserver"
 )
 
@@ -316,5 +317,23 @@ func TestRejectReasonAndDecoderContentType(t *testing.T) {
 	}
 	if got := sink.obs[1].RawContentType; got != "text/plain" {
 		t.Errorf("content type without a decoder value = %q, want the definition's", got)
+	}
+}
+
+func TestApplySecretsAndMalformedCount(t *testing.T) {
+	var tcfg transport.Config
+	ApplySecrets(&tcfg, map[string]string{"password": "p", "tlsCert": "C", "tlsKey": "K", "clientCa": "CC", "serverCa": "SC"})
+	if tcfg.Password != "p" || string(tcfg.CertPEM) != "C" || string(tcfg.KeyPEM) != "K" || string(tcfg.ClientCAPEM) != "CC" || string(tcfg.CAPEM) != "SC" {
+		t.Errorf("tcfg = %+v", tcfg)
+	}
+	d, err := NewFromParts(driver.Spec{FeedID: "f"}, driver.Deps{Logger: zap.NewNop()},
+		transport.Config{Kind: "udp", Address: "127.0.0.1:0"}, "", decoder.Config{Name: "sentinel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := newSink()
+	d.decodeOne(context.Background(), transport.Frame{Payload: []byte{0xff, 0xff, 0xff}}, sink)
+	if d.Health().Detail["malformed"] != int64(1) || len(sink.deadLetters()) != 1 {
+		t.Errorf("detail = %+v, dlq = %v", d.Health().Detail, sink.deadLetters())
 	}
 }

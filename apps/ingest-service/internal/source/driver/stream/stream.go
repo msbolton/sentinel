@@ -14,6 +14,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -42,7 +43,7 @@ func init() {
 		ID: ID, Name: "Message stream",
 		Description:  "Reports delivered over TCP, UDP, WebSocket, MQTT or STOMP in a supported wire format.",
 		Capabilities: []string{},
-		SecretFields: []string{"password"},
+		SecretFields: []string{"password", "tlsCert", "tlsKey", "clientCa", "serverCa"},
 		ConfigSchema: schema,
 		New:          New,
 		Listen:       listenOf,
@@ -67,6 +68,8 @@ type Driver struct {
 	ddef      decoder.Definition
 	policy    string
 
+	malformed atomic.Int64 // frames the decoder dead-lettered
+
 	mu       sync.Mutex
 	lastErr  string
 	decoding bool
@@ -82,38 +85,46 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if err != nil {
 		return nil, err
 	}
+	return NewFromParts(spec, deps, tcfg, cfg.Framing, cfg.Decoder)
+}
+
+// NewFromParts builds a stream driver from an already parsed transport
+// config, a framing name and a decoder section. The tcp and udp drivers
+// use it to assemble the same pipeline from a flatter config; it applies
+// the same framing checks as New.
+func NewFromParts(spec driver.Spec, deps driver.Deps, tcfg transport.Config, framingName string, dec decoder.Config) (*Driver, error) {
 	tdef, ok := transport.Lookup(tcfg.Kind)
 	if !ok {
 		return nil, fmt.Errorf("unknown transport %q (known: %v)", tcfg.Kind, transport.Kinds())
 	}
-	if !framing.Known(cfg.Framing) {
-		return nil, fmt.Errorf("unknown framing %q", cfg.Framing)
+	if !framing.Known(framingName) {
+		return nil, fmt.Errorf("unknown framing %q", framingName)
 	}
 	switch tdef.Type {
 	case transport.KindStream:
-		if cfg.Framing == framing.Message {
+		if framingName == framing.Message {
 			return nil, fmt.Errorf("transport %s is a byte stream and needs a framer (line, lengthprefix, beast, xmlevent)", tcfg.Kind)
 		}
-		tcfg.Framing = cfg.Framing
+		tcfg.Framing = framingName
 	case transport.KindMessage:
-		if cfg.Framing != "" && cfg.Framing != framing.Message && !(tcfg.Kind == "udp" && cfg.Framing == framing.Line) {
+		if framingName != "" && framingName != framing.Message && !(tcfg.Kind == "udp" && framingName == framing.Line) {
 			return nil, fmt.Errorf("transport %s delivers whole messages; framing must be \"message\"", tcfg.Kind)
 		}
-		tcfg.Framing = cfg.Framing
+		tcfg.Framing = framingName
 	}
-	tcfg.Password = spec.Secrets["password"]
+	ApplySecrets(&tcfg, spec.Secrets)
 	t, err := tdef.New(tcfg)
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Decoder.Name == "" {
+	if dec.Name == "" {
 		return nil, errors.New("decoder.name is required")
 	}
-	ddef, ok := decoder.Lookup(cfg.Decoder.Name)
+	ddef, ok := decoder.Lookup(dec.Name)
 	if !ok {
-		return nil, fmt.Errorf("unknown decoder %q (known: %v)", cfg.Decoder.Name, decoder.Names())
+		return nil, fmt.Errorf("unknown decoder %q (known: %v)", dec.Name, decoder.Names())
 	}
-	dec, err := ddef.New(cfg.Decoder.Options)
+	decoded, err := ddef.New(dec.Options)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +137,21 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	default:
 		return nil, fmt.Errorf("unknown backpressure policy %q", policy)
 	}
-	return &Driver{spec: spec, logger: deps.Logger, tcfg: tcfg, tdef: tdef, transport: t, decoder: dec, ddef: ddef, policy: policy}, nil
+	return &Driver{spec: spec, logger: deps.Logger, tcfg: tcfg, tdef: tdef, transport: t, decoder: decoded, ddef: ddef, policy: policy}, nil
+}
+
+// ApplySecrets copies resolved secret references into the transport
+// config: the password, and TLS material as PEM.
+func ApplySecrets(tcfg *transport.Config, secrets map[string]string) {
+	tcfg.Password = secrets["password"]
+	pemOf := func(k string) []byte {
+		if v := secrets[k]; v != "" {
+			return []byte(v)
+		}
+		return nil
+	}
+	tcfg.CertPEM, tcfg.KeyPEM = pemOf("tlsCert"), pemOf("tlsKey")
+	tcfg.ClientCAPEM, tcfg.CAPEM = pemOf("clientCa"), pemOf("serverCa")
 }
 
 func defaultPolicy(kind string) string {
@@ -285,6 +310,7 @@ func (d *Driver) decodeOne(ctx context.Context, f transport.Frame, sink driver.S
 		if errors.Is(err, errPanic) {
 			reason = "panic"
 		}
+		d.malformed.Add(1)
 		sink.DeadLetter(f.Payload, reason, err)
 		return
 	}
@@ -341,6 +367,7 @@ func (d *Driver) Health() driver.Health {
 		"transport": d.tcfg.Kind, "decoder": d.ddef.Name, "framing": d.tcfg.Framing, "backpressure": d.policy,
 		"connected": st.Connected, "connections": st.Connections,
 	}}
+	h.Detail["malformed"] = d.malformed.Load()
 	if lastDecode != "" {
 		h.Detail["lastDecodeError"] = lastDecode
 	}
