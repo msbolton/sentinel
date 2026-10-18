@@ -1,5 +1,5 @@
 // Package udp receives datagrams; each datagram is one frame. It binds a
-// port, so a feed using it must be pinned to one replica.
+// port, so a feed using it runs on a listener replica.
 package udp
 
 import (

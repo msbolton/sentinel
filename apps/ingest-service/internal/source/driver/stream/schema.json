@@ -44,7 +44,7 @@
         { "if": { "properties": { "kind": { "const": "stomp" } } }, "then": { "required": ["brokerUrl", "queue"] } }
       ]
     },
-    "framing": { "type": "string", "enum": ["line", "lengthprefix", "beast", "xmlevent", "message"], "title": "Framing", "description": "How a byte stream is split into frames (stream transports); message transports deliver whole messages." },
+    "framing": { "type": "string", "enum": ["line", "delimited", "lengthprefix", "beast", "xmlevent", "message"], "title": "Framing", "description": "How a byte stream is split into frames (stream transports); message transports deliver whole messages." },
     "decoder": {
       "type": "object",
       "title": "Decoder",

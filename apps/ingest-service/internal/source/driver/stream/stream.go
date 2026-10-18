@@ -103,7 +103,7 @@ func NewFromParts(spec driver.Spec, deps driver.Deps, tcfg transport.Config, fra
 	switch tdef.Type {
 	case transport.KindStream:
 		if framingName == framing.Message {
-			return nil, fmt.Errorf("transport %s is a byte stream and needs a framer (line, lengthprefix, beast, xmlevent)", tcfg.Kind)
+			return nil, fmt.Errorf("transport %s is a byte stream and needs a framer (line, delimited, lengthprefix, beast, xmlevent)", tcfg.Kind)
 		}
 		tcfg.Framing = framingName
 	case transport.KindMessage:

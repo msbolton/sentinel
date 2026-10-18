@@ -126,8 +126,8 @@ type Definition struct {
 	Kind        string
 	Type        Kind
 	Description string
-	// Listens is true for transports that bind a local port and so must be
-	// pinned to one replica.
+	// Listens is true for transports that bind a local port and so run on a
+	// listener replica (or on the replica the feed is pinned to).
 	Listens bool
 	New     Factory
 }

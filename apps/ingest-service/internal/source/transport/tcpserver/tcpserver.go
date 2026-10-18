@@ -1,6 +1,6 @@
 // Package tcpserver accepts TCP connections from remote senders and reads a
-// framed byte stream from each. It binds a port, so a feed using it must be
-// pinned to one replica.
+// framed byte stream from each. It binds a port, so a feed using it runs on
+// a listener replica.
 package tcpserver
 
 import (

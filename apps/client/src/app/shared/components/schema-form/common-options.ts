@@ -30,7 +30,7 @@ export const COMMON_OPTIONS_SCHEMA: JsonSchema = {
     pinnedReplica: {
       type: 'string',
       title: 'Pinned replica',
-      description: 'Run this feed only on the named ingest replica (required for listening transports).',
+      description: 'Run this feed only on the named ingest replica. Optional: a connection that listens on a port runs on a listener replica by default.',
     },
     rawPayload: {
       type: 'string',
