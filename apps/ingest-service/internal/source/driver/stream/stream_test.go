@@ -372,6 +372,8 @@ func TestSensorIDDefaultsToTheRedactedRemote(t *testing.T) {
 		"a URL remote loses its user as well":   {"wss://user:tok@feed.example.com/stream?key=abc#top", "", "wss://feed.example.com/stream"},
 		"a peer address is kept":                {"10.0.0.5:4000", "", "10.0.0.5:4000"},
 		"a topic is kept":                       {"sensors/ais/1", "", "sensors/ais/1"},
+		"a topic with a colon and a query":      {"sensors:temp?unit=c", "", "sensors:temp?unit=c"},
+		"a queue with a colon and a selector":   {"jms.queue:orders?sel=1", "", "jms.queue:orders?sel=1"},
 		"a sensor id the message names is kept": {"wss://feed.example.com/stream?key=abc", "wss://rx.example.com/s?site=7", "wss://rx.example.com/s?site=7"},
 	} {
 		t.Run(name, func(t *testing.T) {

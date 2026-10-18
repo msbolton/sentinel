@@ -9,8 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -28,19 +28,35 @@ type Frame struct {
 // normally a peer address, a topic or a queue, and comes back as it is; a
 // WebSocket feed's is the URL it is configured with, which can carry a token.
 // Anything that records a Frame.Remote (the dead-letter topic, the health
-// detail, an observation's sensor id) should pass it through first. Only text
-// that parses as a URL with a scheme is touched, and one with nothing to strip
-// is returned exactly as written.
+// detail, an observation's sensor id) should pass it through first.
+//
+// Only text containing "://" is taken for a URL, so a name such as
+// "sensors:temp?unit=c" is never touched. Such text is cut at its first '?' or
+// '#', and the user and password are removed: whatever lies between "://" and
+// the last '@' before the next '/' (the last, because a password may hold an
+// unescaped '@'). The rest is kept exactly as written. The work is done on the
+// text, not on a parsed URL, so a URL that does not parse is redacted all the
+// same instead of being let through for being malformed.
 func RedactRemote(remote string) string {
-	u, err := url.Parse(remote)
-	if err != nil || u.Scheme == "" {
+	i := strings.Index(remote, "://")
+	if i < 0 {
 		return remote
 	}
-	if u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" {
-		return remote
+	if cut := strings.IndexAny(remote, "?#"); cut >= 0 {
+		remote = remote[:cut]
+		if cut < i {
+			return remote // the "://" was in the query or the fragment, and went with it
+		}
 	}
-	u.User, u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment = nil, "", false, "", ""
-	return u.String()
+	start := i + len("://")
+	authority := remote[start:]
+	if slash := strings.IndexByte(authority, '/'); slash >= 0 {
+		authority = authority[:slash]
+	}
+	if at := strings.LastIndexByte(authority, '@'); at >= 0 {
+		remote = remote[:start] + remote[start+at+1:]
+	}
+	return remote
 }
 
 // ErrBackpressure is returned by an Emit when the feed cannot take the frame
