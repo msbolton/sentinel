@@ -29,7 +29,7 @@ import { MapComponent } from './features/map/map.component';
       <!-- Navigation rail: labelled when expanded, flyout labels when collapsed -->
       <nav class="sidebar" [class.collapsed]="!rail.expanded()" aria-label="Primary">
         <div class="sidebar-brand">
-          <span class="sidebar-logo" aria-hidden="true">S</span>
+          <img class="sidebar-logo" src="assets/brand/sentinel-icon-64.png" alt="" aria-hidden="true" width="28" height="28" />
           <span class="sidebar-wordmark">SENTINEL</span>
         </div>
 
