@@ -50,10 +50,12 @@ spec:
               value: production
             - name: HTTP_ADDR
               value: ":4010"
+            # The Deployment's name, not the pod name, which changes with every
+            # rollout: a feed pinned to the listener (config.pinnedReplica) names
+            # this id, and the pin would stop matching. One replica and the
+            # Recreate strategy mean two pods never hold the id together.
             - name: REPLICA_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
+              value: {{ include "sentinel.fullname" . }}-ingest-listener
             - name: INGEST_LISTENER
               value: "true"
             - name: INGEST_LISTENER_HOST
