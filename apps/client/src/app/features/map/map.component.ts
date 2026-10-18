@@ -57,8 +57,8 @@ import { GeofenceService } from '../../core/services/geofence.service';
 import { GeofenceLayer } from './geofence-layer';
 import { GeofenceDrawTool } from './geofence-draw';
 import { GeofenceToolbarComponent } from './geofence-toolbar.component';
-import { DrawSession, addPoint, canFinish, draftFromSession, newSession, setAnchor, setCursor, setRadius } from './geofence-draw-state';
-import { GeofenceShape, LngLat } from '../../shared/models/geofence.model';
+import { DrawSession, addPoint, canFinish, draftFromSession, finishShape, newSession, setAnchor, setCursor, setRadius } from './geofence-draw-state';
+import { GeofenceConfig, GeofenceShape, LngLat } from '../../shared/models/geofence.model';
 
 /** Dead-reckoning frame cap: ~30 fps is plenty for gliding markers. */
 const DR_FRAME_INTERVAL_MS = 33;
@@ -198,6 +198,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   /** The geofence being drawn, or null; see geofence-draw-state.ts and geofence-draw.ts. */
   readonly drawSession = signal<DrawSession | null>(null);
   private drawTool: GeofenceDrawTool | null = null;
+  /** A geofence handle being dragged, with the config it has reached. */
+  private handleDrag: { zoneId: string; index: number; config: GeofenceConfig | null } | null = null;
   private clusterImageCache = new Map<string, string>();
   private clusterCanvas: HTMLCanvasElement | null = null;
   /** The line from the selected aircraft, drone or satellite down to the ground; see drop-line.ts. */
@@ -454,11 +456,40 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       if (canFinish(trimmed).ok) this.ngZone.run(() => { this.drawSession.set(trimmed); this.finishDrawing(); });
     }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
     handler.setInputAction((move: any) => {
+      if (this.handleDrag) {
+        const p = this.pickLngLat(move.endPosition);
+        if (p) this.handleDrag.config = this.geofenceLayer?.moveHandle(this.handleDrag.zoneId, this.handleDrag.index, p) ?? null;
+        return;
+      }
       const session = this.drawSession();
       if (!session) return;
       const p = this.pickLngLat(move.endPosition);
       this.drawSession.set(setCursor(session, p));
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+    // Reshaping a selected geofence: a drag that starts on one of its handles
+    // moves the handle and pauses camera rotation for exactly that drag.
+    handler.setInputAction((down: any) => {
+      if (this.drawSession()) return;
+      const handle = this.geofenceLayer?.handleAt(this.viewer.scene.pick(down.position));
+      if (!handle) return;
+      this.handleDrag = { ...handle, config: null };
+      const controller = this.viewer.scene.screenSpaceCameraController;
+      controller.enableRotate = false;
+      controller.enableTranslate = false;
+    }, Cesium.ScreenSpaceEventType.LEFT_DOWN);
+    handler.setInputAction(() => {
+      const drag = this.handleDrag;
+      if (!drag) return;
+      this.handleDrag = null;
+      const controller = this.viewer.scene.screenSpaceCameraController;
+      controller.enableRotate = true;
+      controller.enableTranslate = true;
+      if (drag.config) {
+        const config = drag.config;
+        this.ngZone.run(() => this.geofences.update(drag.zoneId, { config }).subscribe({ error: () => undefined }));
+      }
+    }, Cesium.ScreenSpaceEventType.LEFT_UP);
   }
 
   private setupCameraMoveHandler(): void {
@@ -1147,9 +1178,15 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.geofences.startDrawingRequested.next();
   }
 
-  /** Enter draw mode with the last-used colour; a session in progress is replaced. */
+  /** Enter draw mode with the last-used colour; redrawing a zone starts from its shape and colour. */
   startDrawing(shape: GeofenceShape = 'polygon'): void {
     this.selectedEntity.set(null);
+    const redraw = this.geofences.redrawing();
+    if (redraw) {
+      const radius = redraw.config.circle?.radiusM ?? redraw.config.ring?.radiusM ?? 5000;
+      this.drawSession.set(newSession(redraw.config.shape, redraw.config.color, radius));
+      return;
+    }
     this.geofences.select(null);
     this.drawSession.set(newSession(shape, this.geofences.lastColor()));
   }
@@ -1171,15 +1208,26 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   cancelDrawing(): void {
     this.drawSession.set(null);
+    this.geofences.redrawing.set(null);
   }
 
-  /** Finish turns the shape into a draft the panel's editor opens; draw mode ends. */
+  /** Finish turns the shape into a draft the panel's editor opens, or replaces a redrawn zone's shape. */
   finishDrawing(): void {
     const s = this.drawSession();
     if (!s || !canFinish(s).ok) return;
-    const draft = draftFromSession(s);
     this.geofences.rememberColor(s.color);
-    this.geofences.setDraft(draft);
+    const redraw = this.geofences.redrawing();
+    if (redraw) {
+      const config: GeofenceConfig = { ...redraw.config, ...finishShape(s) };
+      if (config.shape !== 'circle') delete config.circle;
+      if (config.shape !== 'ring') delete config.ring;
+      if (config.shape === 'ring') delete config.polygon;
+      this.geofences.redrawing.set(null);
+      this.geofences.update(redraw.id, { config }).subscribe({ error: () => undefined });
+      this.geofences.select(redraw.id);
+    } else {
+      this.geofences.setDraft(draftFromSession(s));
+    }
     this.drawSession.set(null);
     this.router.navigateByUrl('/geofences');
   }

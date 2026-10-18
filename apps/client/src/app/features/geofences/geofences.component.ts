@@ -204,6 +204,8 @@ export class GeofencesComponent implements OnInit {
   }
 
   protected redraw(): void {
+    const e = this.editing();
+    if (e && !e.isDraft) this.service.redrawing.set(e.base as GeofenceRule);
     this.service.startDrawingRequested.next();
   }
 

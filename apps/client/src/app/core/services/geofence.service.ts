@@ -33,6 +33,8 @@ export class GeofenceService {
   readonly lastColor = signal<string>(localStorage.getItem(COLOR_KEY) ?? DEFAULT_GEOFENCE_COLOR);
   /** The panel's New button and the map control both ask the map to start drawing through this. */
   readonly startDrawingRequested = new Subject<void>();
+  /** The zone whose shape is being redrawn, so Finish replaces it instead of making a draft. */
+  readonly redrawing = signal<GeofenceRule | null>(null);
 
   load(): Observable<GeofenceRule[]> {
     return this.http.get<GeofenceRule[] | { data: GeofenceRule[] }>(RULES_URL).pipe(
