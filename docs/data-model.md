@@ -8,7 +8,7 @@ The schema is a directory of idempotent SQL files, `db/schema/`, one per area (`
 
 Column names are camelCase and must be quoted in SQL (for example `"entityType"`, `"lastSeenAt"`). Enum-like columns are `VARCHAR`; the Go stores bind plain strings. Tables with an `"updatedAt"` column keep it current through the `sentinel.set_updated_at()` trigger.
 
-To change the schema, edit the area's file (or add a new `NN_<area>.sql`; a table that references another must sort after it) and run `make db-schema`.
+To change the schema, edit the area's file (or add a new `NN_<area>.sql`; a table that references another must sort after it) and run `make db-schema`. The ingest service checks at start that the columns it needs exist and exits with `database schema is out of date` when they do not (`docs/development.md`); a column added to `70_feeds.sql` with `ALTER` must also be listed in `RequiredColumns` in `apps/ingest-service/internal/registry/schema.go`.
 
 
 All tables live under the `sentinel` schema. PostGIS provides the `geometry` type for spatial columns.
@@ -78,11 +78,11 @@ The feed registry (see `docs/feeds.md`).
 
 | Table | Content |
 |-------|---------|
-| `feeds` | Desired state: `id` (slug, primary key), `name`, `description`, `driver`, `config` (JSONB, validated against the driver's schema), `secret_refs` (JSONB of `env:` references), `enabled`, `builtin`, `version`, `created_by`, timestamps |
+| `feeds` | Desired state: `id` (slug, primary key), `name`, `description`, `driver`, `config` (JSONB, validated against the driver's schema), `secret_refs` (JSONB of `env:` or `file:` references, never values), `enabled`, `builtin`, `version`, `created_by`, timestamps |
 | `feed_status` | Observed state written by the owning replica: `owner`, `state`, `health`, `last_error`, `last_message_at`, `last_success_at`, `messages_total`, `entities_last`, `errors_total`, `applied_version`, `detail` (JSONB), `updated_at` |
 | `feed_areas` | The area of interest pushed by the gateway: `active`, `clients`, `boxes` (JSONB), `expires_at` |
 | `feed_leases` | Which replica owns the feed: `owner_id`, `fencing_token`, `acquired_at`, `heartbeat_at`, `expires_at` |
-| `ingest_replicas` | Live replicas by heartbeat: `replica_id`, `started_at`, `heartbeat_at`, `expires_at`, `listener` (takes the connections that bind a port) and `listener_host` (the address senders use) |
+| `ingest_replicas` | Live replicas by heartbeat: `replica_id`, `started_at`, `heartbeat_at`, `expires_at`, `listener` (takes the connections that bind a port), `listener_shared` (a listener that also runs ordinary feeds; default false) and `listener_host` (the address senders use) |
 
 ### sentinel.feed_ageout_config
 

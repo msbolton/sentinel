@@ -139,8 +139,8 @@ The Angular frontend similarly falls back to an unauthenticated dev profile when
 OpenSky is polled only for the area connected map clients can see, so nothing is fetched until a browser has the map open. To watch it work:
 
 1. Put your OpenSky API client credentials in `.env` (`OPENSKY_CLIENT_ID`, `OPENSKY_CLIENT_SECRET`). `nx serve` loads `.env`; a bare `go run` does not.
-2. Start the infrastructure and the services (ingest-service, entity-service, api-gateway, client) and enable the feed once: `curl -X POST localhost:4000/feeds/opensky/enable` (or through the gateway as an operator: `POST /api/v1/feeds/opensky/enable`). The enabled state is persisted in the `feeds` table; `FEEDS_BOOTSTRAP_ENABLED=opensky` does the same on first start.
-3. The ingest log shows `opensky idle: waiting for an active viewport`; `curl -s localhost:4000/feeds/opensky/area` reports `active: false`. With `INGEST_SERVICE_TOKEN` set, add `-H 'x-sentinel-service-token: <token>'`.
+2. Start the infrastructure and the services (ingest-service, entity-service, api-gateway, client) and enable the feed once: `curl -X POST localhost:3000/api/v1/feeds/opensky/enable`. The gateway needs no token with `AUTH_DEV_BYPASS=true` (the Compose and `nx serve` default); otherwise add `-H "Authorization: Bearer $TOKEN"` from an operator or admin login. The enabled state is persisted in the `feeds` table; `FEEDS_BOOTSTRAP_ENABLED=opensky` does the same on first start.
+3. The ingest log shows `opensky idle: waiting for an active viewport`; `curl -s localhost:3000/api/v1/feeds/opensky/area` reports `active: false`. Direct calls on `localhost:4000` (`/feeds/opensky/enable`, `/feeds/opensky/area`) work only when the ingest service runs on the host (`make dev-ingest`); Compose does not publish it. With `INGEST_SERVICE_TOKEN` set, a direct call needs `-H 'x-sentinel-service-token: <token>'`.
 4. Open http://localhost:4200 and zoom to a region. The gateway logs `viewport sync push`, the ingest service logs `opensky viewport updated` and then `opensky poll complete` every 10 s, and the viewport endpoint shows the box, `effectiveIntervalSec: 10` and `creditsRemaining`.
 5. Aircraft glide between fixes (dead reckoning on the client). Pan a little and nothing is pushed; pan far or zoom in by half and one push plus an immediate poll follows. Zoom out to the globe and the interval stretches to 60 s.
 6. Close the tab: the gateway pushes `active: false` and the ingest service idles. Kill and restart the ingest service: polling resumes within the 30 s heartbeat.
@@ -206,10 +206,12 @@ Every source is a feed created through `POST /api/v1/feeds` (or the Feeds page).
 {"id":"pier-ais","name":"Pier AIS","driver":"udp","enabled":true,
  "config":{"port":10110,"format":"nmea-ais"}}
 
-// TAK server CoT stream over TLS (port 8089, client certificate)
+// TAK server CoT stream over TLS (port 8089, client certificate). The PEMs go in ./secrets/tak (see
+// "TAK connection" below); for a two-way session, where Sentinel sends as well, use the tak driver
 {"id":"tak","name":"TAK server","driver":"stream","enabled":true,
- "config":{"transport":{"kind":"tcpclient","address":"tak.example.org:8089","tls":{"enabled":true,"certFile":"/etc/sentinel/tak.crt","keyFile":"/etc/sentinel/tak.key","caFile":"/etc/sentinel/tak-ca.crt"}},
-           "framing":"xmlevent","decoder":{"name":"cot"}}}
+ "config":{"transport":{"kind":"tcpclient","address":"tak.example.org:8089","tls":{"enabled":true}},
+           "framing":"xmlevent","decoder":{"name":"cot"}},
+ "secretRefs":{"tlsCert":"file:/etc/sentinel/tak/client.pem","tlsKey":"file:/etc/sentinel/tak/client.key","serverCa":"file:/etc/sentinel/tak/ca.pem"}}
 
 // Any JSON API, polled for the clients' viewport, fields mapped onto observations
 {"id":"adsb-fi","name":"adsb.fi","driver":"httpjson","enabled":true,
@@ -304,7 +306,7 @@ The finding appears in the Findings panel and in the entity's Behaviour section;
 
 ### Several ingest replicas
 
-Every enabled feed runs on exactly one replica: replicas heartbeat `sentinel.ingest_replicas`, a feed's preferred owner is chosen by rendezvous hashing over the live replicas (or `config.pinnedReplica`; connections that open a port go to the listener replicas), and the owner holds a `sentinel.feed_leases` row it renews every `LEASE_TICK_SEC` (2 s) with a `LEASE_TTL_SEC` (15 s) expiry. `docker compose up -d --scale ingest-service=3` starts three; `GET /api/v1/feeds` shows each feed's `status.owner`, a replica that stops reporting renders its feeds as `unassigned` until another one takes them (within one TTL), and every observation carries the lease's fencing token in the `x-fence` header. Connections that bind a port (`tcp` in listen mode, `udp`, `stream` with a `tcpserver` or `udp` transport) run on a listener replica (`INGEST_LISTENER=true`, the `ingest-listener` service described above) and need no `pinnedReplica`; with none live they render as `unassigned`. `LEASE_ENABLED=false` runs every feed on one replica (local development with a single process).
+Every enabled feed runs on exactly one replica: replicas heartbeat `sentinel.ingest_replicas`, a feed's preferred owner is chosen by rendezvous hashing over the live ordinary replicas (or `config.pinnedReplica`; connections that open a port go to the listener replicas, which run nothing else), and the owner holds a `sentinel.feed_leases` row it renews every `LEASE_TICK_SEC` (2 s) with a `LEASE_TTL_SEC` (15 s) expiry. `docker compose up -d --scale ingest-service=3` starts three; `GET /api/v1/feeds` shows each feed's `status.owner`, a replica that stops reporting renders its feeds as `unassigned` until another one takes them (within one TTL), and every observation carries the lease's fencing token in the `x-fence` header. Connections that bind a port (`tcp` in listen mode, `udp`, `stream` with a `tcpserver` or `udp` transport) run on a listener replica (`INGEST_LISTENER=true`, the `ingest-listener` service described above) and need no `pinnedReplica`; with none live they render as `unassigned`. The listener takes nothing else unless a feed is pinned to it or `INGEST_LISTENER_SHARED=true` is set: with only the listener live, every other feed that is not pinned renders as `unassigned` (`no ingest replica for this feed: ...`) and `sentinel_ingest_feeds_unplaced` counts it (`docs/feeds.md`, Listeners). `LEASE_ENABLED=false` runs every feed on one replica (local development with a single process).
 
 See `docs/architecture.md` (OpenSky viewport-driven polling) for the contract, the credit budget, and the environment variables.
 
@@ -347,6 +349,14 @@ Default credentials (from `.env.example`):
 - Password: `sentinel_dev`
 
 The API Gateway uses `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE` env vars (see `app.module.ts`).
+
+### Ingest service exits with `database schema is out of date`
+
+At start, right after it opens the feed registry, the ingest service checks that the tables and columns it uses exist, and refuses to run when any is missing: against an older schema it would misplace feeds without saying so. The fatal log line names the missing columns and the file that adds them, for example `sentinel.ingest_replicas.listener` and `db/schema/70_feeds.sql`. The database predates the code, so apply the schema. Every file in `db/schema` is idempotent, so applying the whole directory is safe:
+
+- **Compose:** `docker compose up db-schema`. Application services wait for that job, so you meet the error only with `up --no-deps`, or after pulling a change onto an older database volume. The ingest container, which Docker keeps restarting, comes up on its next try.
+- **Local stack:** `make db-schema` (it applies the files to the `sentinel-postgres` container).
+- **Any other database, Kubernetes included:** `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <file>` for each file in `db/schema`, in name order; for a Helm release do it before `helm upgrade` (`docs/infrastructure.md`).
 
 ### Resetting everything
 
