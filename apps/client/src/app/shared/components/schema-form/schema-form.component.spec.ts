@@ -1656,6 +1656,11 @@ describe('SchemaFormComponent', () => {
       return Array.from(el.querySelectorAll('.sf-hint')).map((n) => n.textContent?.replace(/\s+/g, ' ').trim());
     }
 
+    /** What a note reads as: its text on one line. */
+    function textOf(node: Element | null | undefined): string | undefined {
+      return node?.textContent?.replace(/\s+/g, ' ').trim();
+    }
+
     it('renders a hint under the field it names and applies its action', () => {
       render(hintSchema);
       setHints([{ path: '/config/port', message: 'Port 6001 is free.', action: { label: 'Use 6001', value: 6001 } }]);
@@ -1723,7 +1728,7 @@ describe('SchemaFormComponent', () => {
         { path: '/config/transport/address', message: 'About the address.', action: { label: 'Use :6001', value: ':6001' } },
       ]);
 
-      expect(hintsAt('/config/transport').map((h) => h.textContent?.trim())).toEqual(['About the transport.']);
+      expect(hintsAt('/config/transport').map((h) => h.textContent?.trim())).toEqual(['Warning: About the transport.']);
       expect(hintsAt('/config/transport/address').map((h) => h.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
         'About the address. Use :6001',
       ]);
@@ -1805,6 +1810,7 @@ describe('SchemaFormComponent', () => {
       component.applyHint(port, { path: '/config/port', message: 'Try this.', action: { label: 'Use 6001', value: 6001 } });
 
       expect(component.control('/config/port')?.value).toBeNull();
+      expect(document.activeElement).not.toBe(el.querySelector('input[name="port"]'));
     });
 
     it('ignores an action whose value a number field cannot take', () => {
@@ -1816,6 +1822,131 @@ describe('SchemaFormComponent', () => {
 
       expect(component.control('/config/port')?.value).toBeNull();
       expect(component.control('/config/port')?.dirty).toBe(false);
+    });
+
+    // A screen reader reads what a control names in aria-describedby along with the control, so a hint that is only
+    // drawn beside a field is not heard by those who cannot see it.
+    describe('for those who cannot see it', () => {
+      const kindsSchema: JsonSchema = {
+        type: 'object',
+        properties: {
+          label: { type: 'string', title: 'Label' },
+          port: { type: 'integer', minimum: 1024, title: 'Port', description: 'The port to open.' },
+          mode: { type: 'string', enum: ['listen', 'connect'] },
+          enabled: { type: 'boolean', title: 'Enabled' },
+          options: { type: 'object', title: 'Options' },
+          fixed: { type: 'string', const: 'fixed', description: 'Never changes.' },
+          transport: {
+            type: 'object',
+            title: 'Transport',
+            description: 'Where it listens.',
+            properties: { address: { type: 'string', title: 'Address' } },
+          },
+        },
+      };
+
+      it('names each hint in the aria-describedby of its control, whatever the kind of field', () => {
+        render(kindsSchema, { secretFields: ['token'] });
+        const controls: Record<string, string> = {
+          '/config/label': 'input[name="label"]',
+          '/config/port': 'input[name="port"]',
+          '/config/mode': 'select[name="mode"]',
+          '/config/enabled': 'input[name="enabled"]',
+          '/config/options': 'textarea[name="options"]',
+          '/secretRefs/token': 'input[name="token"]',
+          '/config/transport': 'fieldset[data-pointer="/config/transport"]',
+          '/config/transport/address': 'input[name="address"]',
+        };
+        setHints(Object.keys(controls).map((path) => ({ path, message: `About ${path}.` })));
+
+        for (const [path, selector] of Object.entries(controls)) {
+          const hint = hintsAt(path)[0];
+          expect(hint.id).toMatch(/\S/);
+          expect(el.querySelector(selector)?.getAttribute('aria-describedby')?.split(' ')).toContain(hint.id);
+          // the id is the hint's alone
+          expect(el.querySelectorAll(`[id="${hint.id}"]`)).toHaveLength(1);
+        }
+      });
+
+      it('lists the help, errors, server problems and hints of a field in the order they are shown', () => {
+        render(kindsSchema, { value: { port: 80 } });
+        component.markAllTouched();
+        fixture.componentRef.setInput('problems', [{ path: '/config/port', message: 'taken' }]);
+        setHints([
+          { path: '/config/port', level: 'warn', message: 'First hint.' },
+          { path: '/config/port', message: 'Second hint.' },
+        ]);
+
+        const ids = el.querySelector('input[name="port"]')!.getAttribute('aria-describedby')!.split(' ');
+
+        expect(ids.map((id) => textOf(el.querySelector(`[id="${id}"]`)))).toEqual([
+          'The port to open.',
+          'Must be at least 1024.',
+          'taken',
+          'Warning: First hint.',
+          'Second hint.',
+        ]);
+        // the group and the constant have their help to be read with them
+        expect(el.querySelector('fieldset[data-pointer="/config/transport"]')?.getAttribute('aria-describedby')).toBe(
+          'sf-transport__help',
+        );
+        expect(el.querySelector('input[name="fixed"]')?.getAttribute('aria-describedby')).toBe('sf-fixed__help');
+        expect(el.querySelector('#sf-fixed__help')?.textContent).toBe('Never changes.');
+      });
+
+      it('leaves aria-describedby off a field that nothing describes', () => {
+        render(kindsSchema);
+        const label = () => el.querySelector('input[name="label"]');
+        expect(label()?.hasAttribute('aria-describedby')).toBe(false);
+
+        setHints([{ path: '/config/label', message: 'A word.' }]);
+        expect(label()?.hasAttribute('aria-describedby')).toBe(true);
+
+        setHints([]);
+        expect(label()?.hasAttribute('aria-describedby')).toBe(false);
+      });
+
+      it('says Warning in words for a warning, not by colour alone', () => {
+        render(kindsSchema);
+        setHints([
+          { path: '/config/port', level: 'warn', message: 'Port 80 is below the floor.' },
+          { path: '/config/label', level: 'info', message: 'Just so you know.' },
+          { path: '/config/mode', message: 'Nothing said about the level.' },
+        ]);
+
+        expect(textOf(hintsAt('/config/port')[0])).toBe('Warning: Port 80 is below the floor.');
+        expect(textOf(hintsAt('/config/label')[0])).toBe('Just so you know.');
+        expect(textOf(hintsAt('/config/mode')[0])).toBe('Nothing said about the level.');
+        // and it is read with the field
+        const ids = el.querySelector('input[name="port"]')!.getAttribute('aria-describedby')!.split(' ');
+        expect(textOf(el.querySelector(`[id="${ids[ids.length - 1]}"]`))).toContain('Warning: Port 80');
+      });
+
+      it('moves the focus to the field when an action is taken, so it does not fall to the page with the button', () => {
+        render(kindsSchema);
+        const hints: FieldHint[] = [
+          { path: '/config/label', message: 'Try this.', action: { label: 'Use north', value: 'north' } },
+          { path: '/config/port', message: 'Try this.', action: { label: 'Use 6003', value: 6003 } },
+          { path: '/config/mode', message: 'Try this.', action: { label: 'Use listen', value: 'listen' } },
+        ];
+
+        for (const [path, selector] of [
+          ['/config/label', 'input[name="label"]'],
+          ['/config/port', 'input[name="port"]'],
+          ['/config/mode', 'select[name="mode"]'],
+        ]) {
+          setHints(hints);
+          const use = hintsAt(path)[0].querySelector('button')!;
+          use.focus();
+          expect(document.activeElement).toBe(use);
+
+          use.click();
+          // the parent takes the hint away once the field is set, and the button with it
+          setHints([]);
+
+          expect(document.activeElement).toBe(el.querySelector(selector));
+        }
+      });
     });
   });
 });

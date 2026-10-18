@@ -606,23 +606,31 @@ describe('ConnectionFormComponent', () => {
 
       expect(text(hintAt('/config/port'))).toBe('Port 6001 is not used by Sentinel or another TCP connection. Use 6001');
       expect(hintAt('/config/port')?.classList.contains('sf-hint-warn')).toBe(false);
+      // a screen reader reads it with the port field
+      const port = el.querySelector<HTMLInputElement>(portInput)!;
+      expect(port.getAttribute('aria-describedby')?.split(' ')).toContain(hintAt('/config/port')!.id);
 
+      hintAt('/config/port')!.querySelector('button')!.focus();
       use('/config/port');
       expect(component.schemaForm()?.control('/config/port')?.value).toBe(6001);
-      expect(el.querySelector<HTMLInputElement>(portInput)?.value).toBe('6001');
-      // a free port needs no remark
+      expect(port.value).toBe('6001');
+      // a free port needs no remark, and the button that is gone does not take the focus with it
       expect(hintAt('/config/port')).toBeNull();
+      expect(document.activeElement).toBe(port);
+      expect(port.hasAttribute('aria-describedby')).toBe(false);
 
       // a port another TCP connection holds
       type(portInput, '6000');
-      expect(text(hintAt('/config/port'))).toBe('Port 6000/tcp is already used by Radar feed (radar). Use 6001');
+      expect(text(hintAt('/config/port'))).toBe('Warning: Port 6000/tcp is already used by Radar feed (radar). Use 6001');
       expect(hintAt('/config/port')?.classList.contains('sf-hint-warn')).toBe(true);
       use('/config/port');
       expect(component.schemaForm()?.control('/config/port')?.value).toBe(6001);
 
       // one of Sentinel's own
       type(portInput, '3002');
-      expect(text(hintAt('/config/port'))).toBe("Port 3002 is one of Sentinel's own (INGEST_RESERVED_PORTS). Use 3006");
+      expect(text(hintAt('/config/port'))).toBe(
+        "Warning: Port 3002 is one of Sentinel's own (INGEST_RESERVED_PORTS). Use 3006",
+      );
       use('/config/port');
       expect(el.querySelector<HTMLInputElement>(portInput)?.value).toBe('3006');
 
@@ -642,7 +650,7 @@ describe('ConnectionFormComponent', () => {
 
       const warning = () => hintAt('/config/allow');
       expect(text(warning())).toBe(
-        "Empty: anyone who can reach port 6100 can connect. List the senders' IP addresses or CIDR ranges.",
+        "Warning: Empty: anyone who can reach port 6100 can connect. List the senders' IP addresses or CIDR ranges.",
       );
       expect(warning()?.classList.contains('sf-hint-warn')).toBe(true);
       expect(warning()?.querySelector('button')).toBeNull();
@@ -665,7 +673,7 @@ describe('ConnectionFormComponent', () => {
 
       expect(text(hintAt('/config/port'))).toBe('Port 10111 is not used by Sentinel or another UDP connection. Use 10111');
       expect(text(hintAt('/config/allow'))).toBe(
-        "Empty: anyone who can reach the port can connect. List the senders' IP addresses or CIDR ranges. " +
+        "Warning: Empty: anyone who can reach the port can connect. List the senders' IP addresses or CIDR ranges. " +
           'UDP source addresses can be forged; on an untrusted network prefer TCP with mutual TLS.',
       );
 
@@ -677,7 +685,7 @@ describe('ConnectionFormComponent', () => {
       // a disabled UDP connection keeps its port
       type(portInput, '10110');
       expect(text(hintAt('/config/port'))).toBe(
-        'Port 10110/udp is already used by Pier AIS (pier). Disabled connections keep their port. Use 10111',
+        'Warning: Port 10110/udp is already used by Pier AIS (pier). Disabled connections keep their port. Use 10111',
       );
     });
 
@@ -706,7 +714,7 @@ describe('ConnectionFormComponent', () => {
 
       // the address is free text, so the floor is pointed out here
       type(address, ':80');
-      expect(text(hintAt('/config/transport/address'))).toBe('Listening ports start at 1024.');
+      expect(text(hintAt('/config/transport/address'))).toBe('Warning: Listening ports start at 1024.');
 
       // the allowlist is inside the transport
       type(address, ':6100');
@@ -778,7 +786,7 @@ describe('ConnectionFormComponent', () => {
 
       open('edit', tcpFeed({ mode: 'listen', port: 6000, allow }, 'gate', 'Gate feed'));
       flushPorts();
-      expect(text(hintAt('/config/port'))).toBe('Port 6000/tcp is already used by Radar feed (radar). Use 6001');
+      expect(text(hintAt('/config/port'))).toBe('Warning: Port 6000/tcp is already used by Radar feed (radar). Use 6001');
     });
 
     it('still saves when the ports endpoint is missing', () => {

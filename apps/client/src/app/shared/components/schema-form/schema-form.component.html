@@ -3,10 +3,15 @@
     @if (isShown(def)) {
       @switch (def.kind) {
         @case ('group') {
-          <fieldset class="sf-group" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
+          <fieldset
+            class="sf-group"
+            [class.has-issue]="hasIssue(def)"
+            [attr.data-pointer]="def.pointer"
+            [attr.aria-describedby]="describedBy(def)"
+          >
             <legend>{{ def.label }}@if (isRequired(def)) {<span class="sf-required" aria-hidden="true">*</span>}</legend>
             @if (def.help) {
-              <p class="sf-help">{{ def.help }}</p>
+              <p class="sf-help" [id]="noteId(def, 'help')">{{ def.help }}</p>
             }
             <ng-container *ngTemplateOutlet="messages; context: { $implicit: def }"></ng-container>
             <ng-container *ngTemplateOutlet="fieldList; context: { $implicit: def.children }"></ng-container>
@@ -16,20 +21,35 @@
         @case ('const') {
           <div class="sf-field" [attr.data-pointer]="def.pointer">
             <label [attr.for]="def.id">{{ def.label }}</label>
-            <input [id]="def.id" [attr.name]="def.key" type="text" readonly class="sf-readonly" [value]="def.constValue" />
+            <input
+              [id]="def.id"
+              [attr.name]="def.key"
+              type="text"
+              readonly
+              class="sf-readonly"
+              [value]="def.constValue"
+              [attr.aria-describedby]="describedBy(def)"
+            />
             @if (def.help) {
-              <p class="sf-help">{{ def.help }}</p>
+              <p class="sf-help" [id]="noteId(def, 'help')">{{ def.help }}</p>
             }
           </div>
         }
         @case ('boolean') {
           <div class="sf-field sf-field-check" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
             <label class="sf-check">
-              <input [id]="def.id" [attr.name]="def.key" type="checkbox" [formControl]="def.control!" (blur)="touch()" />
+              <input
+                [id]="def.id"
+                [attr.name]="def.key"
+                type="checkbox"
+                [formControl]="def.control!"
+                [attr.aria-describedby]="describedBy(def)"
+                (blur)="touch()"
+              />
               <span>{{ def.label }}</span>
             </label>
             @if (def.help) {
-              <p class="sf-help">{{ def.help }}</p>
+              <p class="sf-help" [id]="noteId(def, 'help')">{{ def.help }}</p>
             }
             <ng-container *ngTemplateOutlet="messages; context: { $implicit: def }"></ng-container>
           </div>
@@ -37,7 +57,13 @@
         @case ('select') {
           <div class="sf-field" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
             <label [attr.for]="def.id">{{ def.label }}@if (isRequired(def)) {<span class="sf-required" aria-hidden="true">*</span>}</label>
-            <select [id]="def.id" [attr.name]="def.key" [formControl]="def.control!" (blur)="touch()">
+            <select
+              [id]="def.id"
+              [attr.name]="def.key"
+              [formControl]="def.control!"
+              [attr.aria-describedby]="describedBy(def)"
+              (blur)="touch()"
+            >
               <option [ngValue]="''" [disabled]="def.required">
                 @if (def.required) { Select… } @else if (def.defaultLabel) { Default ({{ def.defaultLabel }}) } @else { — }
               </option>
@@ -46,7 +72,7 @@
               }
             </select>
             @if (def.help) {
-              <p class="sf-help">{{ def.help }}</p>
+              <p class="sf-help" [id]="noteId(def, 'help')">{{ def.help }}</p>
             }
             <ng-container *ngTemplateOutlet="messages; context: { $implicit: def }"></ng-container>
           </div>
@@ -61,10 +87,11 @@
               [step]="def.step"
               [formControl]="def.control!"
               [attr.placeholder]="def.placeholder ?? null"
+              [attr.aria-describedby]="describedBy(def)"
               (blur)="touch()"
             />
             @if (def.help) {
-              <p class="sf-help">{{ def.help }}</p>
+              <p class="sf-help" [id]="noteId(def, 'help')">{{ def.help }}</p>
             }
             <ng-container *ngTemplateOutlet="messages; context: { $implicit: def }"></ng-container>
           </div>
@@ -79,10 +106,11 @@
               spellcheck="false"
               [formControl]="def.control!"
               [attr.placeholder]="def.placeholder ?? null"
+              [attr.aria-describedby]="describedBy(def)"
               (blur)="touch()"
             ></textarea>
             @if (def.help) {
-              <p class="sf-help">{{ def.help }}</p>
+              <p class="sf-help" [id]="noteId(def, 'help')">{{ def.help }}</p>
             }
             <ng-container *ngTemplateOutlet="messages; context: { $implicit: def }"></ng-container>
           </div>
@@ -98,10 +126,11 @@
               [attr.placeholder]="def.placeholder ?? null"
               [attr.autocomplete]="def.kind === 'secret' ? 'off' : null"
               [attr.spellcheck]="def.kind === 'secret' || def.kind === 'url' ? 'false' : null"
+              [attr.aria-describedby]="describedBy(def)"
               (blur)="touch()"
             />
             @if (def.help) {
-              <p class="sf-help">{{ def.help }}</p>
+              <p class="sf-help" [id]="noteId(def, 'help')">{{ def.help }}</p>
             }
             <ng-container *ngTemplateOutlet="messages; context: { $implicit: def }"></ng-container>
           </div>
@@ -112,15 +141,15 @@
 </ng-template>
 
 <ng-template #messages let-def>
-  @for (msg of errorsOf(def); track msg) {
-    <p class="sf-error">{{ msg }}</p>
+  @for (msg of errorsOf(def); track msg; let i = $index) {
+    <p class="sf-error" [id]="noteId(def, 'error', i)">{{ msg }}</p>
   }
-  @for (msg of problemsOf(def); track msg) {
-    <p class="sf-error sf-error-server">{{ msg }}</p>
+  @for (msg of problemsOf(def); track msg; let i = $index) {
+    <p class="sf-error sf-error-server" [id]="noteId(def, 'problem', i)">{{ msg }}</p>
   }
-  @for (hint of hintsOf(def); track $index) {
-    <p class="sf-hint" [class.sf-hint-warn]="hint.level === 'warn'">
-      {{ hint.message }}
+  @for (hint of hintsOf(def); track $index; let i = $index) {
+    <p class="sf-hint" [class.sf-hint-warn]="hint.level === 'warn'" [id]="noteId(def, 'hint', i)">
+      @if (hint.level === 'warn') {<span class="sf-hint-level">Warning: </span>}{{ hint.message }}
       @if (hint.action; as action) {
         <button type="button" class="sf-hint-action" [disabled]="disabled()" (click)="applyHint(def, hint)">{{ action.label }}</button>
       }

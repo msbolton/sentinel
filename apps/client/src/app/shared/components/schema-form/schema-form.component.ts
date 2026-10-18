@@ -1,8 +1,10 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
   computed,
   effect,
+  inject,
   input,
   output,
   signal,
@@ -38,7 +40,7 @@ export interface FieldHint {
   path: string;
   message: string;
   level?: 'info' | 'warn';
-  /** A button beside the message that puts `value` in the field. */
+  /** A button beside the message that puts `value` in the field and leaves the focus there. */
   action?: { label: string; value: unknown };
 }
 
@@ -112,6 +114,8 @@ export const SECRET_REF_PATTERN = /^(env:[A-Z0-9_]+|file:\/\S+)$/;
   styleUrl: './schema-form.component.scss',
 })
 export class SchemaFormComponent {
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+
   readonly schema = input<JsonSchema | null | undefined>(undefined);
   readonly secretFields = input<string[]>([]);
   readonly value = input<Record<string, unknown>>({});
@@ -299,7 +303,29 @@ export class SchemaFormComponent {
     return this.hintsByPointer().get(def.pointer) ?? [];
   }
 
-  /** Puts the value a hint offers in its field as if the user had typed it: the field counts as edited. */
+  /** DOM id of a note under a field: its help text, a validation error, a server problem or a hint. */
+  noteId(def: FieldDef, kind: 'help' | 'error' | 'problem' | 'hint', index = 0): string {
+    return kind === 'help' ? `${def.id}__help` : `${def.id}__${kind}-${index}`;
+  }
+
+  /**
+   * What `aria-describedby` names for a field or group, so that a screen reader reads its help, its messages and
+   * its hints along with it: the notes under it, in the order they are shown.
+   */
+  describedBy(def: FieldDef): string | null {
+    const ids = [
+      ...(def.help ? [this.noteId(def, 'help')] : []),
+      ...this.errorsOf(def).map((_, i) => this.noteId(def, 'error', i)),
+      ...this.problemsOf(def).map((_, i) => this.noteId(def, 'problem', i)),
+      ...this.hintsOf(def).map((_, i) => this.noteId(def, 'hint', i)),
+    ];
+    return ids.length > 0 ? ids.join(' ') : null;
+  }
+
+  /**
+   * Puts the value a hint offers in its field as if the user had typed it: the field counts as edited, and the
+   * focus moves to it, because the button that was pressed goes with the hint once the field no longer needs it.
+   */
   applyHint(def: FieldDef, hint: FieldHint): void {
     const control = def.control;
     if (!hint.action || !control || this.disabled()) {
@@ -318,6 +344,13 @@ export class SchemaFormComponent {
     control.markAsDirty();
     control.markAsTouched();
     this.tick.update((n) => n + 1);
+    this.focusField(def);
+  }
+
+  /** Moves the focus to the control of a field, found by the id it is shown with. */
+  private focusField(def: FieldDef): void {
+    const shown = Array.from(this.host.nativeElement.querySelectorAll<HTMLElement>('[id]'));
+    shown.find((el) => el.id === def.id)?.focus();
   }
 
   /** The names of the stored keys a form or group keeps without showing them. */
