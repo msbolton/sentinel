@@ -27,6 +27,7 @@ import { EntityService } from '../../core/services/entity.service';
 import { WebSocketService } from '../../core/services/websocket.service';
 import { ThemeService, ThemePreset } from '../../core/services/theme.service';
 import { LocationService } from '../../core/services/location.service';
+import { EntityFocusService, FocusTarget } from '../../core/services/entity-focus.service';
 import { BuildingsService } from '../../core/services/buildings.service';
 import { LayerVisibilityService } from '../../core/services/layer-visibility.service';
 import { MapViewportService } from '../../core/services/map-viewport.service';
@@ -258,6 +259,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly geofences: GeofenceService,
     private readonly flightPath: FlightPathService,
     private readonly routes: RouteService,
+    private readonly entityFocus: EntityFocusService,
   ) {
     // Entities stay in the viewer when their layer is hidden (show=false) so
     // dead reckoning keeps advancing them; this flips `show` when the user's
@@ -359,6 +361,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.buildingsService.init(this.viewer, this.Cesium);
     this.subscribeToThemeChanges();
     this.subscribeToFlyTo();
+    this.subscribeToFocus();
     this.startWideViewRefresh();
     this.initUserLocation();
 
@@ -1699,16 +1702,48 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   flyToEntity(entity: Entity): void {
-    if (!this.viewer || !this.Cesium || !entity.position) return;
+    if (!entity.position) return;
+    this.flyToPoint(entity.position.latitude, entity.position.longitude);
+  }
 
+  private flyToPoint(latitude: number, longitude: number): void {
+    if (!this.viewer || !this.Cesium) return;
     const Cesium = this.Cesium;
     this.viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(
-        entity.position.longitude,
-        entity.position.latitude,
-        50000,
-      ),
+      destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 50000),
       duration: 1.0,
+    });
+  }
+
+  /**
+   * Panels over the map (alerts) ask to show something: select the entity
+   * and fly to it, or fly to the position when the entity is gone (aged out
+   * or deleted) or there is none.
+   */
+  private subscribeToFocus(): void {
+    const sub = this.entityFocus.focus$.subscribe((target) => this.focusOn(target));
+    this.subscriptions.add(sub);
+  }
+
+  private focusOn(target: FocusTarget): void {
+    const fallback = () => {
+      if (target.position) this.flyToPoint(target.position.latitude, target.position.longitude);
+    };
+    if (!target.entityId) {
+      fallback();
+      return;
+    }
+    this.entityService.getEntity(target.entityId).subscribe({
+      next: (entity) => {
+        if (entity.position) {
+          this.ngZone.runOutsideAngular(() => this.addOrUpdateCesiumEntity(entity));
+          this.selectedEntity.set(entity);
+          this.flyToEntity(entity);
+        } else {
+          fallback();
+        }
+      },
+      error: () => fallback(),
     });
   }
 

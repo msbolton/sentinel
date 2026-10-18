@@ -68,7 +68,12 @@
         class="alert-card"
         [ngClass]="getSeverityClass(alert.severity)"
         [class.acknowledged]="alert.acknowledged"
-        (click)="flyToAlert(alert)">
+        [class.clickable]="canShow(alert)"
+        [attr.role]="canShow(alert) ? 'button' : null"
+        [attr.tabindex]="canShow(alert) ? 0 : null"
+        [attr.aria-label]="canShow(alert) ? 'Show ' + (alert.entityName || alert.title) + ' on the map' : null"
+        (click)="showOnMap(alert)"
+        (keydown.enter)="onCardKey(alert, $event)">
         <div class="alert-severity-bar"></div>
         <div class="alert-content">
           <div class="alert-header">
@@ -103,9 +108,9 @@
                 }
               </span>
             }
-            @if (alert.position) {
-              <button class="btn btn-ghost btn-sm" (click)="flyToAlert(alert)">
-                <app-icon name="navigation" [size]="14" /> Go to location
+            @if (canShow(alert)) {
+              <button class="btn btn-ghost btn-sm show-on-map" (click)="showOnMap(alert, $event)">
+                <app-icon name="navigation" [size]="14" /> Show on map
               </button>
             }
           </div>

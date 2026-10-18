@@ -136,12 +136,20 @@
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   overflow: hidden;
-  cursor: pointer;
   transition: all var(--transition-fast);
 
-  &:hover {
-    border-color: var(--border-active);
-    background: var(--bg-panel-hover);
+  &.clickable {
+    cursor: pointer;
+
+    &:hover {
+      border-color: var(--border-active);
+      background: var(--bg-panel-hover);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--border-active);
+      outline-offset: 1px;
+    }
   }
 
   &.acknowledged {
