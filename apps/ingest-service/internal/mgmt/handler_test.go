@@ -71,7 +71,9 @@ func (s *memStore) check(f registry.Feed, g registry.Guard) error {
 	}
 	others := make([]registry.Feed, 0, len(s.feeds))
 	for _, o := range s.feeds {
-		others = append(others, o)
+		// Only the fields the real store reads for a guard (see registry.Guard),
+		// so that a guard cannot lean on one it will not get.
+		others = append(others, registry.Feed{ID: o.ID, Name: o.Name, Driver: o.Driver, Config: o.Config, Enabled: o.Enabled})
 	}
 	if problems := g(f, others); len(problems) > 0 {
 		return &registry.ValidationError{Problems: problems}

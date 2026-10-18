@@ -130,9 +130,10 @@ func (s *Store) Get(ctx context.Context, id string) (Feed, error) {
 }
 
 // Guard checks a feed about to be written against every feed in the registry
-// and returns the problems that refuse the write. The feeds include f itself
-// when it is already stored. A guarded write runs it under the advisory lock
-// named by feedPortsLockKey.
+// and returns the problems that refuse the write. others holds every stored
+// feed, f itself included when it is already stored, with only ID, Name,
+// Driver, Config and Enabled set: its other fields are zero. A guarded write
+// runs the guard under the advisory lock named by feedPortsLockKey.
 type Guard func(f Feed, others []Feed) []Problem
 
 // feedPortsLockKey names the transaction-level advisory lock a guarded write
@@ -438,11 +439,11 @@ func (s *Store) listen(ctx context.Context, out chan<- Change) error {
 
 // runGuard is the check of a guarded write, made inside its transaction: it
 // takes the advisory lock on feed ports, reads every feed and runs g. The lock
-// is held until the transaction ends. Under READ COMMITTED (the pgx default)
-// the read starts only once the lock is granted, so it sees what the writer
-// that held the lock before committed. Problems refuse the write as a
-// *ValidationError, which the management API maps to 422. A nil g checks
-// nothing and takes no lock.
+// is held until the transaction ends. The transaction is READ COMMITTED (see
+// runInTx), so the read takes its snapshot only once the lock is granted and
+// sees what the writer that held the lock before committed. Problems refuse the
+// write as a *ValidationError, which the management API maps to 422. A nil g
+// checks nothing and takes no lock.
 func runGuard(ctx context.Context, tx pgx.Tx, f Feed, g Guard) error {
 	if g == nil {
 		return nil
@@ -479,13 +480,34 @@ func notify(ctx context.Context, tx pgx.Tx, channel, payload string) error {
 	return nil
 }
 
+// txBeginner starts a transaction; *pgxpool.Pool is one, and tests use a fake.
+type txBeginner interface {
+	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
+}
+
 func (s *Store) inTx(ctx context.Context, fn func(pgx.Tx) error) error {
-	tx, err := s.pool.Begin(ctx)
+	return runInTx(ctx, s.pool, fn)
+}
+
+// runInTx runs fn in a transaction on db: committed when fn returns nil, rolled
+// back when it returns an error or panics.
+//
+// Every store transaction is READ COMMITTED. That is the Postgres default, but
+// it is pinned because runGuard depends on it: each statement takes a fresh
+// snapshot, so the read after the lock wait sees the previous holder's commit.
+// Under REPEATABLE READ the snapshot would be taken at the lock statement,
+// before the wait, and the lock would protect nothing; under SERIALIZABLE the
+// losing save would fail with a serialization error (40001).
+func runInTx(ctx context.Context, db txBeginner, fn func(pgx.Tx) error) error {
+	tx, err := db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
+	// Deferred so that a panic in fn cannot strand the transaction, and the port
+	// lock it may hold, on a connection that never returns to the pool. A no-op
+	// once Commit has run.
+	defer func() { _ = tx.Rollback(ctx) }()
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback(ctx)
 		return err
 	}
 	return tx.Commit(ctx)

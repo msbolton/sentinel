@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -19,21 +20,42 @@ import (
 // TEST_DATABASE_URL to run them; they create and delete feeds named test-*.
 func testStore(t *testing.T) (*Store, context.Context) {
 	t.Helper()
+	return testStoreWith(t, nil)
+}
+
+// testStoreWith is testStore on a pool that tweak has changed before it
+// connects. The feeds named test-* are deleted before the test as well as
+// after it: what a crashed run left behind still holds its ports and ids, and
+// every guarded create on them would be refused.
+func testStoreWith(t *testing.T, tweak func(*pgxpool.Config)) (*Store, context.Context) {
+	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
-	pool, err := pgxpool.New(ctx, url)
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tweak != nil {
+		tweak(cfg)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
 	s := NewWithPool(pool, nil)
-	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM sentinel.feeds WHERE id LIKE 'test-%'`)
-	})
+	dropTestFeeds := func(ctx context.Context) error {
+		_, err := pool.Exec(ctx, `DELETE FROM sentinel.feeds WHERE id LIKE 'test-%'`)
+		return err
+	}
+	if err := dropTestFeeds(ctx); err != nil {
+		t.Fatalf("removing the test feeds an earlier run left: %v", err)
+	}
+	t.Cleanup(func() { _ = dropTestFeeds(context.Background()) })
 	return s, ctx
 }
 
@@ -308,6 +330,59 @@ func TestUpdateGuardedSeesCommittedFeeds(t *testing.T) {
 		if moved.Version != 1+save {
 			t.Fatalf("version after save %d = %d, want %d", save, moved.Version, 1+save)
 		}
+	}
+}
+
+// Guarded saves rely on the read after the lock wait seeing the previous
+// holder's commit, which only READ COMMITTED gives. A server whose default is a
+// stricter level must not change that.
+func TestTransactionsRunReadCommittedWhateverTheServerDefault(t *testing.T) {
+	s, ctx := testStoreWith(t, func(cfg *pgxpool.Config) {
+		cfg.ConnConfig.RuntimeParams["default_transaction_isolation"] = "repeatable read"
+	})
+	var serverDefault, got string
+	if err := s.pool.QueryRow(ctx, `SELECT current_setting('default_transaction_isolation')`).Scan(&serverDefault); err != nil {
+		t.Fatal(err)
+	}
+	if serverDefault != "repeatable read" {
+		t.Fatalf("test setup: the connections default to %q, want repeatable read", serverDefault)
+	}
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT current_setting('transaction_isolation')`).Scan(&got)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "read committed" {
+		t.Fatalf("a store transaction runs %q on a server that defaults to %q, want read committed", got, serverDefault)
+	}
+}
+
+// A guard that panics must not leave its transaction open holding the port
+// lock: the next guarded save goes through, and the connection is back in the
+// pool.
+func TestPanickingGuardReleasesThePortLock(t *testing.T) {
+	s, ctx := testStore(t)
+
+	crashed := udpFeed("test-panic-crashed", 47200)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the guard's panic did not reach the caller")
+			}
+		}()
+		_ = s.CreateGuarded(ctx, &crashed, func(Feed, []Feed) []Problem { panic("guard failed") })
+	}()
+
+	// With the lock still held, this would wait on it until its context ran out.
+	next, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	after := udpFeed("test-panic-after", 47201)
+	if err := s.CreateGuarded(next, &after, portGuard(t)); err != nil {
+		t.Fatalf("a guarded save after the panic: %v", err)
+	}
+	if n := s.pool.Stat().AcquiredConns(); n != 0 {
+		t.Fatalf("%d connections are still checked out after the panic", n)
 	}
 }
 
