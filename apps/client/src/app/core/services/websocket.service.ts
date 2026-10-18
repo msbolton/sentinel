@@ -2,6 +2,7 @@ import { Injectable, OnDestroy, inject } from '@angular/core';
 import { BehaviorSubject, Observable, Subject } from 'rxjs';
 import { EntityEvent } from '../../shared/models/entity.model';
 import { Alert } from '../../shared/models/alert.model';
+import { DensityGrid } from '../../shared/models/density.model';
 import { AuthService } from './auth.service';
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'reconnecting';
@@ -50,11 +51,14 @@ export class WebSocketService implements OnDestroy {
   private readonly alertSubject = new Subject<Alert>();
   private readonly connectionStatusSubject = new BehaviorSubject<ConnectionStatus>('disconnected');
   private readonly ageoutSubject = new Subject<{ eventType: string; payload: any }>();
+  private readonly densitySubject = new Subject<DensityGrid>();
 
   readonly entityUpdates$: Observable<EntityEvent> = this.entityUpdatesSubject.asObservable();
   readonly alertStream$: Observable<Alert> = this.alertSubject.asObservable();
   readonly connectionStatus$: Observable<ConnectionStatus> = this.connectionStatusSubject.asObservable();
   readonly ageoutEvents$ = this.ageoutSubject.asObservable();
+  /** Per-cell object counts a feed sends while views are too large to show the objects. */
+  readonly density$: Observable<DensityGrid> = this.densitySubject.asObservable();
 
   connect(): void {
     if (this.socket || this.reconnectTimer) {
@@ -230,6 +234,9 @@ export class WebSocketService implements OnDestroy {
         break;
       case 'alert:new':
         this.alertSubject.next(envelope.data as Alert);
+        break;
+      case 'density:grid':
+        if (envelope.data) this.densitySubject.next(envelope.data as DensityGrid);
         break;
       case 'error':
         console.warn('[WS] Server error:', envelope.data);

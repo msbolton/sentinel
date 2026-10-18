@@ -43,9 +43,12 @@ import {
   DEFAULT_CAMERA_POSITION,
   TRACK_TRAIL_CONFIG,
   ORBIT_OVERLAY_CONFIG,
+  DENSITY_OVERLAY_CONFIG,
 } from './cesium-config';
 import { CircularBuffer, decimateTrail, TrailPoint } from './trail-utils';
 import { isGlobalBounds, rectangleToBounds } from './viewport-bounds';
+import { bucketCells, bucketDegrees, densityApplies, densityDiscSize, densityLabel } from './density-overlay';
+import { DensityGrid } from '../../shared/models/density.model';
 import { DeadReckoningTracker } from './dead-reckoning';
 import { SatelliteTracker, periodMinutes, type SatPosition } from './satellite-tracker';
 import { footprintRadiusM, sampleOrbit, splitAtAntimeridian } from './orbit-geometry';
@@ -216,6 +219,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   /** Cached ageout configs fetched from backend, refreshed every 60s */
   private ageoutConfigs: Array<{ sourceType: string | null; staleThresholdMs: number }> = [];
   private ageoutConfigTimer: ReturnType<typeof setInterval> | null = null;
+  /** The latest vessel density grid and when it arrived (local clock). */
+  private density: { grid: DensityGrid; receivedAt: number } | null = null;
+  private densitySource: any = null;
+  private densityShown = false;
+  private densityTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly ngZone: NgZone,
@@ -314,6 +322,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.buildingsService.init(this.viewer, this.Cesium);
     this.subscribeToThemeChanges();
     this.subscribeToFlyTo();
+    this.subscribeToDensity();
     this.initUserLocation();
 
     // Report the initial viewport: a saved camera position is restored with
@@ -327,6 +336,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.geofenceLayer = null;
     this.clearOrbitOverlay();
     if (this.ageoutConfigTimer) clearInterval(this.ageoutConfigTimer);
+    if (this.densityTimer) clearInterval(this.densityTimer);
     if (this.drFrame !== null) {
       cancelAnimationFrame(this.drFrame);
       this.drFrame = null;
@@ -430,6 +440,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         const zoneId = pickedObject.id._sentinelGeofence as string;
         this.viewer.selectedEntity = undefined; // the zone's handles mark the selection, not the viewer's bracket
         if (zoneId !== DRAFT_ID) this.ngZone.run(() => this.geofences.select(zoneId));
+        return;
+      }
+      if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelDensity) {
+        const { lat, lon } = pickedObject.id._sentinelDensity as { lat: number; lon: number };
+        this.viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(lon, lat, DENSITY_OVERLAY_CONFIG.zoomHeightM) });
         return;
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelCluster) {
@@ -538,6 +553,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // is derived from these bounds.
     const bounds = rectangleToBounds(rect, Cesium.Math.toDegrees);
     this.mapViewport.set(bounds);
+    this.syncDensity();
     this.wsService.sendViewportUpdate(bounds);
 
     // Also fetch entities in this viewport (no bbox when the globe is visible).
@@ -1113,6 +1129,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.viewer.dataSources.add(source);
       this.clusterSources.set(type, source);
     }
+    // Vessel counts for views too large to show vessels (see syncDensity).
+    this.densitySource = new Cesium.CustomDataSource('sentinel-vessel-density');
+    this.viewer.dataSources.add(this.densitySource);
     // Clustered labels need their glyphs brought in line after each frame;
     // see syncLabelGlyphClusterShow.
     this.viewer.scene.postRender.addEventListener(() => {
@@ -1148,6 +1167,77 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.clusterCanvas ??= document.createElement('canvas');
       const fill = ENTITY_TYPE_PIN_COLORS[type] ?? ENTITY_TYPE_PIN_COLORS[EntityType.UNKNOWN];
       image = drawClusterDisc(this.clusterCanvas, spec, fill, isLightColor(fill) ? '#0a0e17' : '#ffffff');
+      this.clusterImageCache.set(key, image);
+    }
+    return image;
+  }
+
+  // --- Vessel density -------------------------------------------------------
+
+  /**
+   * The aisstream feed counts vessels instead of storing them while the
+   * viewed area is over its cap, and sends the counts as density grids.
+   */
+  private subscribeToDensity(): void {
+    const sub = this.wsService.density$.subscribe((grid) => {
+      if (grid.entityType !== EntityType.VESSEL) return;
+      this.density = { grid, receivedAt: Date.now() };
+      this.ngZone.runOutsideAngular(() => this.syncDensity());
+    });
+    this.subscriptions.add(sub);
+    // A grid goes stale when the feed stops sending; drop it without waiting for a camera move.
+    this.densityTimer = setInterval(() => {
+      if (this.densityShown) this.ngZone.runOutsideAngular(() => this.syncDensity());
+    }, DENSITY_OVERLAY_CONFIG.recheckMs);
+  }
+
+  /**
+   * Draws the density grid as counted discs while it applies to the view
+   * (fresh, view over the feed's cap, Vessels layer on), hiding individual
+   * vessels meanwhile so the two kinds of disc never overlap; clears it and
+   * shows the vessels again otherwise.
+   */
+  private syncDensity(): void {
+    if (!this.viewer || !this.Cesium || !this.densitySource) return;
+    const Cesium = this.Cesium;
+    const view = this.mapViewport.bounds();
+    const vesselsOn = this.layers.find((l) => l.entityType === EntityType.VESSEL)?.visible ?? true;
+    const d = this.density;
+    const show = vesselsOn && !!d && densityApplies(d.grid, d.receivedAt, view, Date.now());
+    if (!show && !this.densityShown) return;
+
+    const entities = this.densitySource.entities;
+    entities.suspendEvents();
+    entities.removeAll();
+    if (show && d && view) {
+      for (const b of bucketCells(d.grid.cells, view, bucketDegrees(view, d.grid.cellDegrees))) {
+        const disc = entities.add({
+          position: Cesium.Cartesian3.fromDegrees(b.lon, b.lat),
+          billboard: {
+            image: this.densityImage(b.count),
+            scale: 0.5,
+            verticalOrigin: Cesium.VerticalOrigin.CENTER,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
+        disc._sentinelDensity = { lat: b.lat, lon: b.lon };
+      }
+    }
+    entities.resumeEvents();
+    const vessels = this.clusterSources.get(EntityType.VESSEL);
+    if (vessels) vessels.show = !show;
+    this.densityShown = show;
+    this.scheduleRender();
+  }
+
+  /** The disc for a density bucket, drawn once per size and label. */
+  private densityImage(count: number): string {
+    const spec = { size: densityDiscSize(count), text: densityLabel(count) };
+    const key = `density:${spec.size}:${spec.text}`;
+    let image = this.clusterImageCache.get(key);
+    if (!image) {
+      this.clusterCanvas ??= document.createElement('canvas');
+      image = drawClusterDisc(this.clusterCanvas, spec, DENSITY_OVERLAY_CONFIG.fill, DENSITY_OVERLAY_CONFIG.text);
       this.clusterImageCache.set(key, image);
     }
     return image;
@@ -1427,6 +1517,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         cesiumEntity.show = layer.visible && this.layerVisibility.isVisible(sentinelEntity);
       }
     });
+    if (layer.entityType === EntityType.VESSEL) this.syncDensity();
     this.scheduleRender();
   }
 

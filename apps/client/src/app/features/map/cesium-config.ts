@@ -163,3 +163,13 @@ export const ORBIT_OVERLAY_CONFIG = {
   footprintAlpha: 0.12,
   footprintOutlineAlpha: 0.5,
 };
+
+/** Vessel density discs: the vessel cyan, translucent so they read as counts, not pins. */
+export const DENSITY_OVERLAY_CONFIG = {
+  fill: 'rgba(6, 182, 212, 0.55)',
+  text: '#ffffff',
+  /** Camera height a click on a disc flies to: low enough to drop under the feed's cap. */
+  zoomHeightM: 2_500_000,
+  /** How often a shown grid is re-checked for staleness without a camera move. */
+  recheckMs: 15_000,
+};
