@@ -2,6 +2,7 @@ import { Injectable, OnDestroy } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { BehaviorSubject, Observable, Subject, Subscription, interval, map, shareReplay, switchMap, tap } from 'rxjs';
 import { WebSocketService } from './websocket.service';
+import { EntityDensity } from '../../shared/models/density.model';
 import {
   Entity,
   EntityEvent,
@@ -111,6 +112,12 @@ export class EntityService implements OnDestroy {
     this.ageoutSubscription.unsubscribe();
     this.queryPipelineSubscription.unsubscribe();
     this.evictionSubscription.unsubscribe();
+  }
+
+  /** Live entities counted per type and grid cell inside a box, for wide views. */
+  getDensity(bounds: { north: number; south: number; east: number; west: number }, cellDegrees: number): Observable<EntityDensity> {
+    const params = new HttpParams({ fromObject: { ...bounds, cell: cellDegrees } as Record<string, number> });
+    return this.http.get<EntityDensity>(`${this.apiUrl}/density`, { params });
   }
 
   getEntities(query?: EntityQuery): Observable<PaginatedResponse<Entity>> {

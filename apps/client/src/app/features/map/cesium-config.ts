@@ -167,13 +167,14 @@ export const ORBIT_OVERLAY_CONFIG = {
 };
 
 /** Vessel density discs: the vessel cyan, translucent so they read as counts, not pins. */
+/** Count discs for wide views: the type's colour, translucent so they read as counts, not pins. */
 export const DENSITY_OVERLAY_CONFIG = {
-  fill: 'rgba(6, 182, 212, 0.55)',
+  alpha: 0.6,
   text: '#ffffff',
-  /** Camera height a click on a disc flies to: low enough to drop under the feed's cap. */
+  /** Camera height a click on a disc flies to: low enough to drop under the detail cap. */
   zoomHeightM: 2_500_000,
-  /** How often a shown grid is re-checked for staleness without a camera move. */
-  recheckMs: 15_000,
+  /** How often the counts are refreshed while the view stays wide. */
+  refreshMs: 20_000,
 };
 
 /** The selected aircraft's past path from IntelSky: dashed, in the military green. */

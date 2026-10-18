@@ -49,8 +49,9 @@ import {
 import { CircularBuffer, decimateTrail, TrailPoint } from './trail-utils';
 import { isGlobalBounds, rectangleToBounds } from './viewport-bounds';
 import { vesselColor, vesselHeading } from './vessel-style';
-import { bucketCells, bucketDegrees, densityApplies, densityDiscSize, densityLabel } from './density-overlay';
-import { DensityGrid } from '../../shared/models/density.model';
+import { densityCellDegrees, densityDiscSize, densityLabel, densityOffsetPx, isWideView, withAlpha } from './density-overlay';
+import { EntityDensity } from '../../shared/models/density.model';
+import { ViewportBounds } from './viewport-bounds';
 import { DeadReckoningTracker } from './dead-reckoning';
 import { SatelliteTracker, periodMinutes, type SatPosition } from './satellite-tracker';
 import { footprintRadiusM, sampleOrbit, splitAtAntimeridian } from './orbit-geometry';
@@ -223,11 +224,15 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   /** Cached ageout configs fetched from backend, refreshed every 60s */
   private ageoutConfigs: Array<{ sourceType: string | null; staleThresholdMs: number }> = [];
   private ageoutConfigTimer: ReturnType<typeof setInterval> | null = null;
-  /** The latest vessel density grid and when it arrived (local clock). */
-  private density: { grid: DensityGrid; receivedAt: number } | null = null;
+  /**
+   * True while the view is wider than the gateway's detail cap: the map
+   * draws counts per type from the entity service and hides individual
+   * entities (except the selected one), since no live positions arrive.
+   */
+  private wideView = false;
   private densitySource: any = null;
-  private densityShown = false;
   private densityTimer: ReturnType<typeof setInterval> | null = null;
+  private densityRequest: Subscription | null = null;
   /** The selected aircraft's past path: polylines and what they were drawn from. */
   private flightPathLines: any[] = [];
   private flightPathKey = '';
@@ -268,6 +273,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       const selected = this.selectedEntity();
       untracked(() => this.flightPath.select(selected));
+      // In a wide view the selection is the one entity drawn on its own.
+      if (this.wideView) this.ngZone.runOutsideAngular(() => untracked(() => this.applyLayerVisibility()));
     });
     effect(() => {
       const state = this.flightPath.state();
@@ -341,7 +348,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.buildingsService.init(this.viewer, this.Cesium);
     this.subscribeToThemeChanges();
     this.subscribeToFlyTo();
-    this.subscribeToDensity();
+    this.startWideViewRefresh();
     this.initUserLocation();
 
     // Report the initial viewport: a saved camera position is restored with
@@ -357,6 +364,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.clearFlightPath();
     if (this.ageoutConfigTimer) clearInterval(this.ageoutConfigTimer);
     if (this.densityTimer) clearInterval(this.densityTimer);
+    this.densityRequest?.unsubscribe();
     if (this.drFrame !== null) {
       cancelAnimationFrame(this.drFrame);
       this.drFrame = null;
@@ -573,8 +581,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // is derived from these bounds.
     const bounds = rectangleToBounds(rect, Cesium.Math.toDegrees);
     this.mapViewport.set(bounds);
-    this.syncDensity();
     this.wsService.sendViewportUpdate(bounds);
+    // A wide view draws counts; it gets no live positions to fetch for.
+    if (this.syncWideView(bounds)) return;
 
     // Also fetch entities in this viewport (no bbox when the globe is visible).
     const query = isGlobalBounds(bounds) ? { pageSize: 500 } : { ...bounds, pageSize: 500 };
@@ -773,7 +782,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const rotation = headingDeg != null ? -Cesium.Math.toRadians(headingDeg) : 0;
 
     const existing = this.entityMap.get(entity.id);
-    const shown = this.layerVisibility.isVisible(entity);
+    const shown = this.layerVisibility.isVisible(entity) && this.visibleInMode(entity);
 
     // Moving aircraft are dead-reckoned: the tracker owns their displayed
     // position and blends this fix in instead of jumping to it.
@@ -1190,8 +1199,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.viewer.dataSources.add(source);
       this.clusterSources.set(type, source);
     }
-    // Vessel counts for views too large to show vessels (see syncDensity).
-    this.densitySource = new Cesium.CustomDataSource('sentinel-vessel-density');
+    // Counts per type for views wider than the detail cap (see syncWideView).
+    this.densitySource = new Cesium.CustomDataSource('sentinel-density');
     this.viewer.dataSources.add(this.densitySource);
     // After each frame, clustered labels' glyphs and clustered entities'
     // trails follow their billboard: see syncLabelGlyphClusterShow and
@@ -1235,75 +1244,88 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     return image;
   }
 
-  // --- Vessel density -------------------------------------------------------
+  // --- Wide views -----------------------------------------------------------
 
-  /**
-   * The aisstream feed counts vessels instead of storing them while the
-   * viewed area is over its cap, and sends the counts as density grids.
-   */
-  private subscribeToDensity(): void {
-    const sub = this.wsService.density$.subscribe((grid) => {
-      if (grid.entityType !== EntityType.VESSEL) return;
-      this.density = { grid, receivedAt: Date.now() };
-      this.ngZone.runOutsideAngular(() => this.syncDensity());
-    });
-    this.subscriptions.add(sub);
-    // A grid goes stale when the feed stops sending; drop it without waiting for a camera move.
+  /** Refreshes the counts while the view stays wide. */
+  private startWideViewRefresh(): void {
     this.densityTimer = setInterval(() => {
-      if (this.densityShown) this.ngZone.runOutsideAngular(() => this.syncDensity());
-    }, DENSITY_OVERLAY_CONFIG.recheckMs);
+      const view = this.mapViewport.bounds();
+      if (this.wideView && view) this.ngZone.runOutsideAngular(() => this.loadDensity(view));
+    }, DENSITY_OVERLAY_CONFIG.refreshMs);
   }
 
   /**
-   * Draws the density grid as counted discs while it applies to the view
-   * (fresh, view over the feed's cap, Vessels layer on), hiding individual
-   * vessels meanwhile so the two kinds of disc never overlap; clears it and
-   * shows the vessels again otherwise.
+   * Enters or leaves wide mode for a new view and, while wide, loads the
+   * counts. Returns whether the view is wide.
    */
-  private syncDensity(): void {
+  private syncWideView(view: ViewportBounds): boolean {
+    const wide = isWideView(view, this.wsService.detailMaxAreaSqDeg());
+    if (wide !== this.wideView) {
+      this.wideView = wide;
+      this.applyLayerVisibility();
+      if (!wide) this.clearDensity();
+    }
+    if (wide) this.loadDensity(view);
+    return wide;
+  }
+
+  private loadDensity(view: ViewportBounds): void {
+    this.densityRequest?.unsubscribe();
+    this.densityRequest = this.entityService.getDensity(view, densityCellDegrees(view)).subscribe({
+      next: (density) => this.ngZone.runOutsideAngular(() => { if (this.wideView) this.drawDensity(density); }),
+      error: () => { /* keep the last counts; the next refresh retries */ },
+    });
+  }
+
+  /** One disc per type and cell, in the type's colour, for the visible layers. */
+  private drawDensity(density: EntityDensity): void {
     if (!this.viewer || !this.Cesium || !this.densitySource) return;
     const Cesium = this.Cesium;
-    const view = this.mapViewport.bounds();
-    const vesselsOn = this.layers.find((l) => l.entityType === EntityType.VESSEL)?.visible ?? true;
-    const d = this.density;
-    const show = vesselsOn && !!d && densityApplies(d.grid, d.receivedAt, view, Date.now());
-    if (!show && !this.densityShown) return;
-
+    const hidden = new Set(this.layers.filter((l) => !l.visible).map((l) => l.entityType as string));
     const entities = this.densitySource.entities;
     entities.suspendEvents();
     entities.removeAll();
-    if (show && d && view) {
-      for (const b of bucketCells(d.grid.cells, view, bucketDegrees(view, d.grid.cellDegrees))) {
-        const disc = entities.add({
-          position: Cesium.Cartesian3.fromDegrees(b.lon, b.lat),
-          billboard: {
-            image: this.densityImage(b.count),
-            scale: 0.5,
-            verticalOrigin: Cesium.VerticalOrigin.CENTER,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          },
-        });
-        disc._sentinelDensity = { lat: b.lat, lon: b.lon };
-      }
+    for (const [type, lat, lon, count] of density.cells) {
+      if (hidden.has(type)) continue;
+      const disc = entities.add({
+        position: Cesium.Cartesian3.fromDegrees(lon, lat),
+        billboard: {
+          image: this.densityImage(type, count),
+          scale: 0.5,
+          pixelOffset: new Cesium.Cartesian2(densityOffsetPx(type), 0),
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+      disc._sentinelDensity = { lat, lon };
     }
     entities.resumeEvents();
-    const vessels = this.clusterSources.get(EntityType.VESSEL);
-    if (vessels) vessels.show = !show;
-    this.densityShown = show;
     this.scheduleRender();
   }
 
-  /** The disc for a density bucket, drawn once per size and label. */
-  private densityImage(count: number): string {
+  private clearDensity(): void {
+    this.densityRequest?.unsubscribe();
+    this.densitySource?.entities.removeAll();
+    this.scheduleRender();
+  }
+
+  /** The disc for a count of one type, drawn once per type, size and label. */
+  private densityImage(type: string, count: number): string {
     const spec = { size: densityDiscSize(count), text: densityLabel(count) };
-    const key = `density:${spec.size}:${spec.text}`;
+    const key = `density:${type}:${spec.size}:${spec.text}`;
     let image = this.clusterImageCache.get(key);
     if (!image) {
       this.clusterCanvas ??= document.createElement('canvas');
-      image = drawClusterDisc(this.clusterCanvas, spec, DENSITY_OVERLAY_CONFIG.fill, DENSITY_OVERLAY_CONFIG.text);
+      const fill = ENTITY_TYPE_PIN_COLORS[type as EntityType] ?? ENTITY_TYPE_PIN_COLORS[EntityType.UNKNOWN];
+      image = drawClusterDisc(this.clusterCanvas, spec, withAlpha(fill, DENSITY_OVERLAY_CONFIG.alpha), DENSITY_OVERLAY_CONFIG.text);
       this.clusterImageCache.set(key, image);
     }
     return image;
+  }
+
+  /** In a wide view only the selected entity is drawn on its own. */
+  private visibleInMode(entity: Entity): boolean {
+    return !this.wideView || entity.id === this.selectedEntity()?.id;
   }
 
   /** Zoom in on a cluster until its members come apart. */
@@ -1577,10 +1599,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.entityMap.forEach((cesiumEntity) => {
       const sentinelEntity = cesiumEntity._sentinelEntity as Entity;
       if (sentinelEntity.entityType === layer.entityType) {
-        cesiumEntity.show = layer.visible && this.layerVisibility.isVisible(sentinelEntity);
+        cesiumEntity.show = layer.visible && this.layerVisibility.isVisible(sentinelEntity) && this.visibleInMode(sentinelEntity);
       }
     });
-    if (layer.entityType === EntityType.VESSEL) this.syncDensity();
+    const view = this.mapViewport.bounds();
+    if (this.wideView && view) this.loadDensity(view);
     this.scheduleRender();
   }
 
@@ -1590,7 +1613,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.entityMap.forEach((cesiumEntity) => {
       const sentinelEntity = cesiumEntity._sentinelEntity as Entity;
       const typeLayer = this.layers.find((l) => l.entityType === sentinelEntity.entityType);
-      cesiumEntity.show = (typeLayer?.visible ?? true) && this.layerVisibility.isVisible(sentinelEntity);
+      cesiumEntity.show = (typeLayer?.visible ?? true) && this.layerVisibility.isVisible(sentinelEntity) && this.visibleInMode(sentinelEntity);
     });
     this.scheduleRender();
   }
