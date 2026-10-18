@@ -5,6 +5,7 @@ import { IconComponent, IconName } from '../../shared/components/icon.component'
 import { Subscription } from 'rxjs';
 import { Alert, AlertSeverity, AlertType } from '../../shared/models/alert.model';
 import { AlertService } from '../../core/services/alert.service';
+import { EntityFocusService, canFocus } from '../../core/services/entity-focus.service';
 
 @Component({
   selector: 'app-alerts',
@@ -27,7 +28,10 @@ export class AlertsComponent implements OnInit, OnDestroy {
 
   private subscriptions = new Subscription();
 
-  constructor(private readonly alertService: AlertService) {}
+  constructor(
+    private readonly alertService: AlertService,
+    private readonly entityFocus: EntityFocusService,
+  ) {}
 
   ngOnInit(): void {
     this.loadAlerts();
@@ -100,11 +104,22 @@ export class AlertsComponent implements OnInit, OnDestroy {
     this.loadAlerts();
   }
 
-  flyToAlert(alert: Alert): void {
-    if (alert.position) {
-      console.log('Fly to alert position:', alert.position);
-      // TODO: communicate with map component to fly to position
-    }
+  /** An alert can be shown when it names an entity or carries a position. */
+  canShow(alert: Alert): boolean {
+    return canFocus(alert);
+  }
+
+  /** Enter on the card itself, not on a button inside it, shows the alert. */
+  onCardKey(alert: Alert, event: Event): void {
+    if (event.target !== event.currentTarget) return;
+    event.preventDefault();
+    this.showOnMap(alert);
+  }
+
+  /** Selects the alert's entity on the map and flies there (or to the alert's position). */
+  showOnMap(alert: Alert, event?: Event): void {
+    event?.stopPropagation();
+    this.entityFocus.focus({ entityId: alert.entityId, position: alert.position, label: alert.entityName || alert.title });
   }
 
   getSeverityIcon(severity: AlertSeverity): IconName {
