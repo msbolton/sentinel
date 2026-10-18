@@ -8,6 +8,7 @@ import { AnalyticsService } from '../../core/services/analytics.service';
 import { AuthService } from '../../core/services/auth.service';
 import { LocationService } from '../../core/services/location.service';
 import { EntityBaseline, Finding } from '../models/finding.model';
+import { FlightPathService } from '../../core/services/flight-path.service';
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 import { Classification, Entity, EntitySource, EntityType } from '../models/entity.model';
 import { Feed } from '../models/feed.model';
@@ -445,6 +446,46 @@ describe('EntityDetailPanelComponent', () => {
       (el.querySelector('[data-section="platformDetails"]') as HTMLElement).click();
       fixture.detectChanges();
       expect(el.querySelector('[data-section="platformDetails"] .section-summary')?.textContent?.trim()).toBe('Tanker · Moored · to ROTTERDAM');
+    });
+  });
+
+  describe('flight path control', () => {
+    const military = () =>
+      makeEntity({ entityType: EntityType.AIRCRAFT, source: EntitySource.INTELSKY, name: 'CNV4062', platformData: { adsb: { icaoHex: 'AE7457', operatorName: 'United States Air Force' } } as any });
+
+    it("opens a military aircraft's details with today's path and lets the range change", () => {
+      const entity = military();
+      const flightPath = TestBed.inject(FlightPathService);
+      flightPath.select(entity); // the map does this on selection
+      fixture.componentRef.setInput('entity', entity);
+      fixture.detectChanges();
+
+      expect(el.querySelector('[data-section="platformDetails"]')?.getAttribute('aria-expanded')).toBe('true');
+      const buttons = Array.from(el.querySelectorAll('.path-range-btn')) as HTMLButtonElement[];
+      expect(buttons.map((b) => b.textContent?.trim())).toEqual(['Off', 'Today', '3 d', '7 d']);
+      expect(buttons[1].classList).toContain('active');
+      expect(el.querySelector('.path-note')?.textContent).toContain('Loading');
+
+      httpMock.expectOne('/api/v1/aircraft/AE7457/path?days=1').flush({ hex: 'AE7457', source: 'INTELSKY', days: 1, points: [{ lat: 1, lon: 2, altFt: 0, ts: 1792100404 }] });
+      fixture.detectChanges();
+      expect(el.querySelector('.path-note')?.textContent?.trim()).toBe('1 point since 15 Oct 21:40 UTC');
+
+      buttons[2].click();
+      fixture.detectChanges();
+      httpMock.expectOne('/api/v1/aircraft/AE7457/path?days=3').flush({ hex: 'AE7457', source: 'INTELSKY', days: 3, points: [] });
+      fixture.detectChanges();
+      expect(el.querySelector('.path-note')?.textContent?.trim()).toBe('No IntelSky history for this aircraft');
+
+      buttons[0].click();
+      fixture.detectChanges();
+      expect(el.querySelector('.path-note')).toBeNull();
+      flightPath.select(null);
+    });
+
+    it('shows no control for an aircraft without an ICAO address', () => {
+      fixture.componentRef.setInput('entity', makeEntity({ entityType: EntityType.AIRCRAFT, platformData: { adsb: {} } as any }));
+      fixture.detectChanges();
+      expect(el.querySelector('.path-range')).toBeNull();
     });
   });
 });
