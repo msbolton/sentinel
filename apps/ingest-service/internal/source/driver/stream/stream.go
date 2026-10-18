@@ -85,7 +85,11 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewFromParts(spec, deps, tcfg, cfg.Framing, cfg.Decoder)
+	d, err := NewFromParts(spec, deps, tcfg, cfg.Framing, cfg.Decoder)
+	if err != nil {
+		return nil, err // not d: a nil *Driver would be a non-nil driver.Driver
+	}
+	return d, nil
 }
 
 // NewFromParts builds a stream driver from an already parsed transport

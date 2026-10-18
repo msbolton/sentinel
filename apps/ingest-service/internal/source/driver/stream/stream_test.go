@@ -274,8 +274,13 @@ func TestNewRejectsBadConfigs(t *testing.T) {
 		"gps needs entity id": `{"transport":{"kind":"tcpserver","address":":0"},"decoder":{"name":"nmea-gps"}}`,
 	}
 	for name, cfg := range cases {
-		if _, err := New(driver.Spec{FeedID: "x", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()}); err == nil {
+		d, err := New(driver.Spec{FeedID: "x", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+		if err == nil {
 			t.Errorf("%s: expected an error", name)
+		}
+		// An untyped nil: a typed nil *Driver in the interface is not == nil.
+		if d != nil {
+			t.Errorf("%s: driver = %#v alongside the error, want nil", name, d)
 		}
 	}
 	if _, err := New(driver.Spec{FeedID: "x", Backpressure: "maybe", Config: json.RawMessage(`{"transport":{"kind":"tcpserver","address":":0"},"decoder":{"name":"sbs"}}`)}, driver.Deps{Logger: zap.NewNop()}); err == nil {
