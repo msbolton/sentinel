@@ -746,6 +746,8 @@ services:
       OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
       # aisstream.io API key, referenced by the aisstream feed's secretRefs
       AISSTREAM_API_KEY: ${AISSTREAM_API_KEY:-}
+      # Ports a TCP/UDP connection may not take (e.g. "3000-3005,5432"); blank uses the built-in default.
+      INGEST_RESERVED_PORTS: ${INGEST_RESERVED_PORTS:-}
     volumes:
       # Certificates and other files that secretRefs reference as file:/etc/sentinel/tak/...
       # (gitignored; empty is fine).
@@ -773,6 +775,66 @@ services:
           cpus: "0.1"
     networks:
       - sentinel-network
+
+  # Listener replica for TCP/UDP connections that external systems send to.
+  # It shares the host's network so a port chosen in Connections is
+  # reachable at once. Start with: docker compose --profile inbound up -d
+  # Docker Desktop (Mac/Windows) needs Settings > Resources > Network >
+  # "Enable host networking" (4.34+); Linux needs nothing.
+  # Host networking is incompatible with `networks:` and published ports, so
+  # this service reaches Kafka and Postgres through the ports they publish on
+  # the host, and cannot be scaled.
+  ingest-listener:
+    profiles: ["inbound"]
+    image: sentinel/ingest-service:dev
+    build:
+      context: .
+      dockerfile: ./apps/ingest-service/Dockerfile
+    container_name: sentinel-ingest-listener
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      APP_ENV: development
+      # 4000 is the other ingest replicas' port; on the host's network this one needs its own.
+      HTTP_ADDR: ":4010"
+      REPLICA_ID: ingest-listener
+      INGEST_LISTENER: "true"
+      # The address senders use, shown in each connection's send guide.
+      INGEST_LISTENER_HOST: ${INGEST_LISTENER_HOST:-localhost}
+      KAFKA_BROKERS: localhost:9092
+      DATABASE_URL: postgres://sentinel:sentinel_dev@localhost:5432/sentinel?sslmode=disable
+      LEASE_TTL_SEC: "15"
+      LEASE_TICK_SEC: "2"
+      INGEST_SERVICE_TOKEN: ${INGEST_SERVICE_TOKEN:-dev-ingest-token}
+      # Ordinary feeds handed to this replica during failover need the same settings as ingest-service.
+      FEEDS_BOOTSTRAP_ENABLED: ${FEEDS_BOOTSTRAP_ENABLED:-}
+      OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
+      OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
+      AISSTREAM_API_KEY: ${AISSTREAM_API_KEY:-}
+      INGEST_RESERVED_PORTS: ${INGEST_RESERVED_PORTS:-}
+    volumes:
+      - ./secrets/tak:/etc/sentinel/tak:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-schema:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4010/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "2.0"
+        reservations:
+          memory: 128m
+          cpus: "0.1"
 
   # ===========================================================================
   # Analytics Service (Go): behavioural baselines and findings

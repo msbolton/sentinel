@@ -147,6 +147,19 @@ ingestService:
     enabled: false
     interval: 30s
 
+ingestListener:
+  # Runs the TCP/UDP connections external systems send to, with
+  # hostNetwork on a labelled node so any port chosen in Connections is
+  # reachable on that node's address. Open those ports in the node's
+  # firewall or security group.
+  enabled: true
+  host: ""            # address senders use; defaults to the node IP
+  nodeSelector:
+    sentinel.io/ingest-listener: "true"
+  resources:
+    requests: { cpu: 250m, memory: 128Mi }
+    limits: { cpu: 2000m, memory: 512Mi }
+
 # Go behavioural-analysis service. One replica: detector state is in process
 # and the hourly baseline job takes a Postgres advisory lock, so a second
 # replica would be harmless but is not planned for.

@@ -1,0 +1,130 @@
+{{- if .Values.ingestListener.enabled }}
+{{- $secretName := default (printf "%s-ingest" (include "sentinel.fullname" .)) .Values.ingestService.existingSecret -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sentinel.fullname" . }}-ingest-listener
+  labels:
+    app.kubernetes.io/name: ingest-listener
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: ingest
+spec:
+  # One replica: it binds ports on a single node's host network.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ingest-listener
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ingest-listener
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4010"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: 30
+      # Host networking so any port chosen in Connections is reachable on the
+      # node's address; ClusterFirstWithHostNet keeps cluster DNS working.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        {{- toYaml .Values.ingestListener.nodeSelector | nindent 8 }}
+      containers:
+        - name: ingest-listener
+          image: "{{ .Values.ingestService.image.repository }}:{{ .Values.ingestService.image.tag }}"
+          imagePullPolicy: {{ .Values.ingestService.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - name: http
+              containerPort: 4010
+              protocol: TCP
+          env:
+            - name: APP_ENV
+              value: production
+            - name: HTTP_ADDR
+              value: ":4010"
+            - name: REPLICA_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: INGEST_LISTENER
+              value: "true"
+            - name: INGEST_LISTENER_HOST
+              {{- if .Values.ingestListener.host }}
+              value: {{ .Values.ingestListener.host | quote }}
+              {{- else }}
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+              {{- end }}
+            - name: KAFKA_BROKERS
+              value: {{ .Release.Name }}-kafka:9092
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-postgresql
+                  key: database-url
+            - name: INGEST_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: service-token
+            - name: OPENSKY_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: opensky-client-id
+                  optional: true
+            - name: OPENSKY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: opensky-client-secret
+                  optional: true
+            - name: LEASE_TTL_SEC
+              value: {{ .Values.ingestService.lease.ttlSec | quote }}
+            - name: LEASE_TICK_SEC
+              value: {{ .Values.ingestService.lease.tickSec | quote }}
+            - name: LEASE_REBALANCE_SEC
+              value: {{ .Values.ingestService.lease.rebalanceSec | quote }}
+            - name: SHUTDOWN_TIMEOUT_SEC
+              value: "25"
+            {{- range $k, $v := .Values.ingestService.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.ingestListener.resources | nindent 12 }}
+          volumeMounts:
+            # Files that feed secretRefs name as file:/etc/sentinel/tak/... (TAK
+            # client certificate, key and CA). The Secret is optional.
+            - name: tak-secrets
+              mountPath: {{ .Values.ingestService.tak.mountPath }}
+              readOnly: true
+      volumes:
+        - name: tak-secrets
+          secret:
+            secretName: {{ default (printf "%s-ingest-tak" (include "sentinel.fullname" .)) .Values.ingestService.tak.existingSecret }}
+            optional: true
+            items:
+              - key: tak-client-cert
+                path: client.pem
+              - key: tak-client-key
+                path: client.key
+              - key: tak-ca
+                path: ca.pem
+{{- end }}
