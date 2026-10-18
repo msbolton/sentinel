@@ -256,3 +256,53 @@ func TestValidateProblemPathsAreJSONPointers(t *testing.T) {
 		}
 	}
 }
+
+// The nmea-gps decoder refuses to start without the platform its receiver
+// reports, so a tcp or udp connection reading it is refused up front, at the
+// field. Every other format is left alone.
+func TestValidateNMEAGPSNeedsASourceEntityID(t *testing.T) {
+	c := Default()
+	const optionsPath, idPath = "/config/decoderOptions", "/config/decoderOptions/sourceEntityId"
+	listeners := []struct{ name, driver, cfg string }{
+		{"tcp listen", "tcp", `"mode": "listen", "port": 6001`},
+		{"tcp connect", "tcp", `"mode": "connect", "host": "gps.example", "port": 2947`},
+		{"udp", "udp", `"port": 6001`},
+	}
+	cases := []struct {
+		name, rest string
+		want       []string // exact problem paths; none means accepted
+	}{
+		{"an id", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": "truck-1"}`, nil},
+		{"an id with a name and type", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": "truck-1", "name": "Truck 1", "entityType": "VEHICLE"}`, nil},
+		{"no options", `"format": "nmea-gps"`, []string{optionsPath}},
+		{"empty options", `"format": "nmea-gps", "decoderOptions": {}`, []string{idPath}},
+		{"options without an id", `"format": "nmea-gps", "decoderOptions": {"name": "Truck 1"}`, []string{idPath}},
+		{"an empty id", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": ""}`, []string{idPath}},
+		{"a number for the id", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": 7}`, []string{idPath}},
+		{"options that are not an object", `"format": "nmea-gps", "decoderOptions": "truck-1"`, []string{optionsPath}},
+		// No other format is asked for an id, with options or without.
+		{"no format", ``, nil},
+		{"sentinel", `"format": "sentinel"`, nil},
+		{"json", `"format": "json"`, nil},
+		{"json with a field map", `"format": "json", "decoderOptions": {"fields": {"latitude": "lat", "longitude": "lon"}}`, nil},
+		{"cot", `"format": "cot"`, nil},
+		{"cot with options", `"format": "cot", "decoderOptions": {"skipSite": "east"}`, nil},
+		{"nmea-ais", `"format": "nmea-ais"`, nil},
+		{"sbs", `"format": "sbs"`, nil},
+		{"link16", `"format": "link16"`, nil},
+		{"an id without the format", `"decoderOptions": {"sourceEntityId": "truck-1"}`, nil},
+	}
+	for _, l := range listeners {
+		for _, tc := range cases {
+			cfg := "{" + l.cfg
+			if tc.rest != "" {
+				cfg += ", " + tc.rest
+			}
+			cfg += "}"
+			problems := c.Validate(l.driver, json.RawMessage(cfg))
+			if got := problemPaths(problems); !slices.Equal(got, tc.want) {
+				t.Errorf("%s, %s: problem paths = %v, want %v (config %s, problems %+v)", l.name, tc.name, got, tc.want, cfg, problems)
+			}
+		}
+	}
+}

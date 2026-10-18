@@ -24,5 +24,11 @@
     "maxMessageBytes": { "type": "integer", "minimum": 64, "maximum": 65507, "default": 65507, "title": "Max datagram size (bytes)" },
     "maxMessagesPerSec": { "type": "integer", "minimum": 0, "default": 1000, "title": "Max messages per second", "description": "0 = unlimited" },
     "address": { "type": "string", "title": "Bind address", "description": "Interface to bind (default all)" }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "format": { "const": "nmea-gps" } }, "required": ["format"] },
+      "then": { "required": ["decoderOptions"], "properties": { "decoderOptions": { "required": ["sourceEntityId"], "properties": { "sourceEntityId": { "type": "string", "minLength": 1 } } } } }
+    }
+  ]
 }

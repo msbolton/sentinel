@@ -42,6 +42,10 @@
   },
   "allOf": [
     { "if": { "properties": { "mode": { "const": "listen" } }, "required": ["mode"] }, "then": { "required": ["port"], "properties": { "port": { "minimum": 1024 } } } },
-    { "if": { "properties": { "mode": { "const": "connect" } }, "required": ["mode"] }, "then": { "required": ["host", "port"] } }
+    { "if": { "properties": { "mode": { "const": "connect" } }, "required": ["mode"] }, "then": { "required": ["host", "port"] } },
+    {
+      "if": { "properties": { "format": { "const": "nmea-gps" } }, "required": ["format"] },
+      "then": { "required": ["decoderOptions"], "properties": { "decoderOptions": { "required": ["sourceEntityId"], "properties": { "sourceEntityId": { "type": "string", "minLength": 1 } } } } }
+    }
   ]
 }
