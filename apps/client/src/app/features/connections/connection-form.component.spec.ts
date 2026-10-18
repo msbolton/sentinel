@@ -64,6 +64,29 @@ const drivers: FeedDriver[] = [
   },
 ];
 
+/**
+ * The TCP driver, trimmed to what the create flow needs: `mode` is required and defaults to
+ * listen. Not in `drivers`: the test that wants it loads the catalog again with it.
+ */
+const tcpDriver: FeedDriver = {
+  id: 'tcp',
+  name: 'TCP',
+  description: 'An external system sends data over TCP',
+  source: '',
+  direction: 'in',
+  capabilities: ['listen'],
+  configSchema: {
+    type: 'object',
+    required: ['mode'],
+    properties: {
+      mode: { type: 'string', enum: ['listen', 'connect'], default: 'listen', title: 'Mode' },
+      host: { type: 'string', minLength: 1, title: 'Host', 'x-showWhen': { mode: 'connect' } },
+      port: { type: 'integer', minimum: 1, maximum: 65535, title: 'Port' },
+    },
+  },
+  secretFields: [],
+};
+
 const existing: Feed = {
   id: 'opensky-eu',
   name: 'OpenSky Europe',
@@ -248,6 +271,29 @@ describe('ConnectionFormComponent', () => {
     fixture.detectChanges();
 
     expect(el.querySelector('.form-error')?.textContent).toContain('A connection with id "dup" already exists');
+  });
+
+  it('create: a new TCP connection pre-selects listen and saves it', () => {
+    TestBed.inject(FeedService).loadDrivers().subscribe();
+    httpMock.expectOne('/api/v1/drivers').flush([...drivers, tcpDriver]);
+
+    open('create');
+    component.selectDriver('tcp');
+    fixture.detectChanges();
+
+    const mode = el.querySelector<HTMLSelectElement>('app-schema-form select[name="mode"]')!;
+    expect(component.schemaForm()?.control('/config/mode')?.value).toBe('listen');
+    expect(mode.options[mode.selectedIndex].textContent?.trim()).toBe('listen');
+
+    type('#feed-name', 'Radar feed');
+    type('app-schema-form input[name="port"]', '6001');
+    expect(component.canSubmit()).toBe(true);
+
+    component.submit();
+    const req = httpMock.expectOne('/api/v1/feeds');
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body.driver).toBe('tcp');
+    expect(req.request.body.config).toEqual(expect.objectContaining({ mode: 'listen', port: 6001 }));
   });
 
   it('refuses to submit while invalid and surfaces every error', () => {

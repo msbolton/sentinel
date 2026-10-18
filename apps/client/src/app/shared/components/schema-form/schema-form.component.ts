@@ -376,6 +376,10 @@ export class SchemaFormComponent {
       return { ...base, kind: 'group', children };
     }
 
+    // A required key the value leaves out starts at its schema default: the server applies
+    // no default to a missing required key. A stored value always wins.
+    const start = initial === undefined && required && prop.default !== undefined ? prop.default : initial;
+
     const validators: ValidatorFn[] = [];
     if (required) {
       validators.push(Validators.required);
@@ -383,7 +387,7 @@ export class SchemaFormComponent {
 
     if (prop.enum) {
       const control = new FormControl<string | number | ''>(
-        isEnumValue(initial, prop.enum) ? initial : '',
+        isEnumValue(start, prop.enum) ? start : '',
         { nonNullable: true, validators },
       );
       parent.addControl(key, control, { emitEvent: false });
@@ -398,7 +402,7 @@ export class SchemaFormComponent {
 
     if (type === 'boolean') {
       const control = new FormControl<boolean>(
-        typeof initial === 'boolean' ? initial : prop.default === true,
+        typeof start === 'boolean' ? start : prop.default === true,
         { nonNullable: true },
       );
       parent.addControl(key, control, { emitEvent: false });
@@ -418,7 +422,7 @@ export class SchemaFormComponent {
       if (prop.exclusiveMinimum !== undefined) {
         validators.push(exclusiveMinValidator(prop.exclusiveMinimum));
       }
-      const control = new FormControl<number | null>(typeof initial === 'number' ? initial : null, validators);
+      const control = new FormControl<number | null>(typeof start === 'number' ? start : null, validators);
       parent.addControl(key, control, { emitEvent: false });
       return {
         ...base,
@@ -432,7 +436,7 @@ export class SchemaFormComponent {
     if (type === 'array') {
       const minItems = prop.minItems ?? 0;
       validators.push(arrayValidator(required, minItems));
-      const initialList = Array.isArray(initial) ? initial.map(String).join(', ') : '';
+      const initialList = Array.isArray(start) ? start.map(String).join(', ') : '';
       const control = new FormControl<string>(initialList, { nonNullable: true, validators });
       parent.addControl(key, control, { emitEvent: false });
       return {
@@ -451,7 +455,7 @@ export class SchemaFormComponent {
     if (prop.pattern) {
       validators.push(Validators.pattern(new RegExp(prop.pattern)));
     }
-    const control = new FormControl<string>(typeof initial === 'string' ? initial : '', {
+    const control = new FormControl<string>(typeof start === 'string' ? start : '', {
       nonNullable: true,
       validators,
     });

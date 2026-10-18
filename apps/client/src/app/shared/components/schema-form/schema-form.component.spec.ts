@@ -427,7 +427,10 @@ describe('SchemaFormComponent', () => {
     });
 
     it('treats an empty sibling as its schema default', () => {
-      render(showWhenSchema); // mode left unset: the default, listen, applies
+      // Optional and left unset, so the select stays empty and the default, listen, applies.
+      // A required mode would start at listen as a value and never reach this fallback.
+      render({ ...showWhenSchema, required: [] });
+      expect(component.control('/config/mode')?.value).toBe('');
       expect(el.querySelector('[data-pointer="/config/host"]')).toBeNull();
       expect(el.querySelector('[data-pointer="/config/allow"]')).not.toBeNull();
     });
@@ -483,6 +486,69 @@ describe('SchemaFormComponent', () => {
       fixture.detectChanges();
       expect(el.querySelector('[data-pointer="/config/decoderOptions"]')).not.toBeNull();
       expect(last().config['decoderOptions']).toEqual({ timeField: 'ts' });
+    });
+  });
+
+  describe('required defaults', () => {
+    const modeSchema: JsonSchema = {
+      type: 'object',
+      required: ['mode'],
+      properties: {
+        mode: { type: 'string', enum: ['listen', 'connect'], default: 'listen', title: 'Mode' },
+      },
+    };
+
+    it('starts a required enum at its default when the value leaves it out', () => {
+      render(modeSchema);
+
+      expect(component.control('/config/mode')?.value).toBe('listen');
+      expect(last().config['mode']).toBe('listen');
+      expect(last().valid).toBe(true);
+
+      const select = el.querySelector<HTMLSelectElement>('select[name="mode"]')!;
+      expect(select.options[select.selectedIndex].textContent?.trim()).toBe('listen');
+      // the empty option is only a prompt now: it cannot be picked back
+      expect(select.options[0].disabled).toBe(true);
+      expect(select.options[0].textContent?.trim()).toBe('Select…');
+    });
+
+    it('keeps a stored value over the default', () => {
+      render(modeSchema, { value: { mode: 'connect' } });
+
+      expect(component.control('/config/mode')?.value).toBe('connect');
+      expect(last().config['mode']).toBe('connect');
+    });
+
+    it('does not swap a stored value the enum no longer offers', () => {
+      render(modeSchema, { value: { mode: 'bogus' } });
+
+      expect(component.control('/config/mode')?.value).toBe('');
+      expect(last().valid).toBe(false);
+
+      component.markAllTouched();
+      fixture.detectChanges();
+      expect(el.querySelector('[data-pointer="/config/mode"] .sf-error')?.textContent).toContain('Required.');
+    });
+
+    it('starts any required field the value leaves out at its default', () => {
+      render({
+        type: 'object',
+        required: ['retries', 'label', 'tags'],
+        properties: {
+          retries: { type: 'integer', default: 5 },
+          label: { type: 'string', default: 'radar' },
+          tags: { type: 'array', items: { type: 'string' }, default: ['a', 'b'] },
+          // optional: the default stays a placeholder, for the server to apply
+          spare: { type: 'integer', default: 7 },
+        },
+      });
+
+      expect(component.control('/config/retries')?.value).toBe(5);
+      expect(component.control('/config/label')?.value).toBe('radar');
+      expect(component.control('/config/tags')?.value).toBe('a, b');
+      expect(component.control('/config/spare')?.value).toBeNull();
+      expect(last().config).toEqual({ retries: 5, label: 'radar', tags: ['a', 'b'] });
+      expect(last().valid).toBe(true);
     });
   });
 });

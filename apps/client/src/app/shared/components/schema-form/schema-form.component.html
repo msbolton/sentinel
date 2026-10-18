@@ -39,8 +39,8 @@
           <div class="sf-field" [class.has-issue]="hasIssue(def)" [attr.data-pointer]="def.pointer">
             <label [attr.for]="def.id">{{ def.label }}@if (def.required) {<span class="sf-required" aria-hidden="true">*</span>}</label>
             <select [id]="def.id" [attr.name]="def.key" [formControl]="def.control!" (blur)="touch()">
-              <option [ngValue]="''">
-                @if (def.defaultLabel) { Default ({{ def.defaultLabel }}) } @else if (def.required) { Select… } @else { — }
+              <option [ngValue]="''" [disabled]="def.required">
+                @if (def.required) { Select… } @else if (def.defaultLabel) { Default ({{ def.defaultLabel }}) } @else { — }
               </option>
               @for (opt of def.options; track opt) {
                 <option [ngValue]="opt">{{ opt }}</option>
