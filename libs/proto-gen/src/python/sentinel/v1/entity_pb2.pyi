@@ -46,6 +46,7 @@ class EntitySource(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ENTITY_SOURCE_CELESTRAK: _ClassVar[EntitySource]
     ENTITY_SOURCE_OPENSKY: _ClassVar[EntitySource]
     ENTITY_SOURCE_ADSB_LOL: _ClassVar[EntitySource]
+    ENTITY_SOURCE_INTELSKY: _ClassVar[EntitySource]
 
 class Affiliation(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -94,6 +95,7 @@ ENTITY_SOURCE_RADAR: EntitySource
 ENTITY_SOURCE_CELESTRAK: EntitySource
 ENTITY_SOURCE_OPENSKY: EntitySource
 ENTITY_SOURCE_ADSB_LOL: EntitySource
+ENTITY_SOURCE_INTELSKY: EntitySource
 AFFILIATION_UNSPECIFIED: Affiliation
 AFFILIATION_FRIENDLY: Affiliation
 AFFILIATION_HOSTILE: Affiliation

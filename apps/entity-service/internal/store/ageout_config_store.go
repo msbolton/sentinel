@@ -110,6 +110,7 @@ func (s *AgeoutConfigStore) SeedDefaults(ctx context.Context) error {
 		{strPtr("ADS_B"), 60000, 300000},
 		{strPtr("OPENSKY"), 60000, 300000},
 		{strPtr("ADSB_LOL"), 60000, 300000},
+		{strPtr("INTELSKY"), 60000, 300000},
 		{strPtr("AIS"), 600000, 1800000},
 		{strPtr("CELESTRAK"), 600000, 7200000}, // a satellite out of every viewport stops getting fixes; one LEO orbit is ~90 min
 		{strPtr("LINK16"), 30000, 120000},

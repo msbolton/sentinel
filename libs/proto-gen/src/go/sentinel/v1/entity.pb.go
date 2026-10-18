@@ -123,7 +123,8 @@ const (
 	EntitySource_ENTITY_SOURCE_RADAR       EntitySource = 12
 	EntitySource_ENTITY_SOURCE_CELESTRAK   EntitySource = 13
 	EntitySource_ENTITY_SOURCE_OPENSKY     EntitySource = 14
-	EntitySource_ENTITY_SOURCE_ADSB_LOL    EntitySource = 15
+	EntitySource_ENTITY_SOURCE_ADSB_LOL    EntitySource = 15 // legacy: the adsb.lol feed was replaced by IntelSky
+	EntitySource_ENTITY_SOURCE_INTELSKY    EntitySource = 16
 )
 
 // Enum value maps for EntitySource.
@@ -145,6 +146,7 @@ var (
 		13: "ENTITY_SOURCE_CELESTRAK",
 		14: "ENTITY_SOURCE_OPENSKY",
 		15: "ENTITY_SOURCE_ADSB_LOL",
+		16: "ENTITY_SOURCE_INTELSKY",
 	}
 	EntitySource_value = map[string]int32{
 		"ENTITY_SOURCE_UNSPECIFIED": 0,
@@ -163,6 +165,7 @@ var (
 		"ENTITY_SOURCE_CELESTRAK":   13,
 		"ENTITY_SOURCE_OPENSKY":     14,
 		"ENTITY_SOURCE_ADSB_LOL":    15,
+		"ENTITY_SOURCE_INTELSKY":    16,
 	}
 )
 
@@ -2271,7 +2274,7 @@ const file_sentinel_v1_entity_proto_rawDesc = "" +
 	"\x12ENTITY_TYPE_SENSOR\x10\n" +
 	"\x12\x19\n" +
 	"\x15ENTITY_TYPE_SATELLITE\x10\v\x12\x15\n" +
-	"\x11ENTITY_TYPE_DRONE\x10\f*\xaf\x03\n" +
+	"\x11ENTITY_TYPE_DRONE\x10\f*\xcb\x03\n" +
 	"\fEntitySource\x12\x1d\n" +
 	"\x19ENTITY_SOURCE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14ENTITY_SOURCE_HUMINT\x10\x01\x12\x18\n" +
@@ -2289,7 +2292,8 @@ const file_sentinel_v1_entity_proto_rawDesc = "" +
 	"\x13ENTITY_SOURCE_RADAR\x10\f\x12\x1b\n" +
 	"\x17ENTITY_SOURCE_CELESTRAK\x10\r\x12\x19\n" +
 	"\x15ENTITY_SOURCE_OPENSKY\x10\x0e\x12\x1a\n" +
-	"\x16ENTITY_SOURCE_ADSB_LOL\x10\x0f*\xe3\x01\n" +
+	"\x16ENTITY_SOURCE_ADSB_LOL\x10\x0f\x12\x1a\n" +
+	"\x16ENTITY_SOURCE_INTELSKY\x10\x10*\xe3\x01\n" +
 	"\vAffiliation\x12\x1b\n" +
 	"\x17AFFILIATION_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14AFFILIATION_FRIENDLY\x10\x01\x12\x17\n" +

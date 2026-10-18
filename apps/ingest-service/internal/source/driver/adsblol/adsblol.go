@@ -15,7 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/sentinel/ingest-service/internal/aoi"
-	adsbdecoder "github.com/sentinel/ingest-service/internal/source/decoder/adsblol"
+	"github.com/sentinel/ingest-service/internal/source/decoder/readsb"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 	"github.com/sentinel/ingest-service/internal/source/httppoll"
 )
@@ -148,7 +148,7 @@ func (d *Driver) poll(ctx context.Context, area aoi.Area) error {
 			d.fail(err)
 			return err
 		}
-		out, err := adsbdecoder.Decode(resp.Body, time.Now().UTC())
+		out, err := readsb.Decode(resp.Body, time.Now().UTC(), readsb.Options{Decoder: "adsblol", Source: "ADSB_LOL"})
 		if err != nil {
 			d.fail(err)
 			sink.DeadLetter(resp.Body, "parse_error", err)
