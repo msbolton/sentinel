@@ -3,6 +3,7 @@ package feed
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -81,6 +82,8 @@ type listenerFixture struct {
 	listeners []string          // every live listener replica
 	dedicated []string          // the listeners among them that run listening connections only
 	hosts     map[string]string // "replica/feed" -> the ListenerHost the feed's driver was built with
+
+	rebalanceAfter time.Duration // every supervisor's RebalanceAfter; zero takes the default
 }
 
 func newListenerFixture(live, listeners, dedicated []string, feeds ...registry.Feed) *listenerFixture {
@@ -97,8 +100,8 @@ func (f *listenerFixture) supervisor(me string) *Supervisor {
 	}
 	return New(f.reg, &memPublisher{}, zap.NewNop(), metrics.New(nil), Options{
 		ReplicaID: me, Listener: listener, ListenerShared: listener && !slices.Contains(f.dedicated, me), ListenerHost: host,
-		Preferred: defaultPreferred,
-		Leaser:    &listenerLeaser{replicaLeaser: &replicaLeaser{fakeLeaser: f.l, me: me}, listeners: f.listeners, dedicated: f.dedicated},
+		Preferred: defaultPreferred, RebalanceAfter: f.rebalanceAfter,
+		Leaser: &listenerLeaser{replicaLeaser: &replicaLeaser{fakeLeaser: f.l, me: me}, listeners: f.listeners, dedicated: f.dedicated},
 		Factory: func(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 			f.hosts[me+"/"+spec.FeedID] = deps.ListenerHost
 			return newMockDriver(), nil
@@ -221,6 +224,47 @@ func TestSharedListenerTakesItsShare(t *testing.T) {
 	}
 }
 
+// A listener that shares is a candidate for every ordinary feed, so when the
+// ordinary replica goes away and it is the only replica left it runs them all,
+// next to its listening connection. A dedicated listener would leave them
+// waiting.
+func TestSharedListenerTakesOverWhenItIsTheOnlyReplica(t *testing.T) {
+	all := []string{"pier", "a", "b", "c", "d"}
+	fx := newListenerFixture([]string{"r-listen", "r-plain"}, []string{"r-listen"}, nil,
+		udpFeed("pier"), feedSpec("a", 1, true), feedSpec("b", 1, true), feedSpec("c", 1, true), feedSpec("d", 1, true))
+	listen, plain := fx.supervisor("r-listen"), fx.supervisor("r-plain")
+	t.Cleanup(listen.shutdown)
+	t.Cleanup(plain.shutdown)
+	fx.rounds(4, listen, plain)
+
+	// Both replicas run ordinary feeds, so the ordinary replica leaving gives
+	// the listener something to take over.
+	onPlain := 0
+	for _, id := range all[1:] {
+		if plain.Running(id) {
+			onPlain++
+		}
+	}
+	if onPlain == 0 {
+		t.Fatal("the ordinary replica runs no feed, so there is nothing for the listener to take over")
+	}
+
+	plain.shutdown()
+	fx.l.setLive("r-listen")
+	fx.rounds(2, listen)
+
+	for _, id := range all {
+		if !listen.Running(id) || fx.l.owner(id) != "r-listen" {
+			t.Errorf("feed %s: running=%v owner=%q, want the listener to run it", id, listen.Running(id), fx.l.owner(id))
+		}
+	}
+	for _, reason := range []string{"no_ordinary_replica", "no_listener"} {
+		if got := unplaced(listen, reason); got != 0 {
+			t.Errorf("feeds_unplaced{%s} = %v, want 0: the listener is a candidate for every feed", reason, got)
+		}
+	}
+}
+
 // With no live listener a listening feed is simply not run; it is not handed
 // to a plain replica.
 func TestListeningFeedWaitsForAListener(t *testing.T) {
@@ -304,6 +348,57 @@ func TestDedicatedListenerNeverStepsIn(t *testing.T) {
 	}
 	if got := unplaced(listen, "no_ordinary_replica"); got != 0 {
 		t.Errorf("feeds_unplaced{no_ordinary_replica} = %v, want 0: an ordinary replica is live", got)
+	}
+}
+
+// feedsPreferring returns n ids of ordinary feeds that the rendezvous hash over
+// live gives to replica.
+func feedsPreferring(t *testing.T, replica string, live []string, n int) []string {
+	t.Helper()
+	var ids []string
+	for i := 0; len(ids) < n && i < 1000; i++ {
+		if id := fmt.Sprintf("feed-%d", i); defaultPreferred(id, "", live) == replica {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) < n {
+		t.Fatalf("found %d feed ids that hash to %s among %v, want %d", len(ids), replica, live, n)
+	}
+	return ids
+}
+
+// An ordinary feed that the rendezvous hash over every live replica would give
+// to a dedicated listener stays on the ordinary replica: the listener is not a
+// candidate for it, so the ordinary replica never starts the handover clock and
+// the feed is not stopped and picked up again every RebalanceAfter.
+func TestDedicatedListenerDoesNotRebalanceOrdinaryFeeds(t *testing.T) {
+	live := []string{"r-listen", "r-plain"}
+	ids := feedsPreferring(t, "r-listen", live, 4)
+	feeds := make([]registry.Feed, len(ids))
+	for i, id := range ids {
+		feeds[i] = feedSpec(id, 1, true)
+	}
+	fx := newListenerFixture(live, []string{"r-listen"}, []string{"r-listen"}, feeds...)
+	fx.rebalanceAfter = 40 * time.Millisecond // less than the pause between rounds
+	listen, plain := fx.supervisor("r-listen"), fx.supervisor("r-plain")
+	t.Cleanup(listen.shutdown)
+	t.Cleanup(plain.shutdown)
+
+	for round := 1; round <= 5; round++ {
+		fx.rounds(1, listen, plain)
+		for _, id := range ids {
+			if listen.Running(id) || !plain.Running(id) || fx.l.owner(id) != "r-plain" {
+				t.Fatalf("round %d, feed %s: listener=%v plain=%v owner=%q, want it on the ordinary replica only",
+					round, id, listen.Running(id), plain.Running(id), fx.l.owner(id))
+			}
+		}
+	}
+	for _, id := range ids {
+		for _, sup := range []*Supervisor{listen, plain} {
+			if n := testutil.ToFloat64(sup.metrics.LeaseHandovers.WithLabelValues(id)); n != 0 {
+				t.Errorf("replica %s handed %s over %v times, want 0", sup.ReplicaID(), id, n)
+			}
+		}
 	}
 }
 
