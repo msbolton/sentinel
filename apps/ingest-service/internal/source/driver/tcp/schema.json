@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sentinel.local/schemas/tcp.json",
+  "title": "TCP",
+  "description": "An external system sends data over TCP: either it connects to Sentinel on a port you choose (listen), or Sentinel connects to it (connect). Default format: sentinel.v1.Observation, binary protobuf length-delimited, or JSON one per line.",
+  "type": "object",
+  "required": ["mode"],
+  "properties": {
+    "mode": { "type": "string", "enum": ["listen", "connect"], "default": "listen", "title": "Mode", "description": "listen: senders connect to Sentinel. connect: Sentinel connects to the sender." },
+    "host": { "type": "string", "minLength": 1, "title": "Host", "description": "The system to connect to", "x-showWhen": { "mode": "connect" } },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535, "title": "Port", "description": "listen: the port Sentinel opens (1024-65535). connect: the remote port." },
+    "format": { "type": "string", "enum": ["sentinel", "cot", "nmea-ais", "nmea-gps", "sbs", "beast", "link16", "json"], "default": "sentinel", "title": "Format" },
+    "encoding": { "type": "string", "enum": ["protobuf", "json"], "default": "protobuf", "title": "Encoding", "description": "For the sentinel format: binary protobuf (length-delimited) or JSON (one message per line)", "x-showWhen": { "format": "sentinel" } },
+    "framing": { "type": "string", "enum": ["line", "delimited", "lengthprefix", "xmlevent", "beast"], "title": "Framing", "description": "Override the framing the format implies" },
+    "decoderOptions": { "type": "object", "title": "Decoder options", "description": "For the json format: the field mapping (see docs/feeds.md)", "x-showWhen": { "format": "json" } },
+    "defaultSource": { "type": "string", "enum": ["HUMINT", "SIGINT", "GEOINT", "OSINT", "MASINT", "CYBER", "MANUAL", "AIS", "ADS_B", "LINK16", "GPS", "RADAR"], "title": "Default source", "description": "Source for sentinel messages that leave it unset", "x-showWhen": { "format": "sentinel" } },
+    "allow": { "type": "array", "items": { "type": "string", "minLength": 1 }, "title": "Allowed senders", "description": "IP addresses or CIDR ranges allowed to connect; empty allows anyone who can reach the port", "x-showWhen": { "mode": "listen" } },
+    "maxConnections": { "type": "integer", "minimum": 0, "default": 50, "title": "Max connections", "x-showWhen": { "mode": "listen" } },
+    "maxMessageBytes": { "type": "integer", "minimum": 64, "maximum": 16777216, "default": 65536, "title": "Max message size (bytes)" },
+    "maxMessagesPerSec": { "type": "integer", "minimum": 0, "default": 1000, "title": "Max messages per second", "description": "0 = unlimited" },
+    "tls": {
+      "type": "object", "title": "TLS",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false, "title": "Use TLS" },
+        "requireClientCert": { "type": "boolean", "default": false, "title": "Require client certificates", "description": "listen: mutual TLS, verified against the clientCa secret", "x-showWhen": { "enabled": true } },
+        "serverName": { "type": "string", "title": "Server name", "description": "connect: name to verify on the remote certificate", "x-showWhen": { "enabled": true } },
+        "insecureSkipVerify": { "type": "boolean", "default": false, "title": "Skip certificate verification", "description": "connect: testing only", "x-showWhen": { "enabled": true } }
+      }
+    },
+    "address": { "type": "string", "title": "Bind address", "description": "listen: interface to bind (default all)", "x-showWhen": { "mode": "listen" } }
+  },
+  "allOf": [
+    { "if": { "properties": { "mode": { "const": "listen" } }, "required": ["mode"] }, "then": { "required": ["port"], "properties": { "port": { "minimum": 1024 } } } },
+    { "if": { "properties": { "mode": { "const": "connect" } }, "required": ["mode"] }, "then": { "required": ["host", "port"] } }
+  ]
+}

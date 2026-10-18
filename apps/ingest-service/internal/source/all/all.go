@@ -30,4 +30,5 @@ import (
 	_ "github.com/sentinel/ingest-service/internal/source/driver/opensky"
 	_ "github.com/sentinel/ingest-service/internal/source/driver/stream"
 	_ "github.com/sentinel/ingest-service/internal/source/driver/tak"
+	_ "github.com/sentinel/ingest-service/internal/source/driver/tcp"
 )

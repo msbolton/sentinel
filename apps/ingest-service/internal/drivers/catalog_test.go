@@ -21,7 +21,7 @@ func TestDefaultCatalogListsDrivers(t *testing.T) {
 			t.Errorf("%s schema is not JSON: %v", d.ID, err)
 		}
 	}
-	for _, want := range []string{"opensky", "celestrak", "aisstream", "intelsky", "stream", "httpjson"} {
+	for _, want := range []string{"opensky", "celestrak", "aisstream", "intelsky", "stream", "httpjson", "tcp"} {
 		if !ids[want] {
 			t.Errorf("missing driver %s", want)
 		}
@@ -59,6 +59,8 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 		"stream5":    `{"transport": {"kind": "udp", "address": ":10110"}, "decoder": {"name": "nmea-ais"}, "pinnedReplica": "site-1"}`,
 		"httpjson":   `{"url": "https://api.example.com/v2/point/{lat}/{lon}/{radius_nm}", "intervalSec": 15, "requireArea": true, "decoder": {"options": {"records": "ac", "identityType": "ICAO24", "fields": {"id": "hex", "latitude": "lat", "longitude": "lon"}}}}`,
 		"tak":        `{"address": "tak.example.org:8089", "siteId": "east", "direction": "both", "tls": {"enabled": true, "serverName": "tak.example.org"}, "heartbeatSec": 30, "tracks": {"staleSec": 120}, "alerts": {"emergencyMinSeverity": "CRITICAL"}, "shapes": {"enabled": true, "refreshSec": 60}, "policy": {"entityTypes": ["AIRCRAFT", "VESSEL"], "feeds": ["opensky"], "boxes": [{"north": 40, "south": 35, "east": -74, "west": -80}], "classificationCeiling": "UNCLASSIFIED", "alerts": {"enabled": true, "minSeverity": "MEDIUM"}}, "outbound": {"perEntityMinSec": 5, "maxEventsPerSec": 100}}`,
+		"tcp":        `{"mode": "listen", "port": 6000}`,
+		"tcp2":       `{"mode": "connect", "host": "feeds.example", "port": 7000, "format": "cot", "tls": {"enabled": true}}`,
 		"empty":      ``,
 	}
 	for driver, cfg := range cases {
@@ -70,6 +72,8 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 			d = "stream"
 		case "celestrak2":
 			d = "celestrak"
+		case "tcp2":
+			d = "tcp"
 		case "aisstream2":
 			d = "aisstream"
 		}
@@ -108,6 +112,10 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		{"tak", `{"address": "h:1", "policy": {"boxes": [{"north": 1, "south": 0, "east": 0, "west": 0, "depth": 1}]}}`, "/config/policy/boxes/0"},
 		{"tak", `{"address": "h:1", "policy": {"classificationCeiling": "ULTRA"}}`, "/config/policy/classificationCeiling"},
 		{"tak", `{"address": "h:1", "outbound": {"queueMax": 1}}`, "/config/outbound/queueMax"},
+		{"tcp", `{"mode": "listen"}`, "/config/"},
+		{"tcp", `{"mode": "listen", "port": 80}`, "/config/port"},
+		{"tcp", `{"mode": "connect", "port": 7000}`, "/config/"},
+		{"tcp", `{"mode": "listen", "port": 6000, "format": "xml"}`, "/config/format"},
 	}
 	for _, tc := range cases {
 		problems := c.Validate(tc.driver, json.RawMessage(tc.cfg))

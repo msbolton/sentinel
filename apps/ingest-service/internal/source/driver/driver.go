@@ -28,8 +28,8 @@ const (
 	CapabilityArea = "area"
 	// CapabilityPoll means the driver polls a remote API on an interval.
 	CapabilityPoll = "poll"
-	// CapabilityListen means the driver binds a port and must be pinned to
-	// one replica.
+	// CapabilityListen means the driver binds a port, so it runs on a
+	// listener replica.
 	CapabilityListen = "listen"
 )
 
