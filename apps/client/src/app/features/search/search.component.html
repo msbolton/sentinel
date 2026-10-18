@@ -110,7 +110,7 @@
     }
 
     @for (entity of results(); track entity.id) {
-      <div class="entity-card" (click)="selectEntity(entity)">
+      <div class="entity-card" role="button" tabindex="0" [attr.aria-label]="'Show ' + entity.name + ' on the map'" (click)="selectEntity(entity)" (keydown.enter)="onCardKey(entity, $event)">
         <div class="entity-card-header">
           <span
             class="entity-dot"

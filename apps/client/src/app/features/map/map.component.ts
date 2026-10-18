@@ -55,6 +55,7 @@ import { densityCellDegrees, densityDiscSize, densityLabel, densityOffsetPx, isW
 import { EntityDensity } from '../../shared/models/density.model';
 import { ViewportBounds } from './viewport-bounds';
 import { DeadReckoningTracker } from './dead-reckoning';
+import { SelectionSubscription } from './selection-subscription';
 import { SatelliteTracker, periodMinutes, type SatPosition } from './satellite-tracker';
 import { footprintRadiusM, sampleOrbit, splitAtAntimeridian } from './orbit-geometry';
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
@@ -200,6 +201,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private currentCameraAltitude = DEFAULT_CAMERA_POSITION.height;
   /** Moving aircraft are advanced between fixes; see dead-reckoning.ts. */
   private readonly deadReckoning = new DeadReckoningTracker();
+  /** Live updates for the selected entity, even in views too wide to get positions. */
+  private readonly selectionUpdates: SelectionSubscription;
   /** Satellites are propagated from their elements; see satellite-tracker.ts. */
   private readonly satellites = new SatelliteTracker();
   private satLastStepMs = 0;
@@ -279,9 +282,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
     // The selected aircraft's past path from IntelSky: the service follows
     // the selection and the panel's range; the map draws what it loaded.
+    this.selectionUpdates = new SelectionSubscription(this.wsService);
     effect(() => {
       const selected = this.selectedEntity();
-      untracked(() => { this.flightPath.select(selected); this.routes.select(selected); });
+      untracked(() => {
+        this.selectionUpdates.follow(selected?.id ?? null);
+        this.flightPath.select(selected);
+        this.routes.select(selected);
+      });
       // In a wide view the selection is the one entity drawn on its own.
       if (this.wideView) this.ngZone.runOutsideAngular(() => untracked(() => this.applyLayerVisibility()));
     });
@@ -377,6 +385,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.clearOrbitOverlay();
     this.clearFlightPath();
     this.clearRouteLine();
+    this.selectionUpdates.follow(null);
     if (this.ageoutConfigTimer) clearInterval(this.ageoutConfigTimer);
     if (this.densityTimer) clearInterval(this.densityTimer);
     this.densityRequest?.unsubscribe();
