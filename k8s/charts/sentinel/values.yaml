@@ -249,6 +249,21 @@ postgresql:
     persistence:
       size: 50Gi
 
+# Applies db/schema with a Helm hook Job: after the first install creates the
+# release's resources, and before every upgrade (a failing Job aborts it). It
+# runs the files in name order, every one idempotent, as the role in the
+# database-url key of the <release>-postgresql Secret, the role the services
+# connect as. Helm waits for the Job for as long as --timeout (5m by default);
+# the Job itself gives up after activeDeadlineSeconds. On a first install leave
+# out --wait and --atomic: Helm would wait for ingest pods that cannot start
+# until this Job has run. Needs Helm: kubectl apply of the rendered chart
+# ignores hooks.
+dbSchema:
+  enabled: true
+  image: postgres:16-alpine   # needs psql and pg_isready
+  backoffLimit: 10
+  activeDeadlineSeconds: 900
+
 
 kafka:
   enabled: true
