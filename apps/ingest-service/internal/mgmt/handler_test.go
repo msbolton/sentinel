@@ -185,12 +185,14 @@ func TestListAndFilters(t *testing.T) {
 			t.Errorf("opensky dto = %+v", f)
 		}
 	}
+	// Every built-in takes a viewport except intelsky, which polls the globe.
+	areaFeeds := map[string]bool{"opensky": true, "celestrak": true, "aisstream": true}
 	_, body = do(t, srv, "GET", "/feeds?capability=area", "", reqOpts{})
-	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != len(registry.Builtins) {
+	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != len(areaFeeds) {
 		t.Fatalf("area filter = %s", body)
 	}
 	for _, f := range feeds {
-		if f.ID != "opensky" && f.ID != "adsb-lol" && f.ID != "celestrak" && f.ID != "aisstream" {
+		if !areaFeeds[f.ID] {
 			t.Errorf("unexpected area feed %s", f.ID)
 		}
 	}

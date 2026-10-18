@@ -131,7 +131,7 @@ A feed whose driver sends (`out` or `both`, narrowable with `config.direction`) 
 Enum-like columns are `VARCHAR` holding the bare protobuf enum name without its type prefix: the database, the Kafka JSON produced by `pbjson`, the REST API and the client all spell `AIRCRAFT`, `OPENSKY`, `ICAO24`, `STALE`. The protobuf definitions in `proto/sentinel/v1` are the source of truth:
 
 - **EntityType**: `UNKNOWN | PERSON | VEHICLE | VESSEL | AIRCRAFT | FACILITY | EQUIPMENT | UNIT | SIGNAL | CYBER | SENSOR | SATELLITE | DRONE`
-- **EntitySource**: `HUMINT | SIGINT | GEOINT | OSINT | MASINT | CYBER | MANUAL | AIS | ADS_B | LINK16 | GPS | RADAR | CELESTRAK | OPENSKY | ADSB_LOL` (`UNSPECIFIED` for a JSON feed without a configured source)
+- **EntitySource**: `HUMINT | SIGINT | GEOINT | OSINT | MASINT | CYBER | MANUAL | AIS | ADS_B | LINK16 | GPS | RADAR | CELESTRAK | OPENSKY | ADSB_LOL | INTELSKY` (`ADSB_LOL` is legacy: the adsb.lol feed was replaced by IntelSky; `UNSPECIFIED` for a JSON feed without a configured source)
 - **IdentityType**: `ICAO24 | MMSI | IMO | NORAD_ID | COT_UID | LINK16_TN | FEED_LOCAL | CALLSIGN | REGISTRATION`; the first four are canonical and drive fusion
 - **AgeoutState**: `LIVE | STALE | AGED_OUT`
 - **Classification**, hierarchical: `UNCLASSIFIED (0) < CONFIDENTIAL (1) < SECRET (2) < TOP_SECRET (3)`

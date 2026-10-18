@@ -92,9 +92,9 @@ func (x *RawPayload) GetTruncated() bool {
 //
 // Vocabulary (kept stable so consumers can switch on them):
 //
-//	driver:  stream | opensky | adsblol | celestrak
+//	driver:  stream | opensky | intelsky | celestrak | aisstream | httpjson | tak
 //	decoder: json | nmea-gps | nmea-ais | cot | sbs | beast | link16 |
-//	         opensky-states | adsblol | tle-sgp4
+//	         opensky-states | intelsky | tle-sgp4 | aisstream
 type Observation struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Deterministic id: uuid5(feed_id|source_entity_id|source_timestamp|decoder).

@@ -44,6 +44,7 @@ import {
   TRACK_TRAIL_CONFIG,
   ORBIT_OVERLAY_CONFIG,
   DENSITY_OVERLAY_CONFIG,
+  FLIGHT_PATH_CONFIG,
 } from './cesium-config';
 import { CircularBuffer, decimateTrail, TrailPoint } from './trail-utils';
 import { isGlobalBounds, rectangleToBounds } from './viewport-bounds';
@@ -54,6 +55,8 @@ import { DeadReckoningTracker } from './dead-reckoning';
 import { SatelliteTracker, periodMinutes, type SatPosition } from './satellite-tracker';
 import { footprintRadiusM, sampleOrbit, splitAtAntimeridian } from './orbit-geometry';
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
+import { FlightPathService, FlightPathState } from '../../core/services/flight-path.service';
+import { pathRuns } from './flight-path';
 import { CLUSTER_CONFIG, CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, drawClusterDisc, syncLabelGlyphClusterShow } from './entity-clusters';
 import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine, type GeoPoint } from './drop-line';
 import { formatAltitude } from '../../shared/geo-format';
@@ -225,6 +228,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private densitySource: any = null;
   private densityShown = false;
   private densityTimer: ReturnType<typeof setInterval> | null = null;
+  /** The selected aircraft's past path: polylines and what they were drawn from. */
+  private flightPathLines: any[] = [];
+  private flightPathKey = '';
 
   constructor(
     private readonly ngZone: NgZone,
@@ -239,6 +245,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly orbitOverlay: OrbitOverlayService,
     private readonly mapViewport: MapViewportService,
     private readonly geofences: GeofenceService,
+    private readonly flightPath: FlightPathService,
   ) {
     // Entities stay in the viewer when their layer is hidden (show=false) so
     // dead reckoning keeps advancing them; this flips `show` when the user's
@@ -254,6 +261,17 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       const selected = this.selectedEntity();
       const flags = { path: this.orbitOverlay.showPath(), ground: this.orbitOverlay.showGroundTrack(), footprint: this.orbitOverlay.showFootprint() };
       this.ngZone.runOutsideAngular(() => untracked(() => this.syncOrbitOverlay(selected, flags)));
+    });
+
+    // The selected aircraft's past path from IntelSky: the service follows
+    // the selection and the panel's range; the map draws what it loaded.
+    effect(() => {
+      const selected = this.selectedEntity();
+      untracked(() => this.flightPath.select(selected));
+    });
+    effect(() => {
+      const state = this.flightPath.state();
+      this.ngZone.runOutsideAngular(() => untracked(() => this.syncFlightPath(state)));
     });
 
     // The panel's New button and the map control ask for a new zone here.
@@ -336,6 +354,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.geofenceLayer?.destroy();
     this.geofenceLayer = null;
     this.clearOrbitOverlay();
+    this.clearFlightPath();
     if (this.ageoutConfigTimer) clearInterval(this.ageoutConfigTimer);
     if (this.densityTimer) clearInterval(this.densityTimer);
     if (this.drFrame !== null) {
@@ -434,8 +453,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         return;
       }
 
-      if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelOrbit) {
-        return; // a click on the selected satellite's own overlay keeps the selection
+      if (Cesium.defined(pickedObject) && (pickedObject.id?._sentinelOrbit || pickedObject.id?._sentinelFlightPath)) {
+        return; // a click on the selection's own overlay keeps the selection
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelGeofence) {
         const zoneId = pickedObject.id._sentinelGeofence as string;
@@ -1081,6 +1100,46 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.orbit.footprint = null;
   }
 
+  /** Draws the loaded path as dashed runs at altitude; redraws only when it changes. */
+  private syncFlightPath(state: FlightPathState): void {
+    if (!this.viewer || this.viewer.isDestroyed()) return;
+    const path = state.path;
+    if (!path || path.points.length < 2) {
+      this.clearFlightPath();
+      return;
+    }
+    const key = `${path.hex}:${path.days}:${path.points.length}:${path.points[path.points.length - 1].ts}`;
+    if (key === this.flightPathKey) return;
+    this.clearFlightPath();
+    const Cesium = this.Cesium;
+    const cfg = FLIGHT_PATH_CONFIG;
+    const material = new Cesium.PolylineDashMaterialProperty({
+      color: Cesium.Color.fromCssColorString(cfg.color).withAlpha(cfg.alpha),
+      dashLength: cfg.dashLength,
+    });
+    for (const run of pathRuns(path.points)) {
+      const flat: number[] = [];
+      for (const v of run) flat.push(v.lon, v.lat, v.height);
+      const line = this.viewer.entities.add({
+        polyline: { positions: Cesium.Cartesian3.fromDegreesArrayHeights(flat), width: cfg.width, material, arcType: Cesium.ArcType.NONE },
+      });
+      line._sentinelFlightPath = true;
+      this.flightPathLines.push(line);
+    }
+    this.flightPathKey = key;
+    this.scheduleRender();
+  }
+
+  private clearFlightPath(): void {
+    if (this.flightPathLines.length === 0 && !this.flightPathKey) return;
+    if (this.viewer && !this.viewer.isDestroyed()) {
+      for (const line of this.flightPathLines) this.viewer.entities.remove(line);
+    }
+    this.flightPathLines = [];
+    this.flightPathKey = '';
+    this.scheduleRender();
+  }
+
   private clearOrbitOverlay(): void {
     if (!this.orbit.forId && !this.orbit.path && !this.orbit.footprint && this.orbit.ground.length === 0) return;
     this.removeOrbitEntities();
@@ -1580,6 +1639,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         // Remove tracked entities from the Cesium viewer (preserve user location dot)
         if (this.viewer) {
           this.clearDropLine();
+          this.clearFlightPath();
           for (const cesiumEntity of this.entityMap.values()) {
             (cesiumEntity.entityCollection ?? this.viewer.entities).remove(cesiumEntity);
           }
@@ -1647,9 +1707,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     return cached;
   }
 
+  /** IntelSky reports only military and government aircraft; ADSB_LOL is the feed it replaced. */
   private isMilitaryAircraft(entity: Entity): boolean {
     return entity.entityType === EntityType.AIRCRAFT
-      && entity.source === EntitySource.ADSB_LOL;
+      && (entity.source === EntitySource.INTELSKY || entity.source === EntitySource.ADSB_LOL);
   }
 
   private getBillboardImage(entity: Entity): string {

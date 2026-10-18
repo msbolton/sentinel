@@ -1,6 +1,7 @@
-package adsblol
+package readsb
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 	"time"
@@ -17,8 +18,10 @@ const Fixture = `{"now": 1705320000.5, "ac": [
 
 var now = time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
 
+var adsblol = Options{Decoder: "adsblol", Source: "ADSB_LOL"}
+
 func TestDecode(t *testing.T) {
-	out, err := Decode([]byte(Fixture), now)
+	out, err := Decode([]byte(Fixture), now, adsblol)
 	if err != nil || len(out) != 3 {
 		t.Fatalf("out=%d err=%v", len(out), err)
 	}
@@ -57,16 +60,53 @@ func TestDecode(t *testing.T) {
 }
 
 func TestNullsAndEmpty(t *testing.T) {
-	out, err := Decode([]byte(`{"ac":[{"hex":"ae63ed","flight":"X"},{"hex":"ae0000","lat":1,"lon":2}]}`), now)
+	out, err := Decode([]byte(`{"ac":[{"hex":"ae63ed","flight":"X"},{"hex":"ae0000","lat":1,"lon":2}]}`), now, adsblol)
 	if err != nil || len(out) != 1 || out[0].SourceEntityID != "ICAO-AE0000" || out[0].DisplayName != "ae0000" || !out[0].SourceTimestamp.Equal(now) {
 		t.Errorf("out=%+v err=%v", out, err)
 	}
 	for _, body := range []string{`{"ac":[]}`, `{"ac":null}`, `{}`} {
-		if out, err := Decode([]byte(body), now); err != nil || len(out) != 0 {
+		if out, err := Decode([]byte(body), now, adsblol); err != nil || len(out) != 0 {
 			t.Errorf("%s: %v %v", body, out, err)
 		}
 	}
-	if _, err := Decode([]byte(`{"ac":[{"hex":"a","alt_baro":"sky"}]}`), now); err == nil {
+	if _, err := Decode([]byte(`{"ac":[{"hex":"a","alt_baro":"sky"}]}`), now, adsblol); err == nil {
 		t.Error("unknown alt_baro string must fail")
+	}
+}
+
+func TestIntelSkyShape(t *testing.T) {
+	// IntelSky: "now" in milliseconds, dbFlags a flag emoji.
+	body := `{"now": 1792321562828, "total": 1, "ac": [{"hex": "AE7457", "flight": "CNV4062 ", "r": "170041", "t": "B737",
+		"dbFlags": "\ud83c\uddfa\ud83c\uddf8", "desc": "Boeing C-40A", "ownOp": "United States Air Force",
+		"alt_baro": 41000, "gs": 478, "track": 74, "lat": 20.4076, "lon": -160.2457, "seen_pos": 0}]}`
+	out, err := Decode([]byte(body), now, Options{Decoder: "intelsky", Source: "INTELSKY"})
+	if err != nil || len(out) != 1 {
+		t.Fatalf("out %v err %v", out, err)
+	}
+	o := out[0]
+	if o.Source != "INTELSKY" || o.Decoder != "intelsky" || o.CountryOfOrigin != "US" || o.DisplayName != "CNV4062" || o.ADSB.OperatorName != "United States Air Force" {
+		t.Errorf("observation = %+v %+v", o, o.ADSB)
+	}
+	if want := time.UnixMilli(1792321562828).UTC(); !o.SourceTimestamp.Equal(want) {
+		t.Errorf("time = %v, want %v", o.SourceTimestamp, want)
+	}
+}
+
+func TestCountry(t *testing.T) {
+	for raw, want := range map[string]string{
+		`"\ud83c\uddec\ud83c\udde7"`: "GB",
+		`"us"`:                       "US",
+		`"DE"`:                       "DE",
+		`1`:                          "",
+		`""`:                         "",
+		`"usa"`:                      "",
+		`"u1"`:                       "",
+	} {
+		if got := Country(json.RawMessage(raw)); got != want {
+			t.Errorf("Country(%s) = %q, want %q", raw, got, want)
+		}
+	}
+	if Country(nil) != "" {
+		t.Error("missing dbFlags")
 	}
 }

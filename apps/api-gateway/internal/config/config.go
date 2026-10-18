@@ -51,6 +51,9 @@ type Config struct {
 	// IngestServiceToken is presented to ingest-service, which is reachable
 	// only through the gateway.
 	IngestServiceToken string
+
+	// IntelSkyBaseURL is where flight paths for military aircraft come from.
+	IntelSkyBaseURL string
 }
 
 // IsProduction reports whether the gateway runs with production hardening.
@@ -109,6 +112,7 @@ func Load() Config {
 		AnalyticsServiceURL:    commonCfg.EnvOrDefault("ANALYTICS_SERVICE_URL", "http://localhost:5000"),
 		IngestServiceURL:       commonCfg.EnvOrDefault("INGEST_SERVICE_URL", "http://localhost:4000"),
 		IngestServiceToken:     commonCfg.EnvOrDefault("INGEST_SERVICE_TOKEN", ""),
+		IntelSkyBaseURL:        commonCfg.EnvOrDefault("INTELSKY_BASE_URL", "https://intelsky.org"),
 	}
 }
 

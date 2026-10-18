@@ -17,15 +17,15 @@ var Builtins = []Feed{
 		SecretRefs:  map[string]string{"clientId": "env:OPENSKY_CLIENT_ID", "clientSecret": "env:OPENSKY_CLIENT_SECRET"},
 	},
 	{
-		ID: "adsb-lol", Name: "adsb.lol military", Driver: "adsblol", Builtin: true,
-		Description: "Military aircraft from the adsb.lol community ADS-B network.",
-		Config:      json.RawMessage(`{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}`),
-		SecretRefs:  map[string]string{},
-	},
-	{
 		ID: "celestrak", Name: "CelesTrak satellites", Driver: "celestrak", Builtin: true,
 		Description: "Satellite positions propagated with SGP4 from CelesTrak orbital elements.",
 		Config:      json.RawMessage(`{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}`),
+		SecretRefs:  map[string]string{},
+	},
+	{
+		ID: "intelsky", Name: "IntelSky military aircraft", Driver: "intelsky", Builtin: true,
+		Description: "Military and government aircraft worldwide from IntelSky (intelsky.org).",
+		Config:      json.RawMessage(`{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}`),
 		SecretRefs:  map[string]string{},
 	},
 	{

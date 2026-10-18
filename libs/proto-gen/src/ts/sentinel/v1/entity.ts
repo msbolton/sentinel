@@ -192,7 +192,9 @@ export enum EntitySource {
   RADAR = "RADAR",
   CELESTRAK = "CELESTRAK",
   OPENSKY = "OPENSKY",
+  /** ADSB_LOL - legacy: the adsb.lol feed was replaced by IntelSky */
   ADSB_LOL = "ADSB_LOL",
+  INTELSKY = "INTELSKY",
 }
 
 export function entitySourceFromJSON(object: any): EntitySource {
@@ -245,6 +247,9 @@ export function entitySourceFromJSON(object: any): EntitySource {
     case 15:
     case "ENTITY_SOURCE_ADSB_LOL":
       return EntitySource.ADSB_LOL;
+    case 16:
+    case "ENTITY_SOURCE_INTELSKY":
+      return EntitySource.INTELSKY;
     default:
       throw new globalThis.Error("Unrecognized enum value " + object + " for enum EntitySource");
   }
@@ -284,6 +289,8 @@ export function entitySourceToJSON(object: EntitySource): string {
       return "ENTITY_SOURCE_OPENSKY";
     case EntitySource.ADSB_LOL:
       return "ENTITY_SOURCE_ADSB_LOL";
+    case EntitySource.INTELSKY:
+      return "ENTITY_SOURCE_INTELSKY";
     default:
       throw new globalThis.Error("Unrecognized enum value " + object + " for enum EntitySource");
   }
@@ -323,6 +330,8 @@ export function entitySourceToNumber(object: EntitySource): number {
       return 14;
     case EntitySource.ADSB_LOL:
       return 15;
+    case EntitySource.INTELSKY:
+      return 16;
     default:
       throw new globalThis.Error("Unrecognized enum value " + object + " for enum EntitySource");
   }

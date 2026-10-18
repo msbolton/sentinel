@@ -15,8 +15,9 @@ import (
 
 	"github.com/sentinel/api-gateway/internal/apikeys"
 	"github.com/sentinel/api-gateway/internal/auth"
-	"github.com/sentinel/api-gateway/internal/export"
 	"github.com/sentinel/api-gateway/internal/config"
+	"github.com/sentinel/api-gateway/internal/export"
+	"github.com/sentinel/api-gateway/internal/flightpath"
 	"github.com/sentinel/api-gateway/internal/locations"
 	"github.com/sentinel/api-gateway/internal/proxy"
 	"github.com/sentinel/api-gateway/internal/registration"
@@ -125,7 +126,7 @@ func main() {
 		Upstreams:  up,
 		Locations:  locations.NewHandler(locStore, logger),
 		Public:     []func(*http.ServeMux){regHandler.RegisterPublicRoutes},
-		Protected:  []func(*http.ServeMux){regHandler.RegisterAdminRoutes, keyHandler.RegisterRoutes, exportHandler.RegisterRoutes},
+		Protected:  []func(*http.ServeMux){regHandler.RegisterAdminRoutes, keyHandler.RegisterRoutes, exportHandler.RegisterRoutes, flightpath.NewHandler(flightpath.Options{BaseURL: cfg.IntelSkyBaseURL}, logger).RegisterRoutes},
 		Root: []func(*http.ServeMux){func(mux *http.ServeMux) {
 			mux.Handle("GET /ws/entities", authMw.RequireAuth(wsHandler))
 		}},

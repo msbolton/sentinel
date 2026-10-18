@@ -21,7 +21,7 @@ func TestDefaultCatalogListsDrivers(t *testing.T) {
 			t.Errorf("%s schema is not JSON: %v", d.ID, err)
 		}
 	}
-	for _, want := range []string{"opensky", "adsblol", "celestrak", "aisstream", "stream", "httpjson"} {
+	for _, want := range []string{"opensky", "celestrak", "aisstream", "intelsky", "stream", "httpjson"} {
 		if !ids[want] {
 			t.Errorf("missing driver %s", want)
 		}
@@ -32,8 +32,11 @@ func TestDefaultCatalogListsDrivers(t *testing.T) {
 	if o, _ := c.Get("opensky"); !o.HasCapability(CapabilityArea) || o.AreaTTL == 0 || len(o.SecretFields) != 2 {
 		t.Errorf("opensky info = %+v", o)
 	}
-	if a, _ := c.Get("adsblol"); !a.HasCapability(CapabilityArea) {
-		t.Errorf("adsblol should take an area: %+v", a)
+	if _, ok := c.Get("adsblol"); ok {
+		t.Error("the adsblol driver was removed")
+	}
+	if i, _ := c.Get("intelsky"); !i.HasCapability(CapabilityPoll) || i.HasCapability(CapabilityArea) || len(i.SecretFields) != 0 {
+		t.Errorf("intelsky info = %+v", i)
 	}
 	if a, _ := c.Get("aisstream"); !a.HasCapability(CapabilityArea) || a.AreaTTL == 0 || len(a.SecretFields) != 1 || a.SecretFields[0] != "apiKey" {
 		t.Errorf("aisstream info = %+v", a)
@@ -44,9 +47,9 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 	c := Default()
 	cases := map[string]string{
 		"opensky":    `{"intervalSec": 10, "viewportTtlSec": 90, "minPollSpacingSec": 3, "maxAreaSqDeg": 400, "maxIntervalSec": 60, "creditFloor": 200, "staleWarnSec": 120, "staleCriticalSec": 300}`,
-		"adsblol":    `{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}`,
 		"celestrak":  `{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}`,
 		"celestrak2": `{"catalogNumbers": [25544], "designators": ["1998-067"], "names": ["ISS (ZARYA)"], "special": ["GPZ"], "supplemental": ["iss"], "tleRefreshHours": 6}`,
+		"intelsky":   `{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}`,
 		"aisstream":  `{"maxAreaSqDeg": 2500, "movingIntervalSec": 15, "stationaryIntervalSec": 180, "staleWarnSec": 600, "staleCriticalSec": 1800}`,
 		"aisstream2": `{"watchlistMmsi": ["235100247", "538005120"], "messageTypes": ["PositionReport", "ShipStaticData"], "maxAreaSqDeg": 0, "movingIntervalSec": 0}`,
 		"stream":     `{"transport": {"kind": "mqtt", "brokerUrl": "tcp://broker:1883", "topics": ["a/#"]}, "decoder": {"name": "json"}}`,
@@ -62,7 +65,7 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 		d := driver
 		switch d {
 		case "empty":
-			d = "adsblol"
+			d = "intelsky"
 		case "stream2", "stream3", "stream4", "stream5":
 			d = "stream"
 		case "celestrak2":
@@ -88,17 +91,18 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		{"celestrak", `{"refreshHours": 1}`, "/config/refreshHours"},
 		{"celestrak", `{"special": ["nope"]}`, "/config/special"},
 		{"celestrak", `{"catalogNumbers": [0]}`, "/config/catalogNumbers"},
+		{"intelsky", `{"intervalSec": 2}`, "/config/intervalSec"},
+		{"intelsky", `{"url": "ftp://x"}`, "/config/url"},
 		{"aisstream", `{"watchlistMmsi": ["12345"]}`, "/config/watchlistMmsi/0"},
 		{"aisstream", `{"messageTypes": ["SafetyBroadcastMessage"]}`, "/config/messageTypes/0"},
 		{"aisstream", `{"movingIntervalSec": -1}`, "/config/movingIntervalSec"},
-		{"adsblol", `{"scope": "all"}`, "/config/scope"},
 		{"stream", `{"transport": {"kind": "mqtt"}, "decoder": {"name": "json"}}`, "/config/transport"},
 		{"stream", `{"transport": {"kind": "tcpserver", "address": ":4001"}, "decoder": {"name": "xml"}}`, "/config/decoder/name"},
 		{"stream", `{"transport": {"kind": "ftp", "address": ":4001"}, "decoder": {"name": "sbs"}}`, "/config/transport/kind"},
 		{"stream", `{"transport": {"kind": "websocket"}, "decoder": {"name": "json"}}`, "/config/transport"},
 		{"stream", `{"decoder": {"name": "json"}}`, "/config/"},
 		{"nope", `{}`, "/driver"},
-		{"adsblol", `{not json`, "/config"},
+		{"intelsky", `{not json`, "/config"},
 		{"tak", `{"siteId": "east"}`, "/config/"},
 		{"tak", `{"address": "h:1", "protocol": "protobuf"}`, "/config/protocol"},
 		{"tak", `{"address": "h:1", "policy": {"boxes": [{"north": 1, "south": 0, "east": 0, "west": 0, "depth": 1}]}}`, "/config/policy/boxes/0"},

@@ -99,3 +99,9 @@ func TestPriorityOverride(t *testing.T) {
 		t.Error("direct receivers must outrank OpenSky")
 	}
 }
+
+func TestIntelSkyRanksWithTheAggregators(t *testing.T) {
+	if got := DefaultPriority.Of("INTELSKY"); got != 80 || got <= DefaultPriority.Of("OPENSKY") || got >= DefaultPriority.Of("ADS_B") {
+		t.Errorf("INTELSKY priority = %d", got)
+	}
+}
