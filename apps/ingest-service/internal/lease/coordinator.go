@@ -22,6 +22,10 @@ import (
 // Options tune the coordinator. Zero values take the defaults.
 type Options struct {
 	TTL time.Duration // lease and replica expiry (15 s)
+	// Listener marks this replica as one that takes the connections that
+	// bind a port; ListenerHost is the address senders reach it at.
+	Listener     bool
+	ListenerHost string
 }
 
 func (o Options) withDefaults() Options {
@@ -52,10 +56,11 @@ func (c *Coordinator) TTL() time.Duration { return c.opts.TTL }
 // Heartbeat refreshes this replica's row and prunes long-dead replicas.
 func (c *Coordinator) Heartbeat(ctx context.Context) error {
 	_, err := c.pool.Exec(ctx, `
-		INSERT INTO sentinel.ingest_replicas (replica_id, started_at, heartbeat_at, expires_at)
-		VALUES ($1, NOW(), NOW(), NOW() + $2::interval)
-		ON CONFLICT (replica_id) DO UPDATE SET heartbeat_at = NOW(), expires_at = NOW() + $2::interval`,
-		c.replica, c.opts.TTL)
+		INSERT INTO sentinel.ingest_replicas (replica_id, started_at, heartbeat_at, expires_at, listener, listener_host)
+		VALUES ($1, NOW(), NOW(), NOW() + $2::interval, $3, NULLIF($4, ''))
+		ON CONFLICT (replica_id) DO UPDATE SET heartbeat_at = NOW(), expires_at = NOW() + $2::interval,
+		  listener = EXCLUDED.listener, listener_host = EXCLUDED.listener_host`,
+		c.replica, c.opts.TTL, c.opts.Listener, c.opts.ListenerHost)
 	if err != nil {
 		return fmt.Errorf("replica heartbeat: %w", err)
 	}
@@ -68,6 +73,24 @@ func (c *Coordinator) Live(ctx context.Context) ([]string, error) {
 	rows, err := c.pool.Query(ctx, `SELECT replica_id FROM sentinel.ingest_replicas WHERE expires_at > NOW() ORDER BY replica_id`)
 	if err != nil {
 		return nil, fmt.Errorf("listing replicas: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// Listeners returns the unexpired listener replica ids, sorted.
+func (c *Coordinator) Listeners(ctx context.Context) ([]string, error) {
+	rows, err := c.pool.Query(ctx, `SELECT replica_id FROM sentinel.ingest_replicas WHERE expires_at > NOW() AND listener ORDER BY replica_id`)
+	if err != nil {
+		return nil, fmt.Errorf("listing listener replicas: %w", err)
 	}
 	defer rows.Close()
 	var out []string

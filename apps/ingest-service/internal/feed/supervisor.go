@@ -43,6 +43,11 @@ type Leaser interface {
 	TTL() time.Duration
 }
 
+// ListenerLister is implemented by leasers that know the listener replicas.
+type ListenerLister interface {
+	Listeners(ctx context.Context) ([]string, error)
+}
+
 // Preferred picks a feed's owner from the live set; lease.Preferred by
 // default (rendezvous hash, pin wins).
 type Preferred func(feedID, pinned string, live []string) string
@@ -59,6 +64,10 @@ type Options struct {
 	Secrets        registry.Lookup
 	Factory        Factory
 	RawMax         int
+	// Listener means this replica takes listening connections (the ones that
+	// bind a port); ListenerHost is the address senders use to reach it.
+	Listener     bool
+	ListenerHost string
 	// Leaser enables sharding; LeaseTick is how often leases are renewed
 	// and ownership re-evaluated (2 s), RebalanceAfter how long a feed
 	// keeps running here while another live replica is its preferred
@@ -134,6 +143,21 @@ func defaultPreferred(feedID, pinned string, live []string) string {
 	return best
 }
 
+// listens reports whether the feed binds a port.
+func listens(spec registry.Feed) bool {
+	_, _, ok := driver.ListenOf(spec.Driver, spec.Config)
+	return ok
+}
+
+// candidates is the replica set a feed may run on: listener replicas for
+// listening feeds, every live replica otherwise. Call with s.mu held.
+func (s *Supervisor) candidates(spec registry.Feed) []string {
+	if listens(spec) {
+		return s.listeners
+	}
+	return s.live
+}
+
 // instance is one feed this replica runs (or failed to start).
 type instance struct {
 	spec   registry.Feed
@@ -171,6 +195,7 @@ type Supervisor struct {
 	// owner had a lease TTL to claim it.
 	waitingSince map[string]time.Time
 	live         []string
+	listeners    []string // the live replicas that take listening connections
 	// connections is the set of feed ids that send (direction out or both),
 	// from the last listing; outbound policies use it to avoid re-exporting
 	// one connection's contributions on another.
@@ -338,7 +363,10 @@ func (s *Supervisor) owns(ctx context.Context, spec registry.Feed, now time.Time
 		return 0, true
 	}
 	pinned := spec.Common().PinnedReplica
-	preferred := s.opts.Preferred(spec.ID, pinned, s.live)
+	if pinned == "" && listens(spec) && !s.opts.Listener {
+		return 0, false // listening connections run only on listener replicas
+	}
+	preferred := s.opts.Preferred(spec.ID, pinned, s.candidates(spec))
 	if pinned != "" && pinned != s.opts.ReplicaID {
 		return 0, false
 	}
@@ -372,7 +400,7 @@ func (s *Supervisor) rebalance(inst *instance, now time.Time) bool {
 	if s.opts.Leaser == nil || inst.token == 0 {
 		return false
 	}
-	preferred := s.opts.Preferred(inst.spec.ID, inst.spec.Common().PinnedReplica, s.live)
+	preferred := s.opts.Preferred(inst.spec.ID, inst.spec.Common().PinnedReplica, s.candidates(inst.spec))
 	if preferred == "" || preferred == s.opts.ReplicaID {
 		inst.elsewhereSince = time.Time{}
 		return false
@@ -424,6 +452,16 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 			s.mu.Lock()
 			s.live = live
 			s.mu.Unlock()
+		}
+		if ll, ok := s.opts.Leaser.(ListenerLister); ok {
+			listeners, err := ll.Listeners(ctx)
+			if err != nil {
+				s.logger.Warn("reconcile: listing listener replicas failed", zap.Error(err))
+			} else {
+				s.mu.Lock()
+				s.listeners = listeners
+				s.mu.Unlock()
+			}
 		}
 	}
 
@@ -488,7 +526,7 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 			if s.opts.Leaser != nil {
 				// Start the handover clock when we take a feed another live
 				// replica should own (it did not claim it within a TTL).
-				if p := s.opts.Preferred(spec.ID, spec.Common().PinnedReplica, s.live); p != "" && p != s.opts.ReplicaID {
+				if p := s.opts.Preferred(spec.ID, spec.Common().PinnedReplica, s.candidates(spec)); p != "" && p != s.opts.ReplicaID {
 					inst.elsewhereSince = now
 				}
 			}
@@ -561,7 +599,7 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 	}
 	common := spec.Common()
 	logger := s.logger.With(zap.String("feed", spec.ID), zap.String("driver", spec.Driver))
-	deps := driver.Deps{Logger: logger, Shapes: s.opts.Shapes}
+	deps := driver.Deps{Logger: logger, Shapes: s.opts.Shapes, ListenerHost: s.opts.ListenerHost}
 	if s.opts.Density != nil {
 		deps.Density = s.opts.Density(spec.ID, common.Classification)
 	}

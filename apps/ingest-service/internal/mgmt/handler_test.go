@@ -18,8 +18,9 @@ import (
 )
 
 type memStore struct {
-	feeds map[string]registry.Feed
-	areas map[string]registry.Area
+	feeds     map[string]registry.Feed
+	areas     map[string]registry.Area
+	listeners []registry.ListenerReplica
 }
 
 func newMemStore() *memStore {
@@ -85,6 +86,9 @@ func (s *memStore) GetArea(_ context.Context, id string) (registry.Area, error) 
 		return registry.Area{FeedID: id, Boxes: []registry.Box{}}, nil
 	}
 	return a, nil
+}
+func (s *memStore) ListenerReplicas(context.Context) ([]registry.ListenerReplica, error) {
+	return s.listeners, nil
 }
 func (s *memStore) SetArea(_ context.Context, a registry.Area) error {
 	if _, ok := s.feeds[a.FeedID]; !ok {
@@ -498,5 +502,96 @@ func TestListeningPortChecksRunOnUpdate(t *testing.T) {
 	}
 	if resp, out := do(t, srv, "PATCH", "/feeds/dock-ais", `{"config":{"transport":{"kind":"udp","address":":10112"}}}`, operator); resp.StatusCode != 200 {
 		t.Errorf("free port: %d %s", resp.StatusCode, out)
+	}
+}
+
+// Listening connections show why they are not running while no listener
+// replica is live, and only then.
+func TestListeningConnectionWithoutAListenerIsExplained(t *testing.T) {
+	srv, store, _ := newServer(t, "")
+	create := func(name, addr, extra string) string {
+		body := `{"name":"` + name + `","driver":"stream","enabled":true,"config":{"transport":{"kind":"udp","address":"` + addr + `"},"decoder":{"name":"nmea-ais"}` + extra + `}}`
+		resp, out := do(t, srv, "POST", "/feeds", body, operator)
+		if resp.StatusCode != 201 {
+			t.Fatalf("create %s: %d %s", name, resp.StatusCode, out)
+		}
+		var d feedDTO
+		if err := json.Unmarshal(out, &d); err != nil {
+			t.Fatal(err)
+		}
+		return d.ID
+	}
+	read := func(path string) registry.Status {
+		t.Helper()
+		resp, body := do(t, srv, "GET", path, "", reqOpts{})
+		if resp.StatusCode != 200 {
+			t.Fatalf("GET %s: %d %s", path, resp.StatusCode, body)
+		}
+		if strings.HasSuffix(path, "/status") {
+			var st registry.Status
+			if err := json.Unmarshal(body, &st); err != nil {
+				t.Fatal(err)
+			}
+			return st
+		}
+		var d feedDTO
+		if err := json.Unmarshal(body, &d); err != nil {
+			t.Fatal(err)
+		}
+		return d.Status
+	}
+	id := create("Pier AIS", ":10110", "")
+
+	// No listener replica: get, status and list all say so.
+	for _, path := range []string{"/feeds/" + id, "/feeds/" + id + "/status"} {
+		if st := read(path); st.State != registry.StateUnassigned || st.Health != registry.HealthUnknown || st.LastError != registry.NoListenerError {
+			t.Errorf("%s with no listener = %+v", path, st)
+		}
+	}
+	_, body := do(t, srv, "GET", "/feeds", "", reqOpts{})
+	var feeds []feedDTO
+	if err := json.Unmarshal(body, &feeds); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range feeds {
+		listening := d.ID == id
+		if got := d.Status.LastError == registry.NoListenerError; got != listening {
+			t.Errorf("list: feed %s has the no-listener error = %v, want %v", d.ID, got, listening)
+		}
+	}
+
+	// The create, update and enable responses are not decorated with it.
+	_, out := do(t, srv, "POST", "/feeds/"+id+"/enable", "", operator)
+	if strings.Contains(string(out), registry.NoListenerError) {
+		t.Errorf("enable response carries the no-listener error: %s", out)
+	}
+
+	// A disabled listening connection is not waiting for anything.
+	do(t, srv, "POST", "/feeds/"+id+"/disable", "", operator)
+	if st := read("/feeds/" + id); st.LastError == registry.NoListenerError {
+		t.Errorf("disabled connection: %+v", st)
+	}
+	do(t, srv, "POST", "/feeds/"+id+"/enable", "", operator)
+
+	// A stored status survives in the other fields.
+	f := store.feeds[id]
+	f.Status = &registry.Status{FeedID: id, Owner: "r-old", MessagesTotal: 42, State: registry.StateRunning, Health: registry.HealthHealthy, Detail: json.RawMessage("{}")}
+	store.feeds[id] = f
+	if st := read("/feeds/" + id); st.State != registry.StateUnassigned || st.LastError != registry.NoListenerError || st.MessagesTotal != 42 {
+		t.Errorf("stored status overlaid = %+v", st)
+	}
+
+	// A live listener replica clears it.
+	store.listeners = []registry.ListenerReplica{{ID: "r-listen", Host: "ingest.example"}}
+	if st := read("/feeds/" + id); st.LastError == registry.NoListenerError || st.State != registry.StateRunning {
+		t.Errorf("with a listener the stored status stands: %+v", st)
+	}
+	store.listeners = nil
+
+	// A connection pinned to a replica runs there, not on a listener, so a
+	// missing listener says nothing about it.
+	pinned := create("Dock AIS", ":10111", `,"pinnedReplica":"r-host"`)
+	if st := read("/feeds/" + pinned); st.LastError == registry.NoListenerError {
+		t.Errorf("pinned connection explained by a missing listener: %+v", st)
 	}
 }

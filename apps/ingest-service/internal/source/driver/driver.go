@@ -59,6 +59,9 @@ type Deps struct {
 	// Density publishes the counts a driver keeps for areas too large to
 	// store objects one by one (nil when the replica has no producer).
 	Density DensityPublisher
+	// ListenerHost is the address senders reach this replica's listeners
+	// at (INGEST_LISTENER_HOST); empty on replicas that are not listeners.
+	ListenerHost string
 }
 
 // DensityPublisher sends a feed's density grids to the density.events

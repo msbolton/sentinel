@@ -71,6 +71,12 @@ CREATE TABLE IF NOT EXISTS sentinel.ingest_replicas (
   expires_at    TIMESTAMPTZ NOT NULL
 );
 
+-- A listener replica runs with the host's network and takes the
+-- connections that bind a port (TCP/UDP listeners); listener_host is the
+-- address senders use, shown in the send guide.
+ALTER TABLE sentinel.ingest_replicas ADD COLUMN IF NOT EXISTS listener BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE sentinel.ingest_replicas ADD COLUMN IF NOT EXISTS listener_host TEXT;
+
 CREATE TABLE IF NOT EXISTS sentinel.feed_leases (
   feed_id        VARCHAR(64) PRIMARY KEY REFERENCES sentinel.feeds(id) ON DELETE CASCADE,
   owner_id       VARCHAR(128) NOT NULL,

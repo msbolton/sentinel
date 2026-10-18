@@ -32,6 +32,10 @@ import (
 	"github.com/sentinel/ingest-service/internal/source/driver/stream"
 )
 
+// The coordinator must keep telling the supervisor which replicas listen;
+// without it a listening connection would never find a home.
+var _ feed.ListenerLister = (*lease.Coordinator)(nil)
+
 func main() {
 	logger, err := newLogger()
 	if err != nil {
@@ -54,6 +58,7 @@ func main() {
 		zap.String("observation_topic", cfg.KafkaObservationTopic),
 		zap.String("http_addr", cfg.HTTPAddr),
 		zap.String("replica_id", cfg.ReplicaID),
+		zap.Bool("listener", cfg.Listener),
 		zap.Int("publisher_shards", cfg.PublisherShards),
 		zap.Int("frame_buffer", cfg.FrameBuffer),
 	)
@@ -103,6 +108,8 @@ func main() {
 		StaleWarn:      cfg.FeedStaleWarn,
 		StaleCritical:  cfg.FeedStaleCritical,
 		RawMax:         cfg.RawPayloadMaxBytes,
+		Listener:       cfg.Listener,
+		ListenerHost:   cfg.ListenerHost,
 		LeaseTick:      cfg.LeaseTick,
 		RebalanceAfter: cfg.LeaseRebalance,
 		Shapes:         outbound.NewShapeStore(reg.Pool()),
@@ -112,7 +119,7 @@ func main() {
 		},
 	}
 	if cfg.LeaseEnabled {
-		supOpts.Leaser = lease.New(reg.Pool(), cfg.ReplicaID, lease.Options{TTL: cfg.LeaseTTL})
+		supOpts.Leaser = lease.New(reg.Pool(), cfg.ReplicaID, lease.Options{TTL: cfg.LeaseTTL, Listener: cfg.Listener, ListenerHost: cfg.ListenerHost})
 		supOpts.Preferred = lease.Preferred
 		logger.Info("feed leases enabled", zap.Duration("ttl", cfg.LeaseTTL), zap.Duration("tick", cfg.LeaseTick), zap.Duration("rebalance_after", cfg.LeaseRebalance))
 	} else {

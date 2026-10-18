@@ -281,6 +281,33 @@ func (s *Store) ReleaseStatuses(ctx context.Context, replica string) error {
 	return nil
 }
 
+// ListenerReplica is a live listener replica and the address senders use.
+type ListenerReplica struct {
+	ID   string `json:"id"`
+	Host string `json:"host"`
+}
+
+// NoListenerError is shown on listening connections while no listener replica is live.
+const NoListenerError = "no listener replica (run the ingest listener: INGEST_LISTENER=true)"
+
+// ListenerReplicas lists the live listener replicas.
+func (s *Store) ListenerReplicas(ctx context.Context) ([]ListenerReplica, error) {
+	rows, err := s.pool.Query(ctx, `SELECT replica_id, COALESCE(listener_host, '') FROM sentinel.ingest_replicas WHERE expires_at > NOW() AND listener ORDER BY replica_id`)
+	if err != nil {
+		return nil, fmt.Errorf("listing listener replicas: %w", err)
+	}
+	defer rows.Close()
+	var out []ListenerReplica
+	for rows.Next() {
+		var r ListenerReplica
+		if err := rows.Scan(&r.ID, &r.Host); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // GetArea returns the pushed area for a feed, or an inactive area when none
 // has been pushed.
 func (s *Store) GetArea(ctx context.Context, id string) (Area, error) {

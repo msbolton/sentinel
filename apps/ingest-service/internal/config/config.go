@@ -31,6 +31,11 @@ type Config struct {
 	// ReservedPorts are the ports a listening connection may not take
 	// (INGEST_RESERVED_PORTS, e.g. "3000-3005,5432"; default: the stack's own).
 	ReservedPorts string
+	// Listener makes this replica take the connections that bind a port
+	// (INGEST_LISTENER=true; run it with the host's network). ListenerHost
+	// is the address senders reach it at (INGEST_LISTENER_HOST).
+	Listener     bool
+	ListenerHost string
 
 	PublisherShards    int // PUBLISHER_SHARDS (default: 8)
 	ObservationBuffer  int // OBS_BUFFER (default: 1000) observations queued per publisher shard
@@ -70,6 +75,8 @@ func Load() *Config {
 		ReplicaID:             envOr("REPLICA_ID", hostname),
 		FeedsBootstrapEnabled: splitList(envOr("FEEDS_BOOTSTRAP_ENABLED", "")),
 		ReservedPorts:         envOr("INGEST_RESERVED_PORTS", registry.DefaultReservedPorts),
+		Listener:              envOr("INGEST_LISTENER", "false") == "true",
+		ListenerHost:          envOr("INGEST_LISTENER_HOST", ""),
 
 		PublisherShards:    envOrInt("PUBLISHER_SHARDS", 8),
 		ObservationBuffer:  envOrInt("OBS_BUFFER", 1000),
