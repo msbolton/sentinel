@@ -264,11 +264,12 @@ postgresql:
 
 # Applies db/schema with a Helm hook Job: after the first install creates the
 # release's resources, and before every upgrade (a failing Job aborts it). It
-# runs the files in name order, every one idempotent. Helm waits for the Job for
-# as long as --timeout (5m by default); the Job itself gives up after
-# activeDeadlineSeconds. On a first install leave out --wait and --atomic: Helm
-# would wait for ingest pods that cannot start until this Job has run. Needs
-# Helm: kubectl apply of the rendered chart ignores hooks.
+# runs the files in name order, every one idempotent. Helm waits for the Job
+# only as long as --timeout (5m by default); pass --timeout 15m to wait as long
+# as the Job may run (activeDeadlineSeconds). On a first install leave out
+# --wait and --atomic: Helm would wait for ingest pods that cannot start until
+# this Job has run. Needs Helm: kubectl apply of the rendered chart ignores
+# hooks.
 #
 # What the database must provide for the Job to work as a plain role:
 # - The Job connects as the role in the database-url key of the
@@ -287,7 +288,15 @@ dbSchema:
   image: postgres:16-alpine   # needs psql and pg_isready
   backoffLimit: 10
   activeDeadlineSeconds: 900
-
+  # Small but present, so a namespace ResourceQuota that demands requests and
+  # limits cannot reject the hook pod.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
 
 kafka:
   enabled: true

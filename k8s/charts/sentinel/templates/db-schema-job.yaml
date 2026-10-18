@@ -1,4 +1,5 @@
 {{- if .Values.dbSchema.enabled }}
+{{- $name := printf "%s-db-schema" (include "sentinel.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- $files := .Files.Glob "files/schema/*.sql" }}
 {{- if not $files }}
 {{- fail "dbSchema: files/schema holds no .sql files; it must link to db/schema (or set dbSchema.enabled=false)" }}
@@ -10,15 +11,16 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "sentinel.fullname" . }}-db-schema
+  name: {{ $name }}
   labels:
     app.kubernetes.io/name: db-schema
     app.kubernetes.io/instance: {{ .Release.Name }}
   annotations:
     helm.sh/hook: post-install,pre-upgrade
     helm.sh/hook-weight: "-10"
-    # Not hook-succeeded: Helm does not wait on a ConfigMap, so that policy could
-    # delete it before the Job has mounted it.
+    # Only before-hook-creation: the ConfigMap is not deleted after the Job. It
+    # stays until the next install or upgrade replaces it, and after helm
+    # uninstall.
     helm.sh/hook-delete-policy: before-hook-creation
 data:
 {{ $files.AsConfig | indent 2 }}
@@ -26,7 +28,7 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "sentinel.fullname" . }}-db-schema
+  name: {{ $name }}
   labels:
     app.kubernetes.io/name: db-schema
     app.kubernetes.io/instance: {{ .Release.Name }}
@@ -49,12 +51,20 @@ spec:
           image: {{ .Values.dbSchema.image | quote }}
           imagePullPolicy: IfNotPresent
           # Waits for the database, then runs the files in name order as the
-          # db-schema Compose job does. The first error fails the Job, and Helm
-          # then fails the install or upgrade.
+          # db-schema Compose job does. pg_isready exits 3 when it made no
+          # attempt (an invalid DATABASE_URL), which waiting cannot fix, so the
+          # script stops there and retries every other status. The first psql
+          # error fails the Job, and Helm then fails the install or upgrade.
           command: ["/bin/sh", "-c"]
           args:
             - |
-              until pg_isready -d "$DATABASE_URL"; do sleep 2; done
+              until pg_isready -d "$DATABASE_URL"; do
+                if [ $? -eq 3 ]; then
+                  echo "DATABASE_URL is not a valid connection string" >&2
+                  exit 3
+                fi
+                sleep 2
+              done
               for f in /schema/*.sql; do
                 echo "== $f"
                 psql -v ON_ERROR_STOP=1 -q -f "$f" "$DATABASE_URL" || exit 1
@@ -68,6 +78,8 @@ spec:
                 secretKeyRef:
                   name: {{ .Release.Name }}-postgresql
                   key: database-url
+          resources:
+            {{- toYaml .Values.dbSchema.resources | nindent 12 }}
           volumeMounts:
             - name: schema
               mountPath: /schema
@@ -75,5 +87,5 @@ spec:
       volumes:
         - name: schema
           configMap:
-            name: {{ include "sentinel.fullname" . }}-db-schema
+            name: {{ $name }}
 {{- end }}

@@ -1,4 +1,4 @@
-.PHONY: help proto proto-check proto-test build test lint docker-up docker-down docker-infra clean db-schema db-seed
+.PHONY: help proto proto-check proto-test build test lint docker-up docker-down docker-infra clean db-schema db-seed chart-lint
 
 SHELL := /bin/bash
 
@@ -233,7 +233,7 @@ k8s-deploy-prod: ## Deploy to production K8s cluster
 
 chart-lint: ## Lint the Helm chart and check it renders db/schema into the schema Job (needs helm; run helm dependency build k8s/charts/sentinel first)
 	helm lint k8s/charts/sentinel --set ingestService.serviceToken=lint
-	helm template sentinel k8s/charts/sentinel --set ingestService.serviceToken=lint | grep -q '70_feeds\.sql'
+	helm template sentinel k8s/charts/sentinel --set ingestService.serviceToken=lint | grep -q '^  70_feeds\.sql: '
 
 # ----------------------------------------------------------------------------
 # Cleanup
