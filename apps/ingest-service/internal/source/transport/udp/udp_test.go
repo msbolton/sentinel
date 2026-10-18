@@ -144,6 +144,19 @@ func TestUDPRejectsABadAllowlist(t *testing.T) {
 
 // State lists at most 50 senders but counts them all: the tracker holds more
 // than it renders.
+func TestUDPRefusesNonNumericPorts(t *testing.T) {
+	// A service name resolves inside net.ListenPacket, so it would bind a port
+	// the listener policy never sees; out-of-range and signed ports are refused too.
+	for _, addr := range []string{":smtp", "127.0.0.1:domain", ":70000", ":-1"} {
+		if _, err := New(transport.Config{Kind: "udp", Address: addr}); err == nil {
+			t.Errorf("%s: expected a validation error", addr)
+		}
+	}
+	if _, err := New(transport.Config{Kind: "udp", Address: "127.0.0.1:0"}); err != nil {
+		t.Errorf("port 0 should stay allowed: %v", err)
+	}
+}
+
 func TestUDPStateTruncatesSendersButCountsThemAll(t *testing.T) {
 	tr, err := New(transport.Config{Kind: "udp", Address: "127.0.0.1:9"})
 	if err != nil {

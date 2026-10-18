@@ -5,7 +5,9 @@ package udp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/sentinel/ingest-service/internal/source/transport"
@@ -45,8 +47,14 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if cfg.Address == "" {
 		return nil, errors.New("udp: address is required")
 	}
-	if _, _, err := net.SplitHostPort(cfg.Address); err != nil {
+	_, port, err := net.SplitHostPort(cfg.Address)
+	if err != nil {
 		return nil, errors.New("udp: address must be host:port")
+	}
+	// A service name such as "domain" would resolve inside ListenPacket to a
+	// port the listener policy never sees, so only a number in range is accepted.
+	if p, err := strconv.Atoi(port); err != nil || p < 0 || p > 65535 {
+		return nil, fmt.Errorf("udp: address port must be a number from 0 to 65535, not %q", port)
 	}
 	allow, err := transport.ParseAllowlist(cfg.Allow)
 	if err != nil {

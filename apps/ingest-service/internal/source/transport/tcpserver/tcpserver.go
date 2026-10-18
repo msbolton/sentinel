@@ -8,7 +8,9 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,8 +55,14 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if cfg.Address == "" {
 		return nil, errors.New("tcpserver: address is required")
 	}
-	if _, _, err := net.SplitHostPort(cfg.Address); err != nil {
+	_, port, err := net.SplitHostPort(cfg.Address)
+	if err != nil {
 		return nil, errors.New("tcpserver: address must be host:port")
+	}
+	// A service name such as "smtp" would resolve inside Listen to a port the
+	// listener policy never sees, so only a number in range is accepted.
+	if p, err := strconv.Atoi(port); err != nil || p < 0 || p > 65535 {
+		return nil, fmt.Errorf("tcpserver: address port must be a number from 0 to 65535, not %q", port)
 	}
 	t, err := cfg.TLSConfig()
 	if err != nil {

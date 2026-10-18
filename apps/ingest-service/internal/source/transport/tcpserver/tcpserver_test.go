@@ -76,6 +76,19 @@ func TestBindFailureIsFatal(t *testing.T) {
 	}
 }
 
+func TestRefusesNonNumericPorts(t *testing.T) {
+	// A service name resolves inside net.Listen, so it would bind a port the
+	// listener policy never sees; out-of-range and signed ports are refused too.
+	for _, addr := range []string{":smtp", "127.0.0.1:postgresql", ":70000", ":-1"} {
+		if _, err := New(transport.Config{Kind: "tcpserver", Address: addr}); err == nil {
+			t.Errorf("%s: expected a validation error", addr)
+		}
+	}
+	if _, err := New(transport.Config{Kind: "tcpserver", Address: "127.0.0.1:0"}); err != nil {
+		t.Errorf("port 0 should stay allowed: %v", err)
+	}
+}
+
 func detailInt(st transport.State, key string) int64 {
 	v, _ := st.Detail[key].(int64)
 	return v
