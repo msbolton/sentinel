@@ -70,6 +70,13 @@ describe('SchemaFormComponent', () => {
     fixture.detectChanges();
   }
 
+  /** The server messages shown on the control or group at `pointer`, not on the fields inside it. */
+  function serverMessages(pointer: string): string[] {
+    return Array.from(el.querySelectorAll(`[data-pointer="${pointer}"] > .sf-error-server`)).map(
+      (n) => n.textContent?.trim() ?? '',
+    );
+  }
+
   beforeEach(async () => {
     await TestBed.configureTestingModule({ imports: [SchemaFormComponent] }).compileComponents();
     fixture = TestBed.createComponent(SchemaFormComponent);
@@ -328,6 +335,45 @@ describe('SchemaFormComponent', () => {
     const unmatched = el.querySelector('.sf-unmatched');
     expect(unmatched?.textContent).toContain('/config/nope');
     expect(unmatched?.textContent).toContain('unknown property');
+  });
+
+  // The schema leaves out `outbound`, so the Delivery tuning group is one of the common options, under Advanced.
+  describe('a server problem in the Advanced section', () => {
+    it('opens it for a problem on a field inside one of its groups', () => {
+      render(streamLikeSchema);
+      expect(component.advancedOpen()).toBe(false);
+
+      fixture.componentRef.setInput('problems', [
+        { path: '/config/outbound/queueMax', message: 'minimum: got 5, want 100' },
+      ]);
+      fixture.detectChanges();
+
+      expect(component.advancedOpen()).toBe(true);
+      expect(serverMessages('/config/outbound/queueMax')).toEqual(['minimum: got 5, want 100']);
+      expect(el.querySelector('.sf-unmatched')).toBeNull();
+    });
+
+    it('opens it for a problem on one of its groups as a whole', () => {
+      render(streamLikeSchema);
+
+      fixture.componentRef.setInput('problems', [
+        { path: '/config/outbound', message: "additional properties 'retired' not allowed" },
+      ]);
+      fixture.detectChanges();
+
+      expect(component.advancedOpen()).toBe(true);
+      expect(serverMessages('/config/outbound')).toEqual(["additional properties 'retired' not allowed"]);
+    });
+
+    it('stays closed for a problem on a field outside it', () => {
+      render(streamLikeSchema);
+
+      fixture.componentRef.setInput('problems', [{ path: '/config/intervalSec', message: 'must be >= 1' }]);
+      fixture.detectChanges();
+
+      expect(serverMessages('/config/intervalSec')).toEqual(['must be >= 1']);
+      expect(component.advancedOpen()).toBe(false);
+    });
   });
 
   it('disables and re-enables every control', () => {
@@ -1473,13 +1519,6 @@ describe('SchemaFormComponent', () => {
     // for everything inside it, and a group may have no field for the property, so the message has to say
     // which property it is about.
     describe('a server problem below a JSON field or a group', () => {
-      /** The server messages shown on the control or group at `pointer`, not on the fields inside it. */
-      function serverMessages(pointer: string): string[] {
-        return Array.from(el.querySelectorAll(`[data-pointer="${pointer}"] > .sf-error-server`)).map(
-          (n) => n.textContent?.trim() ?? '',
-        );
-      }
-
       it('names the property a problem inside a JSON field is about', () => {
         render(freeFormSchema, { value: { decoderOptions: { name: 7 } } });
 

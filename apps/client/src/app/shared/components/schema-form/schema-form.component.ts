@@ -128,16 +128,6 @@ export class SchemaFormComponent {
   readonly configGroup = new FormGroup<Record<string, AbstractControl>>({});
   readonly secretGroup = new FormGroup<Record<string, AbstractControl>>({});
 
-  private readonly problemIndex = computed(() => {
-    const index = new Map<string, string[]>();
-    for (const p of this.problems()) {
-      const list = index.get(p.path) ?? [];
-      list.push(p.message);
-      index.set(p.path, list);
-    }
-    return index;
-  });
-
   /** Problems resolved to the field (or group) they belong to, else to the form. */
   private readonly resolvedProblems = computed(() => {
     const fields = this.fieldsByPointer();
@@ -203,10 +193,14 @@ export class SchemaFormComponent {
       });
     });
     effect(() => {
-      // Problems under the advanced section should be visible.
-      const index = this.problemIndex();
+      // A problem that lands on a field of the advanced section, in one of its groups too, opens the section:
+      // otherwise its message is out of sight.
+      const targets = [...this.resolvedProblems().byPointer.keys()];
       const advanced = this.advancedFields();
-      if (advanced.some((d) => index.has(d.pointer))) {
+      const inAdvanced = advanced.some((d) =>
+        targets.some((target) => target === d.pointer || target.startsWith(d.pointer + '/')),
+      );
+      if (inAdvanced) {
         untracked(() => this.advancedOpen.set(true));
       }
     });
