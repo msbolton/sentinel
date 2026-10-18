@@ -103,7 +103,10 @@ func (h *Handler) present(f registry.Feed, listeners []registry.ListenerReplica)
 		st.Health = registry.HealthUnknown
 		f.Status = &st
 	}
-	// A connection pinned to a replica runs there, not on a listener.
+	// Only a feed not running here gets this far, so a connection this
+	// replica runs (LEASE_ENABLED=false, or a failed listener lookup) is
+	// never explained away. A connection pinned to a replica runs there, not
+	// on a listener.
 	if _, _, listening := driver.ListenOf(f.Driver, f.Config); listening && f.Enabled && len(listeners) == 0 && f.Common().PinnedReplica == "" {
 		st := registry.Status{FeedID: f.ID}
 		if f.Status != nil {

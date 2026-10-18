@@ -3,6 +3,7 @@ package mgmt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,9 +19,10 @@ import (
 )
 
 type memStore struct {
-	feeds     map[string]registry.Feed
-	areas     map[string]registry.Area
-	listeners []registry.ListenerReplica
+	feeds        map[string]registry.Feed
+	areas        map[string]registry.Area
+	listeners    []registry.ListenerReplica
+	listenersErr error
 }
 
 func newMemStore() *memStore {
@@ -88,7 +90,7 @@ func (s *memStore) GetArea(_ context.Context, id string) (registry.Area, error) 
 	return a, nil
 }
 func (s *memStore) ListenerReplicas(context.Context) ([]registry.ListenerReplica, error) {
-	return s.listeners, nil
+	return s.listeners, s.listenersErr
 }
 func (s *memStore) SetArea(_ context.Context, a registry.Area) error {
 	if _, ok := s.feeds[a.FeedID]; !ok {
@@ -508,7 +510,7 @@ func TestListeningPortChecksRunOnUpdate(t *testing.T) {
 // Listening connections show why they are not running while no listener
 // replica is live, and only then.
 func TestListeningConnectionWithoutAListenerIsExplained(t *testing.T) {
-	srv, store, _ := newServer(t, "")
+	srv, store, rt := newServer(t, "")
 	create := func(name, addr, extra string) string {
 		body := `{"name":"` + name + `","driver":"stream","enabled":true,"config":{"transport":{"kind":"udp","address":"` + addr + `"},"decoder":{"name":"nmea-ais"}` + extra + `}}`
 		resp, out := do(t, srv, "POST", "/feeds", body, operator)
@@ -587,6 +589,30 @@ func TestListeningConnectionWithoutAListenerIsExplained(t *testing.T) {
 		t.Errorf("with a listener the stored status stands: %+v", st)
 	}
 	store.listeners = nil
+
+	// A connection this replica runs shows its live status, whatever the
+	// listener lookup says: LEASE_ENABLED=false runs every feed in one
+	// process, and a failed lookup reads as no listener.
+	rt.snaps = map[string]registry.Status{id: {State: registry.StateRunning, Health: registry.HealthHealthy, MessagesTotal: 7, Detail: json.RawMessage("{}")}}
+	for _, lookupErr := range []error{nil, errors.New("database down")} {
+		store.listenersErr = lookupErr
+		for _, path := range []string{"/feeds/" + id, "/feeds/" + id + "/status"} {
+			if st := read(path); st.LastError == registry.NoListenerError || st.State != registry.StateRunning || st.MessagesTotal != 7 {
+				t.Errorf("%s running here (lookup error %v) = %+v", path, lookupErr, st)
+			}
+		}
+		_, body := do(t, srv, "GET", "/feeds", "", reqOpts{})
+		var feeds []feedDTO
+		if err := json.Unmarshal(body, &feeds); err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range feeds {
+			if d.ID == id && (d.Status.LastError == registry.NoListenerError || d.Status.State != registry.StateRunning) {
+				t.Errorf("list: running here (lookup error %v) = %+v", lookupErr, d.Status)
+			}
+		}
+	}
+	store.listenersErr, rt.snaps = nil, nil
 
 	// A connection pinned to a replica runs there, not on a listener, so a
 	// missing listener says nothing about it.
