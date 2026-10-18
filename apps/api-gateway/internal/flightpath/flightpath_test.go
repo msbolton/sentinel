@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -241,3 +242,7 @@ func TestOwnBudgetStopsBeforeIntelSkyDoes(t *testing.T) {
 		t.Errorf("codes %v, hits %d (burst 10, then the budget)", codes, f.hits.Load())
 	}
 }
+
+func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
+
+func stringReader(s string) *strings.Reader { return strings.NewReader(s) }

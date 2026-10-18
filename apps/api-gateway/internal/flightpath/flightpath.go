@@ -1,8 +1,11 @@
-// Package flightpath serves where a military aircraft has flown, from
-// IntelSky's track endpoints: today's path (stats/map.php?ajax_history=1)
-// or a range of days (stats/stats.php?ajax_track=1). Browsers ask the
-// gateway, never IntelSky, and the gateway caches answers and stays well
-// under IntelSky's 200 requests a minute per IP for these endpoints.
+// Package flightpath serves where an aircraft has flown and where it is
+// going. Paths come from IntelSky's track endpoints: today's path
+// (stats/map.php?ajax_history=1) or a range of days
+// (stats/stats.php?ajax_track=1). Routes come from adsbdb, which maps a
+// callsign to its scheduled departure and arrival airports; a military
+// aircraft with no published route gets the first point IntelSky saw it at
+// today. Browsers ask the gateway, never the providers, and the gateway
+// caches answers and keeps to a request budget for each.
 package flightpath
 
 import (
@@ -71,11 +74,13 @@ type Path struct {
 
 // Options configure a Handler; zero values take the defaults.
 type Options struct {
-	BaseURL    string
-	Client     *http.Client
-	PerMinute  int
-	MaxEntries int
-	Now        func() time.Time
+	BaseURL string
+	// RoutesBaseURL is where scheduled routes come from (adsbdb).
+	RoutesBaseURL string
+	Client        *http.Client
+	PerMinute     int
+	MaxEntries    int
+	Now           func() time.Time
 }
 
 type key struct {
@@ -111,6 +116,7 @@ type Handler struct {
 	max     int
 	now     func() time.Time
 	logger  *zap.Logger
+	routes  *routes
 
 	mu       sync.Mutex
 	lru      *list.List // of *entry, most recent at the front
@@ -143,12 +149,14 @@ func NewHandler(opts Options, logger *zap.Logger) *Handler {
 		h.logger = zap.NewNop()
 	}
 	h.limiter = rate.NewLimiter(rate.Every(time.Minute/time.Duration(h.perMin)), 10)
+	h.routes = newRoutes(opts.RoutesBaseURL, h.client, h.now, h.logger)
 	return h
 }
 
 // RegisterRoutes mounts the endpoint on the protected API mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/aircraft/{hex}/path", h.handlePath)
+	mux.HandleFunc("GET /api/v1/aircraft/{hex}/route", h.handleRoute)
 }
 
 func (h *Handler) handlePath(w http.ResponseWriter, r *http.Request) {

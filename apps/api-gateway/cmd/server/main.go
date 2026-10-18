@@ -127,7 +127,7 @@ func main() {
 		Upstreams:  up,
 		Locations:  locations.NewHandler(locStore, logger),
 		Public:     []func(*http.ServeMux){regHandler.RegisterPublicRoutes},
-		Protected:  []func(*http.ServeMux){regHandler.RegisterAdminRoutes, keyHandler.RegisterRoutes, exportHandler.RegisterRoutes, flightpath.NewHandler(flightpath.Options{BaseURL: cfg.IntelSkyBaseURL}, logger).RegisterRoutes},
+		Protected:  []func(*http.ServeMux){regHandler.RegisterAdminRoutes, keyHandler.RegisterRoutes, exportHandler.RegisterRoutes, flightpath.NewHandler(flightpath.Options{BaseURL: cfg.IntelSkyBaseURL, RoutesBaseURL: cfg.AdsbdbBaseURL}, logger).RegisterRoutes},
 		Root: []func(*http.ServeMux){func(mux *http.ServeMux) {
 			mux.Handle("GET /ws/entities", authMw.RequireAuth(wsHandler))
 		}},

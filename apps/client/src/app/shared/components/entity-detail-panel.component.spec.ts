@@ -9,6 +9,7 @@ import { AuthService } from '../../core/services/auth.service';
 import { LocationService } from '../../core/services/location.service';
 import { EntityBaseline, Finding } from '../models/finding.model';
 import { FlightPathService } from '../../core/services/flight-path.service';
+import { RouteService } from '../../core/services/route.service';
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 import { Classification, Entity, EntitySource, EntityType } from '../models/entity.model';
 import { Feed } from '../models/feed.model';
@@ -486,6 +487,28 @@ describe('EntityDetailPanelComponent', () => {
       fixture.componentRef.setInput('entity', makeEntity({ entityType: EntityType.AIRCRAFT, platformData: { adsb: {} } as any }));
       fixture.detectChanges();
       expect(el.querySelector('.path-range')).toBeNull();
+    });
+  });
+
+  describe('route rows', () => {
+    it('shows departure, arrival and airline for the selected aircraft', () => {
+      const entity = makeEntity({ entityType: EntityType.AIRCRAFT, source: EntitySource.OPENSKY, name: 'BAW123', platformData: { adsb: { icaoHex: '400ABC', aircraftId: 'BAW123' } } as any });
+      TestBed.inject(RouteService).select(entity); // the map does this on selection
+      httpMock.expectOne((r) => r.url === '/api/v1/aircraft/400ABC/route').flush({
+        hex: '400ABC', callsign: 'BAW123', provider: 'adsbdb', airline: { name: 'British Airways' },
+        departure: { icao: 'EGLL', name: 'London Heathrow Airport', municipality: 'London', lat: 51.47, lon: -0.46 },
+        arrival: { icao: 'OTHH', name: 'Hamad International Airport', municipality: 'Doha', lat: 25.27, lon: 51.61 },
+      });
+      fixture.componentRef.setInput('entity', entity);
+      fixture.detectChanges();
+      (el.querySelector('[data-section="platformDetails"]') as HTMLElement).click();
+      fixture.detectChanges();
+      const rows = Array.from(el.querySelectorAll('.field-row')).map((r) => `${r.querySelector('.field-label')?.textContent?.trim()}: ${r.querySelector('.field-value')?.textContent?.trim()}`);
+      expect(rows).toContain('Departure: EGLL London Heathrow Airport');
+      expect(rows).toContain('Arrival: OTHH Hamad International Airport · Doha');
+      expect(rows).toContain('Airline: British Airways');
+      expect(el.textContent).toContain('Scheduled route for the callsign (adsbdb)');
+      TestBed.inject(RouteService).select(null);
     });
   });
 });
