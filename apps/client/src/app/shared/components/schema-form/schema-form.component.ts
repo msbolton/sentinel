@@ -294,9 +294,10 @@ export class SchemaFormComponent {
 
     this.siblingSchemas.set(this.configGroup, { ...(COMMON_OPTIONS_SCHEMA.properties ?? {}), ...properties });
 
-    // What the schema, the common options, the parent and the secrets do not claim is kept as stored.
+    // What the schema, the common options, the parent and the secrets do not claim is kept as stored,
+    // unless the schema forbids keys of its own: the server would refuse them.
     const claimed = new Set([...Object.keys(properties), ...COMMON_OPTION_KEYS, ...external, ...secretKeys]);
-    this.extras.set(undescribed(value, claimed));
+    this.extras.set(schema.additionalProperties === false ? {} : undescribed(value, claimed));
 
     const driverDefs: FieldDef[] = [];
     for (const [key, prop] of Object.entries(properties)) {
@@ -412,7 +413,9 @@ export class SchemaFormComponent {
       const children = Object.entries(prop.properties ?? {}).map(([childKey, childProp]) =>
         this.buildField(childKey, childProp, nestedRequired.has(childKey), nestedValue[childKey], group, base.pointer, base.id),
       );
-      const extras = undescribed(nestedValue, new Set(Object.keys(prop.properties ?? {})));
+      // Stored keys the group does not describe are kept, unless it forbids them.
+      const extras =
+        prop.additionalProperties === false ? {} : undescribed(nestedValue, new Set(Object.keys(prop.properties ?? {})));
       return { ...base, kind: 'group', children, extras };
     }
 

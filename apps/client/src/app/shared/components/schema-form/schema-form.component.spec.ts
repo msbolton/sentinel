@@ -780,6 +780,53 @@ describe('SchemaFormComponent', () => {
       expect(el.querySelector('.sf-extras')).toBeNull();
     });
 
+    describe('where the schema forbids extra keys', () => {
+      it('carries none at the root, and names none', () => {
+        const open: JsonSchema = { type: 'object', properties: { port: { type: 'integer' } } };
+        const value = { port: 7000, legacy: 1 };
+
+        render(open, { value });
+        expect(last().config).toEqual({ port: 7000, legacy: 1 });
+
+        // only `false` closes the schema: extra keys that must match a schema are allowed
+        render({ ...open, additionalProperties: { type: 'integer' } }, { value });
+        expect(last().config).toEqual({ port: 7000, legacy: 1 });
+
+        render({ ...open, additionalProperties: false }, { value });
+        expect(last().config).toEqual({ port: 7000 });
+        expect(el.querySelector('.sf-extras')).toBeNull();
+      });
+
+      it('carries none into a group that forbids them, but still does into one that allows them', () => {
+        render(
+          {
+            type: 'object',
+            properties: {
+              tls: { type: 'object', additionalProperties: false, properties: { enabled: { type: 'boolean' } } },
+              options: { type: 'object', additionalProperties: true, properties: { name: { type: 'string' } } },
+            },
+          },
+          { value: { tls: { enabled: true, certFile: '/x' }, options: { name: 'n', legacy: 2 } } },
+        );
+
+        expect(last().config).toEqual({ tls: { enabled: true }, options: { name: 'n', legacy: 2 } });
+        expect(el.querySelector('[data-pointer="/config/tls"]')).not.toBeNull();
+        expect(el.querySelector('[data-pointer="/config/tls"] .sf-extras')).toBeNull();
+        expect(el.querySelector('[data-pointer="/config/options"] .sf-extras')?.textContent).toContain('legacy');
+      });
+
+      it('carries none into the delivery tuning group, which common.json closes', () => {
+        render(
+          { type: 'object', properties: { port: { type: 'integer' } } },
+          { value: { port: 7000, outbound: { queueMax: 500, retired: 1 } } },
+        );
+
+        expect(el.querySelector('[data-pointer="/config/outbound"]')).not.toBeNull();
+        expect(last().config['outbound']).toEqual({ queueMax: 500 });
+        expect(el.querySelector('[data-pointer="/config/outbound"] .sf-extras')).toBeNull();
+      });
+    });
+
     it('maps a server problem inside the object to the JSON field', () => {
       render(freeFormSchema, { value: { decoderOptions: { fields: {} } } });
 

@@ -42,6 +42,7 @@ export const COMMON_OPTIONS_SCHEMA: JsonSchema = {
       type: 'object',
       title: 'Delivery tuning',
       description: 'How a sending connection paces what it delivers. Only read for connections that send.',
+      additionalProperties: false,
       properties: {
         queueMax: { type: 'integer', minimum: 1, title: 'Queue max', description: 'Events waiting to go out before the oldest are dropped.' },
         perEntityMinSec: { type: 'number', minimum: 0, title: 'Per-entity minimum (s)', description: 'Updates for one entity closer together than this are coalesced.' },

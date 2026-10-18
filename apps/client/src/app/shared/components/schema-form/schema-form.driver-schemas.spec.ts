@@ -74,6 +74,16 @@ describe('SchemaFormComponent with the driver schemas', () => {
     expect(last().config).not.toHaveProperty('allow');
   });
 
+  it('tcp: drops a tls key the schema closes the group to, and names nothing', () => {
+    // a connection stored before tls forbade file paths still carries one
+    render('tcp', { mode: 'listen', port: 6001, tls: { enabled: true, certFile: '/x' } });
+
+    expect(shown('/config/tls')).toBe(true);
+    expect(last().config['tls']).toMatchObject({ enabled: true });
+    expect(last().config['tls']).not.toHaveProperty('certFile');
+    expect(el.querySelector('[data-pointer="/config/tls"] .sf-extras')).toBeNull();
+  });
+
   it('tcp and udp: a json connection keeps decoderOptions through an edit', () => {
     const options = { records: 'ac', fields: { id: 'hex', latitude: 'lat', longitude: 'lon' } };
 
