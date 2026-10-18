@@ -207,3 +207,64 @@ func TestDropNonFiniteCoversEveryFloat(t *testing.T) {
 		}
 	}
 }
+
+// A message with identities but no source_entity_id takes its source id
+// from the first identity (R19), so identity-only senders without a
+// canonical identity get distinct entities and observation ids.
+func TestIdentityOnlyMessagesStayDistinct(t *testing.T) {
+	ship := func(imo string) *sentinelv1.Observation {
+		m := msg()
+		m.SourceEntityId = ""
+		m.Identities = []*sentinelv1.Identity{
+			{Type: sentinelv1.IdentityType_IDENTITY_TYPE_UNSPECIFIED, Value: "ignored"},
+			{Type: sentinelv1.IdentityType_IDENTITY_TYPE_IMO, Value: imo},
+			{Type: sentinelv1.IdentityType_IDENTITY_TYPE_CALLSIGN, Value: "CALL"},
+		}
+		return m
+	}
+	// Two lines in one datagram, same timestamp.
+	a, _ := protojson.Marshal(ship("9321483"))
+	b, _ := protojson.Marshal(ship("9074729"))
+	out, err := newDecoder(t, `{"encoding": "json"}`).Decode(transport.Frame{Payload: append(append(a, '\n'), b...)})
+	if err != nil || len(out) != 2 {
+		t.Fatalf("out %v err %v", out, err)
+	}
+	if out[0].SourceEntityID != "IMO:9321483" || out[1].SourceEntityID != "IMO:9074729" {
+		t.Fatalf("source entity ids = %q, %q", out[0].SourceEntityID, out[1].SourceEntityID)
+	}
+	// What the runner does next: the feed-local key and the id differ.
+	for _, o := range out {
+		o.FeedID = "feed-1"
+		o.EnsureIdentity()
+	}
+	if out[0].Identities[0] == out[1].Identities[0] {
+		t.Errorf("both keyed on %v", out[0].Identities[0])
+	}
+	if out[0].Identities[0].Type != obs.IdentityFeedLocal || out[0].Identities[0].Value != "feed-1:IMO:9321483" {
+		t.Errorf("key = %v", out[0].Identities[0])
+	}
+	if out[0].ComputeID() == out[1].ComputeID() {
+		t.Error("both observations share one id")
+	}
+
+	// A sender's own source_entity_id is kept.
+	m := ship("9321483")
+	m.SourceEntityId = "ship-1"
+	data, _ := proto.Marshal(m)
+	if out, err := newDecoder(t, `{}`).Decode(transport.Frame{Payload: data}); err != nil || out[0].SourceEntityID != "ship-1" {
+		t.Errorf("explicit id: out %v err %v", out, err)
+	}
+
+	// Identities that carry nothing (unspecified type, empty value) are no
+	// identity at all.
+	m = msg()
+	m.SourceEntityId = ""
+	m.Identities = []*sentinelv1.Identity{
+		{Type: sentinelv1.IdentityType_IDENTITY_TYPE_UNSPECIFIED, Value: "x"},
+		{Type: sentinelv1.IdentityType_IDENTITY_TYPE_IMO, Value: ""},
+	}
+	data, _ = proto.Marshal(m)
+	if _, err := newDecoder(t, `{}`).Decode(transport.Frame{Payload: data}); decoder.RejectReason(err) != "missing_identity" {
+		t.Errorf("empty identities: %v", err)
+	}
+}

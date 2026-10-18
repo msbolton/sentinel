@@ -103,6 +103,12 @@ func (d *Decoder) observation(m *sentinelv1.Observation, contentType string) (*o
 	if o.SourceEntityID == "" && len(o.Identities) == 0 {
 		return nil, decoder.Reject("missing_identity", errors.New("the message needs source_entity_id or at least one identity"))
 	}
+	// The source entity id keys the feed-local entity and the observation
+	// id, so an identity-only message borrows its first identity: without it
+	// every such message would fuse into one entity and share one id.
+	if o.SourceEntityID == "" {
+		o.SourceEntityID = o.Identities[0].Type + ":" + o.Identities[0].Value
+	}
 	// Written so only in-range values pass: NaN fails every comparison.
 	if o.HasPosition && !(o.Latitude >= -90 && o.Latitude <= 90 && o.Longitude >= -180 && o.Longitude <= 180) {
 		return nil, decoder.Reject("bad_position", fmt.Errorf("position %v, %v is outside WGS84 bounds", o.Latitude, o.Longitude))
