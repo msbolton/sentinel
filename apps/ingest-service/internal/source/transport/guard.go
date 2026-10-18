@@ -97,7 +97,10 @@ type SenderStat struct {
 
 // MalformedNoter is implemented by a transport that tells its senders apart,
 // so the stream driver can report each message from remote that did not
-// decode. It is defined here so that this package needs no driver imports.
+// decode. remote is the frame's Remote after RedactRemote; a transport whose
+// remotes can be URLs redacts them the same way wherever it names a sender
+// (Seen, say), or one sender would appear under two names. It is defined here
+// so that this package needs no driver imports.
 type MalformedNoter interface {
 	NoteMalformed(remote, reason, errText string)
 }

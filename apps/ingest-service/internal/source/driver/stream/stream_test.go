@@ -335,6 +335,32 @@ func TestProvenanceFromATransportWithoutSenders(t *testing.T) {
 	}
 }
 
+// A WebSocket feed's remote is the URL it is configured with, which usually
+// carries an API key in its query. The sender on the dead letter and the
+// remote a listener is told to note have the user, query and fragment removed,
+// so none of them reaches the dead-letter topic or the health detail.
+func TestURLCredentialsStayOutOfDeadLetterProvenance(t *testing.T) {
+	const remote = "wss://user:tok@feed.example.com:443/stream?key=abc#top"
+	const want = "wss://feed.example.com:443/stream"
+	tr := &noteTransport{originTransport: originTransport{frame: transport.Frame{Payload: []byte("x"), ReceivedAt: time.Now().UTC(), Remote: remote}}}
+	d := newFakeDriver(driver.BackpressureBlock, tr, panicDecoder{})
+	d.noter = tr
+	sink := &provSink{memSink: newSink()}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = d.Run(ctx, sink) }()
+	defer func() { cancel(); <-done }()
+	if !waitFor(func() bool { return len(sink.fromLetters()) == 1 }, time.Second) {
+		t.Fatal("no dead letter")
+	}
+	if got := sink.fromLetters()[0].p.Sender; got != want {
+		t.Errorf("sender = %q, want %q", got, want)
+	}
+	if notes := tr.notes(); len(notes) != 1 || notes[0] != want {
+		t.Errorf("noted remotes = %q, want only %q", notes, want)
+	}
+}
+
 // originTransport emits one frame as given.
 type originTransport struct{ frame transport.Frame }
 
@@ -344,6 +370,26 @@ func (o *originTransport) Run(ctx context.Context, emit transport.Emit) error {
 	return nil
 }
 func (o *originTransport) State() transport.State { return transport.State{Connected: true} }
+
+// noteTransport is an originTransport that, as a listener does, takes note of
+// each undecodable message: it keeps the remote it was told of.
+type noteTransport struct {
+	originTransport
+	mu    sync.Mutex
+	noted []string
+}
+
+func (n *noteTransport) NoteMalformed(remote, _, _ string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.noted = append(n.noted, remote)
+}
+
+func (n *noteTransport) notes() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]string(nil), n.noted...)
+}
 
 func TestBackpressurePolicies(t *testing.T) {
 	saved := FrameBuffer

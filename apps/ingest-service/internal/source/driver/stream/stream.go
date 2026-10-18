@@ -351,11 +351,14 @@ func (d *Driver) decodeOne(ctx context.Context, f transport.Frame, sink driver.S
 			reason = "panic"
 		}
 		d.malformed.Add(1)
+		// A WebSocket feed's remote is its URL, which can carry an API key, so
+		// the sender is noted and reported in its redacted form.
+		sender := transport.RedactRemote(f.Remote)
 		if d.noter != nil {
-			d.noter.NoteMalformed(f.Remote, reason, msg)
+			d.noter.NoteMalformed(sender, reason, msg)
 		}
 		if ps, ok := sink.(driver.ProvenanceSink); ok {
-			ps.DeadLetterFrom(f.Payload, reason, err, driver.Provenance{Decoder: d.ddef.Name, Sender: f.Remote, ReceivedAt: f.ReceivedAt})
+			ps.DeadLetterFrom(f.Payload, reason, err, driver.Provenance{Decoder: d.ddef.Name, Sender: sender, ReceivedAt: f.ReceivedAt})
 		} else {
 			sink.DeadLetter(f.Payload, reason, err)
 		}

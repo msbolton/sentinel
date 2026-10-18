@@ -112,7 +112,9 @@ type Sink interface {
 type Provenance struct {
 	// Decoder is the decoder that refused the payload.
 	Decoder string
-	// Sender is the remote address, topic or queue the payload came from.
+	// Sender is the remote address, topic, queue or URL the payload came
+	// from. A URL arrives without its user, query and fragment, which can
+	// hold credentials (transport.RedactRemote).
 	Sender string
 	// ReceivedAt is when the frame arrived, which may be well before it was
 	// decoded; zero when the payload was never a frame.

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"sync"
 	"time"
@@ -18,8 +19,28 @@ import (
 type Frame struct {
 	Payload    []byte
 	ReceivedAt time.Time
-	Remote     string            // peer address, topic or queue the frame came from
+	Remote     string            // peer address, topic, queue or URL the frame came from; see RedactRemote
 	Attrs      map[string]string // transport-specific metadata (MQTT topic, STOMP headers)
+}
+
+// RedactRemote returns remote without the parts of a URL that can hold a
+// secret: the user and password, the query and the fragment. A remote is
+// normally a peer address, a topic or a queue, and comes back as it is; a
+// WebSocket feed's is the URL it is configured with, which can carry a token.
+// Anything that leaves the process (the dead-letter topic, the health detail)
+// should pass a Frame.Remote through it first. Only text that parses as a URL
+// with a scheme is touched, and one with nothing to strip is returned exactly
+// as written.
+func RedactRemote(remote string) string {
+	u, err := url.Parse(remote)
+	if err != nil || u.Scheme == "" {
+		return remote
+	}
+	if u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" {
+		return remote
+	}
+	u.User, u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment = nil, "", false, "", ""
+	return u.String()
 }
 
 // ErrBackpressure is returned by an Emit when the feed cannot take the frame
