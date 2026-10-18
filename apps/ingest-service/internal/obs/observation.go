@@ -138,6 +138,10 @@ type Observation struct {
 	// configured default and never lowers it.
 	Classification string
 
+	// Background marks a slow refresh of an object outside every detail
+	// viewport: it updates the entity but stays out of track history.
+	Background bool
+
 	AIS    *AISData
 	ADSB   *ADSBData
 	TLE    *TLEData

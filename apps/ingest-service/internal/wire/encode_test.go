@@ -97,3 +97,14 @@ func TestKeyAndHeaders(t *testing.T) {
 		t.Error("no fence header without a lease")
 	}
 }
+
+func TestBackgroundOnWire(t *testing.T) {
+	o := sample()
+	if ToProto(o).Background {
+		t.Error("observations are foreground by default")
+	}
+	o.Background = true
+	if !ToProto(o).Background {
+		t.Error("background flag lost")
+	}
+}

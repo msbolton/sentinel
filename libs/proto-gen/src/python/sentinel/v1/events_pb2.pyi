@@ -12,18 +12,20 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class ObservationRef(_message.Message):
-    __slots__ = ("observation_id", "feed_id", "source", "source_entity_id", "source_timestamp")
+    __slots__ = ("observation_id", "feed_id", "source", "source_entity_id", "source_timestamp", "background")
     OBSERVATION_ID_FIELD_NUMBER: _ClassVar[int]
     FEED_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     SOURCE_ENTITY_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
+    BACKGROUND_FIELD_NUMBER: _ClassVar[int]
     observation_id: str
     feed_id: str
     source: _entity_pb2.EntitySource
     source_entity_id: str
     source_timestamp: _timestamp_pb2.Timestamp
-    def __init__(self, observation_id: _Optional[str] = ..., feed_id: _Optional[str] = ..., source: _Optional[_Union[_entity_pb2.EntitySource, str]] = ..., source_entity_id: _Optional[str] = ..., source_timestamp: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    background: bool
+    def __init__(self, observation_id: _Optional[str] = ..., feed_id: _Optional[str] = ..., source: _Optional[_Union[_entity_pb2.EntitySource, str]] = ..., source_entity_id: _Optional[str] = ..., source_timestamp: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., background: _Optional[bool] = ...) -> None: ...
 
 class EntityCreated(_message.Message):
     __slots__ = ("entity", "observation")

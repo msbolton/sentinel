@@ -148,6 +148,13 @@ export interface Observation {
    * highest level any contributing observation carried.
    */
   classification: Classification;
+  /**
+   * A slow refresh of an object nobody is looking at closely (outside every
+   * detail viewport): it updates the entity's latest position, which search
+   * and alerts read, but is kept out of track history and the observation
+   * archive.
+   */
+  background: boolean;
 }
 
 function createBaseRawPayload(): RawPayload {
@@ -275,6 +282,7 @@ function createBaseObservation(): Observation {
     replicaId: "",
     fencingToken: 0,
     classification: Classification.UNSPECIFIED,
+    background: false,
   };
 }
 
@@ -381,6 +389,9 @@ export const Observation = {
     }
     if (message.classification !== Classification.UNSPECIFIED) {
       writer.uint32(272).int32(classificationToNumber(message.classification));
+    }
+    if (message.background !== false) {
+      writer.uint32(280).bool(message.background);
     }
     return writer;
   },
@@ -630,6 +641,13 @@ export const Observation = {
 
           message.classification = classificationFromJSON(reader.int32());
           continue;
+        case 35:
+          if (tag !== 280) {
+            break;
+          }
+
+          message.background = reader.bool();
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -691,6 +709,7 @@ export const Observation = {
       classification: isSet(object.classification)
         ? classificationFromJSON(object.classification)
         : Classification.UNSPECIFIED,
+      background: isSet(object.background) ? globalThis.Boolean(object.background) : false,
     };
   },
 
@@ -798,6 +817,9 @@ export const Observation = {
     if (message.classification !== Classification.UNSPECIFIED) {
       obj.classification = classificationToJSON(message.classification);
     }
+    if (message.background !== false) {
+      obj.background = message.background;
+    }
     return obj;
   },
 
@@ -861,6 +883,7 @@ export const Observation = {
     message.replicaId = object.replicaId ?? "";
     message.fencingToken = object.fencingToken ?? 0;
     message.classification = object.classification ?? Classification.UNSPECIFIED;
+    message.background = object.background ?? false;
     return message;
   },
 };

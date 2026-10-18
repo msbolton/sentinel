@@ -158,7 +158,10 @@ func (p *Processor) ProcessBatch(ctx context.Context, observations []*sentinelv1
 			stats.Rejected[r.Reject]++
 			continue
 		}
-		rows = append(rows, observationRow(id, r))
+		// Background refreshes update the entity but are not archived.
+		if !r.Obs.Background {
+			rows = append(rows, observationRow(id, r))
+		}
 		srcRows = append(srcRows, store.SourceRow{EntityID: id, FeedID: r.Obs.FeedId, Source: pbjson.EnumName(r.Obs.Source), SourceEntityID: r.Obs.SourceEntityId, ObservedAt: r.ObservedAt, ReceivedAt: r.ReceivedAt, Count: 1})
 		if r.Valid {
 			stats.Accepted++
@@ -282,7 +285,7 @@ func observationRow(id string, r *Report) store.ObservationRow {
 
 func observationRef(r *Report) *sentinelv1.ObservationRef {
 	o := r.Obs
-	return &sentinelv1.ObservationRef{ObservationId: o.ObservationId, FeedId: o.FeedId, Source: o.Source, SourceEntityId: o.SourceEntityId, SourceTimestamp: timestamppb.New(r.ObservedAt)}
+	return &sentinelv1.ObservationRef{ObservationId: o.ObservationId, FeedId: o.FeedId, Source: o.Source, SourceEntityId: o.SourceEntityId, SourceTimestamp: timestamppb.New(r.ObservedAt), Background: o.Background}
 }
 
 func contribution(r *Report) *sentinelv1.SourceContribution {

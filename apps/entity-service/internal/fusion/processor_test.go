@@ -88,13 +88,18 @@ type event struct {
 	extra  string
 }
 
-type memSink struct{ events []event }
-
-func (m *memSink) Created(e *sentinelv1.Entity, _ *sentinelv1.ObservationRef) {
-	m.events = append(m.events, event{"created", e, ""})
+type memSink struct {
+	events []event
+	refs   []*sentinelv1.ObservationRef
 }
-func (m *memSink) Position(e *sentinelv1.Entity, _ *sentinelv1.ObservationRef) {
+
+func (m *memSink) Created(e *sentinelv1.Entity, ref *sentinelv1.ObservationRef) {
+	m.events = append(m.events, event{"created", e, ""})
+	m.refs = append(m.refs, ref)
+}
+func (m *memSink) Position(e *sentinelv1.Entity, ref *sentinelv1.ObservationRef) {
 	m.events = append(m.events, event{"position", e, ""})
+	m.refs = append(m.refs, ref)
 }
 func (m *memSink) Restored(e *sentinelv1.Entity, prev string) {
 	m.events = append(m.events, event{"restored", e, prev})
@@ -252,5 +257,27 @@ func TestClassificationRaiseIsAnnounced(t *testing.T) {
 	}
 	if sink.events[3].entity.Classification != sentinelv1.Classification_CLASSIFICATION_SECRET {
 		t.Errorf("position snapshot classification = %v", sink.events[3].entity.Classification)
+	}
+}
+
+func TestBackgroundFixesMoveTheEntityButAreNotArchived(t *testing.T) {
+	p, _, ents, obsw, srcs, sink := newTestProcessor()
+	first := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t0, 41.9, -87.9), "o1")
+	later := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t0.Add(2*time.Minute), 42.0, -88.0), "o2")
+	first.Background, later.Background = true, true
+	if _, err := p.ProcessBatch(context.Background(), []*sentinelv1.Observation{first}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.ProcessBatch(context.Background(), []*sentinelv1.Observation{later}); err != nil {
+		t.Fatal(err)
+	}
+	if len(obsw.rows) != 0 {
+		t.Errorf("archived %d background observations", len(obsw.rows))
+	}
+	if len(srcs.rows) != 2 || len(ents.fused) != 2 {
+		t.Errorf("sources %d, fused %d: the entity must still move", len(srcs.rows), len(ents.fused))
+	}
+	if len(sink.refs) != 2 || !sink.refs[0].Background || !sink.refs[1].Background || sink.events[1].kind != "position" {
+		t.Errorf("events %+v refs %+v", sink.events, sink.refs)
 	}
 }

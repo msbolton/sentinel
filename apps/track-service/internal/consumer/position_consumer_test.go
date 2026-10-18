@@ -38,6 +38,13 @@ func TestPointFromEventUsesObservationProvenance(t *testing.T) {
 		t.Errorf("created point = %+v ok=%v", p, ok)
 	}
 
+	// A background refresh moves the entity but adds no track point.
+	bg := proto.Clone(ev).(*sentinelv1.EntityEvent)
+	bg.GetPosition().Observation.Background = true
+	if _, ok := PointFromEvent(bg); ok {
+		t.Error("a background refresh must not produce a track point")
+	}
+
 	// No position or an unrelated event type yields nothing.
 	if _, ok := PointFromEvent(&sentinelv1.EntityEvent{Event: &sentinelv1.EntityEvent_Deleted{Deleted: &sentinelv1.EntityDeleted{}}}); ok {
 		t.Error("deleted event must not produce a point")
