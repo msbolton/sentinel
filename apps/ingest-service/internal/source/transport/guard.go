@@ -151,10 +151,10 @@ func SenderIP(remote string) string {
 // SenderStat is one sender as health reports it. LastAt is left out until the
 // sender has sent something (a connection that has not yet is listed too).
 // Messages counts the sender's messages that were taken in; RateLimited counts
-// those dropped for going over the sender's own rate limit. Malformed counts
-// the sender's messages that did not decode; the last of them is described by
-// LastReason, LastError and LastMalformedAt, which are left out until there
-// is one.
+// those dropped for going over the sender's own rate limit while it was
+// listed. Malformed counts the sender's messages that did not decode; the last
+// of them is described by LastReason, LastError and LastMalformedAt, which are
+// left out until there is one.
 type SenderStat struct {
 	Remote    string    `json:"remote"`
 	Since     time.Time `json:"since"`
@@ -245,18 +245,19 @@ func (s *Senders) Seen(remote string, now time.Time) {
 	e.LastAt = now
 }
 
-// RateLimited records that a message from remote was dropped for going over
-// the sender's own rate limit. The message was not taken in, so it is not
-// counted by Seen and does not make the sender look newer. A sender evicted
-// while its bucket lived on is tracked afresh, with LastAt set, which Snapshot
-// needs to keep it.
-func (s *Senders) RateLimited(remote string, now time.Time) {
+// RateLimited records that n messages from remote were dropped for going over
+// the sender's own rate limit. They were not taken in, so Seen has not counted
+// them and they do not make the sender look newer. Only a sender the list
+// holds is counted: a drop is no reason to track one, and a new row in a full
+// list evicts another by a scan of the whole list, which sources rotating
+// through more addresses than the list holds would make the listener pay for
+// every dropped message. The listener's own counter counts every drop, listed
+// sender or not.
+func (s *Senders) RateLimited(remote string, n int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e := s.entry(remote, now)
-	e.RateLimited++
-	if e.LastAt.IsZero() {
-		e.LastAt = now
+	if e, ok := s.m[remote]; ok {
+		e.RateLimited += n
 	}
 }
 

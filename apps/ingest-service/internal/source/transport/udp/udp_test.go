@@ -305,6 +305,79 @@ func TestPerSenderLimitIsolatesSenders(t *testing.T) {
 	}
 }
 
+// A datagram of lines is asked of the sender's bucket at one instant, so once
+// a line is refused the rest are: they are dropped and counted together, and
+// the lines that passed first are delivered.
+func TestPerSenderLimitCountsTheRestOfADatagram(t *testing.T) {
+	addr := freeUDPAddr(t)
+	tr, err := New(transport.Config{Kind: "udp", Address: addr, MaxMessagesPerSecPerSender: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	col := &transporttest.Collector{}
+	stop := transporttest.Run(t, tr, col.Emit)
+	defer stop()
+	if !transporttest.WaitFor(func() bool { return tr.State().Connected }, 2*time.Second) {
+		t.Fatal("listener not up")
+	}
+	c, err := net.Dial("udp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, _ = c.Write([]byte("a\nb\nc\nd\ne\n"))
+	counter := func(key string) int64 { v, _ := tr.State().Detail[key].(int64); return v }
+	if !transporttest.WaitFor(func() bool { return counter("accepted")+counter("senderRateLimited") == 5 }, 2*time.Second) {
+		t.Fatalf("accepted + senderRateLimited never reached 5: %+v", tr.State().Detail)
+	}
+	if counter("accepted") != 2 || counter("senderRateLimited") != 3 || counter("rateLimited") != 0 {
+		t.Errorf("accepted %d, senderRateLimited %d, rateLimited %d; want 2, 3, 0", counter("accepted"), counter("senderRateLimited"), counter("rateLimited"))
+	}
+	if got := col.Payloads(); !slices.Equal(got, []string{"a", "b"}) {
+		t.Errorf("delivered %q, want the lines that passed the sender's bucket: a and b", got)
+	}
+	if s := sendersOf(t, tr)["127.0.0.1"]; s.Messages != 2 || s.RateLimited != 3 {
+		t.Errorf("127.0.0.1 = %+v, want 2 messages and 3 rate limited", s)
+	}
+}
+
+// A datagram dropped by its sender's bucket adds no row to the senders list,
+// whose full list would evict another sender, by a scan, for it. Here the
+// sender's bucket is spent by hand for the next hour, standing in for a sender
+// the list has forgotten while the limiter still remembers it: the drop is
+// counted by the listener and by no row.
+func TestDroppedDatagramAddsNoSenderRow(t *testing.T) {
+	addr := freeUDPAddr(t)
+	tr, err := New(transport.Config{Kind: "udp", Address: addr, MaxMessagesPerSecPerSender: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tr.(*Listener).perSender.Allow("127.0.0.1", time.Now().Add(time.Hour)) {
+		t.Fatal("a new sender's first message was refused")
+	}
+	col := &transporttest.Collector{}
+	stop := transporttest.Run(t, tr, col.Emit)
+	defer stop()
+	if !transporttest.WaitFor(func() bool { return tr.State().Connected }, 2*time.Second) {
+		t.Fatal("listener not up")
+	}
+	c, err := net.Dial("udp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, _ = c.Write([]byte("a\nb\n"))
+	if !transporttest.WaitFor(func() bool { v, _ := tr.State().Detail["senderRateLimited"].(int64); return v == 2 }, 2*time.Second) {
+		t.Fatalf("the sender's lines were not dropped for its rate: %+v", tr.State().Detail)
+	}
+	if senders := sendersOf(t, tr); len(senders) != 0 || tr.State().Detail["distinctSenders"] != 0 {
+		t.Errorf("senders = %+v, want none: a dropped datagram is no reason to list its sender", senders)
+	}
+	if col.Count() != 0 {
+		t.Errorf("delivered %q, want nothing", col.Payloads())
+	}
+}
+
 func TestUDPBindConflictIsExplained(t *testing.T) {
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {

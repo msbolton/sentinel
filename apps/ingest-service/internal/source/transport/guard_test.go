@@ -321,9 +321,12 @@ func TestSendersMalformed(t *testing.T) {
 	})
 }
 
-// A message dropped by a sender's own limit is counted against that sender. It
-// was not accepted, so it is not one of the sender's messages and does not make
-// the sender look newer.
+// A message dropped by a sender's own limit is counted against that sender's
+// row. It was not accepted, so it is not one of the sender's messages and does
+// not make the sender look newer. A drop never adds a row: with the list full,
+// a new row evicts another by a scan of the whole list, which sources rotating
+// through more addresses than the list holds would make the listener pay for
+// every dropped message. The listener's own counter counts every drop anyway.
 func TestSendersRateLimited(t *testing.T) {
 	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 	snapshot := func(s *Senders, now time.Time) map[string]SenderStat {
@@ -335,27 +338,28 @@ func TestSendersRateLimited(t *testing.T) {
 		return out
 	}
 
-	s := NewSenders(10)
+	s := NewSenders(2)
 	s.Seen("a:1", t0)
-	s.RateLimited("a:1", t0.Add(time.Second))
-	s.RateLimited("a:1", t0.Add(2*time.Second))
+	s.RateLimited("a:1", 1)
+	s.RateLimited("a:1", 3) // the rest of a datagram of lines, counted in one step
 	a, ok := snapshot(s, t0.Add(3*time.Second))["a:1"]
-	if !ok || a.RateLimited != 2 || a.Messages != 1 || !a.LastAt.Equal(t0) {
-		t.Errorf("a:1 = %+v (%v), want 2 rate limited, 1 message and lastAt %v", a, ok, t0)
+	if !ok || a.RateLimited != 4 || a.Messages != 1 || !a.LastAt.Equal(t0) {
+		t.Errorf("a:1 = %+v (%v), want 4 rate limited, 1 message and lastAt %v", a, ok, t0)
 	}
 	if a.Malformed != 0 {
 		t.Errorf("a:1 malformed = %d, want none: a message dropped for its rate never reached a decoder", a.Malformed)
 	}
 
-	// A sender the table forgot while its bucket lived on is tracked afresh,
-	// with LastAt set, which Snapshot needs to keep it.
-	s.RateLimited("x:1", t0.Add(time.Minute))
-	x, ok := snapshot(s, t0.Add(time.Minute+time.Second))["x:1"]
-	if !ok {
-		t.Fatal("a sender whose only message was rate limited was dropped by Snapshot")
+	// The list is full once b:1 is in. A drop for x:1, which it does not hold,
+	// adds no row and so evicts none: a:1 and b:1 stay as they were.
+	s.Seen("b:1", t0.Add(time.Minute))
+	s.RateLimited("x:1", 5)
+	got := snapshot(s, t0.Add(time.Minute+2*time.Second))
+	if _, ok := got["x:1"]; ok {
+		t.Errorf("senders = %+v, want no row for x:1: a dropped message is no reason to track a sender", got)
 	}
-	if x.RateLimited != 1 || x.Messages != 0 || !x.Since.Equal(t0.Add(time.Minute)) || !x.LastAt.Equal(t0.Add(time.Minute)) {
-		t.Errorf("x:1 = %+v, want 1 rate limited, no messages, since and lastAt at %v", x, t0.Add(time.Minute))
+	if len(got) != 2 || got["a:1"].RateLimited != 4 || got["a:1"].Messages != 1 || got["b:1"].Messages != 1 {
+		t.Errorf("senders = %+v, want a:1 (1 message, 4 rate limited) and b:1 (1 message) still listed", got)
 	}
 }
 

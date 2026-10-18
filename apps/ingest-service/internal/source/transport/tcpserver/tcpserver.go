@@ -129,7 +129,7 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 		return func(ctx context.Context, f transport.Frame) error {
 			if !s.perSender.Allow(host, f.ReceivedAt) {
 				s.counts.SenderRateLimited.Add(1)
-				s.senders.RateLimited(f.Remote, f.ReceivedAt)
+				s.senders.RateLimited(f.Remote, 1)
 				return nil
 			}
 			if !s.limit.Allow() {
