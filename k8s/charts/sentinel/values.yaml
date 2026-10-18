@@ -238,7 +238,20 @@ postgresql:
           LOAD 'age';
           SET search_path = ag_catalog, "$user", public;
           SELECT create_graph('entity_graph');
-          CREATE SCHEMA IF NOT EXISTS sentinel;
+          -- Owned by the role the services connect as, so that the dbSchema Job
+          -- (which runs as that role) can create and alter the tables. The name
+          -- must be postgresql.auth.username; a values file is not templated.
+          CREATE SCHEMA IF NOT EXISTS sentinel AUTHORIZATION sentinel;
+          -- The GeoServer role, created here without a password so that
+          -- 90_gis_views.sql finds it and needs no CREATEROLE. It cannot log in
+          -- until ALTER ROLE sentinel_gis PASSWORD sets one.
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sentinel_gis') THEN
+              CREATE ROLE sentinel_gis LOGIN;
+            END IF;
+          END
+          $$;
     resources:
       requests:
         cpu: 500m
@@ -251,13 +264,24 @@ postgresql:
 
 # Applies db/schema with a Helm hook Job: after the first install creates the
 # release's resources, and before every upgrade (a failing Job aborts it). It
-# runs the files in name order, every one idempotent, as the role in the
-# database-url key of the <release>-postgresql Secret, the role the services
-# connect as. Helm waits for the Job for as long as --timeout (5m by default);
-# the Job itself gives up after activeDeadlineSeconds. On a first install leave
-# out --wait and --atomic: Helm would wait for ingest pods that cannot start
-# until this Job has run. Needs Helm: kubectl apply of the rendered chart
-# ignores hooks.
+# runs the files in name order, every one idempotent. Helm waits for the Job for
+# as long as --timeout (5m by default); the Job itself gives up after
+# activeDeadlineSeconds. On a first install leave out --wait and --atomic: Helm
+# would wait for ingest pods that cannot start until this Job has run. Needs
+# Helm: kubectl apply of the rendered chart ignores hooks.
+#
+# What the database must provide for the Job to work as a plain role:
+# - The Job connects as the role in the database-url key of the
+#   <release>-postgresql Secret. That role must be postgresql.auth.username, the
+#   role the services and the gateway use. No chart template creates the key;
+#   the operator supplies it.
+# - That role owns schema sentinel, and the role sentinel_gis exists. The
+#   postgresql initdb script above creates both, but only on an empty data
+#   directory: an existing release needs, once and as a superuser, ALTER SCHEMA
+#   sentinel OWNER TO <role> and CREATE ROLE sentinel_gis LOGIN.
+# - sentinel_gis has no password, so it cannot log in until ALTER ROLE
+#   sentinel_gis PASSWORD ... sets the one GeoServer's provisioning uses
+#   (GIS_DB_PASSWORD, from geoserver.gisDbPassword).
 dbSchema:
   enabled: true
   image: postgres:16-alpine   # needs psql and pg_isready
