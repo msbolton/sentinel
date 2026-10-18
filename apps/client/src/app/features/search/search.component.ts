@@ -11,6 +11,7 @@ import {
   PaginatedResponse,
 } from '../../shared/models/entity.model';
 import { EntityService } from '../../core/services/entity.service';
+import { EntityFocusService } from '../../core/services/entity-focus.service';
 import { MapComponent } from '../map/map.component';
 
 @Component({
@@ -38,7 +39,10 @@ export class SearchComponent implements OnInit, OnDestroy {
   private searchSubject = new Subject<string>();
   private subscriptions = new Subscription();
 
-  constructor(private readonly entityService: EntityService) {}
+  constructor(
+    private readonly entityService: EntityService,
+    private readonly entityFocus: EntityFocusService,
+  ) {}
 
   ngOnInit(): void {
     const sub = this.searchSubject
@@ -124,9 +128,21 @@ export class SearchComponent implements OnInit, OnDestroy {
     );
   }
 
+  /** Selects the entity on the map (the panel sits over it) and flies there. */
   selectEntity(entity: Entity): void {
-    // TODO: Fly to entity on map
-    console.log('Selected entity:', entity.id, entity.name);
+    const p = entity.position;
+    this.entityFocus.focus({
+      entityId: entity.id,
+      position: p ? { latitude: p.latitude, longitude: p.longitude } : undefined,
+      label: entity.name,
+    });
+  }
+
+  /** Enter on a result card selects it. */
+  onCardKey(entity: Entity, event: Event): void {
+    if (event.target !== event.currentTarget) return;
+    event.preventDefault();
+    this.selectEntity(entity);
   }
 
   getEntityTypeColor(type: EntityType): string {
