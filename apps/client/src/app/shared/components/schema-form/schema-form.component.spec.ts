@@ -870,7 +870,7 @@ describe('SchemaFormComponent', () => {
         expect(el.querySelector('[data-pointer="/config/options"] .sf-extras')?.textContent).toContain('legacy');
       });
 
-      it('carries none into the delivery tuning group, which common.json closes', () => {
+      it('carries none into the delivery tuning group, which COMMON_OPTIONS_SCHEMA closes', () => {
         render(
           { type: 'object', properties: { port: { type: 'integer' } } },
           { value: { port: 7000, outbound: { queueMax: 500, retired: 1 } } },
