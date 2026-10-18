@@ -36,7 +36,7 @@ type Info struct {
 	ID           string          `json:"id"`
 	Name         string          `json:"name"`
 	Description  string          `json:"description"`
-	Source       string          `json:"source"` // EntitySource label written on observations ("" when the decoder decides)
+	Source       string          `json:"source"`    // EntitySource label written on observations ("" when the decoder decides)
 	Direction    string          `json:"direction"` // in | out | both
 	Capabilities []string        `json:"capabilities"`
 	ConfigSchema json.RawMessage `json:"configSchema"`
