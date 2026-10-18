@@ -237,18 +237,26 @@ func TestType24PartBWithoutPartA(t *testing.T) {
 	}
 }
 
-func TestType24StaleNameEvicted(t *testing.T) {
-	d, _ := New(nil)
-	old := transport.Frame{Payload: []byte(type24A), Remote: "r", ReceivedAt: time.Now().Add(-11 * time.Minute)}
-	if _, err := d.Decode(old); err != nil {
-		t.Fatal(err)
-	}
-	out, err := d.Decode(frame(type24B))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out[0].DisplayName != "TC6163" || len(d.(*Decoder).names) != 0 {
-		t.Errorf("stale part A name must have been evicted, got %q (cache %v)", out[0].DisplayName, d.(*Decoder).names)
+func TestType24NameKeptForADay(t *testing.T) {
+	for _, tc := range []struct {
+		age  time.Duration
+		want string
+	}{
+		{11 * time.Minute, "PROGUY"},
+		{25 * time.Hour, "TC6163"},
+	} {
+		d, _ := New(nil)
+		old := transport.Frame{Payload: []byte(type24A), Remote: "r", ReceivedAt: time.Now().Add(-tc.age)}
+		if _, err := d.Decode(old); err != nil {
+			t.Fatal(err)
+		}
+		out, err := d.Decode(frame(type24B))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out[0].DisplayName != tc.want {
+			t.Errorf("part A %v before part B: name %q, want %q", tc.age, out[0].DisplayName, tc.want)
+		}
 	}
 }
 
