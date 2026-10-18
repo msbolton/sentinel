@@ -27,6 +27,12 @@ alertService:
 ingestService:
   replicaCount: 1
 
+# TCP/UDP listening connections need the ingest listener, which only runs on a
+# labelled node. To enable it, label a node
+# (kubectl label node <name> sentinel.io/ingest-listener=true) and set enabled: true.
+ingestListener:
+  enabled: false
+
 analyticsService:
   replicaCount: 1
 

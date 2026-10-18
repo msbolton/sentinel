@@ -151,7 +151,8 @@ ingestListener:
   # Runs the TCP/UDP connections external systems send to, with
   # hostNetwork on a labelled node so any port chosen in Connections is
   # reachable on that node's address. Open those ports in the node's
-  # firewall or security group.
+  # firewall or security group. Label the node first, or the Pod stays
+  # Pending: kubectl label node <name> sentinel.io/ingest-listener=true
   enabled: true
   host: ""            # address senders use; defaults to the node IP
   nodeSelector:

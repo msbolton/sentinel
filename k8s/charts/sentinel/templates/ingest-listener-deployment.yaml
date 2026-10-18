@@ -11,6 +11,11 @@ metadata:
 spec:
   # One replica: it binds ports on a single node's host network.
   replicas: 1
+  # Recreate, not RollingUpdate: a hostNetwork pod's ports count as taken on
+  # its node, so a surge pod could never schedule beside the old one and the
+  # rollout would stall.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: ingest-listener
