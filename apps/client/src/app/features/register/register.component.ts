@@ -56,11 +56,7 @@ interface RegisterForm {
           </div>
         } @else {
           <!-- Registration form -->
-          <div class="logo-mark">
-            <div class="crosshair">
-              <div class="crosshair-dot"></div>
-            </div>
-          </div>
+          <img class="logo-mark" src="assets/brand/sentinel-icon-256.png" alt="SENTINEL" width="72" height="72" />
           <h1 class="app-title">SENTINEL</h1>
           <p class="app-subtitle">Geospatial Intelligence Platform</p>
           <div class="divider"></div>
@@ -382,34 +378,12 @@ interface RegisterForm {
 
     /* Logo mark */
     .logo-mark {
-      width: 52px;
-      height: 52px;
+      display: block;
+      width: 72px;
+      height: 72px;
       margin: 0 auto 18px;
-      border-radius: 10px;
-      background: linear-gradient(135deg, #3b82f6, #2563eb);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 0 24px rgba(59, 130, 246, 0.3);
-    }
-
-    .crosshair {
-      width: 22px;
-      height: 22px;
-      border: 2.5px solid rgba(255, 255, 255, 0.9);
-      border-radius: 50%;
-      position: relative;
-    }
-
-    .crosshair-dot {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 5px;
-      height: 5px;
-      background: white;
-      border-radius: 50%;
+      border-radius: 16px;
+      box-shadow: 0 0 28px rgba(37, 99, 235, 0.45), 0 0 6px rgba(59, 130, 246, 0.6);
     }
 
     .app-title {
