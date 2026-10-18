@@ -13,8 +13,6 @@ export interface SendTarget {
   framing: string;
   tls: boolean;
   requireClientCert: boolean;
-  /** The name a sender checks the listener's certificate against, when the config sets one; else the host. */
-  serverName: string;
   /** IP addresses and CIDR ranges allowed to send; empty is open to anyone who can reach the port. */
   allow: string[];
 }
@@ -66,7 +64,6 @@ export function sendTarget(feed: Feed): SendTarget | null {
     framing,
     tls: tlsOn,
     requireClientCert: tlsOn && !!tls['requireClientCert'],
-    serverName: textOf(tls['serverName']),
     allow: stringsOf(config['allow']),
   };
 }
@@ -105,6 +102,42 @@ export function endpointLabel(t: SendTarget): string {
 /** The host an example connects to: the listener's, or a placeholder until it is known. */
 function hostOf(t: SendTarget): string {
   return t.host || LISTENER_HOST;
+}
+
+/**
+ * A value as one shell word: bare when it is plainly safe, else in single quotes with each ' written
+ * as '\''. Brackets are not plainly safe: to a shell they are a pattern, and zsh refuses one that
+ * matches nothing, so an IPv6 endpoint is quoted.
+ */
+export function shellQuote(value: string): string {
+  return /^[A-Za-z0-9_.:-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * A double-quoted string literal for Go or Python source, which spell these escapes alike. The quote,
+ * the backslash and every control or non-ASCII character are escaped, as strconv.Quote and Python's
+ * repr would, so a value can neither end the literal nor start new code. A lone surrogate is not
+ * text, so it becomes the replacement character.
+ */
+function stringLiteral(value: string): string {
+  let out = '"';
+  for (const ch of value) {
+    const code = ch.codePointAt(0)!;
+    if (ch === '"' || ch === '\\') out += `\\${ch}`;
+    else if (ch === '\n') out += '\\n';
+    else if (ch === '\r') out += '\\r';
+    else if (ch === '\t') out += '\\t';
+    else if (code >= 0x20 && code < 0x7f) out += ch;
+    else out += escapeCode(code);
+  }
+  return `${out}"`;
+}
+
+function escapeCode(code: number): string {
+  const text = code >= 0xd800 && code <= 0xdfff ? 0xfffd : code;
+  const hex = (digits: number) => text.toString(16).padStart(digits, '0');
+  if (text < 0x80) return `\\x${hex(2)}`;
+  return text <= 0xffff ? `\\u${hex(4)}` : `\\U${hex(8)}`;
 }
 
 /** A minimal Observation in protobuf JSON form. */
@@ -146,7 +179,10 @@ export function examplesNote(t: SendTarget): string {
 /** A one-line test with netcat, for plain-text JSON only. */
 export function netcatCommand(t: SendTarget): string | null {
   if (!sendsJsonLines(t) || t.tls) return null;
-  return `echo '${jsonExample()}' | nc ${t.protocol === 'udp' ? '-u ' : ''}-w1 ${hostOf(t)} ${t.port}`;
+  const host = hostOf(t);
+  // A quote does not stop nc reading a host that begins with "-" as an option; "--" does.
+  const where = `${host.startsWith('-') ? '-- ' : ''}${shellQuote(host)} ${shellQuote(String(t.port))}`;
+  return `echo ${shellQuote(jsonExample())} | nc ${t.protocol === 'udp' ? '-u ' : ''}-w1 ${where}`;
 }
 
 /**
@@ -157,7 +193,7 @@ export function tlsTestCommand(t: SendTarget): string | null {
   if (!t.tls || t.protocol !== 'tcp' || !sendsJsonLines(t)) return null;
   const host = hostOf(t);
   const client = t.requireClientCert ? ' -cert client.pem -key client.key' : '';
-  return `echo '${jsonExample()}' | openssl s_client -quiet -no_ign_eof -verify_return_error -connect ${joinHostPort(host, t.port)} -servername ${t.serverName || host} -CAfile ca.pem${client}`;
+  return `echo ${shellQuote(jsonExample())} | openssl s_client -quiet -no_ign_eof -verify_return_error -connect ${shellQuote(joinHostPort(host, t.port))} -servername ${shellQuote(host)} -CAfile ca.pem${client}`;
 }
 
 /** Go source is written here with two-space indents and handed out with tabs, as gofmt lays it out. */
@@ -184,8 +220,8 @@ roots := x509.NewCertPool()
 if !roots.AppendCertsFromPEM(ca) {
   log.Fatal("no certificates in ca.pem")
 }
-cfg := &tls.Config{RootCAs: roots, ServerName: "${t.serverName || host}"}
-${clientCert}conn, err := tls.Dial("tcp", "${addr}", cfg)`;
+cfg := &tls.Config{RootCAs: roots, ServerName: ${stringLiteral(host)}}
+${clientCert}conn, err := tls.Dial("tcp", ${stringLiteral(addr)}, cfg)`;
 }
 
 /** A complete Go sender for binary protobuf: its imports are the ones this variant uses. */
@@ -214,7 +250,7 @@ if err != nil {
   log.Fatal(err)
 }
 
-conn, err := net.Dial("udp", "${addr}")
+conn, err := net.Dial("udp", ${stringLiteral(addr)})
 if err != nil {
   log.Fatal(err)
 }
@@ -225,7 +261,7 @@ if _, err := conn.Write(data); err != nil {
   log.Fatal(err)
 }`;
   } else {
-    send = `${tls ? goTlsDial(t, host, addr) : `conn, err := net.Dial("tcp", "${addr}")`}
+    send = `${tls ? goTlsDial(t, host, addr) : `conn, err := net.Dial("tcp", ${stringLiteral(addr)})`}
 if err != nil {
   log.Fatal(err)
 }
@@ -292,18 +328,18 @@ data = obs.SerializeToString()`;
   let send: string;
   if (!tcp) {
     send = `with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-    s.sendto(data, ("${host}", ${t.port}))  # one datagram per observation`;
+    s.sendto(data, (${stringLiteral(host)}, ${t.port}))  # one datagram per observation`;
   } else if (tls) {
     const clientCert = t.requireClientCert ? `ctx.load_cert_chain("client.pem", "client.key")  # a certificate the listener's client CA signed\n` : '';
     send = `ctx = ssl.create_default_context(cafile="ca.pem")  # the CA that signed the listener's certificate
-${clientCert}with socket.create_connection(("${host}", ${t.port})) as raw:
-    with ctx.wrap_socket(raw, server_hostname="${t.serverName || host}") as s:
+${clientCert}with socket.create_connection((${stringLiteral(host)}, ${t.port})) as raw:
+    with ctx.wrap_socket(raw, server_hostname=${stringLiteral(host)}) as s:
         s.sendall(varint(len(data)) + data)  # length-delimited
         # Closing at once can reset the connection and lose the message, because TLS 1.3 session
         # tickets are still unread. A sender that stays connected does not need to wait.
         time.sleep(0.5)`;
   } else {
-    send = `with socket.create_connection(("${host}", ${t.port})) as s:
+    send = `with socket.create_connection((${stringLiteral(host)}, ${t.port})) as s:
     s.sendall(varint(len(data)) + data)  # length-delimited`;
   }
   // PEP 8: two blank lines around a function, one between statements.
