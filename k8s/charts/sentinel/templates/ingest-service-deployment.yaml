@@ -77,6 +77,11 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+          {{- if .Values.ingestService.secretEnv.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.ingestService.secretEnv.existingSecret }}
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /health
@@ -97,6 +102,13 @@ spec:
             - name: tak-secrets
               mountPath: {{ .Values.ingestService.tak.mountPath }}
               readOnly: true
+            {{- if .Values.ingestService.secretFiles.existingSecret }}
+            # Files that feed secretRefs name as file:/etc/sentinel/secrets/...
+            # (TLS certificates and keys, for example): one per key of the Secret.
+            - name: secret-files
+              mountPath: {{ .Values.ingestService.secretFiles.mountPath }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tak-secrets
           secret:
@@ -109,6 +121,12 @@ spec:
                 path: client.key
               - key: tak-ca
                 path: ca.pem
+        {{- if .Values.ingestService.secretFiles.existingSecret }}
+        - name: secret-files
+          secret:
+            secretName: {{ .Values.ingestService.secretFiles.existingSecret }}
+            defaultMode: 0440
+        {{- end }}
 ---
 {{- if and (not .Values.ingestService.tak.existingSecret) .Values.ingestService.tak.clientCert }}
 apiVersion: v1

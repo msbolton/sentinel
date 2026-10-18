@@ -251,10 +251,10 @@ Rules and safeguards, in short (details and the counters are in `docs/feeds.md`)
   curl -s -X POST http://localhost:3000/api/v1/feeds -H 'content-type: application/json' -d '{
     "id":"site-tcp","name":"Site gateway","driver":"tcp","enabled":true,
     "config":{"mode":"listen","port":6002,"allow":["10.20.0.0/16"],"tls":{"enabled":true,"requireClientCert":true}},
-    "secretRefs":{"tlsCert":"file:/etc/sentinel/tak/server.pem","tlsKey":"file:/etc/sentinel/tak/server.key","clientCa":"file:/etc/sentinel/tak/clients-ca.pem"}}'
+    "secretRefs":{"tlsCert":"file:/etc/sentinel/secrets/server.pem","tlsKey":"file:/etc/sentinel/secrets/server.key","clientCa":"file:/etc/sentinel/secrets/clients-ca.pem"}}'
   ```
 
-  The certificate files go in `./secrets/tak` like the TAK ones (the folder is mounted read-only into the ingest containers, including the listener).
+  The certificate files go in `./secrets/ingest` (gitignored), which Compose mounts read-only at `/etc/sentinel/secrets` in the ingest containers, including the listener; the TAK ones stay in `./secrets/tak`. Create the folder yourself before the first `docker compose up`: on Linux Docker creates a missing one owned by root.
 - **Limits** per connection: `maxConnections` (50), `maxMessagesPerSec` (1000), `maxMessageBytes` (64 KiB for TCP, 65507 for UDP). What they refuse is counted in the connection's status.
 - **The listener's own port.** The listener's management API binds loopback only (`127.0.0.1:4010`): its healthcheck uses it and nothing else needs to, since the gateway talks to `ingest-service` on `:4000`. It is guarded by `INGEST_SERVICE_TOKEN` too (default `dev-ingest-token`, change it anywhere but a laptop).
 - With no listener running, an enabled listening connection shows `unassigned` with the error `no listener replica`; start the profile above.

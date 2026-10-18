@@ -80,9 +80,26 @@ The chart's `ingestListener` values:
 | `ingestListener.shared` | `false` | Sets `INGEST_LISTENER_SHARED`: the listener also takes its share of the ordinary feeds and runs them when no ordinary replica is live. Off, it runs listening connections and pinned feeds only |
 | `ingestListener.resources` | 250m / 128Mi requested, 2000m / 512Mi limit | |
 
-The Deployment `<fullname>-ingest-listener` (the chart's full name: `fullnameOverride` if set, else `<release>-sentinel`, or just the release name when it contains `sentinel`, so `sentinel-dev-ingest-listener` for the release `sentinel-dev`) has one replica, `hostNetwork: true` (with `dnsPolicy: ClusterFirstWithHostNet`) and health on `:4010`, bound on every interface of the node so the kubelet probes reach it (unlike Compose, which binds it to loopback). It reads the same Secret as the ingest service for `INGEST_SERVICE_TOKEN` and takes `ingestService.env`, `ingestService.lease` and the TAK certificate mount from the ingest values.
+The Deployment `<fullname>-ingest-listener` (the chart's full name: `fullnameOverride` if set, else `<release>-sentinel`, or just the release name when it contains `sentinel`, so `sentinel-dev-ingest-listener` for the release `sentinel-dev`) has one replica, `hostNetwork: true` (with `dnsPolicy: ClusterFirstWithHostNet`) and health on `:4010`, bound on every interface of the node so the kubelet probes reach it (unlike Compose, which binds it to loopback). It reads the same Secret as the ingest service for `INGEST_SERVICE_TOKEN` and takes `ingestService.env`, `ingestService.lease`, the TAK certificate mount, `ingestService.secretFiles` and `ingestService.secretEnv` from the ingest values.
+
+These `ingestService` values reach the ingest service and the listener alike:
+
+| Value | Default | Purpose |
+|-------|---------|---------|
+| `ingestService.secretFiles.existingSecret` | empty | A Secret whose keys are mounted as files (mode 0440) for `file:` secret refs to name; empty mounts nothing. The Secret must exist before the pods start, and each key must be a valid file name |
+| `ingestService.secretFiles.mountPath` | `/etc/sentinel/secrets` | Where the files appear |
+| `ingestService.secretEnv.existingSecret` | empty | A Secret whose keys become environment variables of the pods (`envFrom`) for `env:` secret refs to name; empty adds none |
+| `ingestService.serviceMonitor.enabled` | `false` | Renders a ServiceMonitor for the ingest service and, while `ingestListener.enabled` is true, a PodMonitor for the listener, which has no Service to select (needs the Prometheus Operator CRDs). `ingestService.serviceMonitor.interval` (`30s`) is the scrape interval |
 
 - **Label a node first**, or the Pod stays Pending: `kubectl label node <node> sentinel.io/ingest-listener=true`. Choose a node whose address senders can reach and that you will keep; senders use the node address (or `ingestListener.host`), there is no Service or load balancer in front of it.
+- **Secret files for mutual TLS.** A TCP connection with `tls.requireClientCert` reads its server certificate, key and client CA from `file:` secret refs. Create a Secret in the release's namespace whose keys are the file names (the chart never creates this one, so no key material passes through a values file), and install or upgrade with `--set ingestService.secretFiles.existingSecret=sentinel-ingest-files`:
+
+  ```bash
+  kubectl create secret generic sentinel-ingest-files -n sentinel-dev \
+    --from-file=server.pem --from-file=server.key --from-file=clients-ca.pem
+  ```
+
+  The connection's `secretRefs` are then `"tlsCert":"file:/etc/sentinel/secrets/server.pem"`, `"tlsKey":"file:/etc/sentinel/secrets/server.key"` and `"clientCa":"file:/etc/sentinel/secrets/clients-ca.pem"`. Kubernetes refreshes the mounted files within about a minute of a change to the Secret.
 - **Rollouts drop inbound traffic.** The Deployment uses `strategy: Recreate`: a hostNetwork pod's ports count as taken on its node, so a surge pod could never schedule beside the old one. Each rollout therefore briefly stops inbound TCP and UDP; TCP senders reconnect, and datagrams sent in the gap are lost. Roll it out in a quiet window.
 - **Its replica id is the Deployment's name.** `REPLICA_ID` is `<fullname>-ingest-listener`, not the pod name, so it is the same after a rollout and a feed pinned to the listener (`config.pinnedReplica`, `docs/feeds.md`) keeps matching it. That is safe because the Deployment has one replica and `Recreate` never runs two pods at once. The ingest service's pods use their pod names as ids, and those change with every rollout.
 - **Apply `db/schema` before upgrading.** The chart does not apply the schema, and a new ingest pod checks it at start: against an older schema it exits with the fatal log `database schema is out of date` (naming the missing columns and `db/schema/70_feeds.sql`) and crash-loops. The ingest-service Deployment's default RollingUpdate leaves the old pods serving while the new one fails, but the listener's `Recreate` stops the old pod before it starts the new one, so its listening connections stay down until the schema is applied. Apply every file in `db/schema`, in name order (`psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <file>`; every file is idempotent), then run `helm upgrade`, and upgrade the ingest-service and the listener in the same release: while old and new replicas run side by side they can place feeds differently, and a few feeds restart.
@@ -175,6 +192,6 @@ API_GATEWAY_PORT=3000
 WEB_PORT=4200
 ```
 
-GeoServer provisioning takes `GIS_DB_PASSWORD` and `GIS_USER_PASSWORD_U/_C/_S/_TS` (dev defaults in `.env.example`); `ANALYTICS_SERVICE_PORT` moves the analytics host port off 5000 (macOS AirPlay). Certificates and other files a connection's `secretRefs` name as `file:/etc/sentinel/tak/...` live in the gitignored `./secrets/tak` folder, mounted read-only into the ingest containers (`ingest-service` and `ingest-listener`).
+GeoServer provisioning takes `GIS_DB_PASSWORD` and `GIS_USER_PASSWORD_U/_C/_S/_TS` (dev defaults in `.env.example`); `ANALYTICS_SERVICE_PORT` moves the analytics host port off 5000 (macOS AirPlay). Certificates and other files a connection's `secretRefs` name as `file:/etc/sentinel/...` live in gitignored folders under `./secrets`, mounted read-only into the ingest containers (`ingest-service` and `ingest-listener`): `./secrets/tak` at `/etc/sentinel/tak` for TAK certificates, and `./secrets/ingest` at `/etc/sentinel/secrets` for anything else, such as the PEMs of a TCP connection with mutual TLS (`docs/development.md`).
 
-Ingest replica settings (`LEASE_TTL_SEC`, `LEASE_TICK_SEC`, `LEASE_REBALANCE_SEC`, `FEED_STALE_*`, `FEED_RETRY_*`, `SHUTDOWN_TIMEOUT_SEC`, buffers) are listed in `docs/feeds.md`. When running inside Docker Compose, services use internal hostnames and the `KAFKA_BROKERS=kafka:9093` internal listener.
+Ingest replica settings (`LEASE_TTL_SEC`, `LEASE_TICK_SEC`, `LEASE_REBALANCE_SEC`, `FEED_STALE_*`, `FEED_RETRY_*`, `SHUTDOWN_TIMEOUT_SEC`, buffers) are listed in `docs/feeds.md`. Compose gives both ingest services `stop_grace_period: 30s` (its default is 10 s) so that the 25 s `SHUTDOWN_TIMEOUT_SEC` can run before the container is killed. When running inside Docker Compose, services use internal hostnames and the `KAFKA_BROKERS=kafka:9093` internal listener.

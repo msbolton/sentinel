@@ -1,0 +1,21 @@
+{{- if and .Values.ingestListener.enabled .Values.ingestService.serviceMonitor.enabled }}
+# The listener has no Service for the ServiceMonitor in ingest-service-deployment.yaml
+# to select, so Prometheus scrapes its pods. They run on the host network, so the pod
+# address is the node's; http is the container port 4010.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "sentinel.fullname" . }}-ingest-listener
+  labels:
+    app.kubernetes.io/name: ingest-listener
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ingest-listener
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.ingestService.serviceMonitor.interval }}
+{{- end }}

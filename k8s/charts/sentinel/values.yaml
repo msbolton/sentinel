@@ -143,6 +143,22 @@ ingestService:
     clientKey: ""
     ca: ""
     mountPath: /etc/sentinel/tak
+  # Files for feed secretRefs to name as file:/etc/sentinel/secrets/<key>, such
+  # as the PEMs of a TCP connection with mutual TLS. Name an existing Secret:
+  # each of its keys becomes a file under mountPath (mode 0440), so each key
+  # must be a valid file name. The kubelet refreshes the files within about a
+  # minute of a change to the Secret. Leave existingSecret empty to mount none.
+  secretFiles:
+    existingSecret: ""
+    mountPath: /etc/sentinel/secrets
+  # A Secret whose keys become environment variables of the ingest and listener
+  # pods, for secretRefs to name as env:KEY (env above takes plain values only).
+  # Leave existingSecret empty to add none.
+  secretEnv:
+    existingSecret: ""
+  # Needs the Prometheus Operator CRDs. Renders a ServiceMonitor for the ingest
+  # service and, while the listener is enabled, a PodMonitor for the listener,
+  # which has no Service.
   serviceMonitor:
     enabled: false
     interval: 30s
