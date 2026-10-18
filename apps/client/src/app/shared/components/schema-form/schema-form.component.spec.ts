@@ -583,6 +583,15 @@ describe('SchemaFormComponent', () => {
       },
     };
 
+    // Like httpjson: a POST body is an object, or a string that the driver sends as it is.
+    const postSchema: JsonSchema = {
+      type: 'object',
+      properties: {
+        url: { type: 'string', title: 'Request URL' },
+        body: { type: ['object', 'string'], title: 'POST body' },
+      },
+    };
+
     function textarea(name: string): HTMLTextAreaElement {
       const found = el.querySelector<HTMLTextAreaElement>(`textarea[name="${name}"]`);
       if (!found) {
@@ -687,6 +696,52 @@ describe('SchemaFormComponent', () => {
       render(bodySchema, { value: { body: 'q={lat}' } });
       expect(textarea('body').value).toBe('q={lat}');
       expect(last().config['body']).toBe('q={lat}');
+    });
+
+    // The driver compacts an object body but sends a string as it is, so a string the form turns into
+    // an object (or trims) changes what is sent, and a number parsed from it can lose digits.
+    it('keeps a stored string body verbatim through an edit of another field', () => {
+      render(postSchema, { value: { url: 'https://a.example', body: ' {"q":1} ' } });
+      expect(textarea('body').value).toBe(' {"q":1} ');
+      expect(last().config['body']).toBe(' {"q":1} ');
+
+      setInput('input[name="url"]', 'https://b.example');
+      expect(last().config['url']).toBe('https://b.example');
+      expect(last().config['body']).toBe(' {"q":1} ');
+    });
+
+    it('keeps a stored "{}" string body', () => {
+      render(postSchema, { value: { url: 'https://a.example', body: '{}' } });
+      expect(last().config['body']).toBe('{}');
+
+      setInput('input[name="url"]', 'https://b.example');
+      expect(last().config['body']).toBe('{}');
+    });
+
+    it('keeps every digit of a stored string body', () => {
+      const body = '{"id":9007199254740993}'; // 2^53 + 1, which a parsed number rounds
+      render(postSchema, { value: { url: 'https://a.example', body } });
+
+      setInput('input[name="url"]', 'https://b.example');
+      expect(last().config['body']).toBe(body);
+    });
+
+    it('leaves out a stored string body that is blank, like any empty value', () => {
+      render(postSchema, { value: { url: 'https://a.example', body: ' \n ' } });
+      expect('body' in last().config).toBe(false);
+    });
+
+    it('follows the usual rules once the user types over a stored string body', () => {
+      render(postSchema, { value: { body: ' {"q":1} ' } });
+
+      setInput('textarea[name="body"]', ' {"q":2} ');
+      expect(last().config['body']).toEqual({ q: 2 });
+
+      setInput('textarea[name="body"]', '  q={lat}\n');
+      expect(last().config['body']).toBe('q={lat}');
+
+      setInput('textarea[name="body"]', '');
+      expect('body' in last().config).toBe(false);
     });
 
     it('carries keys the schema does not describe through unchanged', () => {

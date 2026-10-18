@@ -51,6 +51,8 @@ export interface FieldDef {
   constValue?: unknown;
   /** `json`: the schema takes a plain string as well as an object. */
   allowString?: boolean;
+  /** `json` with `allowString`: the string the field started with, emitted as written while the text is unchanged. */
+  stored?: string;
   control?: FormControl;
   children?: FieldDef[];
   /** `group`: stored keys the schema does not describe, kept as they are. */
@@ -389,6 +391,8 @@ export class SchemaFormComponent {
     if (types.includes('object') && Object.keys(prop.properties ?? {}).length === 0) {
       const allowString = types.includes('string');
       const text = isRecord(start) ? JSON.stringify(start, null, 2) : allowString && typeof start === 'string' ? start : '';
+      // Blank text is no value, as in every other field; any other string is kept as it was written.
+      const stored = allowString && typeof start === 'string' && textOf(start) !== '' ? start : undefined;
       const control = new FormControl<string>(text, {
         nonNullable: true,
         validators: [jsonValidator(required, allowString)],
@@ -398,6 +402,7 @@ export class SchemaFormComponent {
         ...base,
         kind: 'json',
         allowString,
+        stored,
         placeholder: JSON.stringify(prop.examples?.[0], null, 2) ?? '{ "key": "value" }',
         help: prop.description ? `${prop.description} JSON object.` : 'JSON object.',
         control,
@@ -541,6 +546,11 @@ export class SchemaFormComponent {
         return Object.keys(nested).length > 0 ? nested : undefined;
       }
       case 'json': {
+        // A stored string is not parsed or trimmed until the user changes it: a driver may send a string as
+        // it is but compact an object (httpjson does), and parsing rounds integers a number cannot hold.
+        if (def.stored !== undefined && def.control?.value === def.stored) {
+          return def.stored;
+        }
         const text = textOf(def.control?.value);
         if (text === '') {
           return undefined;
