@@ -59,6 +59,7 @@ func main() {
 		zap.String("http_addr", cfg.HTTPAddr),
 		zap.String("replica_id", cfg.ReplicaID),
 		zap.Bool("listener", cfg.Listener),
+		zap.Bool("listener_shared", cfg.ListenerShared),
 		zap.Int("publisher_shards", cfg.PublisherShards),
 		zap.Int("frame_buffer", cfg.FrameBuffer),
 	)
@@ -119,6 +120,7 @@ func main() {
 		RawMax:         cfg.RawPayloadMaxBytes,
 		Listener:       cfg.Listener,
 		ListenerHost:   cfg.ListenerHost,
+		ListenerShared: cfg.ListenerShared,
 		LeaseTick:      cfg.LeaseTick,
 		RebalanceAfter: cfg.LeaseRebalance,
 		Shapes:         outbound.NewShapeStore(reg.Pool()),
@@ -128,7 +130,7 @@ func main() {
 		},
 	}
 	if cfg.LeaseEnabled {
-		supOpts.Leaser = lease.New(reg.Pool(), cfg.ReplicaID, lease.Options{TTL: cfg.LeaseTTL, Listener: cfg.Listener, ListenerHost: cfg.ListenerHost})
+		supOpts.Leaser = lease.New(reg.Pool(), cfg.ReplicaID, lease.Options{TTL: cfg.LeaseTTL, Listener: cfg.Listener, ListenerHost: cfg.ListenerHost, ListenerShared: cfg.ListenerShared})
 		supOpts.Preferred = lease.Preferred
 		logger.Info("feed leases enabled", zap.Duration("ttl", cfg.LeaseTTL), zap.Duration("tick", cfg.LeaseTick), zap.Duration("rebalance_after", cfg.LeaseRebalance))
 	} else {

@@ -21,6 +21,7 @@ type Metrics struct {
 	DuplicatesTotal    *prometheus.CounterVec // feed_id
 
 	FeedsRunning    *prometheus.GaugeVec   // driver
+	FeedsUnplaced   *prometheus.GaugeVec   // reason (no_listener|no_ordinary_replica)
 	FeedLastSuccess *prometheus.GaugeVec   // feed_id
 	FeedEntityCount *prometheus.GaugeVec   // feed_id
 	FeedErrorsTotal *prometheus.CounterVec // feed_id
@@ -71,6 +72,7 @@ func New(reg *prometheus.Registry) *Metrics {
 		BlockedSeconds:             counter("blocked_seconds_total", "Time transports spent blocked on backpressure, per feed.", "feed_id"),
 		DuplicatesTotal:            counter("duplicates_total", "Observations suppressed as repeated fixes, per feed.", "feed_id"),
 		FeedsRunning:               gauge("feeds_running", "Feeds currently running on this replica, per driver.", "driver"),
+		FeedsUnplaced:              gauge("feeds_unplaced", "Enabled feeds without a pin that have no replica to run on, as this replica sees it, per reason.", "reason"),
 		FeedLastSuccess:            gauge("feed_last_success_timestamp", "Unix time of the last successful poll or received report, per feed.", "feed_id"),
 		FeedEntityCount:            gauge("feed_entities_count", "Observations produced by the last poll, per feed.", "feed_id"),
 		FeedErrorsTotal:            counter("feed_errors_total", "Poll, connection and start errors, per feed.", "feed_id"),

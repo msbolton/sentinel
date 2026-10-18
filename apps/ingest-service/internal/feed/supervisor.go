@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"slices"
 	"sync"
 	"time"
 
@@ -43,9 +44,11 @@ type Leaser interface {
 	TTL() time.Duration
 }
 
-// ListenerLister is implemented by leasers that know the listener replicas.
+// ListenerLister is implemented by leasers that know the listener replicas:
+// all of them, and the dedicated ones among them, which run listening
+// connections only.
 type ListenerLister interface {
-	Listeners(ctx context.Context) ([]string, error)
+	Listeners(ctx context.Context) (all, dedicated []string, err error)
 }
 
 // Preferred picks a feed's owner from the live set; lease.Preferred by
@@ -66,8 +69,12 @@ type Options struct {
 	RawMax         int
 	// Listener means this replica takes listening connections (the ones that
 	// bind a port); ListenerHost is the address senders use to reach it.
-	Listener     bool
-	ListenerHost string
+	// ListenerShared lets such a replica take its share of the ordinary feeds
+	// too; without it a listener runs only listening connections and the feeds
+	// pinned to it.
+	Listener       bool
+	ListenerHost   string
+	ListenerShared bool
 	// Leaser enables sharding; LeaseTick is how often leases are renewed
 	// and ownership re-evaluated (2 s), RebalanceAfter how long a feed
 	// keeps running here while another live replica is its preferred
@@ -149,13 +156,43 @@ func listens(spec registry.Feed) bool {
 	return ok
 }
 
-// candidates is the replica set a feed may run on: listener replicas for
-// listening feeds, every live replica otherwise. Call with s.mu held.
+// candidates is the replica set a feed may run on: the listener replicas for
+// a listening feed, the ordinary replicas for any other. Either can be empty,
+// and the feed then waits; there is no fallback onto a replica of the other
+// kind. Call with s.mu held.
 func (s *Supervisor) candidates(spec registry.Feed) []string {
 	if listens(spec) {
 		return s.listeners
 	}
-	return s.live
+	return s.ordinary()
+}
+
+// ordinary is the live replicas that run ordinary feeds: all of them but the
+// dedicated listeners. Call with s.mu held.
+func (s *Supervisor) ordinary() []string {
+	if len(s.dedicated) == 0 {
+		return s.live
+	}
+	out := make([]string, 0, len(s.live))
+	for _, r := range s.live {
+		if !slices.Contains(s.dedicated, r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// Why a feed has no replica to run on: the reason label of FeedsUnplaced.
+const (
+	unplacedNoListener        = "no_listener"
+	unplacedNoOrdinaryReplica = "no_ordinary_replica"
+)
+
+// unplacedReasons are the reasons in the order noteUnplaced reports them, each
+// with the text that tells an operator what to do about it.
+var unplacedReasons = []struct{ reason, detail string }{
+	{unplacedNoListener, registry.NoListenerError},
+	{unplacedNoOrdinaryReplica, registry.NoOrdinaryReplicaError},
 }
 
 // instance is one feed this replica runs (or failed to start).
@@ -196,6 +233,10 @@ type Supervisor struct {
 	waitingSince map[string]time.Time
 	live         []string
 	listeners    []string // the live replicas that take listening connections
+	dedicated    []string // the listeners among them that take nothing else
+	// unplaced is, per reason, how many feeds had no replica at the last
+	// reconcile; noteUnplaced compares against it to log only the changes.
+	unplaced map[string]int
 	// connections is the set of feed ids that send (direction out or both),
 	// from the last listing; outbound policies use it to avoid re-exporting
 	// one connection's contributions on another.
@@ -276,7 +317,7 @@ func New(reg Registry, pub Publisher, logger *zap.Logger, m *metrics.Metrics, op
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Supervisor{reg: reg, pub: pub, logger: logger, metrics: m, opts: opts.withDefaults(), running: map[string]*instance{}, waitingSince: map[string]time.Time{}}
+	return &Supervisor{reg: reg, pub: pub, logger: logger, metrics: m, opts: opts.withDefaults(), running: map[string]*instance{}, waitingSince: map[string]time.Time{}, unplaced: map[string]int{}}
 }
 
 // ReplicaID returns this replica's id.
@@ -363,8 +404,14 @@ func (s *Supervisor) owns(ctx context.Context, spec registry.Feed, now time.Time
 		return 0, true
 	}
 	pinned := spec.Common().PinnedReplica
-	if pinned == "" && listens(spec) && !s.opts.Listener {
-		return 0, false // listening connections run only on listener replicas
+	if pinned == "" {
+		listening := listens(spec)
+		if listening && !s.opts.Listener {
+			return 0, false // listening connections run only on listener replicas
+		}
+		if !listening && s.opts.Listener && !s.opts.ListenerShared {
+			return 0, false // a dedicated listener never steps in for an ordinary feed
+		}
 	}
 	preferred := s.opts.Preferred(spec.ID, pinned, s.candidates(spec))
 	if pinned != "" && pinned != s.opts.ReplicaID {
@@ -454,12 +501,12 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 			s.mu.Unlock()
 		}
 		if ll, ok := s.opts.Leaser.(ListenerLister); ok {
-			listeners, err := ll.Listeners(ctx)
+			listeners, dedicated, err := ll.Listeners(ctx)
 			if err != nil {
 				s.logger.Warn("reconcile: listing listener replicas failed", zap.Error(err))
 			} else {
 				s.mu.Lock()
-				s.listeners = listeners
+				s.listeners, s.dedicated = listeners, dedicated
 				s.mu.Unlock()
 			}
 		}
@@ -469,6 +516,9 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 	if s.stopped {
 		s.mu.Unlock()
 		return
+	}
+	if s.opts.Leaser != nil {
+		s.noteUnplaced(desired)
 	}
 	var toStop []*instance
 	var handover []*instance
@@ -540,6 +590,41 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 		}
 		s.mu.Unlock()
 		s.startInstance(ctx, inst)
+	}
+}
+
+// noteUnplaced counts the enabled feeds without a pin that no live replica may
+// run, by reason, and sets the FeedsUnplaced gauge from the counts. The log
+// says when feeds start to lack a replica and when none do, not on every
+// reconcile. These feeds wait until a replica that can run them is live: a
+// listener never fails over for an ordinary feed. Call with s.mu held.
+func (s *Supervisor) noteUnplaced(desired map[string]registry.Feed) {
+	counts := map[string]int{}
+	ordinary := len(s.ordinary())
+	for _, spec := range desired {
+		switch {
+		case spec.Common().PinnedReplica != "":
+			// A pin runs the feed on that replica or on none.
+		case listens(spec):
+			if len(s.listeners) == 0 {
+				counts[unplacedNoListener]++
+			}
+		case ordinary == 0:
+			counts[unplacedNoOrdinaryReplica]++
+		}
+	}
+	for _, r := range unplacedReasons {
+		n, before := counts[r.reason], s.unplaced[r.reason]
+		s.unplaced[r.reason] = n
+		if s.metrics != nil {
+			s.metrics.FeedsUnplaced.WithLabelValues(r.reason).Set(float64(n))
+		}
+		switch {
+		case before == 0 && n > 0:
+			s.logger.Warn("feeds have no replica to run on", zap.String("reason", r.reason), zap.Int("feeds", n), zap.String("detail", r.detail))
+		case before > 0 && n == 0:
+			s.logger.Info("no feed is left without a replica to run on", zap.String("reason", r.reason))
+		}
 	}
 }
 

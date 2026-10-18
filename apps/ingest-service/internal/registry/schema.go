@@ -32,6 +32,7 @@ var RequiredColumns = []SchemaColumn{
 	{"feed_leases", "fencing_token", feedsSchemaFile},
 	{"ingest_replicas", "listener", feedsSchemaFile},
 	{"ingest_replicas", "listener_host", feedsSchemaFile},
+	{"ingest_replicas", "listener_shared", feedsSchemaFile},
 }
 
 // SchemaError reports the required columns the database lacks.

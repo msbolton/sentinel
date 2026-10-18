@@ -26,6 +26,10 @@ type Options struct {
 	// bind a port; ListenerHost is the address senders reach it at.
 	Listener     bool
 	ListenerHost string
+	// ListenerShared marks a listener that also takes its share of the
+	// ordinary feeds. Without it the listener is dedicated: it runs listening
+	// connections and the feeds pinned to it, and nothing else.
+	ListenerShared bool
 }
 
 func (o Options) withDefaults() Options {
@@ -53,14 +57,15 @@ func (c *Coordinator) ReplicaID() string { return c.replica }
 // TTL returns the lease duration.
 func (c *Coordinator) TTL() time.Duration { return c.opts.TTL }
 
-// Heartbeat refreshes this replica's row and prunes long-dead replicas.
+// Heartbeat refreshes this replica's row, including the role it plays, and
+// prunes long-dead replicas.
 func (c *Coordinator) Heartbeat(ctx context.Context) error {
 	_, err := c.pool.Exec(ctx, `
-		INSERT INTO sentinel.ingest_replicas (replica_id, started_at, heartbeat_at, expires_at, listener, listener_host)
-		VALUES ($1, NOW(), NOW(), NOW() + $2::interval, $3, NULLIF($4, ''))
+		INSERT INTO sentinel.ingest_replicas (replica_id, started_at, heartbeat_at, expires_at, listener, listener_host, listener_shared)
+		VALUES ($1, NOW(), NOW(), NOW() + $2::interval, $3, NULLIF($4, ''), $5)
 		ON CONFLICT (replica_id) DO UPDATE SET heartbeat_at = NOW(), expires_at = NOW() + $2::interval,
-		  listener = EXCLUDED.listener, listener_host = EXCLUDED.listener_host`,
-		c.replica, c.opts.TTL, c.opts.Listener, c.opts.ListenerHost)
+		  listener = EXCLUDED.listener, listener_host = EXCLUDED.listener_host, listener_shared = EXCLUDED.listener_shared`,
+		c.replica, c.opts.TTL, c.opts.Listener, c.opts.ListenerHost, c.opts.ListenerShared)
 	if err != nil {
 		return fmt.Errorf("replica heartbeat: %w", err)
 	}
@@ -86,22 +91,30 @@ func (c *Coordinator) Live(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
-// Listeners returns the unexpired listener replica ids, sorted.
-func (c *Coordinator) Listeners(ctx context.Context) ([]string, error) {
-	rows, err := c.pool.Query(ctx, `SELECT replica_id FROM sentinel.ingest_replicas WHERE expires_at > NOW() AND listener ORDER BY replica_id`)
+// Listeners returns the unexpired listener replica ids, sorted: all of them,
+// and the dedicated ones among them, which run listening connections only
+// (a shared listener also takes its share of the ordinary feeds).
+func (c *Coordinator) Listeners(ctx context.Context) (all, dedicated []string, err error) {
+	rows, err := c.pool.Query(ctx, `SELECT replica_id, listener_shared FROM sentinel.ingest_replicas WHERE expires_at > NOW() AND listener ORDER BY replica_id`)
 	if err != nil {
-		return nil, fmt.Errorf("listing listener replicas: %w", err)
+		return nil, nil, fmt.Errorf("listing listener replicas: %w", err)
 	}
 	defer rows.Close()
-	var out []string
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+		var shared bool
+		if err := rows.Scan(&id, &shared); err != nil {
+			return nil, nil, err
 		}
-		out = append(out, id)
+		all = append(all, id)
+		if !shared {
+			dedicated = append(dedicated, id)
+		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return all, dedicated, nil
 }
 
 // Acquire takes the feed's lease when it is free, expired, or already

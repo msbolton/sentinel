@@ -64,6 +64,8 @@ spec:
                 fieldRef:
                   fieldPath: status.hostIP
               {{- end }}
+            - name: INGEST_LISTENER_SHARED
+              value: {{ .Values.ingestListener.shared | quote }}
             - name: KAFKA_BROKERS
               value: {{ .Release.Name }}-kafka:9092
             - name: DATABASE_URL

@@ -803,12 +803,16 @@ services:
       INGEST_LISTENER: "true"
       # The address senders use, shown in each connection's send guide.
       INGEST_LISTENER_HOST: ${INGEST_LISTENER_HOST:-localhost}
+      INGEST_LISTENER_SHARED: ${INGEST_LISTENER_SHARED:-false}
       KAFKA_BROKERS: localhost:9092
       DATABASE_URL: postgres://sentinel:sentinel_dev@localhost:5432/sentinel?sslmode=disable
       LEASE_TTL_SEC: "15"
       LEASE_TICK_SEC: "2"
       INGEST_SERVICE_TOKEN: ${INGEST_SERVICE_TOKEN:-dev-ingest-token}
-      # Ordinary feeds handed to this replica during failover need the same settings as ingest-service.
+      # Ordinary feeds run here only when pinned to ingest-listener, or with
+      # INGEST_LISTENER_SHARED=true (then it takes its rendezvous share). Keep these
+      # settings the same as ingest-service for those cases; FEEDS_BOOTSTRAP_ENABLED
+      # matters on whichever replica starts first.
       FEEDS_BOOTSTRAP_ENABLED: ${FEEDS_BOOTSTRAP_ENABLED:-}
       OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
       OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}

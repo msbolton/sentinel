@@ -37,7 +37,7 @@ type FeedStore interface {
 	Delete(ctx context.Context, id string) error
 	GetArea(ctx context.Context, id string) (registry.Area, error)
 	SetArea(ctx context.Context, a registry.Area) error
-	ListenerReplicas(ctx context.Context) ([]registry.ListenerReplica, error)
+	LiveReplicas(ctx context.Context) ([]registry.Replica, error)
 }
 
 // Runtime is the local-replica fast path: live status for feeds running
@@ -70,22 +70,55 @@ func NewHandler(store FeedStore, catalog *drivers.Catalog, rt Runtime, logger *z
 	return &Handler{store: store, catalog: catalog, validator: &registry.Validator{Catalog: catalog}, runtime: rt, logger: logger, StaleAfter: 15 * time.Second}
 }
 
-// liveListeners lists the live listener replicas for one request; an error
-// reads as none, so the worst case is a listening connection that explains
-// itself with a missing listener for as long as the lookup fails.
-func (h *Handler) liveListeners(ctx context.Context) []registry.ListenerReplica {
-	listeners, err := h.store.ListenerReplicas(ctx)
+// placement is the mix of live replicas one request sees. known is false when
+// the lookup failed, and then nothing is said about where a feed can run.
+type placement struct {
+	known     bool
+	live      int // every live replica
+	listeners int // those that take listening connections
+	ordinary  int // those that take ordinary feeds: the non-listeners and the shared listeners
+}
+
+// placement looks the live replicas up once for a request. A failed lookup
+// leaves the mix unknown, so no feed is explained by it either way; reading
+// it as no replicas would blame a missing listener for as long as the lookup
+// fails.
+func (h *Handler) placement(ctx context.Context) placement {
+	replicas, err := h.store.LiveReplicas(ctx)
 	if err != nil {
-		h.logger.Warn("listing listener replicas failed", zap.Error(err))
-		return nil
+		h.logger.Warn("listing live replicas failed", zap.Error(err))
+		return placement{}
 	}
-	return listeners
+	p := placement{known: true, live: len(replicas)}
+	for _, r := range replicas {
+		if r.Listener {
+			p.listeners++
+		}
+		if !r.Listener || r.Shared {
+			p.ordinary++
+		}
+	}
+	return p
+}
+
+// unassigned returns f with its status replaced by unassigned and the reason
+// it has no replica; the rest of a stored status stands.
+func unassigned(f registry.Feed, reason string) registry.Feed {
+	st := registry.Status{FeedID: f.ID}
+	if f.Status != nil {
+		st = *f.Status
+	}
+	st.State, st.Health, st.LastError = registry.StateUnassigned, registry.HealthUnknown, reason
+	f.Status = &st
+	return f
 }
 
 // present overlays the live status when the feed runs on this replica,
 // renders a stale row from a silent replica as unassigned, and explains an
-// enabled listening connection that has no listener replica to run on.
-func (h *Handler) present(f registry.Feed, listeners []registry.ListenerReplica) registry.Feed {
+// enabled feed that has no replica to run on: a listening connection with no
+// listener replica live, and an ordinary feed when the only live replicas are
+// dedicated listeners.
+func (h *Handler) present(f registry.Feed, p placement) registry.Feed {
 	if h.runtime != nil {
 		if st, live := h.runtime.Snapshot(f.ID); live {
 			st.FeedID = f.ID
@@ -103,17 +136,18 @@ func (h *Handler) present(f registry.Feed, listeners []registry.ListenerReplica)
 		st.Health = registry.HealthUnknown
 		f.Status = &st
 	}
-	// Only a feed not running here gets this far, so a connection this
-	// replica runs (LEASE_ENABLED=false, or a failed listener lookup) is
-	// never explained away. A connection pinned to a replica runs there, not
-	// on a listener.
-	if _, _, listening := driver.ListenOf(f.Driver, f.Config); listening && f.Enabled && len(listeners) == 0 && f.Common().PinnedReplica == "" {
-		st := registry.Status{FeedID: f.ID}
-		if f.Status != nil {
-			st = *f.Status
+	// Only a feed not running here gets this far, so a feed this replica runs
+	// (LEASE_ENABLED=false) is never explained away. A feed pinned to a
+	// replica runs there, whatever the others are.
+	if !p.known || !f.Enabled || f.Common().PinnedReplica != "" {
+		return f
+	}
+	if _, _, listening := driver.ListenOf(f.Driver, f.Config); listening {
+		if p.listeners == 0 {
+			return unassigned(f, registry.NoListenerError)
 		}
-		st.State, st.Health, st.LastError = registry.StateUnassigned, registry.HealthUnknown, registry.NoListenerError
-		f.Status = &st
+	} else if p.live > 0 && p.ordinary == 0 {
+		return unassigned(f, registry.NoOrdinaryReplicaError)
 	}
 	return f
 }
@@ -152,7 +186,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		b := v == "true"
 		enabled = &b
 	}
-	listeners := h.liveListeners(r.Context())
+	p := h.placement(r.Context())
 	out := make([]feedDTO, 0, len(feeds))
 	for _, f := range feeds {
 		if driver != "" && f.Driver != driver {
@@ -167,7 +201,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		dto := toFeedDTO(h.present(f, listeners), h.catalog)
+		dto := toFeedDTO(h.present(f, p), h.catalog)
 		// direction=in|out lists every feed that moves data that way, so
 		// "both" matches either; direction=both matches only "both".
 		if direction != "" && !matchesDirection(dto.Direction, direction) {
@@ -195,7 +229,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toFeedDTO(h.present(f, h.liveListeners(r.Context())), h.catalog))
+	writeJSON(w, http.StatusOK, toFeedDTO(h.present(f, h.placement(r.Context())), h.catalog))
 }
 
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
@@ -204,7 +238,7 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toFeedDTO(h.present(f, h.liveListeners(r.Context())), h.catalog).Status)
+	writeJSON(w, http.StatusOK, toFeedDTO(h.present(f, h.placement(r.Context())), h.catalog).Status)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {

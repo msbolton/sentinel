@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +130,44 @@ func TestEnsureBuiltins(t *testing.T) {
 	// Idempotent: a second call changes nothing.
 	if err := s.EnsureBuiltins(ctx, nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// LiveReplicas reports every unexpired replica with its role: an ordinary
+// replica, a dedicated listener and a listener that also takes ordinary feeds.
+func TestLiveReplicasReportsRoles(t *testing.T) {
+	s, ctx := testStore(t)
+	const prefix = "test-roles-"
+	t.Cleanup(func() {
+		_, _ = s.pool.Exec(context.Background(), `DELETE FROM sentinel.ingest_replicas WHERE replica_id LIKE $1`, prefix+"%")
+	})
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO sentinel.ingest_replicas (replica_id, expires_at, listener, listener_shared, listener_host) VALUES
+		  ($1, NOW() + INTERVAL '1 minute', TRUE,  FALSE, 'ingest.example'),
+		  ($2, NOW() + INTERVAL '1 minute', TRUE,  TRUE,  NULL),
+		  ($3, NOW() + INTERVAL '1 minute', FALSE, FALSE, NULL),
+		  ($4, NOW() - INTERVAL '1 minute', TRUE,  FALSE, 'gone.example')`,
+		prefix+"dedicated", prefix+"shared", prefix+"plain", prefix+"expired"); err != nil {
+		t.Fatal(err)
+	}
+
+	live, err := s.LiveReplicas(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []Replica // the database may hold replicas of a running stack too
+	for _, r := range live {
+		if strings.HasPrefix(r.ID, prefix) {
+			got = append(got, r)
+		}
+	}
+	want := []Replica{
+		{ID: prefix + "dedicated", Listener: true, Host: "ingest.example"},
+		{ID: prefix + "plain"},
+		{ID: prefix + "shared", Listener: true, Shared: true},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("live replicas = %+v, want %+v (sorted by id, the expired one left out)", got, want)
 	}
 }
 

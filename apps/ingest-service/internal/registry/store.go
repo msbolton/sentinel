@@ -281,26 +281,33 @@ func (s *Store) ReleaseStatuses(ctx context.Context, replica string) error {
 	return nil
 }
 
-// ListenerReplica is a live listener replica and the address senders use.
-type ListenerReplica struct {
-	ID   string `json:"id"`
-	Host string `json:"host"`
+// Replica is a live ingest replica and the role it plays: an ordinary
+// replica, or a listener (with the address senders use) that is shared when it
+// also takes ordinary feeds.
+type Replica struct {
+	ID       string `json:"id"`
+	Listener bool   `json:"listener"`
+	Shared   bool   `json:"shared"`
+	Host     string `json:"host"`
 }
 
 // NoListenerError is shown on listening connections while no listener replica is live.
 const NoListenerError = "no listener replica (run the ingest listener: INGEST_LISTENER=true)"
 
-// ListenerReplicas lists the live listener replicas.
-func (s *Store) ListenerReplicas(ctx context.Context) ([]ListenerReplica, error) {
-	rows, err := s.pool.Query(ctx, `SELECT replica_id, COALESCE(listener_host, '') FROM sentinel.ingest_replicas WHERE expires_at > NOW() AND listener ORDER BY replica_id`)
+// NoOrdinaryReplicaError is shown on ordinary feeds while the only live replicas are dedicated listeners.
+const NoOrdinaryReplicaError = "no ingest replica for this feed: the only live replicas are listeners, which run listening connections only (start ingest-service, or set INGEST_LISTENER_SHARED=true on the listener)"
+
+// LiveReplicas lists the unexpired replicas with their roles, by id.
+func (s *Store) LiveReplicas(ctx context.Context) ([]Replica, error) {
+	rows, err := s.pool.Query(ctx, `SELECT replica_id, listener, listener_shared, COALESCE(listener_host, '') FROM sentinel.ingest_replicas WHERE expires_at > NOW() ORDER BY replica_id`)
 	if err != nil {
-		return nil, fmt.Errorf("listing listener replicas: %w", err)
+		return nil, fmt.Errorf("listing live replicas: %w", err)
 	}
 	defer rows.Close()
-	var out []ListenerReplica
+	var out []Replica
 	for rows.Next() {
-		var r ListenerReplica
-		if err := rows.Scan(&r.ID, &r.Host); err != nil {
+		var r Replica
+		if err := rows.Scan(&r.ID, &r.Listener, &r.Shared, &r.Host); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

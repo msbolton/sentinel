@@ -19,10 +19,10 @@ import (
 )
 
 type memStore struct {
-	feeds        map[string]registry.Feed
-	areas        map[string]registry.Area
-	listeners    []registry.ListenerReplica
-	listenersErr error
+	feeds       map[string]registry.Feed
+	areas       map[string]registry.Area
+	replicas    []registry.Replica
+	replicasErr error
 }
 
 func newMemStore() *memStore {
@@ -89,8 +89,8 @@ func (s *memStore) GetArea(_ context.Context, id string) (registry.Area, error) 
 	}
 	return a, nil
 }
-func (s *memStore) ListenerReplicas(context.Context) ([]registry.ListenerReplica, error) {
-	return s.listeners, s.listenersErr
+func (s *memStore) LiveReplicas(context.Context) ([]registry.Replica, error) {
+	return s.replicas, s.replicasErr
 }
 func (s *memStore) SetArea(_ context.Context, a registry.Area) error {
 	if _, ok := s.feeds[a.FeedID]; !ok {
@@ -583,19 +583,40 @@ func TestListeningConnectionWithoutAListenerIsExplained(t *testing.T) {
 		t.Errorf("stored status overlaid = %+v", st)
 	}
 
-	// A live listener replica clears it.
-	store.listeners = []registry.ListenerReplica{{ID: "r-listen", Host: "ingest.example"}}
-	if st := read("/feeds/" + id); st.LastError == registry.NoListenerError || st.State != registry.StateRunning {
-		t.Errorf("with a listener the stored status stands: %+v", st)
+	// An ordinary replica is no listener.
+	store.replicas = []registry.Replica{{ID: "r-plain"}}
+	if st := read("/feeds/" + id); st.State != registry.StateUnassigned || st.LastError != registry.NoListenerError {
+		t.Errorf("with only an ordinary replica live = %+v", st)
 	}
-	store.listeners = nil
+
+	// A live listener replica clears it, a dedicated one and a shared one alike.
+	for _, listener := range []registry.Replica{
+		{ID: "r-listen", Listener: true, Host: "ingest.example"},
+		{ID: "r-listen", Listener: true, Shared: true, Host: "ingest.example"},
+	} {
+		store.replicas = []registry.Replica{listener}
+		if st := read("/feeds/" + id); st.LastError == registry.NoListenerError || st.State != registry.StateRunning {
+			t.Errorf("with the listener %+v the stored status stands: %+v", listener, st)
+		}
+	}
+
+	// A failed lookup says nothing either way, with a listener live or not.
+	store.replicasErr = errors.New("database down")
+	for _, replicas := range [][]registry.Replica{nil, {{ID: "r-listen", Listener: true}}} {
+		store.replicas = replicas
+		for _, path := range []string{"/feeds/" + id, "/feeds/" + id + "/status"} {
+			if st := read(path); st.LastError == registry.NoListenerError || st.State != registry.StateRunning {
+				t.Errorf("%s with a failed lookup and replicas %v = %+v", path, replicas, st)
+			}
+		}
+	}
+	store.replicas, store.replicasErr = nil, nil
 
 	// A connection this replica runs shows its live status, whatever the
-	// listener lookup says: LEASE_ENABLED=false runs every feed in one
-	// process, and a failed lookup reads as no listener.
+	// replica lookup says: LEASE_ENABLED=false runs every feed in one process.
 	rt.snaps = map[string]registry.Status{id: {State: registry.StateRunning, Health: registry.HealthHealthy, MessagesTotal: 7, Detail: json.RawMessage("{}")}}
 	for _, lookupErr := range []error{nil, errors.New("database down")} {
-		store.listenersErr = lookupErr
+		store.replicasErr = lookupErr
 		for _, path := range []string{"/feeds/" + id, "/feeds/" + id + "/status"} {
 			if st := read(path); st.LastError == registry.NoListenerError || st.State != registry.StateRunning || st.MessagesTotal != 7 {
 				t.Errorf("%s running here (lookup error %v) = %+v", path, lookupErr, st)
@@ -612,12 +633,123 @@ func TestListeningConnectionWithoutAListenerIsExplained(t *testing.T) {
 			}
 		}
 	}
-	store.listenersErr, rt.snaps = nil, nil
+	store.replicasErr, rt.snaps = nil, nil
 
 	// A connection pinned to a replica runs there, not on a listener, so a
 	// missing listener says nothing about it.
 	pinned := create("Dock AIS", ":10111", `,"pinnedReplica":"r-host"`)
 	if st := read("/feeds/" + pinned); st.LastError == registry.NoListenerError {
 		t.Errorf("pinned connection explained by a missing listener: %+v", st)
+	}
+}
+
+// An enabled ordinary feed says why it is not running when the only live
+// replicas are listeners that run listening connections only.
+func TestOrdinaryFeedWithOnlyListenersIsExplained(t *testing.T) {
+	srv, store, rt := newServer(t, "")
+	edit := func(id string, mutate func(*registry.Feed)) {
+		f := store.feeds[id]
+		mutate(&f)
+		store.feeds[id] = f
+	}
+	// intelsky is an ordinary feed; aisstream one pinned to the listener;
+	// celestrak stays disabled.
+	edit("intelsky", func(f *registry.Feed) { f.Enabled = true })
+	edit("aisstream", func(f *registry.Feed) {
+		f.Enabled = true
+		f.Config = json.RawMessage(`{"pinnedReplica":"r-listen"}`)
+	})
+	body := `{"name":"Pier AIS","driver":"stream","enabled":true,"config":{"transport":{"kind":"udp","address":":10110"},"decoder":{"name":"nmea-ais"}}}`
+	if resp, out := do(t, srv, "POST", "/feeds", body, operator); resp.StatusCode != 201 {
+		t.Fatalf("create the listening connection: %d %s", resp.StatusCode, out)
+	}
+	const pier = "pier-ais"
+
+	// statuses reads one feed's status the three ways the API gives it.
+	statuses := func(id string) map[string]registry.Status {
+		t.Helper()
+		out := map[string]registry.Status{}
+		_, raw := do(t, srv, "GET", "/feeds/"+id, "", reqOpts{})
+		var dto feedDTO
+		if err := json.Unmarshal(raw, &dto); err != nil {
+			t.Fatal(err)
+		}
+		out["get"] = dto.Status
+		_, raw = do(t, srv, "GET", "/feeds/"+id+"/status", "", reqOpts{})
+		var st registry.Status
+		if err := json.Unmarshal(raw, &st); err != nil {
+			t.Fatal(err)
+		}
+		out["status"] = st
+		_, raw = do(t, srv, "GET", "/feeds", "", reqOpts{})
+		var list []feedDTO
+		if err := json.Unmarshal(raw, &list); err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range list {
+			if d.ID == id {
+				out["list"] = d.Status
+			}
+		}
+		return out
+	}
+	// expect checks every view of the feed: unassigned with the given error,
+	// or, for an empty one, with neither of the two explanations.
+	expect := func(when, id, wantErr string) {
+		t.Helper()
+		for view, st := range statuses(id) {
+			if wantErr != "" {
+				if st.State != registry.StateUnassigned || st.Health != registry.HealthUnknown || st.LastError != wantErr {
+					t.Errorf("%s: %s of %s = %+v, want unassigned with %q", when, view, id, st, wantErr)
+				}
+			} else if st.LastError == registry.NoOrdinaryReplicaError || st.LastError == registry.NoListenerError {
+				t.Errorf("%s: %s of %s is explained although it should not be: %+v", when, view, id, st)
+			}
+		}
+	}
+	dedicated := registry.Replica{ID: "r-listen", Listener: true, Host: "ingest.example"}
+	shared := registry.Replica{ID: "r-listen", Listener: true, Shared: true, Host: "ingest.example"}
+	plain := registry.Replica{ID: "r-plain"}
+
+	store.replicas = []registry.Replica{dedicated}
+	expect("only a dedicated listener is live", "intelsky", registry.NoOrdinaryReplicaError)
+	for _, id := range []string{pier, "aisstream", "celestrak"} { // listening, pinned and disabled
+		expect("only a dedicated listener is live", id, "")
+	}
+
+	for name, replicas := range map[string][]registry.Replica{
+		"an ordinary replica is live too": {dedicated, plain},
+		"the listener is shared":          {shared},
+	} {
+		store.replicas = replicas
+		expect(name, "intelsky", "")
+	}
+
+	// Nothing live at all: that is no reason for an ordinary feed, though a
+	// listening connection says it has no listener.
+	store.replicas = nil
+	expect("no replica is live", "intelsky", "")
+	expect("no replica is live", pier, registry.NoListenerError)
+
+	// A failed lookup says nothing either way.
+	store.replicas, store.replicasErr = []registry.Replica{dedicated}, errors.New("database down")
+	expect("the lookup failed", "intelsky", "")
+	expect("the lookup failed", pier, "")
+	store.replicas, store.replicasErr = []registry.Replica{dedicated}, nil
+
+	// The stored status survives in the other fields.
+	edit("intelsky", func(f *registry.Feed) {
+		f.Status = &registry.Status{FeedID: "intelsky", Owner: "r-old", MessagesTotal: 42, State: registry.StateRunning, Health: registry.HealthHealthy, Detail: json.RawMessage("{}")}
+	})
+	if st := statuses("intelsky")["get"]; st.State != registry.StateUnassigned || st.LastError != registry.NoOrdinaryReplicaError || st.MessagesTotal != 42 {
+		t.Errorf("stored status overlaid = %+v", st)
+	}
+
+	// A feed this replica runs shows its live status.
+	rt.snaps = map[string]registry.Status{"intelsky": {State: registry.StateRunning, Health: registry.HealthHealthy, MessagesTotal: 7, Detail: json.RawMessage("{}")}}
+	for view, st := range statuses("intelsky") {
+		if st.LastError == registry.NoOrdinaryReplicaError || st.State != registry.StateRunning || st.MessagesTotal != 7 {
+			t.Errorf("%s of a feed running here = %+v", view, st)
+		}
 	}
 }

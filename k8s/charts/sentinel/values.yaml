@@ -155,6 +155,10 @@ ingestListener:
   # Pending: kubectl label node <name> sentinel.io/ingest-listener=true
   enabled: true
   host: ""            # address senders use; defaults to the node IP
+  # false: the listener runs listening connections and the feeds pinned to it,
+  # nothing else, so ordinary feeds need an ingest-service replica. true: it
+  # also takes its rendezvous share of the ordinary feeds.
+  shared: false
   nodeSelector:
     sentinel.io/ingest-listener: "true"
   resources:

@@ -47,3 +47,32 @@ func TestLeaseCountersAreExported(t *testing.T) {
 		}
 	}
 }
+
+// The supervisor reports the feeds that have no replica to run on under this
+// name, one series per reason; dashboards and alerts depend on both.
+func TestFeedsUnplacedIsExported(t *testing.T) {
+	m := New(nil)
+	m.FeedsUnplaced.WithLabelValues("no_listener").Set(2)
+	m.FeedsUnplaced.WithLabelValues("no_ordinary_replica").Set(3)
+
+	families, err := m.Registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]float64{} // reason -> value
+	for _, family := range families {
+		if family.GetName() != "sentinel_ingest_feeds_unplaced" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			if len(metric.GetLabel()) != 1 || metric.GetLabel()[0].GetName() != "reason" {
+				t.Errorf("labels = %v, want only reason", metric.GetLabel())
+				continue
+			}
+			got[metric.GetLabel()[0].GetValue()] = metric.GetGauge().GetValue()
+		}
+	}
+	if want := map[string]float64{"no_listener": 2, "no_ordinary_replica": 3}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sentinel_ingest_feeds_unplaced = %v, want %v", got, want)
+	}
+}

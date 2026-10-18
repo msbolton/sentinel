@@ -36,6 +36,10 @@ type Config struct {
 	// is the address senders reach it at (INGEST_LISTENER_HOST).
 	Listener     bool
 	ListenerHost string
+	// ListenerShared lets a listener replica also take its share of the
+	// ordinary feeds (INGEST_LISTENER_SHARED=true). Without it the listener
+	// runs listening connections and the feeds pinned to it, and nothing else.
+	ListenerShared bool
 
 	PublisherShards    int // PUBLISHER_SHARDS (default: 8)
 	ObservationBuffer  int // OBS_BUFFER (default: 1000) observations queued per publisher shard
@@ -77,6 +81,7 @@ func Load() *Config {
 		ReservedPorts:         envOr("INGEST_RESERVED_PORTS", registry.DefaultReservedPorts),
 		Listener:              envOr("INGEST_LISTENER", "false") == "true",
 		ListenerHost:          envOr("INGEST_LISTENER_HOST", ""),
+		ListenerShared:        envOr("INGEST_LISTENER_SHARED", "false") == "true",
 
 		PublisherShards:    envOrInt("PUBLISHER_SHARDS", 8),
 		ObservationBuffer:  envOrInt("OBS_BUFFER", 1000),
@@ -133,6 +138,9 @@ func (c *Config) Validate() error {
 	}
 	if c.LeaseTick*2 > c.LeaseTTL {
 		return errors.New("LEASE_TICK_SEC must be at most half of LEASE_TTL_SEC")
+	}
+	if c.ListenerShared && !c.Listener {
+		return errors.New("INGEST_LISTENER_SHARED needs INGEST_LISTENER=true: only a listener replica can share")
 	}
 	return nil
 }
