@@ -103,7 +103,8 @@ func (d *Decoder) observation(m *sentinelv1.Observation, contentType string) (*o
 	if o.SourceEntityID == "" && len(o.Identities) == 0 {
 		return nil, decoder.Reject("missing_identity", errors.New("the message needs source_entity_id or at least one identity"))
 	}
-	if o.HasPosition && (o.Latitude < -90 || o.Latitude > 90 || o.Longitude < -180 || o.Longitude > 180) {
+	// Written so only in-range values pass: NaN fails every comparison.
+	if o.HasPosition && !(o.Latitude >= -90 && o.Latitude <= 90 && o.Longitude >= -180 && o.Longitude <= 180) {
 		return nil, decoder.Reject("bad_position", fmt.Errorf("position %v, %v is outside WGS84 bounds", o.Latitude, o.Longitude))
 	}
 	if o.Source == "" {

@@ -2,6 +2,7 @@ package sentinelobs
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
@@ -81,6 +82,24 @@ func TestRejections(t *testing.T) {
 	data, _ = proto.Marshal(bad)
 	if _, err := d.Decode(transport.Frame{Payload: data}); decoder.RejectReason(err) != "bad_position" {
 		t.Errorf("bad position: %v", err)
+	}
+	// NaN fails every range comparison, so it must be refused explicitly
+	// (a protobuf double can carry it and protojson accepts "NaN").
+	for name, set := range map[string]func(*sentinelv1.Coordinate){
+		"NaN latitude":  func(c *sentinelv1.Coordinate) { c.Latitude = math.NaN() },
+		"NaN longitude": func(c *sentinelv1.Coordinate) { c.Longitude = math.NaN() },
+		"infinite":      func(c *sentinelv1.Coordinate) { c.Latitude = math.Inf(1) },
+	} {
+		m := msg()
+		set(m.Position)
+		data, _ = proto.Marshal(m)
+		if _, err := d.Decode(transport.Frame{Payload: data}); decoder.RejectReason(err) != "bad_position" {
+			t.Errorf("%s (protobuf): %v", name, err)
+		}
+		line, _ := protojson.Marshal(m)
+		if _, err := newDecoder(t, `{"encoding": "json"}`).Decode(transport.Frame{Payload: line}); decoder.RejectReason(err) != "bad_position" {
+			t.Errorf("%s (json): %v", name, err)
+		}
 	}
 	if _, err := d.Decode(transport.Frame{Payload: []byte{0xff, 0xff, 0xff}}); err == nil || decoder.RejectReason(err) != "" {
 		t.Errorf("garbage: %v", err)
