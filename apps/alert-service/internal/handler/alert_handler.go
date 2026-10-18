@@ -34,6 +34,7 @@ func (h *AlertHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/alerts/rules", h.handleCreateRule)
 	mux.HandleFunc("GET /api/v1/alerts/rules", h.handleGetRules)
 	mux.HandleFunc("PUT /api/v1/alerts/rules/{id}", h.handleUpdateRule)
+	mux.HandleFunc("DELETE /api/v1/alerts/rules/{id}", h.handleDeleteRule)
 }
 
 // ceilingOf is the caller's clearance as propagated by the gateway; a
@@ -227,6 +228,33 @@ func (h *AlertHandler) handleUpdateRule(w http.ResponseWriter, r *http.Request) 
 	}
 
 	httputil.JSON(w, http.StatusOK, rule)
+}
+
+func (h *AlertHandler) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	err := h.store.DeleteRule(r.Context(), id)
+	code, message := ruleDeleteStatus(err)
+	if code == http.StatusInternalServerError {
+		h.logger.Error("delete rule failed", zap.String("ruleId", id), zap.Error(err))
+	}
+	if code != http.StatusNoContent {
+		httputil.Error(w, code, message)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ruleDeleteStatus maps a delete's outcome to the response: 204 on success,
+// 404 when the store reports no such rule, 500 otherwise.
+func ruleDeleteStatus(err error) (int, string) {
+	switch {
+	case err == nil:
+		return http.StatusNoContent, ""
+	case strings.Contains(err.Error(), "not found"):
+		return http.StatusNotFound, "Rule not found"
+	default:
+		return http.StatusInternalServerError, "Failed to delete rule"
+	}
 }
 
 func parseIntDefault(s string, def int) int {

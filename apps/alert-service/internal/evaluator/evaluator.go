@@ -52,6 +52,7 @@ func (e *Evaluator) evaluateGeofence(ctx context.Context, entityID string, lat, 
 	for _, rule := range rules {
 		polygonRaw, ok := rule.Config["polygon"]
 		if !ok {
+			e.evaluateRing(ctx, rule, entityID, lat, lng, classification)
 			continue
 		}
 		coords, ok := parsePolygon(polygonRaw)
@@ -83,29 +84,60 @@ func (e *Evaluator) evaluateGeofence(ctx context.Context, entityID string, lat, 
 			continue
 		}
 
-		alert, err := e.store.CreateAlert(ctx, store.CreateAlertParams{
-			AlertType:   alertType,
-			Severity:    rule.Severity,
-			Title:       fmt.Sprintf("Geofence %s: %s", alertType, rule.Name),
-			Description: fmt.Sprintf("Entity %s triggered %s for rule %s", entityID, alertType, rule.Name),
-			EntityID:       entityID,
-			Lat:            &lat,
-			Lng:            &lng,
-			RuleID:         &rule.ID,
-			Classification: classification,
-		})
-		if err != nil {
-			e.logger.Error("failed to create geofence alert", zap.Error(err))
-			continue
-		}
-
-		e.publishAlert(entityID, alert)
-		e.logger.Info("geofence alert created",
-			zap.String("alertId", alert.ID),
-			zap.String("alertType", alertType),
-			zap.String("entityId", entityID),
-		)
+		e.raiseGeofenceAlert(ctx, rule, alertType, entityID, lat, lng, classification)
 	}
+}
+
+// evaluateRing checks a range-ring rule: the fix is inside when the anchor
+// track is live and the fix lies within the radius of its last position. The
+// anchor's own fixes never trigger its ring.
+func (e *Evaluator) evaluateRing(ctx context.Context, rule store.AlertRuleRecord, entityID string, lat, lng float64, classification string) {
+	anchorID, radiusM, ok := ringConfig(rule.Config)
+	if !ok || anchorID == entityID {
+		return
+	}
+	aLat, aLng, ageoutState, found, err := e.store.GetEntityPosition(ctx, anchorID)
+	if err != nil {
+		e.logger.Error("ring anchor lookup failed", zap.String("ruleId", rule.ID), zap.Error(err))
+		return
+	}
+	inside, ok := ringObservation(found, ageoutState, aLat, aLng, lat, lng, radiusM)
+	if !ok {
+		return // no live anchor, no observation: the entry/exit state is left as it was
+	}
+	triggerOn := triggerMode(rule.Config)
+	alertType := e.geofence.transition(rule.ID, entityID, inside, time.Now(), func(prev *bool, cur bool) string {
+		return geofenceTransition(prev, cur, triggerOn)
+	})
+	if alertType == "" {
+		return
+	}
+	e.raiseGeofenceAlert(ctx, rule, alertType, entityID, lat, lng, classification)
+}
+
+// raiseGeofenceAlert stores and publishes an entry or exit alert for a rule.
+func (e *Evaluator) raiseGeofenceAlert(ctx context.Context, rule store.AlertRuleRecord, alertType, entityID string, lat, lng float64, classification string) {
+	alert, err := e.store.CreateAlert(ctx, store.CreateAlertParams{
+		AlertType:      alertType,
+		Severity:       rule.Severity,
+		Title:          fmt.Sprintf("Geofence %s: %s", alertType, rule.Name),
+		Description:    fmt.Sprintf("Entity %s triggered %s for rule %s", entityID, alertType, rule.Name),
+		EntityID:       entityID,
+		Lat:            &lat,
+		Lng:            &lng,
+		RuleID:         &rule.ID,
+		Classification: classification,
+	})
+	if err != nil {
+		e.logger.Error("failed to create geofence alert", zap.Error(err))
+		return
+	}
+	e.publishAlert(entityID, alert)
+	e.logger.Info("geofence alert created",
+		zap.String("alertId", alert.ID),
+		zap.String("alertType", alertType),
+		zap.String("entityId", entityID),
+	)
 }
 
 func (e *Evaluator) evaluateSpeed(ctx context.Context, entityID string, speedKnots float64, entityType, classification string) {

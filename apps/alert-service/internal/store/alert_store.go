@@ -315,7 +315,7 @@ func (s *AlertStore) ResolveAlert(ctx context.Context, id string) error {
 		UPDATE sentinel.alerts
 		SET "resolvedAt" = NOW()
 		WHERE id = $1
-	`, id, )
+	`, id)
 	if err != nil {
 		return fmt.Errorf("resolve alert: %w", err)
 	}
@@ -417,6 +417,44 @@ func (s *AlertStore) UpdateRule(ctx context.Context, id string, p UpdateRulePara
 
 	row := s.pool.QueryRow(ctx, query, args...)
 	return scanRule(row)
+}
+
+// GetEntityPosition returns an entity's last stored fix and age-out state.
+// found is false when there is no such entity or it has no position.
+func (s *AlertStore) GetEntityPosition(ctx context.Context, id string) (lat, lng float64, ageoutState string, found bool, err error) {
+	var pLat, pLng *float64
+	var state *string
+	err = s.pool.QueryRow(ctx, `
+		SELECT ST_Y(position::geometry), ST_X(position::geometry), "ageoutState"
+		FROM sentinel.entities
+		WHERE id = $1 AND "deletedAt" IS NULL
+	`, id).Scan(&pLat, &pLng, &state)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, 0, "", false, nil
+		}
+		return 0, 0, "", false, fmt.Errorf("get entity position: %w", err)
+	}
+	if pLat == nil || pLng == nil {
+		return 0, 0, "", false, nil
+	}
+	if state != nil {
+		ageoutState = *state
+	}
+	return *pLat, *pLng, ageoutState, true, nil
+}
+
+// DeleteRule removes a rule outright. Alerts it raised keep their ruleId;
+// nothing references the row. A missing id is reported as not found.
+func (s *AlertStore) DeleteRule(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM sentinel.alert_rules WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete rule: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("rule not found")
+	}
+	return nil
 }
 
 // GetEnabledRules returns enabled rules of a given type, optionally filtered by entity type.

@@ -1,4 +1,4 @@
-<div class="map-container">
+<div class="map-container" [class.drawing]="drawSession()" [class.panel-open]="panelRouteActive()">
   <div #cesiumContainer class="cesium-viewer"></div>
 
   <!-- Map Controls -->
@@ -49,6 +49,9 @@
       <button class="control-btn" (click)="toggleFullscreen()" title="Fullscreen">
         <app-icon name="maximize" />
       </button>
+      <button class="control-btn" (click)="openGeofences()" title="Geofences" aria-label="Geofences">
+        <app-icon name="hexagon" />
+      </button>
       <span class="control-divider" aria-hidden="true"></span>
       <button class="control-btn control-btn--danger" (click)="clearAllEntities()" title="Clear All Entities">
         <app-icon name="trash" />
@@ -62,6 +65,19 @@
       <div class="loading-spinner"></div>
       <span>Flying to {{ flyingTo() }}...</span>
     </div>
+  }
+
+  <!-- Geofence drawing -->
+  @if (drawSession(); as session) {
+    <app-geofence-toolbar
+      class="draw-toolbar"
+      [session]="session"
+      (shapeChange)="setDrawShape($event)"
+      (colorChange)="setDrawColor($event)"
+      (radiusChange)="setDrawRadius($event)"
+      (finish)="finishDrawing()"
+      (cancel)="cancelDrawing()"
+    />
   }
 
   <!-- Entity Detail Panel -->

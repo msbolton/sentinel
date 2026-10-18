@@ -3,6 +3,7 @@ package evaluator
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -120,6 +121,41 @@ func evaluateSpeedRule(entityID string, config map[string]interface{}, speedKnot
 	return false, ""
 }
 
+// ringConfig reads a range ring: {"ring": {"entityId", "radiusM"}}. ok is false
+// when the rule has no usable ring (no anchor, or a radius that is not positive).
+func ringConfig(config map[string]interface{}) (entityID string, radiusM float64, ok bool) {
+	raw, exists := config["ring"]
+	if !exists {
+		return "", 0, false
+	}
+	ring, isMap := raw.(map[string]interface{})
+	if !isMap {
+		return "", 0, false
+	}
+	entityID, _ = ring["entityId"].(string)
+	radiusM, hasRadius := toFloat(ring["radiusM"])
+	if entityID == "" || !hasRadius || radiusM <= 0 {
+		return "", 0, false
+	}
+	return entityID, radiusM, true
+}
+
+// earthRadiusM is the IUGG mean Earth radius, matching the client's geometry.
+const earthRadiusM = 6_371_008.8
+
+// withinRing reports whether (lat, lng) lies within radiusM of the anchor,
+// by great-circle (haversine) distance.
+func withinRing(anchorLat, anchorLng, lat, lng, radiusM float64) bool {
+	toRad := func(d float64) float64 { return d * math.Pi / 180 }
+	dLat := toRad(lat - anchorLat)
+	dLng := toRad(lng - anchorLng)
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) + math.Cos(toRad(anchorLat))*math.Cos(toRad(lat))*math.Sin(dLng/2)*math.Sin(dLng/2)
+	if a > 1 {
+		a = 1
+	}
+	return 2*earthRadiusM*math.Asin(math.Sqrt(a)) <= radiusM
+}
+
 func toFloat(v interface{}) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
@@ -135,4 +171,15 @@ func toFloat(v interface{}) (float64, bool) {
 		return f, err == nil
 	}
 	return 0, false
+}
+
+// ringObservation says whether a fix is inside a ring, and whether that is an
+// observation at all: a ring is only watched while its anchor track is live,
+// so a stale, aged-out or missing anchor yields no observation and must not
+// be recorded as "outside".
+func ringObservation(found bool, ageoutState string, aLat, aLng, lat, lng, radiusM float64) (inside, ok bool) {
+	if !found || ageoutState != "LIVE" {
+		return false, false
+	}
+	return withinRing(aLat, aLng, lat, lng, radiusM), true
 }

@@ -53,9 +53,23 @@ import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 import { CLUSTER_CONFIG, CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, drawClusterDisc, syncLabelGlyphClusterShow } from './entity-clusters';
 import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine, type GeoPoint } from './drop-line';
 import { formatAltitude } from '../../shared/geo-format';
+import { GeofenceService } from '../../core/services/geofence.service';
+import { DRAFT_ID, GeofenceLayer } from './geofence-layer';
+import { GeofenceDrawTool } from './geofence-draw';
+import { GeofenceToolbarComponent } from './geofence-toolbar.component';
+import { DrawSession, addPoint, canFinish, draftFromSession, finishShape, newSession, setAnchor, setCursor, setRadius } from './geofence-draw-state';
+import { GeofenceConfig, GeofenceShape, LngLat } from '../../shared/models/geofence.model';
 
 /** Dead-reckoning frame cap: ~30 fps is plenty for gliding markers. */
 const DR_FRAME_INTERVAL_MS = 33;
+/** Pick window, in pixels, used to find the track under a ring's anchor click. */
+const ANCHOR_PICK_PX = 14;
+
+/** Two positions a double click produced from the same spot. */
+function samePoint(a: LngLat, b: LngLat): boolean {
+  return Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6;
+}
+
 /** Whether a #rrggbb colour is light enough to need dark text on it. */
 function isLightColor(hex: string): boolean {
   const h = hex.replace('#', '');
@@ -133,7 +147,7 @@ interface LayerConfig {
   selector: 'app-map',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, IconComponent],
+  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, IconComponent, GeofenceToolbarComponent],
   templateUrl: './map.component.html',
   styleUrls: ['./map.component.scss'],
 })
@@ -182,6 +196,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     { forId: null, path: null, ground: [], footprint: null, builtAtMs: 0, line1: '' };
   /** One clustered data source per type in CLUSTERED_TYPES; see entity-clusters.ts. */
   private clusterSources = new Map<string, any>();
+  /** Saved geofences drawn on the globe; see geofence-layer.ts. */
+  private geofenceLayer: GeofenceLayer | null = null;
+  /** The geofence being drawn, or null; see geofence-draw-state.ts and geofence-draw.ts. */
+  readonly drawSession = signal<DrawSession | null>(null);
+  private drawTool: GeofenceDrawTool | null = null;
+  /** A geofence handle being dragged, with the config it has reached. */
+  private handleDrag: { zoneId: string; index: number; config: GeofenceConfig | null } | null = null;
   private clusterImageCache = new Map<string, string>();
   private clusterCanvas: HTMLCanvasElement | null = null;
   /** The line from the selected aircraft, drone or satellite down to the ground; see drop-line.ts. */
@@ -208,6 +229,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly layerVisibility: LayerVisibilityService,
     private readonly orbitOverlay: OrbitOverlayService,
     private readonly mapViewport: MapViewportService,
+    private readonly geofences: GeofenceService,
   ) {
     // Entities stay in the viewer when their layer is hidden (show=false) so
     // dead reckoning keeps advancing them; this flips `show` when the user's
@@ -223,6 +245,25 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       const selected = this.selectedEntity();
       const flags = { path: this.orbitOverlay.showPath(), ground: this.orbitOverlay.showGroundTrack(), footprint: this.orbitOverlay.showFootprint() };
       this.ngZone.runOutsideAngular(() => untracked(() => this.syncOrbitOverlay(selected, flags)));
+    });
+
+    // The panel's New button and the map control ask for a new zone here.
+    this.subscriptions.add(this.geofences.startDrawingRequested.subscribe(() => { if (this.geofences.canWrite()) this.startDrawing(); }));
+    effect(() => {
+      const session = this.drawSession();
+      this.ngZone.runOutsideAngular(() => {
+        if (session) this.drawTool?.render(session);
+        else this.drawTool?.clear();
+      });
+    });
+
+    // Saved geofences are drawn on the globe and follow the service's list and selection.
+    effect(() => {
+      const zones = this.geofences.zones();
+      const selectedId = this.geofences.selectedId();
+      const draft = this.geofences.draft();
+      this.geofences.anchors();
+      this.ngZone.runOutsideAngular(() => untracked(() => this.geofenceLayer?.sync(zones, selectedId, (id) => this.geofenceAnchorPosition(id), draft)));
     });
 
     // A selected aircraft, drone or satellite shows how high it flies: a line to the ground.
@@ -248,6 +289,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   async ngAfterViewInit(): Promise<void> {
     await this.initCesium();
+    this.geofences.load().subscribe({ error: () => undefined });
     this.setupEventHandlers();
     this.subscribeToEntities();
     this.setupCameraMoveHandler();
@@ -281,6 +323,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.geofenceLayer?.destroy();
+    this.geofenceLayer = null;
     this.clearOrbitOverlay();
     if (this.ageoutConfigTimer) clearInterval(this.ageoutConfigTimer);
     if (this.drFrame !== null) {
@@ -324,6 +368,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.ngZone.runOutsideAngular(() => {
       this.viewer = new Cesium.Viewer(container, viewerOptions);
       this.setupClusterSources();
+      this.geofenceLayer = new GeofenceLayer(this.viewer, Cesium);
+      this.drawTool = new GeofenceDrawTool(this.viewer, Cesium);
+      this.geofenceLayer.sync(this.geofences.zones(), this.geofences.selectedId(), (id) => this.geofenceAnchorPosition(id));
 
       // Set dark atmosphere
       this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
@@ -370,15 +417,27 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     handler.setInputAction((click: any) => {
       const pickedObject = this.viewer.scene.pick(click.position);
 
+      if (this.drawSession()) {
+        this.drawClick(click.position, pickedObject);
+        this.viewer.selectedEntity = undefined; // the viewer's own bracket means nothing while drawing
+        return;
+      }
+
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelOrbit) {
         return; // a click on the selected satellite's own overlay keeps the selection
+      }
+      if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelGeofence) {
+        const zoneId = pickedObject.id._sentinelGeofence as string;
+        this.viewer.selectedEntity = undefined; // the zone's handles mark the selection, not the viewer's bracket
+        if (zoneId !== DRAFT_ID) this.ngZone.run(() => this.geofences.select(zoneId));
+        return;
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelCluster) {
         this.flyToCluster(pickedObject.id._sentinelCluster);
         return;
       }
-      if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelDropLine) {
-        return;
+      if (Cesium.defined(pickedObject) && (pickedObject.id?._sentinelDropLine || pickedObject.id?._sentinelGeofenceHandle)) {
+        return; // a click on a handle is the start of a drag, not a deselection
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelEntity) {
         this.ngZone.run(() => {
@@ -390,6 +449,55 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         });
       }
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+    // Drawing: a double click closes a polygon; the mouse carries the trailing edge.
+    handler.setInputAction(() => {
+      const session = this.drawSession();
+      if (session) this.viewer.trackedEntity = undefined; // the viewer's own double click must not start tracking a track mid-draw
+      if (!session || session.shape !== 'polygon') return;
+      // the two single clicks of a double click added the same point twice
+      const points = session.points.length >= 2 && samePoint(session.points[session.points.length - 1], session.points[session.points.length - 2])
+        ? session.points.slice(0, -1)
+        : session.points;
+      const trimmed = { ...session, points };
+      if (canFinish(trimmed).ok) this.ngZone.run(() => { this.drawSession.set(trimmed); this.finishDrawing(); });
+    }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+    handler.setInputAction((move: any) => {
+      if (this.handleDrag) {
+        const p = this.pickLngLat(move.endPosition);
+        if (p) this.handleDrag.config = this.geofenceLayer?.moveHandle(this.handleDrag.zoneId, this.handleDrag.index, p) ?? null;
+        return;
+      }
+      const session = this.drawSession();
+      if (!session) return;
+      const p = this.pickLngLat(move.endPosition);
+      this.drawSession.set(setCursor(session, p));
+    }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+    // Reshaping a selected geofence: a drag that starts on one of its handles
+    // moves the handle and pauses camera rotation for exactly that drag.
+    handler.setInputAction((down: any) => {
+      if (this.drawSession()) return;
+      const handle = this.geofenceLayer?.handleAt(this.viewer.scene.pick(down.position));
+      if (!handle) return;
+      this.handleDrag = { ...handle, config: null };
+      const controller = this.viewer.scene.screenSpaceCameraController;
+      controller.enableRotate = false;
+      controller.enableTranslate = false;
+    }, Cesium.ScreenSpaceEventType.LEFT_DOWN);
+    handler.setInputAction(() => {
+      const drag = this.handleDrag;
+      if (!drag) return;
+      this.handleDrag = null;
+      const controller = this.viewer.scene.screenSpaceCameraController;
+      controller.enableRotate = true;
+      controller.enableTranslate = true;
+      if (drag.config) {
+        const config = drag.config;
+        // a refused drag snaps the shape back to what the server holds
+        this.ngZone.run(() => this.geofences.update(drag.zoneId, { config }).subscribe({ error: () => this.resyncGeofences() }));
+      }
+    }, Cesium.ScreenSpaceEventType.LEFT_UP);
   }
 
   private setupCameraMoveHandler(): void {
@@ -1059,6 +1167,117 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       duration: 0.8,
       offset: new Cesium.HeadingPitchRange(this.viewer.camera.heading, this.viewer.camera.pitch, range),
     });
+  }
+
+  // --- Geofences ------------------------------------------------------------------
+
+  /** Where a ring's anchor track is drawn now: its live map position, else its last stored fix. */
+  private geofenceAnchorPosition(entityId: string): LngLat | null {
+    const live = this.entityMap.get(entityId)?._sentinelEntity as Entity | undefined;
+    const geo = live ? this.displayedGeoPoint(live, this.wsService.serverNow()) : null;
+    if (geo) return [geo.lon, geo.lat];
+    const stored = this.geofences.anchors().get(entityId);
+    return stored?.position ? [stored.position.longitude, stored.position.latitude] : null;
+  }
+
+  /** Redraw the geofence layer from the service's current state. */
+  private resyncGeofences(): void {
+    this.ngZone.runOutsideAngular(() => this.geofenceLayer?.sync(this.geofences.zones(), this.geofences.selectedId(), (id) => this.geofenceAnchorPosition(id), this.geofences.draft()));
+  }
+
+  /** The Geofences map control: open the panel and start a new zone in one step. */
+  openGeofences(): void {
+    this.router.navigateByUrl('/geofences');
+    if (this.geofences.canWrite()) this.geofences.startDrawingRequested.next();
+  }
+
+  /** Enter draw mode with the last-used colour; redrawing a zone starts from its shape and colour. */
+  startDrawing(shape: GeofenceShape = 'polygon'): void {
+    this.selectedEntity.set(null);
+    const redraw = this.geofences.redrawing();
+    if (redraw) {
+      const radius = redraw.config.circle?.radiusM ?? redraw.config.ring?.radiusM ?? 5000;
+      this.drawSession.set(newSession(redraw.config.shape, redraw.config.color, radius));
+      return;
+    }
+    this.geofences.select(null);
+    this.drawSession.set(newSession(shape, this.geofences.lastColor()));
+  }
+
+  setDrawShape(shape: GeofenceShape): void {
+    const s = this.drawSession();
+    if (s) this.drawSession.set(newSession(shape, s.color, s.radiusM));
+  }
+
+  setDrawColor(color: string): void {
+    const s = this.drawSession();
+    if (s) this.drawSession.set({ ...s, color });
+  }
+
+  setDrawRadius(radiusM: number): void {
+    const s = this.drawSession();
+    if (s) this.drawSession.set(setRadius(s, radiusM));
+  }
+
+  cancelDrawing(): void {
+    this.drawSession.set(null);
+    this.geofences.redrawing.set(null);
+  }
+
+  /** Finish turns the shape into a draft the panel's editor opens, or replaces a redrawn zone's shape. */
+  finishDrawing(): void {
+    const s = this.drawSession();
+    if (!s || !canFinish(s).ok) return;
+    this.geofences.rememberColor(s.color);
+    const redraw = this.geofences.redrawing();
+    if (redraw) {
+      const config: GeofenceConfig = { ...redraw.config, ...finishShape(s) };
+      if (config.shape !== 'circle') delete config.circle;
+      if (config.shape !== 'ring') delete config.ring;
+      if (config.shape === 'ring') delete config.polygon;
+      this.geofences.redrawing.set(null);
+      this.geofences.update(redraw.id, { config }).subscribe({ error: () => undefined });
+      this.geofences.select(redraw.id);
+    } else {
+      this.geofences.setDraft(draftFromSession(s));
+    }
+    this.drawSession.set(null);
+    this.router.navigateByUrl('/geofences');
+  }
+
+  /** A click while drawing: a vertex, the radius, or the anchor track for a ring. */
+  private drawClick(position: any, pickedObject: any): void {
+    const session = this.drawSession();
+    if (!session) return;
+    if (session.shape === 'ring' && !session.anchor) {
+      const entity = this.trackAt(position, pickedObject);
+      if (!entity) return;
+      const geo = this.displayedGeoPoint(entity, this.wsService.serverNow());
+      if (!geo) return;
+      this.ngZone.run(() => this.drawSession.set(setAnchor(session, { entityId: entity.id, entityName: entity.name, position: [geo.lon, geo.lat] })));
+      return;
+    }
+    const p = this.pickLngLat(position);
+    if (!p) return;
+    this.ngZone.run(() => this.drawSession.set(addPoint(session, p)));
+  }
+
+  /** The track under a click, looking a few pixels around it: track icons are small targets. */
+  private trackAt(position: any, pickedObject: any): Entity | undefined {
+    const direct = pickedObject?.id?._sentinelEntity as Entity | undefined;
+    if (direct) return direct;
+    const around = this.viewer.scene.drillPick(position, 8, ANCHOR_PICK_PX, ANCHOR_PICK_PX) as any[];
+    return around.map((p) => p?.id?._sentinelEntity as Entity | undefined).find((e) => !!e);
+  }
+
+  /** The globe position under a screen point, or null when the point misses the globe. */
+  private pickLngLat(screen: any): LngLat | null {
+    const Cesium = this.Cesium;
+    const ray = this.viewer.camera.getPickRay(screen);
+    const cartesian = (ray && this.viewer.scene.globe.pick(ray, this.viewer.scene)) || this.viewer.camera.pickEllipsoid(screen, this.viewer.scene.globe.ellipsoid);
+    if (!cartesian) return null;
+    const carto = Cesium.Cartographic.fromCartesian(cartesian);
+    return [Cesium.Math.toDegrees(carto.longitude), Cesium.Math.toDegrees(carto.latitude)];
   }
 
   // --- Satellite altitude -------------------------------------------------------

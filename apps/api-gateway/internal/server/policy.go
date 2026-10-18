@@ -35,9 +35,10 @@ func findPolicy(policies []Policy, method, path string) (Policy, bool) {
 }
 
 var (
-	analystOrAdmin  = []string{auth.RoleAnalyst, auth.RoleAdmin}
-	operatorOrAdmin = []string{auth.RoleOperator, auth.RoleAdmin}
-	adminOnly       = []string{auth.RoleAdmin}
+	analystOrAdmin         = []string{auth.RoleAnalyst, auth.RoleAdmin}
+	operatorOrAdmin        = []string{auth.RoleOperator, auth.RoleAdmin}
+	operatorAnalystOrAdmin = []string{auth.RoleOperator, auth.RoleAnalyst, auth.RoleAdmin}
+	adminOnly              = []string{auth.RoleAdmin}
 )
 
 // DefaultPolicies reproduces the role rules of the NestJS controllers using the
@@ -54,8 +55,10 @@ var DefaultPolicies = []Policy{
 	// Alerts: acknowledge, resolve, and rule management
 	{Method: http.MethodPatch, Prefix: "/api/v1/alerts", Roles: analystOrAdmin},
 	{Method: http.MethodPatch, Prefix: "/api/v1/analytics/findings", Roles: analystOrAdmin},
-	{Method: http.MethodPost, Prefix: "/api/v1/alerts/rules", Roles: analystOrAdmin},
-	{Method: http.MethodPut, Prefix: "/api/v1/alerts/rules", Roles: analystOrAdmin},
+	// Geofences are alert rules; operators draw and manage them too.
+	{Method: http.MethodPost, Prefix: "/api/v1/alerts/rules", Roles: operatorAnalystOrAdmin},
+	{Method: http.MethodPut, Prefix: "/api/v1/alerts/rules", Roles: operatorAnalystOrAdmin},
+	{Method: http.MethodDelete, Prefix: "/api/v1/alerts/rules", Roles: operatorAnalystOrAdmin},
 	// Links
 	{Method: http.MethodPost, Prefix: "/api/v1/links", Roles: analystOrAdmin},
 	{Method: http.MethodDelete, Prefix: "/api/v1/links", Roles: analystOrAdmin},

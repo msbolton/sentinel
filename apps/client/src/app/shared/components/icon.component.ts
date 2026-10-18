@@ -7,6 +7,7 @@ export const ICON_NAMES = [
   'skip-back', 'play', 'pause', 'skip-forward', 'square',
   'zoom-in', 'zoom-out', 'fit', 'zap', 'share',
   'alert-octagon', 'alert-triangle', 'alert-circle', 'info', 'user', 'box', 'arrow-up',
+  'hexagon', 'rectangle', 'circle-dot', 'ring', 'plus',
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -140,6 +141,21 @@ export type IconName = (typeof ICON_NAMES)[number];
         }
         @case ('user') {
           <svg:path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><svg:circle cx="12" cy="7" r="4"/>
+        }
+        @case ('hexagon') {
+          <svg:polygon points="12 3 21 10 17 21 7 21 3 10"/><svg:circle cx="12" cy="3" r="1.5" fill="currentColor"/><svg:circle cx="21" cy="10" r="1.5" fill="currentColor"/><svg:circle cx="3" cy="10" r="1.5" fill="currentColor"/>
+        }
+        @case ('rectangle') {
+          <svg:rect x="3" y="5" width="18" height="14" rx="1"/>
+        }
+        @case ('circle-dot') {
+          <svg:circle cx="12" cy="12" r="9"/><svg:circle cx="12" cy="12" r="1.5" fill="currentColor"/>
+        }
+        @case ('ring') {
+          <svg:circle cx="12" cy="12" r="9" stroke-dasharray="3 3"/><svg:path d="M12 7l4 5-4 5-4-5z"/>
+        }
+        @case ('plus') {
+          <svg:path d="M12 5v14"/><svg:path d="M5 12h14"/>
         }
         @case ('arrow-up') {
           <svg:path d="M12 19V5"/><svg:path d="M5 12l7-7 7 7"/>
