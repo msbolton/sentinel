@@ -261,6 +261,7 @@ func TestNewRefusals(t *testing.T) {
 		"unknown framing":      {"mode": "listen", "port": 6000, "framing": "zigzag"},
 		"bad encoding":         {"mode": "listen", "port": 6000, "encoding": "yaml"},
 		"message framing":      {"mode": "listen", "port": 6000, "framing": "message"},
+		"negative timeout":     {"mode": "listen", "port": 6000, "readTimeoutSec": -1},
 	} {
 		if d, err := newDriver(t, cfg, nil); err == nil {
 			t.Errorf("%s: accepted, driver %v", name, d)
@@ -330,4 +331,39 @@ func TestClientCAWithoutRequireClientCert(t *testing.T) {
 	if _, err := newDriver(t, cfg, secrets); err != nil {
 		t.Errorf("mutual TLS with a client CA: %v", err)
 	}
+}
+
+// readTimeoutSec closes a connection that sends nothing for that long: one
+// that never sends (it waits in the plain listener's TLS sniff) and one
+// that goes quiet after a message (R22). An idle close is not an error.
+func TestReadTimeoutClosesIdleConnections(t *testing.T) {
+	port := freePort(t)
+	d, sink := start(t, map[string]any{"mode": "listen", "port": port, "address": "127.0.0.1", "encoding": "json", "readTimeoutSec": 1}, nil)
+	silent := dial(t, port, nil)
+	quiet := dial(t, port, nil)
+	_, _ = quiet.Write([]byte(`{"sourceEntityId":"q1","position":{"latitude":1,"longitude":2}}` + "\n"))
+	if !transporttest.WaitFor(func() bool { return sink.count() == 1 }, waitTimeout) {
+		t.Fatal("no observation before the idle period")
+	}
+	connections := func() any { return d.Health().Detail["connections"] }
+	if !transporttest.WaitFor(func() bool { return connections() == 2 }, waitTimeout) {
+		t.Fatalf("connections = %v, want 2", connections())
+	}
+	if !transporttest.WaitFor(func() bool { return connections() == 0 }, waitTimeout) {
+		t.Fatalf("idle connections still open: %v", connections())
+	}
+	for name, c := range map[string]net.Conn{"silent": silent, "quiet": quiet} {
+		_ = c.SetReadDeadline(time.Now().Add(time.Second))
+		if _, err := c.Read(make([]byte, 1)); err == nil || isTimeout(err) {
+			t.Errorf("%s connection not closed by the server: %v", name, err)
+		}
+	}
+	if e := d.Health().LastError; e != "" {
+		t.Errorf("an idle close is not an error: %q", e)
+	}
+}
+
+func isTimeout(err error) bool {
+	ne, ok := err.(net.Error)
+	return ok && ne.Timeout()
 }

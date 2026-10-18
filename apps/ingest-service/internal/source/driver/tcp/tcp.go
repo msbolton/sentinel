@@ -54,6 +54,7 @@ type Config struct {
 	MaxConnections    *int            `json:"maxConnections"`
 	MaxMessageBytes   int             `json:"maxMessageBytes"`
 	MaxMessagesPerSec *int            `json:"maxMessagesPerSec"`
+	ReadTimeoutSec    int             `json:"readTimeoutSec"`
 	TLS               *TLSOptions     `json:"tls"`
 }
 
@@ -150,7 +151,10 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	tcfg := transport.Config{TLS: c.TLS.transport(), MaxFrameBytes: c.MaxMessageBytes, MaxMessagesPerSec: intOr(c.MaxMessagesPerSec, 1000)}
+	if c.ReadTimeoutSec < 0 {
+		return nil, fmt.Errorf("tcp: readTimeoutSec must be 0 or more, not %d", c.ReadTimeoutSec)
+	}
+	tcfg := transport.Config{TLS: c.TLS.transport(), MaxFrameBytes: c.MaxMessageBytes, MaxMessagesPerSec: intOr(c.MaxMessagesPerSec, 1000), ReadTimeoutSec: c.ReadTimeoutSec}
 	if tcfg.MaxFrameBytes == 0 {
 		tcfg.MaxFrameBytes = 65536
 	}

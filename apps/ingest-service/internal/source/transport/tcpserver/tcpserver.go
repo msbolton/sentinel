@@ -174,6 +174,10 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 					s.counts.TLSFailed.Add(1) // closed and counted; not a read error worth LastError
 					return
 				}
+				var ne net.Error
+				if errors.As(err, &ne) && ne.Timeout() {
+					return // the read timeout closed an idle sender, as configured
+				}
 				if errors.Is(err, bufio.ErrTooLong) || errors.Is(err, framing.ErrFrameTooLong) {
 					s.counts.Oversize.Add(1)
 				}

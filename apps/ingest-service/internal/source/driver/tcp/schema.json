@@ -18,6 +18,7 @@
     "maxConnections": { "type": "integer", "minimum": 0, "default": 50, "title": "Max connections", "x-showWhen": { "mode": "listen" } },
     "maxMessageBytes": { "type": "integer", "minimum": 64, "maximum": 16777216, "default": 65536, "title": "Max message size (bytes)" },
     "maxMessagesPerSec": { "type": "integer", "minimum": 0, "default": 1000, "title": "Max messages per second", "description": "0 = unlimited" },
+    "readTimeoutSec": { "type": "integer", "minimum": 0, "default": 0, "title": "Idle timeout (seconds)", "description": "close a connection that sends nothing for this long; 0 = never" },
     "tls": {
       "type": "object", "title": "TLS", "additionalProperties": false,
       "description": "Certificates and keys come from the tlsCert, tlsKey, clientCa and serverCa secrets, never from file paths.",
