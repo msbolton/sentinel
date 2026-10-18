@@ -52,6 +52,9 @@ export class GeofencesComponent implements OnInit {
   protected readonly types = signal<string[]>([]);
   protected readonly severity = signal<GeofenceSeverity>('HIGH');
   protected readonly saving = signal(false);
+  /** Why the last write failed, shown until the next action. */
+  protected readonly error = signal<string | null>(null);
+  private openedId: string | null = null;
 
   private readonly nameField = viewChild<ElementRef<HTMLInputElement>>('nameField');
   private focusPending = false;
@@ -62,13 +65,17 @@ export class GeofencesComponent implements OnInit {
       const draft = this.service.draft();
       if (draft && this.canWrite()) untracked(() => this.openEditor(draft, true));
     });
-    // Selecting a zone, here or on the map, opens its editor for writers.
+    // Selecting a zone, here or on the map, opens its editor for writers. Only a
+    // change of selection does: the list updating underneath (a toggle, a drag,
+    // another operator's save) must not throw away what is being typed.
     effect(() => {
       const id = this.selectedId();
-      const zone = this.zones().find((z) => z.id === id);
       untracked(() => {
+        if (id === this.openedId) return;
+        this.openedId = id;
+        const zone = this.zones().find((z) => z.id === id);
         if (zone && this.canWrite()) this.openEditor(zone, false);
-        else if (!zone && !this.editing()?.isDraft) this.editing.set(null);
+        else if (!this.editing()?.isDraft) this.editing.set(null);
       });
     });
     afterRenderEffect(() => {
@@ -104,7 +111,8 @@ export class GeofencesComponent implements OnInit {
 
   protected toggleEnabled(zone: GeofenceRule, event: Event): void {
     event.stopPropagation();
-    this.service.setEnabled(zone.id, !zone.enabled).subscribe({ error: () => undefined });
+    this.error.set(null);
+    this.service.setEnabled(zone.id, !zone.enabled).subscribe({ error: () => this.error.set('This geofence could not be changed. Check your access and try again.') });
   }
 
   protected shapeIcon(zone: GeofenceRule | GeofenceDraft): IconName {
@@ -149,6 +157,8 @@ export class GeofencesComponent implements OnInit {
     const e = this.editing();
     if (!e || this.saving()) return;
     this.saving.set(true);
+    this.error.set(null);
+    const failed = () => { this.saving.set(false); this.error.set('This geofence could not be saved. Check your access and try again.'); };
     if (e.isDraft) {
       const draft = e.base as GeofenceDraft;
       const body: GeofenceDraft = {
@@ -159,17 +169,18 @@ export class GeofencesComponent implements OnInit {
         severity: this.severity(),
       };
       this.service.create(body).subscribe({
-        next: (zone) => {
+        next: () => {
           this.saving.set(false);
           this.service.setDraft(null);
-          this.editing.set(null);
-          this.service.select(zone.id);
+          this.closeEditor();
         },
-        error: () => this.saving.set(false),
+        error: failed,
       });
       return;
     }
-    const zone = e.base as GeofenceRule;
+    // The zone as it is now: a drag or another save may have changed it since the editor opened.
+    const opened = e.base as GeofenceRule;
+    const zone = this.zones().find((z) => z.id === opened.id) ?? opened;
     const patch: Partial<GeofenceDraft> = {};
     const name = this.name().trim();
     if (name && name !== zone.name) patch.name = name;
@@ -180,24 +191,34 @@ export class GeofencesComponent implements OnInit {
     if (this.severity() !== zone.severity) patch.severity = this.severity();
     if (Object.keys(patch).length === 0) {
       this.saving.set(false);
-      this.editing.set(null);
+      this.closeEditor();
       return;
     }
     this.service.update(zone.id, patch).subscribe({
-      next: () => { this.saving.set(false); this.editing.set(null); },
-      error: () => this.saving.set(false),
+      next: () => { this.saving.set(false); this.closeEditor(); },
+      error: failed,
     });
   }
 
   protected discard(): void {
     const e = this.editing();
     if (e?.isDraft) this.service.setDraft(null);
-    this.editing.set(null);
+    this.closeEditor();
   }
 
   protected remove(zone: GeofenceRule): void {
     if (!confirm(`Delete the geofence "${zone.name}"? Its alerts stay.`)) return;
-    this.service.delete(zone.id).subscribe({ next: () => this.editing.set(null), error: () => undefined });
+    this.error.set(null);
+    this.service.delete(zone.id).subscribe({
+      next: () => this.closeEditor(),
+      error: () => this.error.set('This geofence could not be deleted. Check your access and try again.'),
+    });
+  }
+
+  /** Close the editor and drop the selection, so the next click on the zone opens it again. */
+  private closeEditor(): void {
+    this.editing.set(null);
+    this.service.select(null);
   }
 
   protected redraw(): void {
@@ -207,6 +228,7 @@ export class GeofencesComponent implements OnInit {
   }
 
   private openEditor(base: GeofenceRule | GeofenceDraft, isDraft: boolean): void {
+    this.error.set(null);
     this.editing.set({ base, isDraft });
     this.name.set(base.name);
     this.color.set(base.config.color);

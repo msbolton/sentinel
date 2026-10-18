@@ -1,12 +1,5 @@
 import { GeofenceConfig, GeofenceDraft, GeofenceShape, LngLat } from '../../shared/models/geofence.model';
-import {
-  circlePolygon,
-  crossesAntimeridian,
-  distinctPoints,
-  formatDistance,
-  geodesicDistanceM,
-  rectanglePolygon,
-} from './geofence-geometry';
+import { circlePolygon, crossesAntimeridian, distinctPoints, formatDistance, geodesicDistanceM, polygonAreaM2, rectanglePolygon } from './geofence-geometry';
 
 /**
  * Everything the draw tool knows while a zone is being drawn. Pure data:
@@ -32,6 +25,7 @@ export const REASONS = {
   circle: 'Click to set the radius',
   ring: 'Click a track to anchor the ring',
   antimeridian: 'Zones cannot cross the antimeridian in this version',
+  area: 'The shape must enclose an area',
 } as const;
 
 export function newSession(shape: GeofenceShape, color: string, radiusM = 5000): DrawSession {
@@ -75,7 +69,7 @@ export function previewRing(s: DrawSession): LngLat[] {
     }
     case 'circle': {
       if (!s.points[0]) return [];
-      const r = s.points[1] ? s.radiusM : s.cursor ? geodesicDistanceM(s.points[0], s.cursor) : s.radiusM;
+      const r = s.radiusSet ? s.radiusM : s.cursor ? geodesicDistanceM(s.points[0], s.cursor) : s.radiusM;
       return r > 0 ? circlePolygon(s.points[0], r) : [];
     }
     case 'ring': {
@@ -108,7 +102,7 @@ export function liveMeasure(s: DrawSession): string {
     }
     case 'circle': {
       if (!s.points[0]) return '';
-      const r = s.points[1] ? s.radiusM : s.cursor ? geodesicDistanceM(s.points[0], s.cursor) : s.radiusM;
+      const r = s.radiusSet ? s.radiusM : s.cursor ? geodesicDistanceM(s.points[0], s.cursor) : s.radiusM;
       return r > 0 ? formatDistance(r) : '';
     }
     case 'ring': {
@@ -135,6 +129,7 @@ export function canFinish(s: DrawSession): FinishCheck {
   }
   const ring = s.shape === 'ring' ? [] : finalRing(s);
   if (crossesAntimeridian(ring)) return { ok: false, reason: REASONS.antimeridian };
+  if ((s.shape === 'polygon' || s.shape === 'rectangle') && polygonAreaM2(ring) <= 1) return { ok: false, reason: REASONS.area };
   return { ok: true };
 }
 

@@ -232,16 +232,29 @@ func (h *AlertHandler) handleUpdateRule(w http.ResponseWriter, r *http.Request) 
 
 func (h *AlertHandler) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := h.store.DeleteRule(r.Context(), id); err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			httputil.Error(w, http.StatusNotFound, "Rule not found")
-			return
-		}
+	err := h.store.DeleteRule(r.Context(), id)
+	code, message := ruleDeleteStatus(err)
+	if code == http.StatusInternalServerError {
 		h.logger.Error("delete rule failed", zap.String("ruleId", id), zap.Error(err))
-		httputil.Error(w, http.StatusInternalServerError, "Failed to delete rule")
+	}
+	if code != http.StatusNoContent {
+		httputil.Error(w, code, message)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ruleDeleteStatus maps a delete's outcome to the response: 204 on success,
+// 404 when the store reports no such rule, 500 otherwise.
+func ruleDeleteStatus(err error) (int, string) {
+	switch {
+	case err == nil:
+		return http.StatusNoContent, ""
+	case strings.Contains(err.Error(), "not found"):
+		return http.StatusNotFound, "Rule not found"
+	default:
+		return http.StatusInternalServerError, "Failed to delete rule"
+	}
 }
 
 func parseIntDefault(s string, def int) int {

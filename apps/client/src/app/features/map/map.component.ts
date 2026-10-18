@@ -62,10 +62,10 @@ import { GeofenceConfig, GeofenceShape, LngLat } from '../../shared/models/geofe
 
 /** Dead-reckoning frame cap: ~30 fps is plenty for gliding markers. */
 const DR_FRAME_INTERVAL_MS = 33;
-/** Two positions a double click produced from the same spot. */
 /** Pick window, in pixels, used to find the track under a ring's anchor click. */
 const ANCHOR_PICK_PX = 14;
 
+/** Two positions a double click produced from the same spot. */
 function samePoint(a: LngLat, b: LngLat): boolean {
   return Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6;
 }
@@ -436,8 +436,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         this.flyToCluster(pickedObject.id._sentinelCluster);
         return;
       }
-      if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelDropLine) {
-        return;
+      if (Cesium.defined(pickedObject) && (pickedObject.id?._sentinelDropLine || pickedObject.id?._sentinelGeofenceHandle)) {
+        return; // a click on a handle is the start of a drag, not a deselection
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelEntity) {
         this.ngZone.run(() => {
@@ -453,6 +453,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // Drawing: a double click closes a polygon; the mouse carries the trailing edge.
     handler.setInputAction(() => {
       const session = this.drawSession();
+      if (session) this.viewer.trackedEntity = undefined; // the viewer's own double click must not start tracking a track mid-draw
       if (!session || session.shape !== 'polygon') return;
       // the two single clicks of a double click added the same point twice
       const points = session.points.length >= 2 && samePoint(session.points[session.points.length - 1], session.points[session.points.length - 2])
@@ -493,7 +494,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       controller.enableTranslate = true;
       if (drag.config) {
         const config = drag.config;
-        this.ngZone.run(() => this.geofences.update(drag.zoneId, { config }).subscribe({ error: () => undefined }));
+        // a refused drag snaps the shape back to what the server holds
+        this.ngZone.run(() => this.geofences.update(drag.zoneId, { config }).subscribe({ error: () => this.resyncGeofences() }));
       }
     }, Cesium.ScreenSpaceEventType.LEFT_UP);
   }
@@ -1176,6 +1178,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (geo) return [geo.lon, geo.lat];
     const stored = this.geofences.anchors().get(entityId);
     return stored?.position ? [stored.position.longitude, stored.position.latitude] : null;
+  }
+
+  /** Redraw the geofence layer from the service's current state. */
+  private resyncGeofences(): void {
+    this.ngZone.runOutsideAngular(() => this.geofenceLayer?.sync(this.geofences.zones(), this.geofences.selectedId(), (id) => this.geofenceAnchorPosition(id), this.geofences.draft()));
   }
 
   /** The Geofences map control: open the panel and start a new zone in one step. */

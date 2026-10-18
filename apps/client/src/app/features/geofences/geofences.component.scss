@@ -307,3 +307,12 @@
     padding: 0 4px;
   }
 }
+
+.zone-error {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-red, #ef4444);
+  color: var(--accent-red, #ef4444);
+  font-size: 0.75rem;
+}

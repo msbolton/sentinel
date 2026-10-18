@@ -110,4 +110,24 @@ describe('GeofenceService', () => {
     expect(service.canWrite()).toBe(false);
     expect(auth.hasAnyRole).toHaveBeenCalledWith('sentinel-operator', 'sentinel-analyst', 'sentinel-admin');
   });
+
+  it('treats an anchor that is not live as lost and refreshes anchors on every load', () => {
+    entities.getEntity.mockReturnValue(of({ id: 'e9', name: 'MV HORIZON STAR', ageoutState: 'AGED_OUT' }));
+    service.load().subscribe();
+    http.expectOne('/api/v1/alerts/rules').flush([ring]);
+    expect(service.anchors().get('e9')).toBeNull();
+    entities.getEntity.mockReturnValue(of({ id: 'e9', name: 'MV HORIZON STAR', ageoutState: 'LIVE' }));
+    service.load().subscribe();
+    http.expectOne('/api/v1/alerts/rules').flush([ring]);
+    expect(service.anchors().get('e9')?.id).toBe('e9');
+    service.load().subscribe();
+    http.expectOne('/api/v1/alerts/rules').flush([ring]);
+    expect(entities.getEntity).toHaveBeenCalledTimes(3);
+  });
+
+  it('falls back to the default colour for an unparsable one', () => {
+    service.load().subscribe();
+    http.expectOne('/api/v1/alerts/rules').flush([{ ...seeded, config: { ...seeded.config, color: 'xyz' } }]);
+    expect(service.zones()[0].config.color).toBe('#ef4444');
+  });
 });

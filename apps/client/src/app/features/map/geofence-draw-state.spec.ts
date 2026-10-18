@@ -91,4 +91,17 @@ describe('geofence draw session', () => {
     expect(liveMeasure(typed)).toBe('8.0 km');
     expect(previewRing(typed)).toEqual(circlePolygon(A, 8000));
   });
+
+  it('refuses shapes that enclose no area', () => {
+    const flat = addPoint(addPoint(newSession('rectangle', '#3b82f6'), A), B); // corners on one latitude
+    expect(canFinish(flat)).toEqual({ ok: false, reason: 'The shape must enclose an area' });
+    const line = addPoint(addPoint(addPoint(newSession('polygon', '#f97316'), A), B), [55.2, 25.0]);
+    expect(canFinish(line)).toEqual({ ok: false, reason: 'The shape must enclose an area' });
+  });
+
+  it('previews a circle at its typed radius once one is set', () => {
+    const typed = setCursor(setRadius(addPoint(newSession('circle', '#06b6d4'), A), 20_000), [55.0378, 25.0]);
+    expect(liveMeasure(typed)).toBe('20.0 km');
+    expect(previewRing(typed)).toEqual(circlePolygon(A, 20_000));
+  });
 });

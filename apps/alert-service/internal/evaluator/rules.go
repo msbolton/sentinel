@@ -172,3 +172,14 @@ func toFloat(v interface{}) (float64, bool) {
 	}
 	return 0, false
 }
+
+// ringObservation says whether a fix is inside a ring, and whether that is an
+// observation at all: a ring is only watched while its anchor track is live,
+// so a stale, aged-out or missing anchor yields no observation and must not
+// be recorded as "outside".
+func ringObservation(found bool, ageoutState string, aLat, aLng, lat, lng, radiusM float64) (inside, ok bool) {
+	if !found || ageoutState != "LIVE" {
+		return false, false
+	}
+	return withinRing(aLat, aLng, lat, lng, radiusM), true
+}

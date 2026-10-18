@@ -11,7 +11,7 @@ import {
   GeofenceRule,
   WATCHABLE_TYPES,
 } from '../../shared/models/geofence.model';
-import { formatArea, formatDistance, polygonAreaM2 } from '../../features/map/geofence-geometry';
+import { formatArea, formatDistance, normalizeHex, polygonAreaM2 } from '../../features/map/geofence-geometry';
 
 const COLOR_KEY = 'sentinel-geofence-color';
 const RULES_URL = '/api/v1/alerts/rules';
@@ -118,19 +118,16 @@ export class GeofenceService {
   }
 
   /**
-   * Fetch each ring's anchor; a failure records null so the list can say
-   * "track lost", and a null is retried on the next load in case the track
-   * is back.
+   * Fetch each ring's anchor on every load. A failure, or a track that is no
+   * longer live (the evaluator only follows live anchors), records null so
+   * the list says "track lost" and the ring leaves the map.
    */
   private fetchAnchors(zones: GeofenceRule[]): void {
-    const known = this.anchors();
-    const ids = zones
-      .map((z) => z.config.ring?.entityId)
-      .filter((id): id is string => typeof id === 'string' && id !== '' && !known.get(id));
+    const ids = [...new Set(zones.map((z) => z.config.ring?.entityId).filter((id): id is string => typeof id === 'string' && id !== ''))];
     if (ids.length === 0) return;
     forkJoin(
       ids.map((id) => this.entities.getEntity(id).pipe(
-        map((e) => [id, e] as const),
+        map((e) => [id, e && e.ageoutState !== undefined && e.ageoutState !== 'LIVE' ? null : e] as const),
         catchError(() => of([id, null] as const)),
       )),
     ).subscribe((pairs) => {
@@ -152,7 +149,7 @@ function normalizeRule(raw: GeofenceRule): GeofenceRule {
     config: {
       ...config,
       shape: config.shape ?? 'polygon',
-      color: config.color ?? DEFAULT_GEOFENCE_COLOR,
+      color: normalizeHex(config.color ?? '') ?? DEFAULT_GEOFENCE_COLOR,
       triggerOn: config.triggerOn ?? 'ENTRY',
     } as GeofenceConfig,
   };

@@ -10,6 +10,9 @@
   </div>
 
   <div class="panel-content">
+    @if (error(); as message) {
+      <p class="zone-error" role="alert">{{ message }}</p>
+    }
     @if (editing()?.isDraft; as isDraft) {
       <div class="zone-row draft selected" [style.--zone-color]="color()">
         <span class="zone-chip" aria-hidden="true"><app-icon [name]="shapeIcon(editing()!.base)" [size]="12" [strokeWidth]="2.5" /></span>

@@ -101,7 +101,10 @@ func (e *Evaluator) evaluateRing(ctx context.Context, rule store.AlertRuleRecord
 		e.logger.Error("ring anchor lookup failed", zap.String("ruleId", rule.ID), zap.Error(err))
 		return
 	}
-	inside := found && ageoutState == "LIVE" && withinRing(aLat, aLng, lat, lng, radiusM)
+	inside, ok := ringObservation(found, ageoutState, aLat, aLng, lat, lng, radiusM)
+	if !ok {
+		return // no live anchor, no observation: the entry/exit state is left as it was
+	}
 	triggerOn := triggerMode(rule.Config)
 	alertType := e.geofence.transition(rule.ID, entityID, inside, time.Now(), func(prev *bool, cur bool) string {
 		return geofenceTransition(prev, cur, triggerOn)

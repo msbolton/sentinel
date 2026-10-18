@@ -117,7 +117,8 @@ describe('GeofencesComponent', () => {
     req.flush({ ...req.request.body, id: 'r9', createdAt: 'now', updatedAt: 'now' });
     fixture.detectChanges();
     expect(service.draft()).toBeNull();
-    expect(service.selectedId()).toBe('r9');
+    expect(service.selectedId()).toBeNull();
+    expect(el.querySelector('.zone-editor')).toBeNull();
     expect(rows()).toHaveLength(1);
   });
 
@@ -148,5 +149,82 @@ describe('GeofencesComponent', () => {
     expect(requests).toBe(1);
     button('New')!.click();
     expect(requests).toBe(2);
+  });
+
+  it('keeps unsaved edits when another zone changes', async () => {
+    await setup(true, [gulf, port]);
+    (rows()[0] as HTMLElement).click();
+    fixture.detectChanges();
+    const name = el.querySelector<HTMLInputElement>('.zone-editor input[aria-label="Name"]')!;
+    name.value = 'Gulf north';
+    name.dispatchEvent(new Event('input'));
+    (rows()[1].querySelector('.zone-switch') as HTMLButtonElement).click();
+    http.expectOne('/api/v1/alerts/rules/r2').flush({ ...port, enabled: true });
+    fixture.detectChanges();
+    expect(el.querySelector<HTMLInputElement>('.zone-editor input[aria-label="Name"]')!.value).toBe('Gulf north');
+  });
+
+  it('closes the editor on Save and on Discard, and a click reopens it', async () => {
+    await setup(true, [gulf]);
+    (rows()[0] as HTMLElement).click();
+    fixture.detectChanges();
+    button('Leaves')!.click();
+    fixture.detectChanges();
+    button('Save geofence')!.click();
+    http.expectOne('/api/v1/alerts/rules/r1').flush({ ...gulf, config: { ...gulf.config, triggerOn: 'EXIT' } });
+    fixture.detectChanges();
+    expect(el.querySelector('.zone-editor')).toBeNull();
+    (rows()[0] as HTMLElement).click();
+    fixture.detectChanges();
+    expect(el.querySelector('.zone-editor')).not.toBeNull();
+    button('Discard')!.click();
+    fixture.detectChanges();
+    expect(el.querySelector('.zone-editor')).toBeNull();
+    (rows()[0] as HTMLElement).click();
+    fixture.detectChanges();
+    expect(el.querySelector('.zone-editor')).not.toBeNull();
+  });
+
+  it('saves against the zone as it is now, not as it was when the editor opened', async () => {
+    await setup(true, [gulf]);
+    (rows()[0] as HTMLElement).click();
+    fixture.detectChanges();
+    const moved = { ...gulf.config, polygon: [[55, 25], [56, 25], [56, 24.5], [55, 24.5]] as [number, number][] };
+    service.update('r1', { config: moved }).subscribe();
+    http.expectOne('/api/v1/alerts/rules/r1').flush({ ...gulf, config: moved });
+    fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>('button[aria-label="Blue"]')!.click();
+    fixture.detectChanges();
+    button('Save geofence')!.click();
+    const req = http.expectOne('/api/v1/alerts/rules/r1');
+    expect(req.request.body).toEqual({ config: { ...moved, color: '#3b82f6' } });
+    req.flush({ ...gulf, config: { ...moved, color: '#3b82f6' } });
+  });
+
+  it('deletes after confirming and closes the editor', async () => {
+    await setup(true, [gulf]);
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    (rows()[0] as HTMLElement).click();
+    fixture.detectChanges();
+    button('Delete')!.click();
+    const req = http.expectOne('/api/v1/alerts/rules/r1');
+    expect(req.request.method).toBe('DELETE');
+    req.flush(null, { status: 204, statusText: 'No Content' });
+    fixture.detectChanges();
+    expect(rows()).toHaveLength(0);
+    expect(el.querySelector('.zone-editor')).toBeNull();
+  });
+
+  it('says so when a save is refused and keeps the editor open', async () => {
+    await setup(true, [gulf]);
+    (rows()[0] as HTMLElement).click();
+    fixture.detectChanges();
+    button('Leaves')!.click();
+    fixture.detectChanges();
+    button('Save geofence')!.click();
+    http.expectOne('/api/v1/alerts/rules/r1').flush({ error: 'forbidden' }, { status: 403, statusText: 'Forbidden' });
+    fixture.detectChanges();
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain('could not be saved');
+    expect(el.querySelector('.zone-editor')).not.toBeNull();
   });
 });
