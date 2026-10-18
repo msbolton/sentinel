@@ -8,6 +8,7 @@ package tcp
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -160,6 +161,11 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 			return nil, fmt.Errorf("tcp listen: port must be 1024-65535, not %d", c.Port)
 		}
 		tcfg.Kind, tcfg.Address = "tcpserver", net.JoinHostPort(c.Address, strconv.Itoa(c.Port))
+		// A client CA verifies only certificates the listener asks for: staged
+		// without requireClientCert it would let every sender in unchecked.
+		if spec.Secrets["clientCa"] != "" && (c.TLS == nil || !c.TLS.Enabled || !c.TLS.RequireClientCert) {
+			return nil, errors.New("tcp listen: the clientCa secret is set but tls.requireClientCert is off; turn it on (with TLS) to verify senders, or remove the secret")
+		}
 		tcfg.Allow, tcfg.MaxConnections = c.Allow, intOr(c.MaxConnections, 50)
 		d.detailKey, d.target = "listen", map[string]any{"protocol": "tcp", "host": deps.ListenerHost, "port": c.Port}
 	case "connect":

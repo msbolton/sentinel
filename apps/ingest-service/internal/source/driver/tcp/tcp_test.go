@@ -304,3 +304,30 @@ func TestListenHookAndFraming(t *testing.T) {
 		}
 	}
 }
+
+// A client CA verifies nothing unless client certificates are required, so
+// a listener with the clientCa secret and requireClientCert off is refused
+// (R20) instead of silently accepting any sender.
+func TestClientCAWithoutRequireClientCert(t *testing.T) {
+	ca := transporttest.NewCA(t)
+	pair := ca.Issue(t, "localhost")
+	secrets := map[string]string{"tlsCert": string(pair.CertPEM), "tlsKey": string(pair.KeyPEM), "clientCa": string(ca.CertPEM)}
+	for name, tlsCfg := range map[string]any{
+		"TLS off":               map[string]any{"enabled": false, "requireClientCert": true},
+		"no tls section":        nil,
+		"requireClientCert off": map[string]any{"enabled": true},
+	} {
+		cfg := map[string]any{"mode": "listen", "port": 6000}
+		if tlsCfg != nil {
+			cfg["tls"] = tlsCfg
+		}
+		_, err := newDriver(t, cfg, secrets)
+		if err == nil || !strings.Contains(err.Error(), "clientCa") || !strings.Contains(err.Error(), "requireClientCert") {
+			t.Errorf("%s: err = %v, want one naming clientCa and requireClientCert", name, err)
+		}
+	}
+	cfg := map[string]any{"mode": "listen", "port": 6000, "tls": map[string]any{"enabled": true, "requireClientCert": true}}
+	if _, err := newDriver(t, cfg, secrets); err != nil {
+		t.Errorf("mutual TLS with a client CA: %v", err)
+	}
+}
