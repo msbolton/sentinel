@@ -70,9 +70,9 @@ export interface RawPayload {
  * entity service resolves it from identities.
  *
  * Vocabulary (kept stable so consumers can switch on them):
- *   driver:  stream | opensky | adsblol | celestrak
+ *   driver:  stream | opensky | intelsky | celestrak | aisstream | httpjson | tak
  *   decoder: json | nmea-gps | nmea-ais | cot | sbs | beast | link16 |
- *            opensky-states | adsblol | tle-sgp4
+ *            opensky-states | intelsky | tle-sgp4 | aisstream
  */
 export interface Observation {
   /**

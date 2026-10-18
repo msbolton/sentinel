@@ -90,11 +90,6 @@ VALUES
    '{"intervalSec": 10, "viewportTtlSec": 90, "minPollSpacingSec": 3, "maxAreaSqDeg": 400, "maxIntervalSec": 60, "creditFloor": 200, "staleWarnSec": 120, "staleCriticalSec": 300}'::jsonb,
    '{"clientId": "env:OPENSKY_CLIENT_ID", "clientSecret": "env:OPENSKY_CLIENT_SECRET"}'::jsonb,
    FALSE, TRUE),
-  ('adsb-lol', 'adsb.lol military', 'Military aircraft from the adsb.lol community ADS-B network.',
-   'adsblol',
-   '{"intervalSec": 10, "staleWarnSec": 120, "staleCriticalSec": 300}'::jsonb,
-   '{}'::jsonb,
-   FALSE, TRUE),
   ('celestrak', 'CelesTrak satellites', 'Satellite positions propagated with SGP4 from CelesTrak orbital elements.',
    'celestrak',
    '{"groups": ["active"], "refreshHours": 2, "propagationIntervalSec": 60, "staleWarnSec": 600, "staleCriticalSec": 900}'::jsonb,
@@ -117,7 +112,6 @@ INSERT INTO sentinel.feed_ageout_config ("feedId", "sourceType", "staleThreshold
 SELECT v.feed, v.src, v.stale, v.ageout
 FROM (VALUES
   ('opensky',   'OPENSKY',   60000,  300000),
-  ('adsb-lol',  'ADSB_LOL',  60000,  300000),
   ('celestrak', 'CELESTRAK', 600000, 7200000),
   ('intelsky',  'INTELSKY',  60000,  300000)
 ) AS v(feed, src, stale, ageout)

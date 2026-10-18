@@ -186,7 +186,7 @@ func TestListAndFilters(t *testing.T) {
 		}
 	}
 	// Every built-in takes a viewport except intelsky, which polls the globe.
-	areaFeeds := map[string]bool{"opensky": true, "adsb-lol": true, "celestrak": true, "aisstream": true}
+	areaFeeds := map[string]bool{"opensky": true, "celestrak": true, "aisstream": true}
 	_, body = do(t, srv, "GET", "/feeds?capability=area", "", reqOpts{})
 	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != len(areaFeeds) {
 		t.Fatalf("area filter = %s", body)
