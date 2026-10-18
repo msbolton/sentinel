@@ -62,7 +62,7 @@
   "x-secrets": {
     "tlsCert": { "title": "TLS certificate (PEM)" },
     "tlsKey": { "title": "TLS private key (PEM)" },
-    "clientCa": { "title": "Client CA (PEM)" },
+    "clientCa": { "title": "Client CA (PEM)", "showWhen": { "transport/kind": "tcpserver", "transport/tls/enabled": true, "transport/tls/requireClientCert": true } },
     "serverCa": { "title": "Server CA (PEM)" }
   }
 }

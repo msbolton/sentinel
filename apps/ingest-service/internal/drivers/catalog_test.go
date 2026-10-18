@@ -307,3 +307,77 @@ func TestValidateNMEAGPSNeedsASourceEntityID(t *testing.T) {
 		}
 	}
 }
+
+// secretMeta is one x-secrets entry, as far as the catalog checks it.
+type secretMeta struct {
+	Title        string         `json:"title"`
+	ShowWhen     map[string]any `json:"showWhen"`
+	RequiredWhen map[string]any `json:"requiredWhen"`
+}
+
+// propertyNode is a schema as far as a secret's conditions care: the nested
+// properties a path walks through.
+type propertyNode struct {
+	Properties map[string]propertyNode `json:"properties"`
+}
+
+// has reports whether the slash-separated path names a property, following
+// nested properties from this schema.
+func (n propertyNode) has(path string) bool {
+	for _, name := range strings.Split(path, "/") {
+		next, ok := n.Properties[name]
+		if !ok {
+			return false
+		}
+		n = next
+	}
+	return true
+}
+
+// A schema describes its secrets under x-secrets, so the form can label each
+// one, hint at a reference, and show or require it only while its conditions
+// hold. The form reads the entries by secret name and the conditions by
+// property path, so a typo in either is silent: an entry for a secret the
+// driver does not take is never used, and a condition on a property the schema
+// lacks never holds.
+func TestSecretMetadataNamesDeclaredSecrets(t *testing.T) {
+	// The drivers whose forms take TLS material, and the secrets each must
+	// describe, so that a dropped block fails here instead of passing for want
+	// of anything to check.
+	wantDescribed := map[string][]string{
+		"tcp":    {"tlsCert", "tlsKey", "clientCa", "serverCa"},
+		"stream": {"tlsCert", "tlsKey", "clientCa", "serverCa"},
+		"tak":    {"clientCert", "clientKey", "caCert"},
+	}
+	for _, info := range Default().List() {
+		var schema struct {
+			Properties map[string]propertyNode `json:"properties"`
+			Secrets    map[string]secretMeta   `json:"x-secrets"`
+		}
+		if err := json.Unmarshal(info.ConfigSchema, &schema); err != nil {
+			t.Errorf("%s: the schema does not decode: %v", info.ID, err)
+			continue
+		}
+		root := propertyNode{Properties: schema.Properties}
+		for _, name := range wantDescribed[info.ID] {
+			if _, ok := schema.Secrets[name]; !ok {
+				t.Errorf("%s: x-secrets has no entry for %s", info.ID, name)
+			}
+		}
+		for name, meta := range schema.Secrets {
+			if !slices.Contains(info.SecretFields, name) {
+				t.Errorf("%s: x-secrets describes %s, which is not one of the driver's secret fields %v", info.ID, name, info.SecretFields)
+			}
+			if meta.Title == "" {
+				t.Errorf("%s: x-secrets.%s has no title", info.ID, name)
+			}
+			for when, conditions := range map[string]map[string]any{"showWhen": meta.ShowWhen, "requiredWhen": meta.RequiredWhen} {
+				for path := range conditions {
+					if !root.has(path) {
+						t.Errorf("%s: x-secrets.%s.%s tests %q, which is not a property path in the schema", info.ID, name, when, path)
+					}
+				}
+			}
+		}
+	}
+}

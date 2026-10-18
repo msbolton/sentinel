@@ -47,5 +47,11 @@
       "if": { "properties": { "format": { "const": "nmea-gps" } }, "required": ["format"] },
       "then": { "required": ["decoderOptions"], "properties": { "decoderOptions": { "required": ["sourceEntityId"], "properties": { "sourceEntityId": { "type": "string", "minLength": 1 } } } } }
     }
-  ]
+  ],
+  "x-secrets": {
+    "tlsCert": { "title": "TLS certificate (PEM)", "description": "listen: the certificate Sentinel presents. connect: an optional client certificate.", "examples": ["file:/etc/sentinel/secrets/server.pem"], "showWhen": { "tls/enabled": true }, "requiredWhen": { "mode": "listen", "tls/enabled": true } },
+    "tlsKey": { "title": "TLS private key (PEM)", "examples": ["file:/etc/sentinel/secrets/server.key"], "showWhen": { "tls/enabled": true }, "requiredWhen": { "mode": "listen", "tls/enabled": true } },
+    "clientCa": { "title": "Client CA (PEM)", "description": "Signs the senders' certificates.", "examples": ["file:/etc/sentinel/secrets/clients-ca.pem"], "showWhen": { "mode": "listen", "tls/enabled": true, "tls/requireClientCert": true }, "requiredWhen": { "mode": "listen", "tls/enabled": true, "tls/requireClientCert": true } },
+    "serverCa": { "title": "Server CA (PEM)", "description": "Signs the remote's certificate; empty trusts the system roots.", "examples": ["file:/etc/sentinel/secrets/ca.pem"], "showWhen": { "mode": "connect", "tls/enabled": true } }
+  }
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net"
 	"slices"
 	"strings"
@@ -674,11 +675,13 @@ func TestSchemaDefaultMatchesDefaultMaxConnections(t *testing.T) {
 	}
 }
 
-// The form titles each TLS secret from the schema's x-secrets and puts no
-// condition on any: a stream's TLS is not always governed by tls.enabled (a
-// wss:// URL or an ssl:// broker turns it on too), so each secret is always
-// offered.
-func TestSchemaTitlesTheTLSSecretsWithoutConditions(t *testing.T) {
+// The form titles each TLS secret from the schema's x-secrets. A stream's TLS
+// is not always governed by tls.enabled (a wss:// URL or an ssl:// broker turns
+// it on too), so no secret is hidden or required by it, with one exception: only
+// a tcpserver that requires client certificates reads a client CA, and a
+// tcpserver refuses one it would not check, so the form offers clientCa to that
+// listener alone.
+func TestSchemaTitlesTheTLSSecrets(t *testing.T) {
 	var doc struct {
 		Secrets map[string]map[string]json.RawMessage `json:"x-secrets"`
 	}
@@ -702,10 +705,21 @@ func TestSchemaTitlesTheTLSSecretsWithoutConditions(t *testing.T) {
 		if err := json.Unmarshal(meta["title"], &title); err != nil || title == "" {
 			t.Errorf("x-secrets.%s has no title", name)
 		}
-		for _, condition := range []string{"showWhen", "requiredWhen"} {
-			if _, has := meta[condition]; has {
-				t.Errorf("x-secrets.%s has %s, but a stream's TLS secrets are always offered", name, condition)
+		if _, has := meta["requiredWhen"]; has {
+			t.Errorf("x-secrets.%s has requiredWhen, but the form does not require a stream's TLS secrets", name)
+		}
+		var showWhen map[string]any
+		if raw, has := meta["showWhen"]; has {
+			if err := json.Unmarshal(raw, &showWhen); err != nil {
+				t.Errorf("x-secrets.%s showWhen is not an object: %v", name, err)
 			}
+		}
+		var want map[string]any // nil: every other secret is always offered
+		if name == "clientCa" {
+			want = map[string]any{"transport/kind": "tcpserver", "transport/tls/enabled": true, "transport/tls/requireClientCert": true}
+		}
+		if !maps.Equal(showWhen, want) {
+			t.Errorf("x-secrets.%s showWhen = %v, want %v", name, showWhen, want)
 		}
 	}
 }
