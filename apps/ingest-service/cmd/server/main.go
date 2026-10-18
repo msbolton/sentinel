@@ -138,6 +138,9 @@ func main() {
 		logger.Warn("LEASE_ENABLED=false: this replica runs every enabled feed")
 	}
 	sup := feed.New(reg, publisher, logger, m, supOpts)
+	// The listeners' counters, connections and senders live in their drivers'
+	// health detail; this reads them when Prometheus scrapes.
+	promReg.MustRegister(metrics.NewListenerCollector(sup))
 	supervisorDone := make(chan struct{})
 	go func() {
 		defer close(supervisorDone)

@@ -214,6 +214,11 @@ type instance struct {
 
 	token          int64     // lease fencing token; 0 without a leaser
 	elsewhereSince time.Time // when another live replica became the preferred owner
+
+	// listening is whether the feed binds a port, decided when the instance is
+	// created because ListenerStats asks on every scrape; a changed config is a
+	// new version and so a new instance.
+	listening bool
 }
 
 // Supervisor owns this replica's feed runners.
@@ -572,7 +577,7 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 				s.mu.Unlock()
 				continue
 			}
-			inst = &instance{spec: spec, state: registry.StateStarting, token: token}
+			inst = &instance{spec: spec, state: registry.StateStarting, token: token, listening: listens(spec)}
 			if s.opts.Leaser != nil {
 				// Start the handover clock when we take a feed another live
 				// replica should own (it did not claim it within a TTL).
@@ -818,6 +823,34 @@ func (s *Supervisor) AreaStatus(id string) (aoi.Status, bool) {
 		return aoi.Status{}, false
 	}
 	return aa.AreaStatus(), true
+}
+
+// ListenerStats lists the listening feeds this replica runs, each with the
+// health detail its driver reports now; the Prometheus listener collector
+// reads it on every scrape. A feed that is starting, failed or stopped is not
+// listed, so a series never describes a listener that is not there.
+//
+// s.mu is held only to copy what to ask. Health reads transport state under
+// locks of its own and stays safe on a driver stopped in the meantime, so it
+// is called after the unlock, and a scrape never holds up Reconcile.
+func (s *Supervisor) ListenerStats() []metrics.ListenerStat {
+	type listener struct {
+		id, driver string
+		drv        driver.Driver
+	}
+	var running []listener
+	s.mu.Lock()
+	for id, inst := range s.running {
+		if inst.listening && inst.state == registry.StateRunning && inst.runner != nil {
+			running = append(running, listener{id, inst.spec.Driver, inst.runner.Driver()})
+		}
+	}
+	s.mu.Unlock()
+	stats := make([]metrics.ListenerStat, len(running))
+	for i, l := range running {
+		stats[i] = metrics.ListenerStat{FeedID: l.id, Driver: l.driver, Detail: l.drv.Health().Detail}
+	}
+	return stats
 }
 
 // Running reports whether this replica runs the feed.
