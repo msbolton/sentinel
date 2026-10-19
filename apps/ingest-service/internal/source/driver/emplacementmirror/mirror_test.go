@@ -34,6 +34,17 @@ func (m *memSource) Get(id string) (emplacement.Emplacement, bool) {
 	e, ok := m.rows[id]
 	return e, ok
 }
+func (m *memSource) ByFeed(feedID string) []emplacement.Emplacement {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []emplacement.Emplacement
+	for _, e := range m.rows {
+		if e.FeedID != nil && *e.FeedID == feedID {
+			out = append(out, e)
+		}
+	}
+	return out
+}
 func (m *memSource) OnChange(fn func(string)) func() {
 	m.mu.Lock()
 	m.fns = append(m.fns, fn)

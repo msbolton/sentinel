@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sentinel/ingest-service/internal/registry"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // within polls cond for up to five seconds.
@@ -68,10 +68,27 @@ func TestRunFollowsRevocationAndFeedDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	within(t, "the second token to authenticate", authenticates(secret))
-	// The real registry delete, which sends the feed notice itself.
-	if err := registry.NewWithPool(pool, nil).Delete(ctx, "test-tok-b"); err != nil {
+	// What the registry's delete does: remove the feed and send the feed
+	// notice in one transaction. (The registry package cannot be imported
+	// here: it imports driver, which imports this package.)
+	if err := deleteFeed(ctx, pool, "test-tok-b"); err != nil {
 		t.Fatal(err)
 	}
 	within(t, "the deleted feed's token to stop authenticating", func() bool { return !authenticates(secret)() })
 	expectRevoked(created.ID)
+}
+
+func deleteFeed(ctx context.Context, pool *pgxpool.Pool, id string) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM sentinel.feeds WHERE id = $1`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, "SELECT pg_notify($1, $2)", feedsChannel, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

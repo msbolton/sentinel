@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/sentinel/go-common/secrettoken"
-
-	"github.com/sentinel/ingest-service/internal/registry"
 )
 
 type memLoader struct {
@@ -130,12 +128,6 @@ func recordRevokes(c *Cache) func() []string {
 		mu.Lock()
 		defer mu.Unlock()
 		return append([]string(nil), gone...)
-	}
-}
-
-func TestFeedsChannelMatchesRegistry(t *testing.T) {
-	if feedsChannel != registry.ChannelFeeds {
-		t.Fatalf("feedsChannel %q, registry %q", feedsChannel, registry.ChannelFeeds)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
 	"github.com/sentinel/ingest-service/internal/emplacement"
+	"github.com/sentinel/ingest-service/internal/ingesttoken"
 	"github.com/sentinel/ingest-service/internal/obs"
 )
 
@@ -74,6 +75,9 @@ type Deps struct {
 	// Emplacements is the in-memory view of the emplacements table, for the
 	// drivers that report as emplacements (nil when there is none).
 	Emplacements EmplacementSource
+	// Tokens authenticates senders for the drivers that take ingest tokens
+	// (nil when there is none).
+	Tokens TokenSource
 }
 
 // DensityPublisher sends a feed's density grids to the density.events
@@ -106,7 +110,23 @@ type ShapeSource interface {
 type EmplacementSource interface {
 	All() []emplacement.Emplacement
 	Get(id string) (emplacement.Emplacement, bool)
+	// ByFeed lists the emplacements bound to a feed.
+	ByFeed(feedID string) []emplacement.Emplacement
 	OnChange(fn func(id string)) (cancel func())
+}
+
+// TokenSource authenticates the senders of the drivers that take ingest
+// tokens (grpc). *ingesttoken.Cache is the real one.
+type TokenSource interface {
+	// Authenticate returns the usable token a secret names. It does not
+	// check which feed the token belongs to: the driver does.
+	Authenticate(secret string) (ingesttoken.Token, bool)
+	// OnRevoke calls fn once for each token that is revoked or deleted
+	// (with its feed). fn must not block.
+	OnRevoke(fn func(ingesttoken.Token)) (cancel func())
+	// Ready is closed once the tokens have loaded; until then nothing
+	// authenticates, and the driver answers Unavailable.
+	Ready() <-chan struct{}
 }
 
 // Sink receives what a driver produces. Implementations are safe for

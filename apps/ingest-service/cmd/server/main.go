@@ -164,6 +164,7 @@ func main() {
 		SecretReloadEvery: time.Duration(cfg.TLSReloadSec) * time.Second,
 		Shapes:            outbound.NewShapeStore(reg.Pool()),
 		Emplacements:      empCache,
+		Tokens:            tokCache,
 		Density:           density.New(producer, commonkafka.TopicDensityEvents).For,
 		ConsumerFactory: func(groupID, clientID string) (outbound.Consumer, error) {
 			return commonkafka.NewBatchConsumer(cfg.KafkaBrokers, groupID, clientID, "latest", commonkafka.BatchOptions{MaxMessages: 200, MaxWait: 200 * time.Millisecond, MaxRetries: 1}, logger.With(zap.String("group", groupID)))
