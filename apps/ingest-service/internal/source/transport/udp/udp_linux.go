@@ -10,12 +10,17 @@ import (
 )
 
 // datagramReader reads a socket's datagrams and, with them, the count of
-// datagrams the kernel dropped because the socket's receive buffer was full.
-// Such a datagram never reaches the listener, so the kernel is the only one
-// who can say it was sent.
+// datagrams the kernel dropped on the socket: because its receive buffer was
+// full or out of memory, its checksum was bad, or a filter refused it. Such a
+// datagram never reaches the listener, so the kernel is the only one who can
+// say it was sent.
 type datagramReader struct {
-	conn    *net.UDPConn
-	oob     []byte        // room for the kernel's drop count; nil when the kernel was not asked for it
+	conn *net.UDPConn
+	// oob has room for the kernel's drop count and nothing else; nil when the
+	// kernel was not asked for it. The count is the only control message the
+	// socket is set up to receive, and it fits (CmsgSpace(4) is one message
+	// holding a uint32), so the kernel has no reason to cut it short.
+	oob     []byte
 	dropped *atomic.Int64 // where the latest count is kept
 }
 
@@ -54,9 +59,12 @@ func (r *datagramReader) read(buf []byte) (int, netip.AddrPort, error) {
 	if r.oob == nil {
 		return r.conn.ReadFromUDPAddrPort(buf)
 	}
-	n, oobn, _, ap, err := r.conn.ReadMsgUDPAddrPort(buf, r.oob)
+	n, oobn, flags, ap, err := r.conn.ReadMsgUDPAddrPort(buf, r.oob)
 	if oobn > 0 {
-		if total, ok := controlUint32(r.oob[:oobn], syscall.SOL_SOCKET, syscall.SO_RXQ_OVFL); ok {
+		// Control data the kernel cut short (MSG_CTRUNC) may end inside a
+		// message, so it is not read. The buffer holds the one message the
+		// socket is set up to receive, so this is not expected to happen.
+		if total, ok := controlUint32Intact(r.oob[:oobn], flags, syscall.SOL_SOCKET, syscall.SO_RXQ_OVFL); ok {
 			r.dropped.Store(int64(total))
 		}
 	}

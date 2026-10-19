@@ -47,9 +47,9 @@ type Listener struct {
 	// receiveBuffer is the size of the socket's receive buffer as the OS reports
 	// it: 0 until the socket is open, and where the OS cannot say.
 	receiveBuffer atomic.Int64
-	// kernelDropped is how many datagrams the OS dropped from the socket's full
-	// receive buffer, as of the latest datagram it delivered. Only Linux reports
-	// it; elsewhere it stays 0.
+	// kernelDropped is how many datagrams the OS dropped on the socket (a full
+	// receive buffer, memory limits, bad checksums, filters), as of the latest
+	// datagram it delivered. Only Linux reports it; elsewhere it stays 0.
 	kernelDropped atomic.Int64
 
 	transport.StateTracker
@@ -95,8 +95,7 @@ func New(cfg transport.Config) (transport.Transport, error) {
 // its IP address, in the senders list and for its rate limit; the frame's
 // Remote is the exact ip:port. Datagrams that arrive faster than the loop
 // reads them wait in the socket's receive buffer, which is sized from the
-// config; on Linux the datagrams the OS had to drop when it was full are
-// counted too.
+// config; on Linux the datagrams the OS dropped on the socket are counted too.
 func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 	lc := net.ListenConfig{}
 	pc, err := lc.ListenPacket(ctx, "udp", l.cfg.Address)
