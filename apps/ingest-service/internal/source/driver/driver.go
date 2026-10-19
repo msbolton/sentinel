@@ -62,6 +62,14 @@ type Deps struct {
 	// ListenerHost is the address senders reach this replica's listeners
 	// at (INGEST_LISTENER_HOST); empty on replicas that are not listeners.
 	ListenerHost string
+	// ReloadSecrets resolves the feed's secret references again, under the
+	// policy that checked them at start, and returns them as Spec.Secrets was
+	// first. A driver calls it to follow a rotation of the TLS material; nil
+	// when nothing resolves secrets (tests).
+	ReloadSecrets func() (map[string]string, error)
+	// SecretReloadEvery is how often a driver reads rotated secrets again
+	// (INGEST_TLS_RELOAD_SEC); 0 means never.
+	SecretReloadEvery time.Duration
 }
 
 // DensityPublisher sends a feed's density grids to the density.events

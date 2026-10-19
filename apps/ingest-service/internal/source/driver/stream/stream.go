@@ -176,6 +176,9 @@ func NewFromParts(spec driver.Spec, deps driver.Deps, tcfg transport.Config, fra
 		tcfg.Framing = framingName
 	}
 	ApplySecrets(&tcfg, spec.Secrets)
+	if tcfg.TLS != nil && tcfg.TLS.Enabled {
+		tcfg.ReloadTLS, tcfg.ReloadEvery = reloadTLS(spec.Secrets, deps.ReloadSecrets), deps.SecretReloadEvery
+	}
 	tcfg.Logger = deps.Logger
 	tcfg.FileDirs = FileDirs
 	t, err := tdef.New(tcfg)
@@ -210,14 +213,37 @@ func NewFromParts(spec driver.Spec, deps driver.Deps, tcfg transport.Config, fra
 // config: the password, and TLS material as PEM.
 func ApplySecrets(tcfg *transport.Config, secrets map[string]string) {
 	tcfg.Password = secrets["password"]
+	*tcfg = tcfg.WithMaterial(MaterialFrom(secrets))
+}
+
+// MaterialFrom is the TLS material among resolved secrets: tlsCert, tlsKey,
+// clientCa and serverCa. A secret that is not set is empty material, and the
+// transport reads the file of the same purpose instead, if the config names one.
+func MaterialFrom(secrets map[string]string) transport.TLSMaterial {
 	pemOf := func(k string) []byte {
 		if v := secrets[k]; v != "" {
 			return []byte(v)
 		}
 		return nil
 	}
-	tcfg.CertPEM, tcfg.KeyPEM = pemOf("tlsCert"), pemOf("tlsKey")
-	tcfg.ClientCAPEM, tcfg.CAPEM = pemOf("clientCa"), pemOf("serverCa")
+	return transport.TLSMaterial{CertPEM: pemOf("tlsCert"), KeyPEM: pemOf("tlsKey"), ClientCAPEM: pemOf("clientCa"), CAPEM: pemOf("serverCa")}
+}
+
+// reloadTLS is the transport's way to read its TLS material again: the secret
+// references resolved anew through reload (the supervisor's, which applies the
+// secret policy), or the secrets of the start where nothing resolves them. The
+// files the TLS options name are read again by the transport itself.
+func reloadTLS(start map[string]string, reload func() (map[string]string, error)) func() (transport.TLSMaterial, error) {
+	return func() (transport.TLSMaterial, error) {
+		secrets := start
+		if reload != nil {
+			var err error
+			if secrets, err = reload(); err != nil {
+				return transport.TLSMaterial{}, err
+			}
+		}
+		return MaterialFrom(secrets), nil
+	}
 }
 
 func defaultPolicy(kind string) string {

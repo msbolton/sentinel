@@ -24,10 +24,12 @@ var exposedListeners = listeners{
 		"transport": "tcpserver", "connections": 2, "distinctSenders": 3,
 		"accepted": int64(120), "rejected": int64(3), "refused": int64(1),
 		"rateLimited": int64(7), "oversize": int64(2), "tlsFailed": int64(4), "senderRateLimited": int64(6),
-		"malformed":  int64(9),             // the same count as decode_errors_total
-		"senders":    []any{"a", "b", "c"}, // not a number
-		"format":     "sentinel",           // not a number
-		"newCounter": int64(5),             // a counter the collector has no row for
+		"tlsReloadFailed": int64(2), "tlsReloads": int64(1), // a count of swaps: not an event
+		"tlsCertNotAfter": "2026-11-01T00:00:00Z", // text: exported as a timestamp
+		"malformed":       int64(9),               // the same count as decode_errors_total
+		"senders":         []any{"a", "b", "c"},   // not a number
+		"format":          "sentinel",             // not a number
+		"newCounter":      int64(5),               // a counter the collector has no row for
 	}},
 	{FeedID: "pier", Driver: "udp", Detail: map[string]any{
 		"transport": "udp", "connections": 0, "distinctSenders": uint64(12),
@@ -54,12 +56,16 @@ sentinel_ingest_listener_events_total{driver="tcp",event="refused",feed_id="gate
 sentinel_ingest_listener_events_total{driver="tcp",event="rejected",feed_id="gate"} 3
 sentinel_ingest_listener_events_total{driver="tcp",event="sender_rate_limited",feed_id="gate"} 6
 sentinel_ingest_listener_events_total{driver="tcp",event="tls_failed",feed_id="gate"} 4
+sentinel_ingest_listener_events_total{driver="tcp",event="tls_reload_failed",feed_id="gate"} 2
 sentinel_ingest_listener_events_total{driver="udp",event="accepted",feed_id="pier"} 500
 sentinel_ingest_listener_events_total{driver="udp",event="kernel_dropped",feed_id="pier"} 31
 sentinel_ingest_listener_events_total{driver="udp",event="rate_limited",feed_id="pier"} 9
 sentinel_ingest_listener_events_total{driver="udp",event="refused",feed_id="pier"} 0
 sentinel_ingest_listener_events_total{driver="udp",event="rejected",feed_id="pier"} 2
 sentinel_ingest_listener_events_total{driver="udp",event="sender_rate_limited",feed_id="pier"} 8
+# HELP sentinel_ingest_listener_tls_cert_expiry_timestamp_seconds When the TLS certificate a listening feed serves expires, as a Unix timestamp, per feed.
+# TYPE sentinel_ingest_listener_tls_cert_expiry_timestamp_seconds gauge
+sentinel_ingest_listener_tls_cert_expiry_timestamp_seconds{driver="tcp",feed_id="gate"} 1.7934912e+09
 # HELP sentinel_ingest_listener_senders Distinct senders connected to a listening feed or heard from in the last 10 minutes, per feed.
 # TYPE sentinel_ingest_listener_senders gauge
 sentinel_ingest_listener_senders{driver="tcp",feed_id="gate"} 3
@@ -75,7 +81,7 @@ sentinel_ingest_listener_senders{driver="udp",feed_id="pier"} 12
 func TestListenerCollectorLint(t *testing.T) {
 	// Every counter in the event table, so a row added later is linted too and
 	// a duplicated event label fails the gather.
-	detail := map[string]any{"transport": "tcpserver", "connections": 1, "distinctSenders": 2}
+	detail := map[string]any{"transport": "tcpserver", "connections": 1, "distinctSenders": 2, "tlsCertNotAfter": "2026-11-01T00:00:00Z"}
 	for _, key := range ListenerEventKeys() {
 		detail[key] = int64(1)
 	}
@@ -89,8 +95,8 @@ func TestListenerCollectorLint(t *testing.T) {
 		t.Errorf("%s: %s", p.Metric, p.Text)
 	}
 	// Nothing to lint is not a pass.
-	if got, want := testutil.CollectAndCount(c), len(ListenerEventKeys())+2; got != want {
-		t.Errorf("collected %d series, want %d: one per event, connections and senders", got, want)
+	if got, want := testutil.CollectAndCount(c), len(ListenerEventKeys())+3; got != want {
+		t.Errorf("collected %d series, want %d: one per event, connections, senders and the certificate expiry", got, want)
 	}
 }
 
@@ -121,5 +127,37 @@ func TestListenerCollectorRegistersBesideTheOtherMetrics(t *testing.T) {
 	m.ObservationsReceived.WithLabelValues("gate", "tcp").Inc()
 	if _, err := m.Registry.Gather(); err != nil {
 		t.Errorf("gathering both: %v", err)
+	}
+}
+
+// The certificate expiry is read from the RFC 3339 text the listener reports.
+// Text that is not a time exports nothing, and neither does a listener that
+// reports none (a plain one).
+func TestListenerCollectorCertExpiry(t *testing.T) {
+	const family = "sentinel_ingest_listener_tls_cert_expiry_timestamp_seconds"
+	for _, tc := range []struct {
+		name string
+		v    any
+		want int
+	}{
+		{"UTC", "2026-11-01T00:00:00Z", 1},
+		{"an offset", "2026-11-01T02:00:00+02:00", 1},
+		{"not a time", "soon", 0},
+		{"a number", int64(1793491200), 0},
+		{"absent", nil, 0},
+	} {
+		src := listeners{{FeedID: "f", Driver: "tcp", Detail: map[string]any{"tlsCertNotAfter": tc.v}}}
+		if got := testutil.CollectAndCount(NewListenerCollector(src), family); got != tc.want {
+			t.Errorf("%s: %d series, want %d", tc.name, got, tc.want)
+		}
+	}
+	src := listeners{{FeedID: "f", Driver: "tcp", Detail: map[string]any{"tlsCertNotAfter": "2026-11-01T00:00:00Z"}}}
+	want := `
+# HELP ` + family + ` When the TLS certificate a listening feed serves expires, as a Unix timestamp, per feed.
+# TYPE ` + family + ` gauge
+` + family + `{driver="tcp",feed_id="f"} 1.7934912e+09
+`
+	if err := testutil.CollectAndCompare(NewListenerCollector(src), strings.NewReader(want), family); err != nil {
+		t.Error(err)
 	}
 }

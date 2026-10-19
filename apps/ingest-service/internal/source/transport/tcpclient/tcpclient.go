@@ -28,8 +28,8 @@ func init() {
 
 // Client is the tcpclient transport.
 type Client struct {
-	cfg transport.Config
-	tls *tls.Config
+	cfg   transport.Config
+	tlsrc *transport.TLSSource // nil without TLS; builds the config again before each dial when the config reloads
 	// connects counts successful dials, messages the frames read, and since
 	// is when the live connection came up (unix nanoseconds, 0 while down).
 	connects, messages, since atomic.Int64
@@ -44,11 +44,11 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if _, _, err := net.SplitHostPort(cfg.Address); err != nil {
 		return nil, errors.New("tcpclient: address must be host:port")
 	}
-	t, err := cfg.TLSConfig()
+	src, err := transport.NewTLSSource(cfg, nil)
 	if err != nil {
 		return nil, err
 	}
-	return &Client{cfg: cfg, tls: t}, nil
+	return &Client{cfg: cfg, tlsrc: src}, nil
 }
 
 // Run dials, scans and reconnects until ctx ends.
@@ -104,8 +104,11 @@ func (c *Client) Run(ctx context.Context, emit transport.Emit) error {
 
 func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 	d := net.Dialer{Timeout: dialTimeout}
-	if c.tls != nil {
-		td := tls.Dialer{NetDialer: &d, Config: c.tls}
+	// Each dial reads the TLS material again (a rotated CA or client certificate
+	// is followed at the next reconnect); a reload that fails dials with the
+	// config in use.
+	if t := c.tlsrc.Fresh(); t != nil {
+		td := tls.Dialer{NetDialer: &d, Config: t}
 		return td.DialContext(ctx, "tcp", c.cfg.Address)
 	}
 	return d.DialContext(ctx, "tcp", c.cfg.Address)
@@ -124,5 +127,6 @@ func (c *Client) State() transport.State {
 	if ns := c.since.Load(); ns > 0 {
 		st.Detail["since"] = time.Unix(0, ns).UTC().Format(time.RFC3339)
 	}
+	c.tlsrc.Apply(&st)
 	return st
 }

@@ -130,6 +130,17 @@ type Config struct {
 	// TLS material from secret references; never part of the config JSON.
 	CertPEM, KeyPEM, ClientCAPEM, CAPEM []byte `json:"-"`
 
+	// ReloadTLS returns the TLS material as it is now: the secret references
+	// resolved again. Fields it leaves empty fall back to the files named in TLS
+	// (CertFile and the others), which are read again too. With ReloadEvery above
+	// zero every transport that uses TLS follows a rotation: a listener (tcpserver)
+	// polls and swaps what it serves at each tick, a transport that dials builds
+	// its config again before each dial. A reload that fails keeps what is in use.
+	// Nil, or a zero ReloadEvery, turns reloading off. Set by the stream driver,
+	// never from the feed's JSON.
+	ReloadTLS   func() (TLSMaterial, error) `json:"-"`
+	ReloadEvery time.Duration               `json:"-"`
+
 	// Logger receives a transport's diagnostics (a TLS handshake that failed,
 	// and who it was with); nil is silent. The stream driver sets it to its
 	// feed's logger.
@@ -151,6 +162,12 @@ type Config struct {
 	// Framing names the framer for stream transports (default line).
 	Framing string `json:"-"`
 }
+
+// TLSMaterial is the PEM of a transport's TLS secrets: its own certificate and
+// key, the CA that signs the clients a listener accepts, and the CA that signs
+// the server a client dials. An empty field means the secret is not set, and
+// the file the TLS options name (if any) is read instead.
+type TLSMaterial struct{ CertPEM, KeyPEM, ClientCAPEM, CAPEM []byte }
 
 // TLS options for stream transports.
 type TLS struct {

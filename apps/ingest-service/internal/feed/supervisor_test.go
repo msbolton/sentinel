@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -466,5 +467,94 @@ func TestStartRefusesASecretOutsideThePolicy(t *testing.T) {
 		if spec.FeedID == "good" && spec.Secrets["apiKey"] != "v-OPENSKY_CLIENT_ID" {
 			t.Errorf("good secrets %v", spec.Secrets)
 		}
+	}
+}
+
+// A driver is handed a function that resolves its secret references again,
+// under the same policy that checked them at start, and how often to call it.
+func TestStartInstancePassesSecretReloader(t *testing.T) {
+	type got struct {
+		spec driver.Spec
+		deps driver.Deps
+	}
+	built := make(chan got, 4)
+	var version atomic.Int64
+	version.Store(1)
+	reg := newFakeRegistry()
+	sup := New(reg, &memPublisher{}, zap.NewNop(), metrics.New(nil), Options{
+		ReplicaID: "r1", RetryMin: 10 * time.Millisecond, RetryMax: 20 * time.Millisecond,
+		SecretPolicy:      registry.SecretPolicy{EnvAllow: []string{"OPENSKY_*"}, FileDirs: []string{"/etc/sentinel"}},
+		SecretReloadEvery: 45 * time.Second,
+		Secrets: func(name string) (string, bool) {
+			return "v" + strconv.FormatInt(version.Load(), 10) + "-" + name, true
+		},
+		Factory: func(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
+			built <- got{spec, deps}
+			return newMockDriver(), nil
+		},
+	})
+	t.Cleanup(sup.shutdown)
+	f := feedSpec("a", 1, true)
+	f.SecretRefs = map[string]string{"apiKey": "env:OPENSKY_CLIENT_ID"}
+	reg.set(f)
+	sup.Reconcile(context.Background())
+
+	var g got
+	select {
+	case g = <-built:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the driver was not built")
+	}
+	if g.deps.SecretReloadEvery != 45*time.Second {
+		t.Errorf("SecretReloadEvery = %v, want 45s", g.deps.SecretReloadEvery)
+	}
+	if g.deps.ReloadSecrets == nil {
+		t.Fatal("the driver got no secret reloader")
+	}
+	if g.spec.Secrets["apiKey"] != "v1-OPENSKY_CLIENT_ID" {
+		t.Fatalf("secrets at start: %v", g.spec.Secrets)
+	}
+	version.Store(2) // the secret was rotated
+	again, err := g.deps.ReloadSecrets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again["apiKey"] != "v2-OPENSKY_CLIENT_ID" {
+		t.Errorf("reloaded secrets = %v, want the rotated value", again)
+	}
+}
+
+// The reloader enforces the policy as the start does: a reference outside it,
+// or a file that cannot be read now, is an error, never an empty secret.
+func TestSecretReloaderFollowsThePolicy(t *testing.T) {
+	built := make(chan driver.Deps, 2)
+	reg := newFakeRegistry()
+	sup := New(reg, &memPublisher{}, zap.NewNop(), metrics.New(nil), Options{
+		ReplicaID: "r1", RetryMin: 10 * time.Millisecond, RetryMax: 20 * time.Millisecond,
+		SecretPolicy: registry.SecretPolicy{EnvAllow: []string{"OPENSKY_*"}, FileDirs: []string{"/etc/sentinel"}},
+		Secrets: func(name string) (string, bool) {
+			if name == "OPENSKY_GONE" {
+				return "", false
+			}
+			return "v", true
+		},
+		Factory: func(_ driver.Spec, deps driver.Deps) (driver.Driver, error) {
+			built <- deps
+			return newMockDriver(), nil
+		},
+	})
+	t.Cleanup(sup.shutdown)
+	f := feedSpec("a", 1, true)
+	f.SecretRefs = map[string]string{"apiKey": "env:OPENSKY_GONE"}
+	reg.set(f)
+	// Not resolvable at start, so no driver is built: the reloader cannot be asked
+	// from a driver. Ask the supervisor's own function the way startInstance builds it.
+	reload := sup.secretReloader(f)
+	if _, err := reload(); err == nil || !strings.Contains(err.Error(), "OPENSKY_GONE") {
+		t.Errorf("reload of an unset variable: err = %v, want one naming it", err)
+	}
+	f.SecretRefs = map[string]string{"apiKey": "env:DATABASE_URL"}
+	if _, err := sup.secretReloader(f)(); err == nil || !strings.Contains(err.Error(), "DATABASE_URL") {
+		t.Errorf("reload of a reference outside the policy: err = %v, want one naming the variable", err)
 	}
 }

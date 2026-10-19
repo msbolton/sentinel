@@ -30,8 +30,8 @@ func init() {
 
 // Consumer is the stomp transport.
 type Consumer struct {
-	cfg transport.Config
-	tls *tls.Config
+	cfg   transport.Config
+	tlsrc *transport.TLSSource // nil without TLS; builds the config again before each connect when the config reloads
 	transport.StateTracker
 }
 
@@ -49,11 +49,11 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if cfg.Framing != "" && cfg.Framing != "message" {
 		return nil, errors.New("stomp: framing must be \"message\"")
 	}
-	t, err := cfg.TLSConfig()
+	src, err := transport.NewTLSSource(cfg, nil)
 	if err != nil {
 		return nil, err
 	}
-	return &Consumer{cfg: cfg, tls: t}, nil
+	return &Consumer{cfg: cfg, tlsrc: src}, nil
 }
 
 // Run connects (retrying), subscribes and forwards until ctx ends.
@@ -79,8 +79,8 @@ func (c *Consumer) session(ctx context.Context, emit transport.Emit) error {
 	d := net.Dialer{Timeout: dialTimeout}
 	var netConn net.Conn
 	var err error
-	if c.tls != nil {
-		netConn, err = (&tls.Dialer{NetDialer: &d, Config: c.tls}).DialContext(ctx, "tcp", c.cfg.BrokerURL)
+	if t := c.tlsrc.Fresh(); t != nil {
+		netConn, err = (&tls.Dialer{NetDialer: &d, Config: t}).DialContext(ctx, "tcp", c.cfg.BrokerURL)
 	} else {
 		netConn, err = d.DialContext(ctx, "tcp", c.cfg.BrokerURL)
 	}
@@ -140,5 +140,9 @@ func (c *Consumer) session(ctx context.Context, emit transport.Emit) error {
 	}
 }
 
-// State reports connectivity.
-func (c *Consumer) State() transport.State { return c.Get() }
+// State reports connectivity, and the TLS reloads when there is TLS.
+func (c *Consumer) State() transport.State {
+	st := c.Get()
+	c.tlsrc.Apply(&st)
+	return st
+}

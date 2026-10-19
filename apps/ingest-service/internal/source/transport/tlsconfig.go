@@ -59,10 +59,12 @@ func (c Config) TLSConfig() (*tls.Config, error) {
 }
 
 // pemOrFile returns the PEM from a secret reference, or else the contents of
-// file. The file is read each time, by the path as configured, so a rotated
-// certificate (a mounted secret whose link is re-pointed) is followed. With
-// dirs set (a non-nil list) the read is confined to those folders, links
-// followed inside them and never out; with nil dirs it is a plain read.
+// file. The file is read each time, by the path as configured, never a path
+// resolved once, so a rotated certificate (a mounted secret whose link is
+// re-pointed) is followed by whatever builds a TLS config again: a listener's
+// reload, a dialer's next dial (see TLSSource). With dirs set (a non-nil list)
+// the read is confined to those folders, links followed inside them and never
+// out; with nil dirs it is a plain read.
 func pemOrFile(pemBytes []byte, file, what string, dirs []string) ([]byte, error) {
 	if len(pemBytes) > 0 {
 		return pemBytes, nil

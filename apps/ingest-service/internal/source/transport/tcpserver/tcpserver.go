@@ -46,7 +46,8 @@ const (
 type Server struct {
 	cfg       transport.Config
 	log       *zap.Logger
-	tls       *tls.Config
+	tlsrc     *transport.TLSSource // the TLS config in use, and its reloads; nil for a plain listener
+	serverTLS *tls.Config          // what tls.Server gets: it asks tlsrc for the config in use at each handshake
 	allow     transport.Allowlist
 	limit     *transport.Limiter       // shared by every sender
 	perSender *transport.SenderLimiter // a bucket for each sender IP; nil when off
@@ -76,30 +77,36 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if hasClientCA(cfg) && !mutualTLS {
 		return nil, errors.New("tcpserver: a client CA is set (the clientCa secret or tls.clientCaFile) but tls.requireClientCert is off; turn it on (with TLS) to verify senders, or remove the client CA")
 	}
-	t, err := cfg.TLSConfig()
+	// What is the listener's own decision, not the shared builder's (which
+	// dialers use too), is applied to every config it serves, the first and each
+	// reload (see TLSSource), so a rotation keeps it:
+	//   - Resumption is of no use to senders that send and go, and a TLS 1.3
+	//     server sends a session ticket just after the handshake. A sender that
+	//     writes and closes at once never reads it, so its close finds unread
+	//     data and becomes a RST, which can take the message with it.
+	//   - Asking senders for certificates can be checked only against a client
+	//     CA, and a listener without a TLS config at all has nothing to check
+	//     them with.
+	//   - A listener serves a certificate or none.
+	finish := func(t *tls.Config) error {
+		if mutualTLS && (t == nil || t.ClientCAs == nil) {
+			return errors.New("tcpserver: requiring client certificates needs a client CA")
+		}
+		if t == nil {
+			return nil
+		}
+		t.SessionTicketsDisabled = true
+		if mutualTLS {
+			t.ClientAuth = tls.RequireAndVerifyClientCert
+		}
+		if len(t.Certificates) == 0 {
+			return errors.New("tcpserver: TLS needs a certificate and key")
+		}
+		return nil
+	}
+	src, err := transport.NewTLSSource(cfg, finish)
 	if err != nil {
 		return nil, err
-	}
-	// Resumption is of no use to senders that send and go, and a TLS 1.3 server
-	// sends a session ticket just after the handshake. A sender that writes and
-	// closes at once never reads it, so its close finds unread data and becomes
-	// a RST, which can take the message with it. Like asking for certificates,
-	// this is the listener's decision, not the shared builder's, which dialers
-	// use too.
-	if t != nil {
-		t.SessionTicketsDisabled = true
-	}
-	// Asking senders for certificates is this listener's decision, not the
-	// shared TLS builder's. It can check them only against a client CA, and a
-	// listener without a TLS config at all has nothing to check them with.
-	if mutualTLS {
-		if t == nil || t.ClientCAs == nil {
-			return nil, errors.New("tcpserver: requiring client certificates needs a client CA")
-		}
-		t.ClientAuth = tls.RequireAndVerifyClientCert
-	}
-	if t != nil && len(t.Certificates) == 0 {
-		return nil, errors.New("tcpserver: TLS needs a certificate and key")
 	}
 	allow, err := transport.ParseAllowlist(cfg.Allow)
 	if err != nil {
@@ -109,12 +116,18 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if log == nil {
 		log = zap.NewNop()
 	}
-	return &Server{
-		cfg: cfg, log: log, tls: t, allow: allow,
+	srv := &Server{
+		cfg: cfg, log: log, tlsrc: src, allow: allow,
 		limit:     transport.NewLimiter(cfg.MaxMessagesPerSec),
 		perSender: transport.NewSenderLimiter(cfg.MaxMessagesPerSecPerSender, transport.SenderLimiterKeys),
 		senders:   transport.NewSenders(maxSenders),
-	}, nil
+	}
+	if src != nil {
+		// The config in use is looked up per handshake, so the certificate and the
+		// client CA pool swap together; a connection already made keeps its own.
+		srv.serverTLS = &tls.Config{GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { return src.Current(), nil }}
+	}
+	return srv, nil
 }
 
 // hasClientCA reports whether the config names a CA for client certificates,
@@ -138,6 +151,11 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 	s.Set(func(st *transport.State) { st.Connected = true; st.LastError = "" })
 
 	var wg sync.WaitGroup
+	reloadDone := make(chan struct{})
+	go func() {
+		defer close(reloadDone)
+		s.tlsrc.Run(ctx) // returns at once when there is nothing to reload
+	}()
 	var conns sync.Map
 	var live atomic.Int64
 	go func() {
@@ -190,8 +208,8 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 				s.Set(func(st *transport.State) { st.Connections = int(live.Load()) })
 			}()
 			conn := raw
-			if s.tls != nil {
-				tc := tls.Server(raw, s.tls)
+			if s.serverTLS != nil {
+				tc := tls.Server(raw, s.serverTLS)
 				hctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 				err := tc.HandshakeContext(hctx)
 				cancel()
@@ -217,6 +235,7 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 		}()
 	}
 	wg.Wait()
+	<-reloadDone
 	s.Set(func(st *transport.State) { st.Connected = false })
 	return nil
 }
@@ -283,5 +302,6 @@ func (s *Server) State() transport.State {
 		list = list[:maxSenders]
 	}
 	st.Detail["senders"], st.Detail["distinctSenders"] = list, n
+	s.tlsrc.Apply(&st)
 	return st
 }

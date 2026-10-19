@@ -17,6 +17,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/registry"
 	_ "github.com/sentinel/ingest-service/internal/source/all"
 	"github.com/sentinel/ingest-service/internal/source/driver"
+	"github.com/sentinel/ingest-service/internal/source/transport/transporttest"
 )
 
 // detailDriver is a mock driver that reports health detail, the way a
@@ -218,6 +219,14 @@ func TestListenerStatsWhileReconciling(t *testing.T) {
 // collector exports; receiveBufferEffectiveBytes is a size, which it does not.
 var datagramOnlyDetailKeys = []string{"kernelDropped", "receiveBufferEffectiveBytes"}
 
+// tlsOnlyDetailKeys are the health detail keys only a listener with TLS has: a
+// plain one has no certificate to expire and nothing to reload, so reporting
+// them would claim a state it cannot be in. tlsReloadFailed is an event the
+// collector exports; tlsReloads is a count of swaps, which it does not export,
+// and tlsCertNotAfter is RFC 3339 text (the collector exports a timestamp from
+// it), the one key that the numeric guard exempts, by name.
+var tlsOnlyDetailKeys = []string{"tlsReloadFailed", "tlsReloads", "tlsCertNotAfter"}
+
 // The collector reads counters out of the health detail by key. A driver that
 // renames one, or reports it as a string, would leave its metric silently
 // empty, so this builds the kinds of listener (without running them) and asks
@@ -239,13 +248,21 @@ func TestListenerDetailKeysAreNumeric(t *testing.T) {
 	for _, tc := range []struct {
 		name, driverID, config string
 		datagrams              bool // a datagram listener: no connections to count, and the datagram-only keys
+		tls                    bool // a listener with TLS: the TLS-only keys
 	}{
-		{"tcp listen", "tcp", `{"mode":"listen","port":6000,"address":"127.0.0.1"}`, false},
-		{"udp", "udp", `{"port":10110,"address":"127.0.0.1"}`, true},
-		{"stream tcpserver", "stream", `{"transport":{"kind":"tcpserver","address":"127.0.0.1:6001"},"framing":"line","decoder":{"name":"nmea-ais"}}`, false},
-		{"stream udp", "stream", `{"transport":{"kind":"udp","address":"127.0.0.1:6002"},"framing":"line","decoder":{"name":"nmea-ais"}}`, true},
+		{"tcp listen", "tcp", `{"mode":"listen","port":6000,"address":"127.0.0.1"}`, false, false},
+		{"udp", "udp", `{"port":10110,"address":"127.0.0.1"}`, true, false},
+		{"stream tcpserver", "stream", `{"transport":{"kind":"tcpserver","address":"127.0.0.1:6001"},"framing":"line","decoder":{"name":"nmea-ais"}}`, false, false},
+		{"stream udp", "stream", `{"transport":{"kind":"udp","address":"127.0.0.1:6002"},"framing":"line","decoder":{"name":"nmea-ais"}}`, true, false},
+		{"tcp listen with TLS", "tcp", `{"mode":"listen","port":6003,"address":"127.0.0.1","tls":{"enabled":true}}`, false, true},
+		{"stream tcpserver with TLS", "stream", `{"transport":{"kind":"tcpserver","address":"127.0.0.1:6004","tls":{"enabled":true}},"framing":"line","decoder":{"name":"nmea-ais"}}`, false, true},
 	} {
-		drv, err := driver.New(driver.Spec{FeedID: "f", Driver: tc.driverID, Config: json.RawMessage(tc.config)}, driver.Deps{})
+		spec := driver.Spec{FeedID: "f", Driver: tc.driverID, Config: json.RawMessage(tc.config)}
+		if tc.tls {
+			pair := transporttest.NewCA(t).Issue(t, "localhost")
+			spec.Secrets = map[string]string{"tlsCert": string(pair.CertPEM), "tlsKey": string(pair.KeyPEM)}
+		}
+		drv, err := driver.New(spec, driver.Deps{})
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -255,6 +272,9 @@ func TestListenerDetailKeysAreNumeric(t *testing.T) {
 			if !tc.datagrams && slices.Contains(datagramOnlyDetailKeys, key) {
 				continue // asked below not to be there
 			}
+			if !tc.tls && slices.Contains(tlsOnlyDetailKeys, key) {
+				continue // asked below not to be there
+			}
 			if exported(events, map[string]any{key: detail[key]}) != 1 {
 				t.Errorf("%s: Health().Detail[%q] = %#v (%T), which the listener collector does not export as an event", tc.name, key, detail[key], detail[key])
 			}
@@ -262,6 +282,26 @@ func TestListenerDetailKeysAreNumeric(t *testing.T) {
 		for _, key := range datagramOnlyDetailKeys {
 			if _, has := detail[key]; has != tc.datagrams {
 				t.Errorf("%s: Health().Detail has %q = %v; only a datagram listener reports it (this one is a datagram listener: %v)", tc.name, key, has, tc.datagrams)
+			}
+		}
+		for _, key := range tlsOnlyDetailKeys {
+			if _, has := detail[key]; has != tc.tls {
+				t.Errorf("%s: Health().Detail has %q = %v; only a listener with TLS reports it (this one has TLS: %v)", tc.name, key, has, tc.tls)
+			}
+		}
+		// The certificate expiry is text, not a count: exempt from the numeric
+		// guard above by name, and held to being a UTC time the client and the
+		// collector can read instead.
+		if tc.tls {
+			text, _ := detail["tlsCertNotAfter"].(string)
+			if when, err := time.Parse(time.RFC3339, text); err != nil || when.Location() != time.UTC {
+				t.Errorf("%s: Health().Detail[tlsCertNotAfter] = %#v, want RFC 3339 text in UTC", tc.name, detail["tlsCertNotAfter"])
+			}
+			if got := exported("sentinel_ingest_listener_tls_cert_expiry_timestamp_seconds", map[string]any{"tlsCertNotAfter": detail["tlsCertNotAfter"]}); got != 1 {
+				t.Errorf("%s: the collector exports %d expiry series from Health().Detail[tlsCertNotAfter], want 1", tc.name, got)
+			}
+			if n, ok := detail["tlsReloads"].(int64); !ok || n != 0 {
+				t.Errorf("%s: Health().Detail[tlsReloads] = %#v, want an int64 0", tc.name, detail["tlsReloads"])
 			}
 		}
 		// A size is a number the client reads and no event of the collector's: it

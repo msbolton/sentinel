@@ -43,6 +43,13 @@ func NewCA(t *testing.T) *CA {
 	return &CA{CertPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), cert: cert, key: key}
 }
 
+// Pool is a certificate pool holding the CA.
+func (ca *CA) Pool() *x509.CertPool {
+	p := x509.NewCertPool()
+	p.AddCert(ca.cert)
+	return p
+}
+
 // Issue signs a leaf for name and 127.0.0.1, usable as a server or a client.
 func (ca *CA) Issue(t *testing.T, name string) Pair {
 	t.Helper()

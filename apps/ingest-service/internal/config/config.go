@@ -47,6 +47,10 @@ type Config struct {
 	// the TAK key material and the listener secrets.
 	SecretEnvAllow []string
 	SecretFileDirs []string
+	// TLSReloadSec is how often (in seconds) a feed with TLS reads its
+	// certificates, keys and CAs again, so a rotation takes effect without a
+	// restart (INGEST_TLS_RELOAD_SEC, default 60); 0 turns reloading off.
+	TLSReloadSec int
 
 	PublisherShards    int // PUBLISHER_SHARDS (default: 8)
 	ObservationBuffer  int // OBS_BUFFER (default: 1000) observations queued per publisher shard
@@ -92,6 +96,7 @@ func Load() *Config {
 		ListenerShared:        envOr("INGEST_LISTENER_SHARED", "false") == "true",
 		SecretEnvAllow:        splitList(envOr("INGEST_SECRET_ENV_ALLOW", registry.DefaultSecretEnvAllow)),
 		SecretFileDirs:        splitList(envOr("INGEST_SECRET_FILE_DIRS", registry.DefaultSecretFileDirs)),
+		TLSReloadSec:          envOrInt("INGEST_TLS_RELOAD_SEC", 60),
 
 		PublisherShards:    envOrInt("PUBLISHER_SHARDS", 8),
 		ObservationBuffer:  envOrInt("OBS_BUFFER", 1000),
@@ -158,6 +163,9 @@ func (c *Config) Validate() error {
 	}
 	if err := c.SecretPolicy().Validate(); err != nil {
 		return err
+	}
+	if c.TLSReloadSec < 0 {
+		return errors.New("INGEST_TLS_RELOAD_SEC must not be negative (0 turns TLS reloading off)")
 	}
 	if c.ListenerShared && !c.Listener {
 		return errors.New("INGEST_LISTENER_SHARED needs INGEST_LISTENER=true: only a listener replica can share")

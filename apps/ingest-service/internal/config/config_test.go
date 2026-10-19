@@ -159,3 +159,24 @@ func TestSecretPolicyMustBeValid(t *testing.T) {
 		t.Setenv(env[0], "")
 	}
 }
+
+// INGEST_TLS_RELOAD_SEC is how often feeds with TLS read their certificates
+// again: 60 seconds unless set, and 0 turns it off.
+func TestTLSReloadSec(t *testing.T) {
+	if got := Load().TLSReloadSec; got != 60 {
+		t.Errorf("INGEST_TLS_RELOAD_SEC default = %d, want 60", got)
+	}
+	t.Setenv("INGEST_TLS_RELOAD_SEC", "0")
+	c := Load()
+	if c.TLSReloadSec != 0 || c.Validate() != nil {
+		t.Errorf("INGEST_TLS_RELOAD_SEC=0: %d, Validate() = %v; want 0 (off) and valid", c.TLSReloadSec, c.Validate())
+	}
+	t.Setenv("INGEST_TLS_RELOAD_SEC", "15")
+	if got := Load().TLSReloadSec; got != 15 {
+		t.Errorf("INGEST_TLS_RELOAD_SEC=15 reads as %d", got)
+	}
+	t.Setenv("INGEST_TLS_RELOAD_SEC", "-5")
+	if err := Load().Validate(); err == nil || !strings.Contains(err.Error(), "INGEST_TLS_RELOAD_SEC") {
+		t.Errorf("INGEST_TLS_RELOAD_SEC=-5: Validate() = %v, want an error that names the variable", err)
+	}
+}

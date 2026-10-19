@@ -3,8 +3,10 @@ package transporttest
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -92,4 +94,44 @@ func Run(t *testing.T, tr transport.Transport, emit transport.Emit) func() {
 			t.Error("transport did not stop")
 		}
 	}
+}
+
+// TLSListener accepts TLS connections presenting pair, completes each
+// handshake and closes the connection. Handshakes counts the handshakes that
+// completed: the peer verified pair, and (when clientCAs is not nil) pair's
+// peer was verified in turn. It is for testing that a dialer trusts the
+// certificate it is now meant to.
+func TLSListener(t *testing.T, pair Pair, clientCAs *CA) (addr string, handshakes *atomic.Int64) {
+	t.Helper()
+	cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	if clientCAs != nil {
+		cfg.ClientAuth = tls.RequireAndVerifyClientCert
+		cfg.ClientCAs = clientCAs.Pool()
+	}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	handshakes = new(atomic.Int64)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+				if err := c.(*tls.Conn).Handshake(); err == nil {
+					handshakes.Add(1)
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String(), handshakes
 }

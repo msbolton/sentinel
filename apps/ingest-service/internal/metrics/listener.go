@@ -1,6 +1,10 @@
 package metrics
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 // ListenerStat is one listening feed (a TCP or UDP listener) as its driver
 // reports it in Health().Detail.
@@ -20,6 +24,10 @@ type ListenerSource interface {
 // counter under in its health detail, and the event label it is exported
 // under. A counter is exported by adding a row.
 //
+// tlsReloads, a count of the swaps, has no row either: a rotation is not an
+// event to alert on, and tlsCertNotAfter (RFC 3339 text) is exported as the
+// expiry gauge below.
+//
 // malformed has no row: the stream driver counts it exactly when it
 // dead-letters a frame, which is what decode_errors_total counts. Nor does
 // receiveBufferEffectiveBytes, a datagram listener's receive buffer: it is a
@@ -32,6 +40,7 @@ var listenerEvents = []struct{ key, event string }{
 	{"oversize", "oversize"},                     // frames or datagrams over maxMessageBytes
 	{"tlsFailed", "tls_failed"},                  // failed handshakes, and TLS clients on a plain listener
 	{"senderRateLimited", "sender_rate_limited"}, // frames over one sender's maxMessagesPerSecPerSender
+	{"tlsReloadFailed", "tls_reload_failed"},     // TLS material read again that could not be used (a half-written pair, a file outside the allowed folders); the certificate in use stays. A listener with TLS only
 	{"kernelDropped", "kernel_dropped"},          // datagrams the OS dropped from a full receive buffer; a datagram listener on Linux only
 }
 
@@ -56,6 +65,7 @@ func ListenerEventKeys() []string {
 type listenerCollector struct {
 	src                          ListenerSource
 	events, connections, senders *prometheus.Desc
+	certExpiry                   *prometheus.Desc
 }
 
 // NewListenerCollector exports, for each listening feed src lists:
@@ -64,7 +74,10 @@ type listenerCollector struct {
 //   - sentinel_ingest_listener_connections{feed_id,driver}, a gauge, except
 //     for a UDP listener, which has no connections;
 //   - sentinel_ingest_listener_senders{feed_id,driver}, a gauge of the
-//     distinct senders.
+//     distinct senders;
+//   - sentinel_ingest_listener_tls_cert_expiry_timestamp_seconds{feed_id,driver},
+//     a gauge of when the certificate a TLS listener serves expires, for a
+//     listener that reports one.
 func NewListenerCollector(src ListenerSource) prometheus.Collector {
 	desc := func(name, help string, labels ...string) *prometheus.Desc {
 		return prometheus.NewDesc(prometheus.BuildFQName("sentinel", "ingest", name), help, labels, nil)
@@ -74,6 +87,7 @@ func NewListenerCollector(src ListenerSource) prometheus.Collector {
 		events:      desc("listener_events_total", "Frames a listening feed accepted and the connections, datagrams and frames it turned away, per feed and event.", "feed_id", "driver", "event"),
 		connections: desc("listener_connections", "Connections currently open on a TCP listening feed, per feed.", "feed_id", "driver"),
 		senders:     desc("listener_senders", "Distinct senders connected to a listening feed or heard from in the last 10 minutes, per feed.", "feed_id", "driver"),
+		certExpiry:  desc("listener_tls_cert_expiry_timestamp_seconds", "When the TLS certificate a listening feed serves expires, as a Unix timestamp, per feed.", "feed_id", "driver"),
 	}
 }
 
@@ -84,6 +98,7 @@ func (c *listenerCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.events
 	ch <- c.connections
 	ch <- c.senders
+	ch <- c.certExpiry
 }
 
 // Collect may run alongside itself and alongside the supervisor's reconcile;
@@ -104,6 +119,13 @@ func (c *listenerCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		if v, ok := number(st.Detail["distinctSenders"]); ok {
 			sample(ch, c.senders, prometheus.GaugeValue, v, st.FeedID, st.Driver)
+		}
+		// The expiry is RFC 3339 text in the detail (the client reads it so); a
+		// value that is not a time exports nothing.
+		if text, ok := st.Detail["tlsCertNotAfter"].(string); ok {
+			if when, err := time.Parse(time.RFC3339, text); err == nil {
+				sample(ch, c.certExpiry, prometheus.GaugeValue, float64(when.Unix()), st.FeedID, st.Driver)
+			}
 		}
 	}
 }

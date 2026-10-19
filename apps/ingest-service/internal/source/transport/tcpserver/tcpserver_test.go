@@ -448,7 +448,7 @@ func TestMutualTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The listener asks for the certificates: the shared TLS builder leaves ClientAuth alone.
-	if got := tr.(*Server).tls.ClientAuth; got != tls.RequireAndVerifyClientCert {
+	if got := tr.(*Server).tlsrc.Current().ClientAuth; got != tls.RequireAndVerifyClientCert {
 		t.Errorf("ClientAuth = %v, want RequireAndVerifyClientCert", got)
 	}
 	col := &transporttest.Collector{}
@@ -728,7 +728,7 @@ func TestShutdownDuringHandshakeIsNotTLSFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	inHandshake, release := make(chan struct{}), make(chan struct{})
-	tr.(*Server).tls.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+	tr.(*Server).serverTLS.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
 		close(inHandshake)
 		<-release
 		return nil, nil

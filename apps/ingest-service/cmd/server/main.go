@@ -66,6 +66,7 @@ func main() {
 		zap.Int("frame_buffer", cfg.FrameBuffer),
 		zap.Strings("secret_env_allow", cfg.SecretEnvAllow),
 		zap.Strings("secret_file_dirs", cfg.SecretFileDirs),
+		zap.Int("tls_reload_sec", cfg.TLSReloadSec),
 	)
 	stream.FrameBuffer = cfg.FrameBuffer
 	secretPolicy := cfg.SecretPolicy()
@@ -120,20 +121,21 @@ func main() {
 
 	// Supervisor: runs the feeds this replica owns and reports status.
 	supOpts := feed.Options{
-		ReplicaID:      cfg.ReplicaID,
-		RetryMin:       cfg.FeedRetryMin,
-		RetryMax:       cfg.FeedRetryMax,
-		StaleWarn:      cfg.FeedStaleWarn,
-		StaleCritical:  cfg.FeedStaleCritical,
-		RawMax:         cfg.RawPayloadMaxBytes,
-		Listener:       cfg.Listener,
-		ListenerHost:   cfg.ListenerHost,
-		ListenerShared: cfg.ListenerShared,
-		LeaseTick:      cfg.LeaseTick,
-		RebalanceAfter: cfg.LeaseRebalance,
-		SecretPolicy:   secretPolicy,
-		Shapes:         outbound.NewShapeStore(reg.Pool()),
-		Density:        density.New(producer, commonkafka.TopicDensityEvents).For,
+		ReplicaID:         cfg.ReplicaID,
+		RetryMin:          cfg.FeedRetryMin,
+		RetryMax:          cfg.FeedRetryMax,
+		StaleWarn:         cfg.FeedStaleWarn,
+		StaleCritical:     cfg.FeedStaleCritical,
+		RawMax:            cfg.RawPayloadMaxBytes,
+		Listener:          cfg.Listener,
+		ListenerHost:      cfg.ListenerHost,
+		ListenerShared:    cfg.ListenerShared,
+		LeaseTick:         cfg.LeaseTick,
+		RebalanceAfter:    cfg.LeaseRebalance,
+		SecretPolicy:      secretPolicy,
+		SecretReloadEvery: time.Duration(cfg.TLSReloadSec) * time.Second,
+		Shapes:            outbound.NewShapeStore(reg.Pool()),
+		Density:           density.New(producer, commonkafka.TopicDensityEvents).For,
 		ConsumerFactory: func(groupID, clientID string) (outbound.Consumer, error) {
 			return commonkafka.NewBatchConsumer(cfg.KafkaBrokers, groupID, clientID, "latest", commonkafka.BatchOptions{MaxMessages: 200, MaxWait: 200 * time.Millisecond, MaxRetries: 1}, logger.With(zap.String("group", groupID)))
 		},

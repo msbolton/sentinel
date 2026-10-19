@@ -68,8 +68,12 @@ type Options struct {
 	// SecretPolicy limits what the secret references of a feed may name when
 	// it starts; the zero value restricts nothing.
 	SecretPolicy registry.SecretPolicy
-	Factory      Factory
-	RawMax       int
+	// SecretReloadEvery is how often a running feed reads its rotated secrets
+	// again (TLS certificates, mostly): handed to the drivers, which poll their
+	// transports with it. 0 means never.
+	SecretReloadEvery time.Duration
+	Factory           Factory
+	RawMax            int
 	// Listener means this replica takes listening connections (the ones that
 	// bind a port); ListenerHost is the address senders use to reach it.
 	// ListenerShared lets such a replica take its share of the ordinary feeds
@@ -698,7 +702,8 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 	}
 	common := spec.Common()
 	logger := s.logger.With(zap.String("feed", spec.ID), zap.String("driver", spec.Driver))
-	deps := driver.Deps{Logger: logger, Shapes: s.opts.Shapes, ListenerHost: s.opts.ListenerHost}
+	deps := driver.Deps{Logger: logger, Shapes: s.opts.Shapes, ListenerHost: s.opts.ListenerHost,
+		ReloadSecrets: s.secretReloader(spec), SecretReloadEvery: s.opts.SecretReloadEvery}
 	if s.opts.Density != nil {
 		deps.Density = s.opts.Density(spec.ID, common.Classification)
 	}
@@ -747,6 +752,18 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 
 	if _, aware := drv.(aoi.AreaAware); aware {
 		s.applyArea(ctx, spec.ID)
+	}
+}
+
+// secretReloader is how a running feed resolves its secret references again:
+// the same policy-checked resolver that started it, so a variable outside the
+// allowed names or a file outside the allowed folders (a link re-pointed there
+// included) is refused now as it would have been then, and a reference that no
+// longer resolves is an error, never an empty secret.
+func (s *Supervisor) secretReloader(spec registry.Feed) func() (map[string]string, error) {
+	refs := spec.SecretRefs
+	return func() (map[string]string, error) {
+		return s.opts.SecretPolicy.Resolve(refs, s.opts.Secrets, nil)
 	}
 }
 
