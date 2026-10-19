@@ -177,7 +177,7 @@ func NewFromParts(spec driver.Spec, deps driver.Deps, tcfg transport.Config, fra
 	}
 	ApplySecrets(&tcfg, spec.Secrets)
 	if tcfg.TLS != nil && tcfg.TLS.Enabled {
-		tcfg.ReloadTLS, tcfg.ReloadEvery = reloadTLS(spec.Secrets, deps.ReloadSecrets), deps.SecretReloadEvery
+		tcfg.ReloadTLS, tcfg.ReloadEvery = ReloadTLS(spec.Secrets, deps.ReloadSecrets), deps.SecretReloadEvery
 	}
 	tcfg.Logger = deps.Logger
 	tcfg.FileDirs = FileDirs
@@ -229,11 +229,11 @@ func MaterialFrom(secrets map[string]string) transport.TLSMaterial {
 	return transport.TLSMaterial{CertPEM: pemOf("tlsCert"), KeyPEM: pemOf("tlsKey"), ClientCAPEM: pemOf("clientCa"), CAPEM: pemOf("serverCa")}
 }
 
-// reloadTLS is the transport's way to read its TLS material again: the secret
+// ReloadTLS is the transport's way to read its TLS material again: the secret
 // references resolved anew through reload (the supervisor's, which applies the
 // secret policy), or the secrets of the start where nothing resolves them. The
 // files the TLS options name are read again by the transport itself.
-func reloadTLS(start map[string]string, reload func() (map[string]string, error)) func() (transport.TLSMaterial, error) {
+func ReloadTLS(start map[string]string, reload func() (map[string]string, error)) func() (transport.TLSMaterial, error) {
 	return func() (transport.TLSMaterial, error) {
 		secrets := start
 		if reload != nil {

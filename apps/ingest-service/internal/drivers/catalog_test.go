@@ -25,7 +25,7 @@ func TestDefaultCatalogListsDrivers(t *testing.T) {
 			t.Errorf("%s schema is not JSON: %v", d.ID, err)
 		}
 	}
-	for _, want := range []string{"opensky", "celestrak", "aisstream", "intelsky", "stream", "httpjson", "tcp", "udp"} {
+	for _, want := range []string{"opensky", "celestrak", "aisstream", "intelsky", "stream", "httpjson", "tcp", "udp", "grpc"} {
 		if !ids[want] {
 			t.Errorf("missing driver %s", want)
 		}
@@ -70,6 +70,7 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 		"tcp":        `{"mode": "listen", "port": 6000}`,
 		"tcp2":       `{"mode": "connect", "host": "feeds.example", "port": 7000, "format": "cot", "tls": {"enabled": true}}`,
 		"tcp3":       `{"mode": "listen", "port": 6000, "maxMessagesPerSec": 1000, "maxMessagesPerSecPerSender": 50}`,
+		"grpc":       `{"port": 6200}`,
 		"udp":        `{"port": 10110, "format": "nmea-ais"}`,
 		"udp2":       `{"port": 10111, "encoding": "json", "allow": ["10.0.0.0/8", "192.0.2.7"], "maxMessageBytes": 1500, "maxMessagesPerSec": 0}`,
 		"udp3":       `{"port": 10112, "maxMessagesPerSec": 1000, "maxMessagesPerSecPerSender": 50}`,
@@ -135,6 +136,9 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		{"tak", `{"address": "h:1", "policy": {"boxes": [{"north": 1, "south": 0, "east": 0, "west": 0, "depth": 1}]}}`, "/config/policy/boxes/0"},
 		{"tak", `{"address": "h:1", "policy": {"classificationCeiling": "ULTRA"}}`, "/config/policy/classificationCeiling"},
 		{"tak", `{"address": "h:1", "outbound": {"queueMax": 1}}`, "/config/outbound/queueMax"},
+		{"grpc", `{}`, "/config/port"},
+		{"grpc", `{"port": 80}`, "/config/port"},
+		{"grpc", `{"port": 6200, "backpressure": "drop"}`, "/config/backpressure"},
 		{"tcp", `{"mode": "listen"}`, "/config/port"},
 		{"tcp", `{"mode": "listen", "port": 80}`, "/config/port"},
 		{"tcp", `{"mode": "connect", "port": 7000}`, "/config/host"},
