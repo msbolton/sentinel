@@ -202,19 +202,15 @@ func main() {
 		logger.Warn("feed supervisor did not stop in time")
 	}
 	// With Kafka unreachable nothing drains: the shards cannot hand their
-	// observations over and a flush delivers none. So each step below waits only
-	// until the deadline, the publisher gives up on what it still holds (and logs
-	// how much), and the producer closes within the time that is left rather
-	// than a flush of its own. A step that finds the deadline passed still gets
-	// a second to try, so the process ends inside the grace period the
-	// orchestrator allows.
+	// observations over and a flush delivers none. So the publisher waits only
+	// until the deadline and then gives up on what it still holds (and logs how
+	// much), the HTTP server gets what is left of the deadline (at most 5 s), and
+	// the producer's one flush happens in its close, for the time then left but
+	// at least a second. The process thus ends at most about a second after
+	// the deadline, inside the grace period the orchestrator allows.
 	publisher.CloseWithin(time.Until(deadline))
-	flushFor := func() time.Duration { return max(time.Until(deadline), time.Second) }
-	if remaining := producer.Flush(int(flushFor() / time.Millisecond)); remaining > 0 {
-		logger.Warn("kafka producer still has unflushed messages", zap.Int("remaining", remaining))
-	}
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), min(5*time.Second, max(time.Until(deadline), 0)))
 	defer shutdownCancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http server shutdown error", zap.Error(err))
@@ -222,7 +218,7 @@ func main() {
 
 	// The producer's deferred Close flushes for 10 s whatever the deadline; closing
 	// it here makes that one a no-op.
-	producer.CloseWithin(flushFor())
+	producer.CloseWithin(max(time.Until(deadline), time.Second))
 
 	logger.Info("sentinel ingest service shut down gracefully")
 }
