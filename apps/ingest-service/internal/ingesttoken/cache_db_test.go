@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/sentinel/ingest-service/internal/registry"
 )
 
 // within polls cond for up to five seconds.
@@ -66,18 +68,8 @@ func TestRunFollowsRevocationAndFeedDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	within(t, "the second token to authenticate", authenticates(secret))
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `DELETE FROM sentinel.feeds WHERE id = $1`, "test-tok-b"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, feedsChannel, "test-tok-b"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
+	// The real registry delete, which sends the feed notice itself.
+	if err := registry.NewWithPool(pool, nil).Delete(ctx, "test-tok-b"); err != nil {
 		t.Fatal(err)
 	}
 	within(t, "the deleted feed's token to stop authenticating", func() bool { return !authenticates(secret)() })

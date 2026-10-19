@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
@@ -27,6 +28,10 @@ const (
 	// minBackoff and maxBackoff bound the wait before reconnecting.
 	minBackoff = time.Second
 	maxBackoff = 30 * time.Second
+	// reconcileEvery is how often a connected cache re-reads every token. A
+	// half-open LISTEN socket delivers no notices and no error, so without it a
+	// revocation could stay hidden for as long as the kernel keeps the socket.
+	reconcileEvery = 2 * time.Minute
 )
 
 // Loader is what the cache reads tokens through (the Store).
@@ -44,6 +49,13 @@ type Cache struct {
 	pool   *pgxpool.Pool
 	logger *zap.Logger
 	now    func() time.Time
+
+	// reconcileEvery is the interval of the periodic full reload while
+	// connected (a field so tests can shorten it).
+	reconcileEvery time.Duration
+
+	readyOnce sync.Once
+	ready     chan struct{}
 
 	// refreshMu serializes Load and RefreshFeed across both the read and the
 	// swap, so a read that went stale while waiting cannot overwrite a newer one.
@@ -67,8 +79,15 @@ func NewCache(loader Loader, pool *pgxpool.Pool, logger *zap.Logger) *Cache {
 		logger = zap.NewNop()
 	}
 	return &Cache{loader: loader, pool: pool, logger: logger, now: time.Now,
+		reconcileEvery: reconcileEvery, ready: make(chan struct{}),
 		byHash: map[string]Stored{}, used: map[string]time.Time{}, subs: map[int]func(Token){}}
 }
+
+// Ready returns a channel closed, once, after the first successful Load,
+// whether called directly or by Run. Until then the cache knows no tokens, so
+// a caller that authenticates streams (the gRPC driver) must answer
+// Unavailable, not Unauthenticated, while it is open.
+func (c *Cache) Ready() <-chan struct{} { return c.ready }
 
 // Load replaces every token with what the loader lists now.
 func (c *Cache) Load(ctx context.Context) error {
@@ -79,6 +98,7 @@ func (c *Cache) Load(ctx context.Context) error {
 		return err
 	}
 	c.replace(func(Stored) bool { return true }, all)
+	c.readyOnce.Do(func() { close(c.ready) })
 	return nil
 }
 
@@ -259,6 +279,43 @@ func (c *Cache) listen(ctx context.Context, ready func()) error {
 		return err
 	}
 	ready()
+
+	// Reconcile on a timer beside the notice loop; either one failing ends
+	// the connection.
+	rctx, cancel := context.WithCancel(ctx)
+	reconciled := make(chan error, 1)
+	go func() { reconciled <- c.reconcile(rctx) }()
+	err = c.follow(rctx, conn)
+	cancel()
+	if rerr := <-reconciled; rerr != nil {
+		return rerr
+	}
+	return err
+}
+
+// reconcile reloads every token each reconcileEvery until ctx ends (nil) or a
+// reload fails (that error, after logging it).
+func (c *Cache) reconcile(ctx context.Context) error {
+	t := time.NewTicker(c.reconcileEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-t.C:
+			if err := c.Load(ctx); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				c.logger.Warn("reconciling the ingest tokens failed; reconnecting to reload", zap.Error(err))
+				return err
+			}
+		}
+	}
+}
+
+// follow applies each notice on conn until the connection or a refresh fails.
+func (c *Cache) follow(ctx context.Context, conn *pgx.Conn) error {
 	for {
 		n, err := conn.WaitForNotification(ctx)
 		if err != nil {

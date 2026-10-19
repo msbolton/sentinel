@@ -28,6 +28,8 @@ type Store interface {
 // PGStore is the Store on sentinel.ingest_tokens.
 type PGStore struct{ pool *pgxpool.Pool }
 
+var _ Store = (*PGStore)(nil)
+
 // NewPGStore returns a store on pool.
 func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
 

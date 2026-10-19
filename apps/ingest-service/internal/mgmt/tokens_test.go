@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
+
 	"github.com/sentinel/ingest-service/internal/drivers"
 	"github.com/sentinel/ingest-service/internal/ingesttoken"
 	"github.com/sentinel/ingest-service/internal/registry"
@@ -72,11 +75,17 @@ func grpcFeed(id, level string) registry.Feed {
 // registered yet, so its feeds go straight into the store.
 func newTokenServer(t *testing.T, tokens TokenStore, feeds ...registry.Feed) *httptest.Server {
 	t.Helper()
+	return newLoggedTokenServer(t, nil, tokens, feeds...)
+}
+
+// newLoggedTokenServer is newTokenServer with the handler logging to logger.
+func newLoggedTokenServer(t *testing.T, logger *zap.Logger, tokens TokenStore, feeds ...registry.Feed) *httptest.Server {
+	t.Helper()
 	store := newMemStore()
 	for _, f := range feeds {
 		store.feeds[f.ID] = f
 	}
-	h := NewHandler(store, drivers.Default(), &fakeRuntime{live: map[string]bool{}}, nil)
+	h := NewHandler(store, drivers.Default(), &fakeRuntime{live: map[string]bool{}}, logger)
 	if tokens != nil { // a typed nil must not reach the interface
 		h.Tokens = tokens
 	}
@@ -245,5 +254,38 @@ func TestTokenCreateOnAFeedDeletedMidRequest(t *testing.T) {
 	resp, out := do(t, srv, "POST", "/feeds/ew-1/tokens", `{"name":"x"}`, reqOpts{roles: "sentinel-operator", user: "u1", class: "SECRET"})
 	if resp.StatusCode != 404 || !strings.Contains(string(out), "feed not found") {
 		t.Fatalf("got %d %s", resp.StatusCode, out)
+	}
+}
+
+// The secret is shown once, in the create response, and nowhere else: the
+// handler's logs name the token by id and prefix only.
+func TestTokenSecretNeverReachesTheLogs(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	tokens := &memTokens{rows: map[string]ingesttoken.Token{}}
+	srv := newLoggedTokenServer(t, zap.New(core), tokens, grpcFeed("ew-1", "CONFIDENTIAL"))
+	cleared := reqOpts{roles: "sentinel-operator", user: "u1", class: "SECRET"}
+
+	resp, out := do(t, srv, "POST", "/feeds/ew-1/tokens", `{"name":"sensor one"}`, cleared)
+	var created struct {
+		ingesttoken.Token
+		Secret string `json:"token"`
+	}
+	if err := json.Unmarshal(out, &created); err != nil || resp.StatusCode != 201 || created.Secret == "" {
+		t.Fatalf("create: %d %s", resp.StatusCode, out)
+	}
+	if resp, _ := do(t, srv, "DELETE", "/feeds/ew-1/tokens/"+created.ID, "", cleared); resp.StatusCode != 204 {
+		t.Fatalf("revoke: %d", resp.StatusCode)
+	}
+
+	entries := logs.All()
+	if len(entries) < 2 {
+		t.Fatalf("expected the create and revoke to be logged, got %d entries", len(entries))
+	}
+	for _, e := range entries {
+		fields, _ := json.Marshal(e.ContextMap())
+		if strings.Contains(e.Message, created.Secret) || strings.Contains(string(fields), created.Secret) ||
+			strings.Contains(e.Message, created.Secret[3:]) || strings.Contains(string(fields), created.Secret[3:]) {
+			t.Errorf("the token secret reached the log: %q %s", e.Message, fields)
+		}
 	}
 }

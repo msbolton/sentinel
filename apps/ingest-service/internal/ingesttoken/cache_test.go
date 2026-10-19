@@ -371,3 +371,85 @@ func TestFlushUsedKeepsUsesWhenTheWriteFails(t *testing.T) {
 		t.Fatalf("merged use = %v, want %v", got, late)
 	}
 }
+
+// With no notice at all, the timer alone notices a revoked token.
+func TestReconcileNoticesARevocationWithoutNotices(t *testing.T) {
+	l := &memLoader{rows: map[string]Stored{}}
+	secret := add(t, l, "t1", "grpc-1")
+	c := NewCache(l, nil, nil)
+	c.reconcileEvery = 10 * time.Millisecond
+	mustLoad(t, c)
+	gone := recordRevokes(c)
+
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.reconcile(ctx) }()
+
+	if _, ok := c.Authenticate(secret); !ok {
+		t.Fatal("the token did not authenticate before it was revoked")
+	}
+	now := time.Now()
+	l.mutate("t1", func(s *Stored) { s.RevokedAt = &now })
+	within(t, "the reconcile to drop the revoked token", func() bool { _, ok := c.Authenticate(secret); return !ok })
+	time.Sleep(60 * time.Millisecond) // several more reconciles must not fire again
+	stop()
+	if err := <-done; err != nil {
+		t.Fatalf("reconcile after cancel = %v", err)
+	}
+	if got := gone(); len(got) != 1 || got[0] != "t1" {
+		t.Fatalf("OnRevoke saw %v, want [t1] once", got)
+	}
+}
+
+// A failing reload ends the reconcile so the connection is rebuilt.
+func TestReconcileReturnsAReloadError(t *testing.T) {
+	l := &memLoader{rows: map[string]Stored{}}
+	c := NewCache(l, nil, nil)
+	c.reconcileEvery = 10 * time.Millisecond
+	mustLoad(t, c)
+	boom := errors.New("boom")
+	l.setErr(boom)
+	done := make(chan error, 1)
+	go func() { done <- c.reconcile(context.Background()) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, boom) {
+			t.Fatalf("reconcile = %v, want boom", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reconcile ignored a failing reload")
+	}
+}
+
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
+func TestReady(t *testing.T) {
+	l := &memLoader{rows: map[string]Stored{}}
+	c := NewCache(l, nil, nil)
+	if isClosed(c.Ready()) {
+		t.Fatal("Ready is closed before any Load")
+	}
+	l.setErr(errors.New("down"))
+	if err := c.Load(context.Background()); err == nil {
+		t.Fatal("Load should fail")
+	}
+	if isClosed(c.Ready()) {
+		t.Fatal("Ready closed after a failed Load")
+	}
+	l.setErr(nil)
+	mustLoad(t, c)
+	if !isClosed(c.Ready()) {
+		t.Fatal("Ready is still open after a successful Load")
+	}
+	mustLoad(t, c) // closing twice would panic
+	if !isClosed(c.Ready()) {
+		t.Fatal("Ready reopened")
+	}
+}
