@@ -22,6 +22,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/density"
 	"github.com/sentinel/ingest-service/internal/dlq"
 	"github.com/sentinel/ingest-service/internal/drivers"
+	"github.com/sentinel/ingest-service/internal/emplacement"
 	"github.com/sentinel/ingest-service/internal/feed"
 	"github.com/sentinel/ingest-service/internal/health"
 	kafkaproducer "github.com/sentinel/ingest-service/internal/kafka"
@@ -129,6 +130,12 @@ func main() {
 
 	catalog := drivers.Default()
 
+	// Emplacements: the store behind the management API, and the cache the
+	// drivers that report as emplacements read.
+	empStore := emplacement.NewPGStore(reg.Pool())
+	empCache := emplacement.NewCache(empStore, reg.Pool(), logger)
+	go empCache.Run(ctx)
+
 	// Supervisor: runs the feeds this replica owns and reports status.
 	supOpts := feed.Options{
 		ReplicaID:         cfg.ReplicaID,
@@ -181,6 +188,8 @@ func main() {
 	mgmtHandler.Reserved = reserved
 	mgmtHandler.UseSecretPolicy(secretPolicy)
 	mgmtHandler.RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
+	emplacement.NewHandler(empStore, feedCheck(reg, catalog), logger).
+		RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
 
 	httpServer := &http.Server{
 		Addr:         cfg.HTTPAddr,
@@ -324,4 +333,24 @@ func newLogger() (*zap.Logger, error) {
 	}
 
 	return cfg.Build()
+}
+
+// feedCheck says whether a feed exists and takes data in (its effective
+// direction, after config.direction narrows a bidirectional driver), so an
+// emplacement is bound only to a connection that can report as it.
+func feedCheck(reg *registry.Store, catalog *drivers.Catalog) emplacement.FeedCheck {
+	return func(ctx context.Context, id string) (bool, bool, error) {
+		f, err := reg.Get(ctx, id)
+		if errors.Is(err, registry.ErrNotFound) {
+			return false, false, nil
+		}
+		if err != nil {
+			return false, false, err
+		}
+		info, ok := catalog.Get(f.Driver)
+		if !ok {
+			return true, false, nil
+		}
+		return true, f.Direction(info.Dir()).Inbound(), nil
+	}
 }

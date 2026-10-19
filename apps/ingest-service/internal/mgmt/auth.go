@@ -21,8 +21,27 @@ type AuthOptions struct {
 // check on reading dead letters, which the gateway lets any GET through.
 var operatorRoles = []string{"sentinel-operator", "sentinel-admin"}
 
+// Roles that create and edit emplacements, matching the gateway's policy;
+// deleting one needs admin.
+var (
+	emplacementWriters = []string{"sentinel-operator", "sentinel-analyst", "sentinel-admin"}
+	adminRoles         = []string{"sentinel-admin"}
+)
+
+// required is the roles a mutation needs and the refusal that names them.
+func required(r *http.Request) ([]string, string) {
+	if r.URL.Path == "/emplacements" || strings.HasPrefix(r.URL.Path, "/emplacements/") {
+		if r.Method == http.MethodDelete {
+			return adminRoles, "admin role required"
+		}
+		return emplacementWriters, "operator, analyst or admin role required"
+	}
+	return operatorRoles, "operator or admin role required"
+}
+
 // Auth returns middleware that requires the service token (when configured)
-// on every request and an operator or admin identity on mutations. PUT on
+// on every request and an operator or admin identity on mutations (operator,
+// analyst or admin for emplacements; admin to delete one). PUT on
 // an area endpoint is exempt from the role check because the gateway's
 // viewport sync has no user behind it.
 func Auth(opts AuthOptions) func(http.Handler) http.Handler {
@@ -39,8 +58,8 @@ func Auth(opts AuthOptions) func(http.Handler) http.Handler {
 			}
 			if isMutation(r) && !isAreaPush(r) {
 				roles := strings.Split(r.Header.Get(middleware.HeaderUserRoles), ",")
-				if !hasAny(roles, operatorRoles) {
-					writeError(w, http.StatusForbidden, "operator or admin role required")
+				if want, msg := required(r); !hasAny(roles, want) {
+					writeError(w, http.StatusForbidden, msg)
 					return
 				}
 			}
