@@ -28,7 +28,7 @@
     }
 
     @if (draft(); as d) {
-      @if (d.id === null) {
+      @if (editorOnTop()) {
         <ng-container *ngTemplateOutlet="editor; context: { $implicit: d }" />
       }
     }
@@ -134,8 +134,8 @@
         <button type="submit" class="btn btn-primary btn-sm" [disabled]="saving()">{{ saving() ? 'Saving…' : 'Save' }}</button>
       }
       <button type="button" class="btn btn-sm" (click)="cancel()">Cancel</button>
-      @if (d.id && canDelete()) {
-        <button type="button" class="btn btn-danger btn-sm" (click)="remove(selectedEmplacement(d.id)!)">
+      @if (d.id && canDelete() && selectedEmplacement(d.id); as target) {
+        <button type="button" class="btn btn-danger btn-sm" (click)="remove(target)">
           <app-icon name="trash" [size]="14" /> Delete
         </button>
       }

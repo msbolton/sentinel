@@ -65,9 +65,11 @@ export interface EmplacementInput {
   active?: boolean;
 }
 
-/** The form's state; id is null for a new emplacement. */
+/** The form's state; id and version are null for a new emplacement. */
 export interface EmplacementDraft {
   id: string | null;
+  /** The version the user opened: a save claims it in If-Match, so a newer one on the server answers 412. */
+  version: number | null;
   name: string;
   description: string;
   mobility: Mobility;
@@ -86,7 +88,7 @@ export interface EmplacementDraft {
 
 export function newDraft(): EmplacementDraft {
   return {
-    id: null, name: '', description: '', mobility: 'FIXED', sensorType: 'RADAR', position: null, altitude: null,
+    id: null, version: null, name: '', description: '', mobility: 'FIXED', sensorType: 'RADAR', position: null, altitude: null,
     boresightDeg: 0, azimuthReference: 'TRUE_NORTH', coverage: { minRangeM: 0, maxRangeM: 50_000, azimuthWidthDeg: 120 },
     defaultSigma: {}, feedId: null, classification: 'UNCLASSIFIED', exercise: false, active: true,
   };
@@ -94,7 +96,7 @@ export function newDraft(): EmplacementDraft {
 
 export function draftOf(e: Emplacement): EmplacementDraft {
   return {
-    id: e.id, name: e.name, description: e.description, mobility: e.mobility, sensorType: e.sensorType,
+    id: e.id, version: e.version, name: e.name, description: e.description, mobility: e.mobility, sensorType: e.sensorType,
     position: e.position ? { ...e.position } : null, altitude: e.altitude, boresightDeg: e.boresightDeg,
     azimuthReference: e.azimuthReference, coverage: { ...e.coverage }, defaultSigma: { ...e.defaultSigma },
     feedId: e.feedId, classification: e.classification, exercise: e.exercise, active: e.active,

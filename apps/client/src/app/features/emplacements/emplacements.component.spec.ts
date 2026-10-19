@@ -115,10 +115,58 @@ describe('EmplacementsComponent', () => {
     http.expectOne({ method: 'GET', url: '/api/v1/emplacements' }).flush([row(4, 'Theirs')]);
     fixture.detectChanges();
     expect(draft()?.name).toBe('Renamed');
+    expect(draft()?.version).toBe(4);
     expect(el.querySelector('[role="alert"]')?.textContent).toContain('review and save again');
 
     (el.querySelector('form.editor') as HTMLFormElement).dispatchEvent(new Event('submit'));
     const second = http.expectOne((r) => r.method === 'PATCH' && r.url === '/api/v1/emplacements/e1');
     expect(second.request.headers.get('If-Match')).toBe('"4"');
+  });
+
+  // Two editors: B opens version 3, A saves version 4, the map's poll loads
+  // it. B's save must still claim the version B edited, so the server refuses
+  // it instead of overwriting A's change.
+  it('saves with the version the user opened, even after a poll refreshed the list', () => {
+    const { fixture, http, el } = create([row(3)]);
+    const service = TestBed.inject(EmplacementService);
+    (el.querySelector('.row') as HTMLElement).click();
+    fixture.detectChanges();
+    typeInto(fixture, el, 'name', 'Mine');
+
+    service.load().subscribe();
+    http.expectOne({ method: 'GET', url: '/api/v1/emplacements' }).flush([row(4, 'Theirs')]);
+    fixture.detectChanges();
+
+    (el.querySelector('form.editor') as HTMLFormElement).dispatchEvent(new Event('submit'));
+    const req = http.expectOne((r) => r.method === 'PATCH' && r.url === '/api/v1/emplacements/e1');
+    expect(req.request.headers.get('If-Match')).toBe('"3"');
+  });
+
+  it('says an emplacement deleted since it was opened is gone, and sends nothing', () => {
+    const { fixture, http, el } = create([row(3)]);
+    const service = TestBed.inject(EmplacementService);
+    (el.querySelector('.row') as HTMLElement).click();
+    fixture.detectChanges();
+
+    service.load().subscribe();
+    http.expectOne({ method: 'GET', url: '/api/v1/emplacements' }).flush([]);
+    fixture.detectChanges();
+
+    (el.querySelector('form.editor') as HTMLFormElement).dispatchEvent(new Event('submit'));
+    fixture.detectChanges();
+    http.expectNone((r) => r.method === 'PATCH' || r.method === 'POST');
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain('Deleted by someone else.');
+  });
+
+  it('says so when the reload after a 412 no longer has the emplacement', () => {
+    const { fixture, http, el } = create([row(3)]);
+    (el.querySelector('.row') as HTMLElement).click();
+    fixture.detectChanges();
+
+    (el.querySelector('form.editor') as HTMLFormElement).dispatchEvent(new Event('submit'));
+    http.expectOne((r) => r.method === 'PATCH').flush({ error: 'stale' }, { status: 412, statusText: 'Precondition Failed' });
+    http.expectOne({ method: 'GET', url: '/api/v1/emplacements' }).flush([]);
+    fixture.detectChanges();
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain('Deleted by someone else.');
   });
 });

@@ -20,6 +20,9 @@ import {
   newDraft,
 } from '../../shared/models/emplacement.model';
 
+const CHANGED = 'Changed by someone else since you opened it. The latest is loaded; review and save again.';
+const DELETED = 'Deleted by someone else.';
+
 /** A coordinate input's text as a number, or null when it is empty or not a number yet. */
 function parseCoordinate(text: string): number | null {
   if (text.trim() === '') return null;
@@ -63,6 +66,14 @@ export class EmplacementsComponent implements OnInit, OnDestroy {
   protected readonly shown = computed(() => {
     const f = this.filter();
     return f === 'ALL' ? this.list() : this.list().filter((e) => e.mobility === f);
+  });
+  /**
+   * The editor sits above the list for a new emplacement, and for one whose
+   * row is not shown: filtered out, or deleted by someone else while open.
+   */
+  protected readonly editorOnTop = computed(() => {
+    const d = this.draft();
+    return !!d && (d.id === null || !this.shown().some((e) => e.id === d.id));
   });
   protected readonly saving = signal(false);
   protected readonly error = signal<string | null>(null);
@@ -149,10 +160,16 @@ export class EmplacementsComponent implements OnInit, OnDestroy {
   protected save(): void {
     const d = this.draft();
     if (!d) return;
-    this.saving.set(true);
     this.error.set(null);
-    const existing = d.id ? this.list().find((e) => e.id === d.id) : undefined;
-    const request = existing ? this.service.update(existing, inputOf(d)) : this.service.create(inputOf(d));
+    // The draft keeps the version the user opened. The list may hold a newer
+    // one (the map refreshes it), and saving with that would overwrite
+    // someone else's change instead of being refused.
+    if (d.id && !this.list().some((e) => e.id === d.id)) {
+      this.error.set(DELETED);
+      return;
+    }
+    this.saving.set(true);
+    const request = d.id && d.version != null ? this.service.update(d.id, d.version, inputOf(d)) : this.service.create(inputOf(d));
     request.subscribe({
       next: (e) => {
         this.saving.set(false);
@@ -161,14 +178,28 @@ export class EmplacementsComponent implements OnInit, OnDestroy {
       },
       error: (err) => {
         this.saving.set(false);
-        if (err instanceof HttpErrorResponse && err.status === 412) {
-          // Keep the draft; the fresh list gives the next Save the current version.
-          this.service.load().subscribe({ error: () => undefined });
-          this.error.set('Changed by someone else since you opened it. The latest is loaded; review and save again.');
+        if (err instanceof HttpErrorResponse && err.status === 412 && d.id) {
+          this.reloadAfterConflict(d.id);
         } else {
           this.error.set(errorMessage(err));
         }
       },
+    });
+  }
+
+  /** Someone saved first: load the latest and let the next save claim it, keeping the user's edits. */
+  private reloadAfterConflict(id: string): void {
+    this.error.set(CHANGED);
+    this.service.load().subscribe({
+      next: (list) => {
+        const latest = list.find((e) => e.id === id);
+        if (!latest) {
+          this.error.set(DELETED);
+          return;
+        }
+        this.draft.update((d) => (d?.id === id ? { ...d, version: latest.version } : d));
+      },
+      error: () => undefined,
     });
   }
 

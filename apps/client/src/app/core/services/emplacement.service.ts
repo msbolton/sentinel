@@ -54,10 +54,14 @@ export class EmplacementService {
     return this.http.post<Emplacement>(URL, input).pipe(tap((e) => this.emplacements.update((l) => byName([...l, e]))));
   }
 
-  /** Saves a change to the version the user edited; a newer one on the server answers 412. */
-  update(e: Emplacement, input: EmplacementInput): Observable<Emplacement> {
+  /**
+   * Saves a change to the version the user edited, which the caller names: the
+   * list may have been refreshed to a newer one since. A newer one on the
+   * server answers 412.
+   */
+  update(id: string, version: number, input: EmplacementInput): Observable<Emplacement> {
     return this.http
-      .patch<Emplacement>(`${URL}/${e.id}`, input, { headers: { 'If-Match': `"${e.version}"` } })
+      .patch<Emplacement>(`${URL}/${id}`, input, { headers: { 'If-Match': `"${version}"` } })
       .pipe(tap((u) => this.emplacements.update((l) => byName(l.map((x) => (x.id === u.id ? u : x))))));
   }
 

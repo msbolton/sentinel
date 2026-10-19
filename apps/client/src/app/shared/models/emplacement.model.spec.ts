@@ -18,10 +18,13 @@ describe('emplacement model', () => {
   it('turns a stored emplacement into a draft and back into an input', () => {
     const d = draftOf(stored);
     expect(d.id).toBe('e1');
+    expect(d.version).toBe(3);
+    expect(newDraft().version).toBeNull();
     const input = inputOf({ ...d, feedId: null });
     expect(input.feedId).toBe(''); // "" unbinds on the server
     expect(input.position).toEqual({ lat: 50, lon: -4 });
     expect('id' in input).toBe(false);
+    expect('version' in input).toBe(false);
   });
 
   it('sends no coverage as all zeros', () => {

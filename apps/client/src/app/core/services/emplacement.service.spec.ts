@@ -32,7 +32,7 @@ describe('EmplacementService', () => {
 
   it('sends the version it edited as If-Match and replaces the row', () => {
     service.emplacements.set([e1]);
-    service.update(e1, { boresightDeg: 90 }).subscribe();
+    service.update('e1', 3, { boresightDeg: 90 }).subscribe();
     const req = http.expectOne('/api/v1/emplacements/e1');
     expect(req.request.method).toBe('PATCH');
     expect(req.request.headers.get('If-Match')).toBe('"3"');
