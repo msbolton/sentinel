@@ -241,13 +241,21 @@ func TestNoteMalformedCountsAgainstTheSenderIP(t *testing.T) {
 // so it spends none of the shared budget (10 a second, a sender's is 3), and
 // the other sender's messages all get through.
 func TestPerSenderLimitIsolatesSenders(t *testing.T) {
-	probe, err := net.ListenPacket("udp", "[::1]:0")
-	if err != nil {
+	if v6, err := net.ListenPacket("udp", "[::1]:0"); err != nil {
 		t.Skipf("no IPv6 loopback: %v", err)
+	} else {
+		v6.Close()
+	}
+	// The listener binds the wildcard, one socket for both families, so the port
+	// is chosen on the wildcard: a port free on ::1 alone may be taken on IPv4,
+	// and the datagrams to 127.0.0.1 would go to whoever holds it.
+	probe, err := net.ListenPacket("udp", ":0")
+	if err != nil {
+		t.Fatal(err)
 	}
 	port := probe.LocalAddr().(*net.UDPAddr).Port
 	probe.Close()
-	// An address with no host is the wildcard: one socket for both families.
+	// An address with no host is the wildcard.
 	tr, err := New(transport.Config{Kind: "udp", Address: ":" + strconv.Itoa(port), MaxMessagesPerSec: 10, MaxMessagesPerSecPerSender: 3})
 	if err != nil {
 		t.Fatal(err)
