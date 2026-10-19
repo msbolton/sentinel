@@ -193,6 +193,8 @@ func TestValidateRequiredPointsAtTheField(t *testing.T) {
 		{"tak without an address", "tak", `{"siteId": "east"}`, []string{"/config/address"}},
 		{"transport and decoder with nothing in them", "stream", `{"transport": {}, "decoder": {}}`, []string{"/config/decoder/name", "/config/transport/kind"}},
 		{"sharing box without its corners", "tak", `{"address": "h:1", "policy": {"boxes": [{"north": 1}]}}`, []string{"/config/policy/boxes/0/east", "/config/policy/boxes/0/south", "/config/policy/boxes/0/west"}},
+		{"stream nmea-gps without options", "stream", `{"transport": {"kind": "tcpclient", "address": "gps:2947"}, "decoder": {"name": "nmea-gps"}}`, []string{"/config/decoder/options"}},
+		{"stream nmea-gps without a platform id", "stream", `{"transport": {"kind": "tcpclient", "address": "gps:2947"}, "decoder": {"name": "nmea-gps", "options": {}}}`, []string{"/config/decoder/options/sourceEntityId"}},
 	}
 	for _, tc := range cases {
 		problems := c.Validate(tc.driver, json.RawMessage(tc.cfg))
@@ -311,6 +313,53 @@ func TestValidateNMEAGPSNeedsASourceEntityID(t *testing.T) {
 			problems := c.Validate(l.driver, json.RawMessage(cfg))
 			if got := problemPaths(problems); !slices.Equal(got, tc.want) {
 				t.Errorf("%s, %s: problem paths = %v, want %v (config %s, problems %+v)", l.name, tc.name, got, tc.want, cfg, problems)
+			}
+		}
+	}
+}
+
+// The stream driver's nmea-gps decoder refuses to start without the platform
+// its receiver reports, as the tcp and udp ones do, so a stream connection
+// naming it is refused up front, at the field. The rule is the decoder's, so
+// it holds whatever the transport, and every other decoder is left alone.
+func TestValidateStreamNMEAGPSNeedsASourceEntityID(t *testing.T) {
+	c := Default()
+	const optionsPath, idPath = "/config/decoder/options", "/config/decoder/options/sourceEntityId"
+	transports := []struct{ name, section string }{
+		{"tcpclient", `{"kind": "tcpclient", "address": "gps.example:2947"}`},
+		{"tcpserver", `{"kind": "tcpserver", "address": ":4001"}`},
+		{"udp", `{"kind": "udp", "address": ":4001"}`},
+	}
+	cases := []struct {
+		name, decoder string
+		want          []string // exact problem paths; none means accepted
+	}{
+		{"an id", `{"name": "nmea-gps", "options": {"sourceEntityId": "truck-1"}}`, nil},
+		{"an id with a name and type", `{"name": "nmea-gps", "options": {"sourceEntityId": "truck-1", "name": "Truck 1", "entityType": "VEHICLE"}}`, nil},
+		{"no options", `{"name": "nmea-gps"}`, []string{optionsPath}},
+		{"empty options", `{"name": "nmea-gps", "options": {}}`, []string{idPath}},
+		{"options without an id", `{"name": "nmea-gps", "options": {"name": "Truck 1"}}`, []string{idPath}},
+		{"an empty id", `{"name": "nmea-gps", "options": {"sourceEntityId": ""}}`, []string{idPath}},
+		{"a number for the id", `{"name": "nmea-gps", "options": {"sourceEntityId": 7}}`, []string{idPath}},
+		{"options that are not an object", `{"name": "nmea-gps", "options": "truck-1"}`, []string{optionsPath}},
+		// No other decoder is asked for an id, with options or without.
+		{"json", `{"name": "json"}`, nil},
+		{"json with a field map", `{"name": "json", "options": {"fields": {"latitude": "lat", "longitude": "lon"}}}`, nil},
+		{"cot", `{"name": "cot"}`, nil},
+		{"nmea-ais", `{"name": "nmea-ais"}`, nil},
+		{"sbs", `{"name": "sbs"}`, nil},
+		{"beast", `{"name": "beast"}`, nil},
+		{"link16", `{"name": "link16"}`, nil},
+		{"an id on another decoder", `{"name": "json", "options": {"sourceEntityId": "truck-1"}}`, nil},
+		// With no name the decoder is refused for that, and for nothing else.
+		{"an id without a decoder name", `{"options": {"sourceEntityId": "truck-1"}}`, []string{"/config/decoder/name"}},
+	}
+	for _, tr := range transports {
+		for _, tc := range cases {
+			cfg := `{"transport": ` + tr.section + `, "decoder": ` + tc.decoder + `}`
+			problems := c.Validate("stream", json.RawMessage(cfg))
+			if got := problemPaths(problems); !slices.Equal(got, tc.want) {
+				t.Errorf("%s, %s: problem paths = %v, want %v (config %s, problems %+v)", tr.name, tc.name, got, tc.want, cfg, problems)
 			}
 		}
 	}

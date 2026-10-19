@@ -57,7 +57,13 @@
       "properties": {
         "name": { "type": "string", "enum": ["json", "nmea-gps", "nmea-ais", "cot", "sbs", "beast", "link16"], "title": "Format" },
         "options": { "type": "object", "title": "Decoder options" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "name": { "const": "nmea-gps" } }, "required": ["name"] },
+          "then": { "required": ["options"], "properties": { "options": { "required": ["sourceEntityId"], "properties": { "sourceEntityId": { "type": "string", "minLength": 1 } } } } }
+        }
+      ]
     }
   },
   "x-secrets": {
