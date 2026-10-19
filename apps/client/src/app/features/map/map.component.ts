@@ -1753,6 +1753,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
           }
         }
         this.entityMap.clear();
+        this.emplacementEntities.clear();
         this.trackTrails.clear();
         this.deadReckoning.clear();
         this.satellites.clear();
