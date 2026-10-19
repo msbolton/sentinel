@@ -114,7 +114,7 @@ The places observations come from (see `docs/emplacements.md`). One row per empl
 | `"deletedAt"` | Set by a delete |
 | `version` | Starts at 1 and rises on every write; the API's ETag and `If-Match` |
 
-A partial unique index on `lower(name)` where `"deletedAt" IS NULL` keeps live names unique whatever their case and frees a deleted emplacement's name. A GIST index covers `position`, and a partial index covers `"feedId"` for live rows. Each write sends a NOTIFY on the channel `sentinel_emplacements` with the payload `{"id": "<uuid>", "op": "upsert"|"delete"}`; every ingest replica follows it to keep its cache current. The file also seeds the `feed_ageout_config` rows of the built-in `emplacements` feed (stale after 180000 ms, aged out after 600000 ms, for each of the sources `RADAR`, `AIS`, `ADS_B`, `HUMINT` and `MASINT`).
+A partial unique index on `lower(name)` where `"deletedAt" IS NULL` keeps live names unique whatever their case and frees a deleted emplacement's name. A GIST index covers `position`, and a partial index covers `"feedId"` for live rows. Each write sends a NOTIFY on the channel `sentinel_emplacements` with the payload `{"id": "<uuid>", "op": "upsert"|"delete"}`; every ingest replica follows it to keep its cache current. The file also seeds the `feed_ageout_config` rows of the built-in `emplacements` feed (stale after 180000 ms, aged out after 600000 ms, for each of the sources `RADAR`, `AIS`, `ADS_B`, `HUMINT`, `SIGINT` and `MASINT`).
 
 ### sentinel.alerts and sentinel.alert_rules
 
