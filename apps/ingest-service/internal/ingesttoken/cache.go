@@ -282,10 +282,24 @@ func (c *Cache) listen(ctx context.Context, ready func()) error {
 
 	// Reconcile on a timer beside the notice loop; either one failing ends
 	// the connection.
+	return together(ctx, func(ctx context.Context) error { return c.follow(ctx, conn) }, c.reconcile)
+}
+
+// together runs follow and reconcile until either ends. A reconcile failure
+// cancels follow (which may be blocked waiting for a notice) and wins; follow
+// ending cancels reconcile. It returns only once both have stopped.
+func together(ctx context.Context, follow, reconcile func(context.Context) error) error {
 	rctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	reconciled := make(chan error, 1)
-	go func() { reconciled <- c.reconcile(rctx) }()
-	err = c.follow(rctx, conn)
+	go func() {
+		err := reconcile(rctx)
+		if err != nil {
+			cancel()
+		}
+		reconciled <- err
+	}()
+	err := follow(rctx)
 	cancel()
 	if rerr := <-reconciled; rerr != nil {
 		return rerr

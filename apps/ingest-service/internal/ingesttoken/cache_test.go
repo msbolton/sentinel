@@ -453,3 +453,40 @@ func TestReady(t *testing.T) {
 		t.Fatal("Ready reopened")
 	}
 }
+
+// A failed reconcile must wake a notice loop that is blocked waiting, so the
+// connection ends and Run reconnects; the reconcile error is what is returned.
+func TestTogetherEndsABlockedFollowWhenReconcileFails(t *testing.T) {
+	boom := errors.New("reload failed")
+	done := make(chan error, 1)
+	go func() {
+		done <- together(context.Background(),
+			func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() },
+			func(context.Context) error { return boom })
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, boom) {
+			t.Fatalf("together = %v, want the reconcile error", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a failed reconcile left the notice loop blocked")
+	}
+}
+
+// A notice loop that fails stops the reconciler and its error is returned.
+func TestTogetherStopsReconcileWhenFollowFails(t *testing.T) {
+	boom := errors.New("connection lost")
+	stopped := make(chan struct{})
+	err := together(context.Background(),
+		func(context.Context) error { return boom },
+		func(ctx context.Context) error { <-ctx.Done(); close(stopped); return nil })
+	if !errors.Is(err, boom) {
+		t.Fatalf("together = %v, want the follow error", err)
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("together returned before the reconciler stopped")
+	}
+}
