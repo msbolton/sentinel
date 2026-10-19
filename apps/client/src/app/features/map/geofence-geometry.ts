@@ -17,7 +17,7 @@ export function geodesicDistanceM(a: LngLat, b: LngLat): number {
 }
 
 /** The point `distanceM` from `from` along `bearingDeg`. */
-function destination(from: LngLat, bearingDeg: number, distanceM: number): LngLat {
+export function destination(from: LngLat, bearingDeg: number, distanceM: number): LngLat {
   const [lng1, lat1] = from.map(toRad);
   const brg = toRad(bearingDeg);
   const d = distanceM / EARTH_RADIUS_M;
