@@ -88,6 +88,34 @@ The feed registry (see `docs/feeds.md`).
 
 Stale and age-out thresholds in milliseconds, per feed (`"feedId"`), per source type (`"sourceType"`) or global, with partial unique indexes for each level. The entity-service seeds the defaults.
 
+### sentinel.emplacements (`db/schema/72_emplacements.sql`)
+
+The places observations come from (see `docs/emplacements.md`). One row per emplacement; a delete sets `"deletedAt"` (soft delete).
+
+| Column | Content |
+|--------|---------|
+| `id` | UUID primary key, generated |
+| `name` | Up to 255 characters |
+| `description` | Free text, default empty |
+| `mobility` | `FIXED` or `MOBILE`; a CHECK requires a `position` when `FIXED` |
+| `"sensorType"` | `RADAR`, `EO_IR`, `RF`, `ACOUSTIC`, `AIS_RECEIVER`, `ADSB_RECEIVER`, `HUMAN` or `OTHER` |
+| `position` | `geometry(Point, 4326)`, null for a mobile emplacement with no fix |
+| `altitude` | Metres above the WGS84 ellipsoid |
+| `"boresightDeg"` | Centre of the coverage sector in [0, 360), measured from `"azimuthReference"` |
+| `"azimuthReference"` | `TRUE_NORTH` (default) or `PLATFORM` |
+| `coverage` | JSONB `{minRangeM, maxRangeM, azimuthWidthDeg, elevationMinDeg?, elevationMaxDeg?}`; `{}` when unknown |
+| `"defaultSigma"` | JSONB `{rangeM?, azimuthDeg?, elevationDeg?}`, the standard deviations used for reports that carry none |
+| `"feedId"` | The connection (`feeds.id`) the emplacement is bound to; `ON DELETE SET NULL` |
+| `classification` | `UNCLASSIFIED` (default) to `TOP_SECRET`; callers above it neither see nor edit the row |
+| `exercise` | Whether the emplacement belongs to an exercise, default false |
+| `active` | Whether it is reported, default true |
+| `"lastReportAt"` | When it last reported (reserved for gRPC reporting) |
+| `"createdBy"`, `"createdAt"`, `"updatedAt"` | Provenance and timestamps |
+| `"deletedAt"` | Set by a delete |
+| `version` | Starts at 1 and rises on every write; the API's ETag and `If-Match` |
+
+A partial unique index on `lower(name)` where `"deletedAt" IS NULL` keeps live names unique whatever their case and frees a deleted emplacement's name. A GIST index covers `position`, and a partial index covers `"feedId"` for live rows. Each write sends a NOTIFY on the channel `sentinel_emplacements` with the payload `{"id": "<uuid>", "op": "upsert"|"delete"}`; every ingest replica follows it to keep its cache current. The file also seeds the `feed_ageout_config` rows of the built-in `emplacements` feed (stale after 180000 ms, aged out after 600000 ms, for each of the sources `RADAR`, `AIS`, `ADS_B`, `HUMINT` and `MASINT`).
+
 ### sentinel.alerts and sentinel.alert_rules
 
 | Column | Description |
