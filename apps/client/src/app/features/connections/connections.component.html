@@ -238,6 +238,9 @@
                       </div>
                     </div>
                     <app-send-guide [feed]="row.feed" />
+                    <ng-container *appHasRole="deadLetterRoles">
+                      <app-dead-letters [feedId]="row.feed.id" />
+                    </ng-container>
                   </td>
                 </tr>
               }

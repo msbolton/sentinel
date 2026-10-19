@@ -1,8 +1,10 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { BehaviorSubject } from 'rxjs';
 import { ConnectionsComponent } from './connections.component';
-import { AuthService } from '../../core/services/auth.service';
+import { AuthService, UserProfile } from '../../core/services/auth.service';
+import { FeedService } from '../../core/services/feed.service';
 import { Feed, FeedDriver } from '../../shared/models/feed.model';
 
 function makeFeed(over: Partial<Feed> & { id: string }): Feed {
@@ -53,6 +55,10 @@ describe('ConnectionsComponent', () => {
   let component: ConnectionsComponent;
   let el: HTMLElement;
   let httpMock: HttpTestingController;
+  let profile$: BehaviorSubject<UserProfile | null>;
+
+  /** Signs in with these roles (the page opens for an operator). */
+  const signInAs = (...roles: string[]) => profile$.next({ username: 'tester', roles, classificationLevel: 'UNCLASSIFIED' });
 
   function flushInitial(feeds: Feed[]): void {
     httpMock.expectOne('/api/v1/feeds').flush(feeds);
@@ -70,12 +76,13 @@ describe('ConnectionsComponent', () => {
   }
 
   beforeEach(async () => {
+    profile$ = new BehaviorSubject<UserProfile | null>({ username: 'op', roles: ['sentinel-operator'], classificationLevel: 'UNCLASSIFIED' });
     await TestBed.configureTestingModule({
       imports: [ConnectionsComponent],
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
-        { provide: AuthService, useValue: { getClassificationLevel: () => 'UNCLASSIFIED' } },
+        { provide: AuthService, useValue: { getClassificationLevel: () => 'UNCLASSIFIED', userProfile$: profile$ } },
       ],
     }).compileComponents();
     httpMock = TestBed.inject(HttpTestingController);
@@ -291,6 +298,102 @@ describe('ConnectionsComponent', () => {
     expect(guide.querySelector('details.examples')?.textContent).toContain('LISTENER_HOST:6000');
     // Nothing reported, so no counters (and no glossary to explain them).
     expect(guide.querySelector('.counters')).toBeNull();
+  });
+
+  describe('recent rejects', () => {
+    const connections = () => [
+      makeFeed({ id: 'sensor-tcp', driver: 'tcp', config: { mode: 'listen', port: 6000 } }),
+      makeFeed({ id: 'dialled', driver: 'tcp', config: { mode: 'connect', host: 'h', port: 7000 } }),
+      makeFeed({ id: 'sky' }),
+    ];
+    const expandAll = () => {
+      Array.from(el.querySelectorAll<HTMLButtonElement>('.expand-btn')).forEach((b) => b.click());
+      fixture.detectChanges();
+    };
+    const panels = () => Array.from(el.querySelectorAll('tr.detail-row app-dead-letters'));
+    /** Opens a panel as a click on its summary does, and waits for the toggle event the browser sends. */
+    const open = async (panel: Element) => {
+      const details = panel.querySelector('details')!;
+      const toggled = new Promise<void>((resolve) => details.addEventListener('toggle', () => resolve(), { once: true }));
+      panel.querySelector<HTMLElement>('summary')!.click();
+      await toggled;
+      fixture.detectChanges();
+    };
+
+    it('is offered in every expanded connection, whatever its driver, and asks for nothing until it is opened', () => {
+      flushInitial(connections());
+      expect(panels()).toHaveLength(0);
+
+      expandAll();
+      expect(panels()).toHaveLength(3);
+      expect(panels().map((p) => p.querySelector('summary')?.textContent?.trim())).toEqual(Array(3).fill('Recent rejects'));
+      expect(panels().every((p) => p.querySelector('details')!.open === false)).toBe(true);
+      // closed, so asking nothing: httpMock.verify() in afterEach finds no deadletters request
+    });
+
+    it('is hidden for viewers', () => {
+      signInAs('sentinel-viewer');
+      flushInitial(connections());
+      expandAll();
+
+      // the guide is theirs to read; the rejects are not
+      expect(el.querySelectorAll('tr.detail-row app-send-guide')).toHaveLength(3);
+      expect(panels()).toHaveLength(0);
+      expect(el.textContent).not.toContain('Recent rejects');
+    });
+
+    it('is shown to admins, and follows the user when the roles change', () => {
+      signInAs('sentinel-admin');
+      flushInitial(connections());
+      expandAll();
+      expect(panels()).toHaveLength(3);
+
+      // not an operator or an admin: the analyst and the user with no role see none
+      for (const roles of [['sentinel-viewer'], ['sentinel-analyst'], []]) {
+        signInAs(...roles);
+        fixture.detectChanges();
+        expect(panels()).toHaveLength(0);
+        signInAs('sentinel-operator');
+        fixture.detectChanges();
+        expect(panels()).toHaveLength(3);
+      }
+    });
+
+    it('asks for the rejects of the connection whose row it is in', async () => {
+      flushInitial(connections());
+      expandAll();
+
+      const dialled = panels()[1];
+      await open(dialled);
+
+      httpMock.expectOne('/api/v1/feeds/dialled/deadletters?limit=20').flush({ letters: [], scanned: 10, partial: false });
+      fixture.detectChanges();
+      expect(dialled.textContent).toContain('No rejects in the last 10 scanned');
+      // and the others were not asked
+      expect(panels()[0].textContent).not.toContain('scanned');
+    });
+
+    it('stays open, with its rejects, when the page refreshes its connections', async () => {
+      flushInitial(connections());
+      expandAll();
+      const panel = panels()[0];
+      await open(panel);
+      httpMock
+        .expectOne('/api/v1/feeds/sensor-tcp/deadletters?limit=20')
+        .flush({ letters: [{ at: '2026-10-18T12:00:00Z', reason: 'parse_error', size: 17, partition: 0, offset: 42 }], scanned: 120, partial: false });
+      fixture.detectChanges();
+      expect(panel.querySelectorAll('tr.reject')).toHaveLength(1);
+
+      // the poll answers again, with every connection a new object
+      TestBed.inject(FeedService).load().subscribe();
+      httpMock.expectOne('/api/v1/feeds').flush(connections());
+      fixture.detectChanges();
+
+      // the same panel, still open, still showing them, and nobody asked the server again
+      expect(panels()[0]).toBe(panel);
+      expect(panel.querySelector('details')!.open).toBe(true);
+      expect(panel.querySelectorAll('tr.reject')).toHaveLength(1);
+    });
   });
 
   describe('listening connections', () => {

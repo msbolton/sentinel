@@ -1,0 +1,113 @@
+<details class="dead-letters" (toggle)="onToggle($event)">
+  <summary>Recent rejects</summary>
+  <div class="panel">
+    <div class="bar">
+      <!-- Always in the page, so a screen reader announces what appears in it. -->
+      <div class="status" role="status">
+        @if (loading()) {
+          <p>Loading rejects…</p>
+        } @else if (problem() === 'forbidden') {
+          <p>You are not cleared to see this connection's rejects</p>
+        } @else if (problem() === 'disabled') {
+          <p>Dead-letter viewing is not enabled on this server</p>
+        } @else if (problem() === 'failed') {
+          <p class="warn">Couldn't load rejects</p>
+        } @else {
+          @if (page(); as p) {
+            @if (p.letters.length === 0) {
+              <p>No rejects in the last {{ p.scanned | number }} scanned</p>
+            } @else {
+              <p>{{ p.letters.length | number }} reject{{ p.letters.length === 1 ? '' : 's' }} in the last {{ p.scanned | number }} scanned, newest first</p>
+            }
+            @if (p.partial) {
+              <p class="warn">Partial: the scan stopped at its time limit, so some rejects may be missing</p>
+            }
+          }
+        }
+      </div>
+      @if (problem() !== 'forbidden' && problem() !== 'disabled') {
+        <div class="actions">
+          <!-- aria-disabled, not disabled: a button that goes disabled under the keyboard drops its focus. -->
+          <button type="button" class="btn" [attr.aria-disabled]="loading() || null" (click)="reload()">{{ problem() === 'failed' ? 'Retry' : 'Refresh' }}</button>
+          @if (page(); as p) {
+            @if (p.letters.length > 0) {
+              <button type="button" class="btn" [attr.aria-disabled]="loading() || null" (click)="togglePayloads()">{{ payloads() ? 'Hide payload' : 'Show payload' }}</button>
+            }
+          }
+        </div>
+      }
+    </div>
+    @if (page(); as p) {
+      @if (p.letters.length > 0) {
+        <!-- Busy while it is asked again; the status above is not, so that what it says is announced. -->
+        <div class="scroll" [attr.aria-busy]="loading()">
+          <table class="rejects">
+            <caption>Recent rejects, newest first</caption>
+            <thead>
+              <tr>
+                <th scope="col">Time</th>
+                <th scope="col">Reason</th>
+                <th scope="col">Decoder</th>
+                <th scope="col">Sender</th>
+                <th scope="col">Error</th>
+                <th scope="col" class="num">Size</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (l of p.letters; track l.partition + ':' + l.offset) {
+                <tr class="reject">
+                  <td class="time mono">
+                    @if (time(l.at); as at) {
+                      <time [attr.datetime]="at" [attr.title]="at + ' (partition ' + l.partition + ', offset ' + l.offset + ')'">{{ at | date: 'MMM d HH:mm:ss' }}</time>
+                    } @else {
+                      <span title="Not recorded">—</span>
+                    }
+                  </td>
+                  <td class="mono">{{ l.reason }}</td>
+                  <td class="mono">
+                    @if (l.decoder) {
+                      {{ l.decoder }}
+                    } @else {
+                      <span title="Not recorded">—</span>
+                    }
+                  </td>
+                  <td class="mono">
+                    @if (l.sender) {
+                      {{ l.sender }}
+                    } @else {
+                      <span title="Not recorded">—</span>
+                    }
+                  </td>
+                  <td class="mono error">
+                    @if (l.error) {
+                      {{ l.error }}
+                    } @else {
+                      <span title="Not recorded">—</span>
+                    }
+                  </td>
+                  <td class="mono num">{{ l.size | number }} B</td>
+                </tr>
+                @if (showPayloads()) {
+                  <tr class="payload">
+                    <td colspan="6">
+                      @if (l.payload == null) {
+                        <p class="none">Payload <span title="Not recorded">—</span></p>
+                      } @else if (l.payload === '') {
+                        <p class="none">Payload · empty</p>
+                      } @else {
+                        <figure class="block">
+                          <figcaption [id]="captionId(l)">{{ captionOf(l) }}</figcaption>
+                          <pre class="mono" tabindex="0" role="group" [attr.aria-labelledby]="captionId(l)">{{ l.payload }}</pre>
+                        </figure>
+                      }
+                    </td>
+                  </tr>
+                }
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    }
+  </div>
+</details>

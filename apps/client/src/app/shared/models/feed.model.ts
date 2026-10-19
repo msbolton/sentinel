@@ -296,6 +296,46 @@ export interface ListenPorts {
   suggested: Partial<Record<'tcp' | 'udp', number>>;
 }
 
+/** How many rejects the panel asks for; the server's default, and it allows up to 100. */
+export const DEAD_LETTERS_LIMIT = 20;
+
+/**
+ * One message a connection rejected, as `GET /api/v1/feeds/{id}/deadletters` lists it. Only `at`, `reason`, `size`,
+ * `partition` and `offset` are always there; a reject written before the rest was recorded lacks them.
+ */
+export interface DeadLetter {
+  /** When the connection rejected it. */
+  at: string;
+  /** Why, as a short code (`parse_error`…). */
+  reason: string;
+  /** The decoder's own words, which can quote part of the message. */
+  error?: string;
+  driver?: string;
+  decoder?: string;
+  /** Who sent it: `ip:port`. */
+  sender?: string;
+  /** The size of the whole message in bytes, whatever part of it `payload` holds. */
+  size: number;
+  /** Where the reject sits in the dead-letter topic. */
+  partition: number;
+  offset: number;
+  /** The start of the message, up to 1 KiB of it; only with `payload=true`. */
+  payload?: string;
+  /** `utf8` when `payload` is the text, `base64` when the bytes it holds are not valid UTF-8. */
+  payloadEncoding?: 'utf8' | 'base64';
+  /** Whether `payload` stops short of `size`. */
+  payloadTruncated?: boolean;
+}
+
+/** The answer to `GET /api/v1/feeds/{id}/deadletters`: this connection's rejects, newest first. */
+export interface DeadLetterPage {
+  letters: DeadLetter[];
+  /** How many dead-letter records the server looked through to find them. */
+  scanned: number;
+  /** True when the server stopped scanning at its deadline, so it may have missed some. */
+  partial: boolean;
+}
+
 /** A feed's direction, with older servers (no field) treated as a source. */
 export function directionOf(feed: { direction?: FeedDirection } | null | undefined): FeedDirection {
   return feed?.direction ?? 'in';

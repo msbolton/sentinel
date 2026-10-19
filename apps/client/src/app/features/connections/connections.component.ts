@@ -13,7 +13,9 @@ import {
   policySummaryOf,
   sinkDetailOf,
 } from '../../shared/models/feed.model';
+import { HasRoleDirective } from '../../shared/directives/has-role.directive';
 import { ConnectionFormComponent } from './connection-form.component';
+import { DeadLettersComponent } from './dead-letters.component';
 import { SendGuideComponent } from './send-guide.component';
 import { endpointLabel, sendTarget } from './send-guide';
 import { listenOf } from './listen-config';
@@ -73,13 +75,16 @@ const HEALTH_LABELS: Record<FeedHealthLevel, string> = {
 @Component({
   selector: 'app-connections',
   standalone: true,
-  imports: [DecimalPipe, ConnectionFormComponent, SendGuideComponent],
+  imports: [DecimalPipe, ConnectionFormComponent, DeadLettersComponent, HasRoleDirective, SendGuideComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './connections.component.html',
   styleUrl: './connections.component.scss',
 })
 export class ConnectionsComponent implements OnInit, OnDestroy {
   private readonly feedService = inject(FeedService);
+
+  /** Who sees a connection's recent rejects; the server refuses everyone else, so this only spares them the panel. */
+  readonly deadLetterRoles = ['sentinel-operator', 'sentinel-admin'];
 
   readonly loading = this.feedService.loading;
   readonly loadError = this.feedService.error;

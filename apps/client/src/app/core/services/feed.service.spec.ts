@@ -2,7 +2,7 @@ import { TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { FeedService, problemsOf } from './feed.service';
-import { Feed, FeedStatus, ListenPorts } from '../../shared/models/feed.model';
+import { DeadLetterPage, Feed, FeedStatus, ListenPorts } from '../../shared/models/feed.model';
 
 function makeStatus(overrides: Partial<FeedStatus> = {}): FeedStatus {
   return {
@@ -191,6 +191,71 @@ describe('FeedService', () => {
 
       second.flush(newer);
       expect(service.listenPorts()?.suggested).toEqual({ tcp: 6002 });
+    });
+  });
+
+  describe('deadLetters()', () => {
+    /** What `GET /api/v1/feeds/{id}/deadletters` answers (Task 23's contract). */
+    const answer = {
+      letters: [
+        {
+          at: '2026-10-18T12:00:00Z',
+          reason: 'parse_error',
+          error: 'not a sentinel.v1.Observation in JSON: …',
+          driver: 'tcp',
+          decoder: 'sentinel',
+          sender: '10.0.0.5:51234',
+          size: 17,
+          partition: 0,
+          offset: 42,
+        },
+      ],
+      scanned: 120,
+      partial: false,
+    };
+
+    it('asks for the newest 20, and for the payloads only when told to', () => {
+      let got: DeadLetterPage | undefined;
+      service.deadLetters('sensor-tcp').subscribe((page) => (got = page));
+      const plain = http.expectOne('/api/v1/feeds/sensor-tcp/deadletters?limit=20');
+      expect(plain.request.method).toBe('GET');
+      plain.flush(answer);
+      expect(got).toEqual(answer);
+
+      service.deadLetters('sensor-tcp', { payload: true }).subscribe();
+      http.expectOne('/api/v1/feeds/sensor-tcp/deadletters?limit=20&payload=true').flush(answer);
+
+      service.deadLetters('sensor-tcp', { payload: false }).subscribe();
+      http.expectOne('/api/v1/feeds/sensor-tcp/deadletters?limit=20').flush(answer);
+    });
+
+    it('writes the connection id as one path segment', () => {
+      service.deadLetters('a/b c').subscribe();
+      http.expectOne('/api/v1/feeds/a%2Fb%20c/deadletters?limit=20').flush(answer);
+    });
+
+    it('reads a list the server sent as null or left out as no letters', () => {
+      const got: DeadLetterPage[] = [];
+      service.deadLetters('x').subscribe((page) => got.push(page));
+      http.expectOne('/api/v1/feeds/x/deadletters?limit=20').flush({ letters: null, scanned: 120, partial: false });
+      service.deadLetters('x').subscribe((page) => got.push(page));
+      http.expectOne('/api/v1/feeds/x/deadletters?limit=20').flush({});
+
+      expect(got).toEqual([
+        { letters: [], scanned: 120, partial: false },
+        { letters: [], scanned: 0, partial: false },
+      ]);
+    });
+
+    it('hands the status of a refusal to the caller, which tells 403 from 501 from 502', () => {
+      const statuses: number[] = [];
+      for (const status of [403, 501, 502]) {
+        service.deadLetters('x').subscribe({ error: (err: HttpErrorResponse) => statuses.push(err.status) });
+        http.expectOne('/api/v1/feeds/x/deadletters?limit=20').flush({ error: 'no' }, { status, statusText: 'No' });
+      }
+      expect(statuses).toEqual([403, 501, 502]);
+      // and it is not a feeds failure: the list and its error are the list's own
+      expect(service.error()).toBeNull();
     });
   });
 

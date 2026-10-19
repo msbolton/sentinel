@@ -1,7 +1,9 @@
 import { Injectable, inject, signal, computed, DestroyRef } from '@angular/core';
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { Observable, tap, retry, timer, Subscription, interval, startWith, switchMap, catchError, of, defer } from 'rxjs';
+import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
+import { Observable, tap, retry, timer, Subscription, interval, startWith, switchMap, catchError, of, defer, map } from 'rxjs';
 import {
+  DEAD_LETTERS_LIMIT,
+  DeadLetterPage,
   Feed,
   FeedDriver,
   CreateFeedRequest,
@@ -94,6 +96,21 @@ export class FeedService {
     });
   }
 
+  /**
+   * A connection's recent rejects (dead letters), newest first. The payloads, up to 1 KiB of each message, come
+   * only with `payload`. Nothing is kept here: the caller holds the answer, and a 403 (not cleared for the
+   * connection), 501 (the server cannot read them) or 502 (Kafka failed) reaches it as the error.
+   */
+  deadLetters(id: string, options: { payload?: boolean } = {}): Observable<DeadLetterPage> {
+    let params = new HttpParams().set('limit', String(DEAD_LETTERS_LIMIT));
+    if (options.payload) {
+      params = params.set('payload', 'true');
+    }
+    return this.http
+      .get<Partial<DeadLetterPage> | null>(`${this.feedsUrl}/${encodeURIComponent(id)}/deadletters`, { params })
+      .pipe(map(deadLetterPageOf));
+  }
+
   driver(id: string): FeedDriver | undefined {
     return this.driversState().find((d) => d.id === id);
   }
@@ -182,4 +199,15 @@ export function problemsOf(err: unknown): { message: string; problems: FeedProbl
 
 function messageOf(err: unknown): string {
   return problemsOf(err).message;
+}
+
+/** The answer made safe to read: Go writes a list with nothing in it as null, and may leave a field out. */
+function deadLetterPageOf(raw: Partial<DeadLetterPage> | null | undefined): DeadLetterPage {
+  const letters = raw?.letters;
+  const scanned = raw?.scanned;
+  return {
+    letters: Array.isArray(letters) ? letters : [],
+    scanned: typeof scanned === 'number' ? scanned : 0,
+    partial: raw?.partial === true,
+  };
 }
