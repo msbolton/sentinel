@@ -207,16 +207,24 @@ export function netcatCommand(t: SendTarget): string | null {
   return `echo ${shellQuote(jsonExample())} | nc ${t.protocol === 'udp' ? '-u ' : ''}-w1 ${where}`;
 }
 
+/** Whether a host is an IPv4 or IPv6 address written out, not a name. */
+function isIpLiteral(host: string): boolean {
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (v4) return v4.slice(1).every((octet) => Number(octet) <= 255);
+  return host.includes(':') && /^[0-9a-f:.]+$/i.test(host) && host.split(':').length >= 3;
+}
+
 /**
  * A one-line test with OpenSSL for JSON over TLS. -servername only says which name to ask for;
- * -verify_hostname makes openssl check the certificate against it. ca.pem is the CA that signed the listener's
+ * -verify_hostname makes openssl check the certificate against it (-verify_ip when the host is an IP address,
+ * which a certificate names as an address, not a DNS name). ca.pem is the CA that signed the listener's
  * certificate; a listener that requires client certificates also needs client.pem and client.key.
  */
 export function tlsTestCommand(t: SendTarget): string | null {
   if (!t.tls || t.protocol !== 'tcp' || !sendsJsonLines(t)) return null;
   const host = hostOf(t);
   const client = t.requireClientCert ? ' -cert client.pem -key client.key' : '';
-  return `echo ${shellQuote(jsonExample())} | openssl s_client -quiet -no_ign_eof -verify_return_error -connect ${shellQuote(joinHostPort(host, t.port))} -servername ${shellQuote(host)} -verify_hostname ${shellQuote(host)} -CAfile ca.pem${client}`;
+  return `echo ${shellQuote(jsonExample())} | openssl s_client -quiet -no_ign_eof -verify_return_error -connect ${shellQuote(joinHostPort(host, t.port))} -servername ${shellQuote(host)} ${isIpLiteral(host) ? '-verify_ip' : '-verify_hostname'} ${shellQuote(host)} -CAfile ca.pem${client}`;
 }
 
 /** Go source is written here with two-space indents and handed out with tabs, as gofmt lays it out. */

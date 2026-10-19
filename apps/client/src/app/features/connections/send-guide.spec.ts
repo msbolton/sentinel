@@ -190,7 +190,7 @@ describe('send guide', () => {
     expect(endpointLabel(target({ host: '' }))).toBe('listener:6000/tcp');
     expect(goSnippet(target({ host: '2001:db8::1' }))).toContain('net.Dial("tcp", "[2001:db8::1]:6000")');
     // The brackets are a shell pattern (zsh refuses an unquoted one), so the address is quoted.
-    expect(tlsTestCommand(jsonTarget({ tls: true, host: '2001:db8::1' }))).toContain("-connect '[2001:db8::1]:6000' -servername 2001:db8::1 -verify_hostname 2001:db8::1");
+    expect(tlsTestCommand(jsonTarget({ tls: true, host: '2001:db8::1' }))).toContain("-connect '[2001:db8::1]:6000' -servername 2001:db8::1 -verify_ip 2001:db8::1");
   });
 
   describe('Go', () => {
@@ -328,6 +328,18 @@ describe('send guide', () => {
       expect(udp).not.toContain('varint');
       expect(udp).not.toContain('ssl');
     });
+  });
+
+  it('checks an IP listener by address and a named one by name', () => {
+    const verify = (host: string) => /-verify_(hostname|ip) (\S+)/.exec(tlsTestCommand(jsonTarget({ tls: true, host }))!)!.slice(1);
+    expect(verify('10.0.0.5')).toEqual(['ip', '10.0.0.5']);
+    expect(verify('2001:db8::1')).toEqual(['ip', '2001:db8::1']);
+    expect(verify('::1')).toEqual(['ip', '::1']);
+    // names that only look like addresses are names
+    for (const name of ['sentinel.example', '10.0.0.256', '1.2.3', '10.0.0.5.example', 'a:b', 'LISTENER_HOST']) {
+      expect(verify(name)[0]).toBe('hostname');
+    }
+    expect(tlsTestCommand(jsonTarget({ tls: true, host: '' }))).toContain('-verify_hostname LISTENER_HOST');
   });
 
   it('tests TLS JSON with openssl', () => {

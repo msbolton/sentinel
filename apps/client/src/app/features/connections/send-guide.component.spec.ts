@@ -308,16 +308,23 @@ describe('SendGuideComponent', () => {
 
     it('warns when the certificate expires within 14 days', () => {
       tlsGuide({ tlsCertNotAfter: '2026-10-25T00:00:00Z' });
-      expect(status()).toBe('TLS certificate expires on 2026-10-25 (in 7 days)');
+      expect(status()).toBe('TLS certificate expires on 2026-10-25 (in 6 days)');
       expect(el.querySelector('[role=status] .warn')).not.toBeNull();
 
-      // Part of a day left counts as a day; the last day is singular.
+      // Whole days are counted: 13.5 days left is 13, never 14; under a day says so; one day is singular.
       tlsGuide({ tlsCertNotAfter: daysFromNow(0.25) });
-      expect(status()).toBe('TLS certificate expires on 2026-10-18 (in 1 day)');
+      expect(status()).toBe('TLS certificate expires on 2026-10-18 (in less than a day)');
+      tlsGuide({ tlsCertNotAfter: daysFromNow(1.5) });
+      expect(status()).toContain('(in 1 day)');
       tlsGuide({ tlsCertNotAfter: daysFromNow(13) });
       expect(status()).toContain('(in 13 days)');
       tlsGuide({ tlsCertNotAfter: daysFromNow(13.5) });
-      expect(status()).toContain('(in 14 days)');
+      expect(status()).toContain('(in 13 days)');
+      // an offset is read as the instant it names, and the date is shown in UTC
+      tlsGuide({ tlsCertNotAfter: '2026-10-25T01:00:00+01:00' });
+      expect(status()).toBe('TLS certificate expires on 2026-10-25 (in 6 days)');
+      tlsGuide({ tlsCertNotAfter: '2026-11-01T14:00:00+01:00' });
+      expect(status()).toBe('');
 
       // The warning arrives in the region that was already on the page.
       tlsGuide({});
@@ -346,7 +353,7 @@ describe('SendGuideComponent', () => {
       tlsGuide({});
       expect(status()).toBe('');
       // Anything the guide cannot read is no warning, not a broken page.
-      for (const bad of ['', 'soon', '2026-13-45T99:00:00Z', 20261101, null, { at: 1 }]) {
+      for (const bad of ['', 'soon', '1', 'Oct 1 2026', '2026-10-20', '2026-10-20 00:00:00Z', '2026-13-45T99:00:00Z', 20261101, null, { at: 1 }]) {
         tlsGuide({ tlsCertNotAfter: bad });
         expect(status()).toBe('');
       }

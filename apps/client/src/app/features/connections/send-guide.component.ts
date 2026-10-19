@@ -50,19 +50,24 @@ const DAY_MS = 86_400_000;
 /** How long before it expires a certificate is worth a warning. */
 const CERT_WARN_DAYS = 14;
 
+/** An RFC 3339 time: date, time with a zone. Date.parse alone also reads "1" and "Oct 1 2026". */
+const RFC3339 = /^\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d(\.\d+)?)?(Z|[+-]\d\d:\d\d)$/i;
+
 /**
  * The warning for a listener's certificate, from its `tlsCertNotAfter` (RFC 3339): empty while at
- * least CERT_WARN_DAYS remain, and for a value that is missing or not a date. Dates are UTC.
+ * least CERT_WARN_DAYS remain, and for a value that is missing or not such a time. Dates are UTC.
+ * Whole days are counted, so 13.9 days left is "in 13 days", never 14, and under a day is said so.
  */
 function certExpiryNotice(notAfter: unknown, now: number): string {
-  if (typeof notAfter !== 'string') return '';
+  if (typeof notAfter !== 'string' || !RFC3339.test(notAfter)) return '';
   const end = Date.parse(notAfter);
   if (Number.isNaN(end)) return '';
   const date = new Date(end).toISOString().slice(0, 10);
   if (end <= now) return `TLS certificate expired on ${date}`;
   if (end - now >= CERT_WARN_DAYS * DAY_MS) return '';
-  const days = Math.ceil((end - now) / DAY_MS);
-  return `TLS certificate expires on ${date} (in ${days} ${days === 1 ? 'day' : 'days'})`;
+  const days = Math.floor((end - now) / DAY_MS);
+  const left = days === 0 ? 'less than a day' : `${days} ${days === 1 ? 'day' : 'days'}`;
+  return `TLS certificate expires on ${date} (in ${left})`;
 }
 
 /** The detail comes from the server as unchecked JSON; a row the table cannot name is left out. */
