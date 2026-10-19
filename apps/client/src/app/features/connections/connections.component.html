@@ -239,6 +239,9 @@
                     </div>
                     <app-send-guide [feed]="row.feed" />
                     <ng-container *appHasRole="deadLetterRoles">
+                      @if (row.feed.driver === 'grpc') {
+                        <app-ingest-tokens [feed]="row.feed" />
+                      }
                       <app-dead-letters [feedId]="row.feed.id" />
                     </ng-container>
                   </td>

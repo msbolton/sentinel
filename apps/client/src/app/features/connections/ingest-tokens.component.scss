@@ -1,0 +1,121 @@
+// Everything that has to be read is --text-primary (see dead-letters.component.scss for the contrast figures);
+// --text-secondary and --text-muted do not carry text here.
+
+:host {
+  display: block;
+  margin-top: 12px;
+}
+
+.tokens {
+  display: grid;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+
+  h4 {
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+
+  p {
+    margin: 0;
+  }
+
+  button {
+    padding: 2px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 0.74rem;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+
+    &:hover {
+      border-color: var(--border-active);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-blue);
+      outline-offset: 1px;
+    }
+  }
+
+  input,
+  select {
+    padding: 2px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 0.78rem;
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-blue);
+      outline-offset: 1px;
+    }
+  }
+}
+
+.muted {
+  color: var(--text-primary);
+}
+
+.secret {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--accent-green);
+  border-radius: var(--radius-sm);
+
+  code {
+    font-family: var(--font-mono);
+    word-break: break-all;
+  }
+}
+
+.secret-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.error {
+  color: var(--accent-red);
+}
+
+.issue {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.list {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+
+  th,
+  td {
+    padding: 4px 12px 4px 0;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  th {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  code {
+    font-family: var(--font-mono);
+  }
+
+  tr.revoked td {
+    opacity: 0.6;
+  }
+}

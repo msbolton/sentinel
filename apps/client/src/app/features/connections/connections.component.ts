@@ -16,6 +16,7 @@ import {
 import { HasRoleDirective } from '../../shared/directives/has-role.directive';
 import { ConnectionFormComponent } from './connection-form.component';
 import { DeadLettersComponent } from './dead-letters.component';
+import { IngestTokensComponent } from './ingest-tokens.component';
 import { SendGuideComponent } from './send-guide.component';
 import { endpointLabel, sendTarget } from './send-guide';
 import { listenOf } from './listen-config';
@@ -75,7 +76,7 @@ const HEALTH_LABELS: Record<FeedHealthLevel, string> = {
 @Component({
   selector: 'app-connections',
   standalone: true,
-  imports: [DecimalPipe, ConnectionFormComponent, DeadLettersComponent, HasRoleDirective, SendGuideComponent],
+  imports: [DecimalPipe, ConnectionFormComponent, DeadLettersComponent, HasRoleDirective, IngestTokensComponent, SendGuideComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './connections.component.html',
   styleUrl: './connections.component.scss',

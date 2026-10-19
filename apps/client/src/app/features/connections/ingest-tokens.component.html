@@ -1,0 +1,55 @@
+<section class="tokens">
+  <h4>Ingest tokens</h4>
+  <p class="muted">Senders present one as <code>authorization: Bearer si_…</code>. A token is shown once.</p>
+
+  @if (secret(); as s) {
+    <div class="secret" role="status">
+      <p>Copy this token now; it will not be shown again.</p>
+      <code>{{ s }}</code>
+      <div class="secret-actions">
+        <button type="button" name="copy" (click)="copy()">Copy</button>
+        <button type="button" name="dismiss" (click)="secret.set(null)">Done</button>
+      </div>
+    </div>
+  }
+
+  @if (error(); as message) {
+    <p class="error" role="alert">{{ message }}</p>
+  }
+
+  <form class="issue" (submit)="issue($event)" novalidate>
+    <input type="text" name="name" placeholder="Name (e.g. ridge ESM)" [value]="name()" (input)="name.set(text($event))" />
+    <select name="classification" (change)="level.set(text($event))">
+      @for (l of levels(); track l) {
+        <option [value]="l" [selected]="l === level()">{{ l }}</option>
+      }
+    </select>
+    <input type="datetime-local" name="expiresAt" [value]="expiresAt()" (input)="expiresAt.set(text($event))" />
+    <button type="submit">Issue token</button>
+  </form>
+
+  <table class="list">
+    <thead><tr><th>Name</th><th>Token</th><th>Ceiling</th><th>Created</th><th>Last used</th><th>Expires</th><th></th></tr></thead>
+    <tbody>
+      @for (t of tokens(); track t.id) {
+        <tr [class.revoked]="t.revokedAt">
+          <td>{{ t.name }}</td>
+          <td><code>{{ t.prefix }}…</code></td>
+          <td>{{ t.classification }}</td>
+          <td>{{ t.createdAt | date: 'MMM d HH:mm' }}</td>
+          <td>{{ t.lastUsedAt ? (t.lastUsedAt | date: 'MMM d HH:mm') : 'never' }}</td>
+          <td>{{ t.expiresAt ? (t.expiresAt | date: 'MMM d HH:mm') : '—' }}</td>
+          <td>
+            @if (t.revokedAt) {
+              <span class="muted">revoked</span>
+            } @else {
+              <button type="button" name="revoke" (click)="revoke(t)">{{ confirming() === t.id ? 'Confirm revoke' : 'Revoke' }}</button>
+            }
+          </td>
+        </tr>
+      } @empty {
+        <tr><td colspan="7" class="muted">No tokens yet.</td></tr>
+      }
+    </tbody>
+  </table>
+</section>
