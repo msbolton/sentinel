@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sentinel.local/schemas/emplacement.json",
+  "title": "Emplacements",
+  "description": "Reports every emplacement as a SENSOR entity, so it is in search, can anchor a geofence ring and, when mobile, has a track. Runs the built-in emplacements feed only.",
+  "type": "object",
+  "properties": {
+    "heartbeatSec": { "type": "integer", "minimum": 10, "default": 60, "title": "Heartbeat (s)", "description": "How often fixed emplacements are reported again so their entities stay live" }
+  }
+}

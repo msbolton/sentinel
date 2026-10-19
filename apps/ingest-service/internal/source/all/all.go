@@ -25,6 +25,7 @@ import (
 	// Drivers.
 	_ "github.com/sentinel/ingest-service/internal/source/driver/aisstream"
 	_ "github.com/sentinel/ingest-service/internal/source/driver/celestrak"
+	_ "github.com/sentinel/ingest-service/internal/source/driver/emplacementmirror"
 	_ "github.com/sentinel/ingest-service/internal/source/driver/httpjson"
 	_ "github.com/sentinel/ingest-service/internal/source/driver/intelsky"
 	_ "github.com/sentinel/ingest-service/internal/source/driver/opensky"

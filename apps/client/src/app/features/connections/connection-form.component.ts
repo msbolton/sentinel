@@ -85,6 +85,8 @@ export class ConnectionFormComponent {
   readonly classificationOptions = computed(() => levelsUpTo(this.clearance()));
 
   readonly drivers = this.feedService.drivers;
+  /** The drivers a new connection may use: every one but Sentinel's internal ones. */
+  readonly creatableDrivers = computed(() => this.drivers().filter((d) => !d.internal));
   readonly selectedDriverId = signal<string | null>(null);
   readonly driver = computed(() => {
     const id = this.selectedDriverId();

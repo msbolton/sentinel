@@ -300,6 +300,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if info, ok := h.catalog.Get(req.Driver); ok && info.Internal {
+		writeProblems(w, []drivers.Problem{{Path: "/driver", Message: "is internal to Sentinel and runs its built-in feed only"}})
+		return
+	}
 	if req.ID == "" {
 		req.ID = registry.Slugify(req.Name)
 	}

@@ -34,10 +34,17 @@ var Builtins = []Feed{
 		Config:      json.RawMessage(`{"maxAreaSqDeg": 2500, "movingIntervalSec": 15, "stationaryIntervalSec": 180, "staleWarnSec": 600, "staleCriticalSec": 1800}`),
 		SecretRefs:  map[string]string{"apiKey": "env:AISSTREAM_API_KEY"},
 	},
+	{
+		ID: "emplacements", Name: "Emplacements", Driver: "emplacement", Builtin: true, Enabled: true,
+		Description: "Sentinel's emplacements, reported as SENSOR entities so they are in search, anchor geofences and, when mobile, are tracked.",
+		Config:      json.RawMessage(`{"heartbeatSec": 60}`),
+		SecretRefs:  map[string]string{},
+	},
 }
 
-// EnsureBuiltins inserts any missing built-in feed. Feeds named in
-// enabledIDs are inserted enabled; an existing row is never changed.
+// EnsureBuiltins inserts any missing built-in feed. Feeds named in enabledIDs,
+// and builtins that need no credentials (Enabled), are inserted enabled; an
+// existing row is never changed.
 func (s *Store) EnsureBuiltins(ctx context.Context, enabledIDs []string) error {
 	enabled := map[string]bool{}
 	for _, id := range enabledIDs {
@@ -48,7 +55,7 @@ func (s *Store) EnsureBuiltins(ctx context.Context, enabledIDs []string) error {
 			INSERT INTO sentinel.feeds (id, name, description, driver, config, secret_refs, enabled, builtin)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE)
 			ON CONFLICT (id) DO NOTHING`,
-			b.ID, b.Name, b.Description, b.Driver, b.Config, b.SecretRefs, enabled[b.ID])
+			b.ID, b.Name, b.Description, b.Driver, b.Config, b.SecretRefs, enabled[b.ID] || b.Enabled)
 		if err != nil {
 			return fmt.Errorf("ensuring builtin feed %s: %w", b.ID, err)
 		}

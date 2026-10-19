@@ -104,7 +104,12 @@ VALUES
    'aisstream',
    '{"maxAreaSqDeg": 2500, "movingIntervalSec": 15, "stationaryIntervalSec": 180, "staleWarnSec": 600, "staleCriticalSec": 1800}'::jsonb,
    '{"apiKey": "env:AISSTREAM_API_KEY"}'::jsonb,
-   FALSE, TRUE)
+   FALSE, TRUE),
+  ('emplacements', 'Emplacements', 'Sentinel''s emplacements, reported as SENSOR entities so they are in search, anchor geofences and, when mobile, are tracked.',
+   'emplacement',
+   '{"heartbeatSec": 60}'::jsonb,
+   '{}'::jsonb,
+   TRUE, TRUE)
 ON CONFLICT (id) DO NOTHING;
 
 -- Per-feed age-out thresholds keyed by the feed slug.

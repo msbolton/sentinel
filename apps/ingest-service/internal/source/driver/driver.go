@@ -18,6 +18,7 @@ import (
 
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
+	"github.com/sentinel/ingest-service/internal/emplacement"
 	"github.com/sentinel/ingest-service/internal/obs"
 )
 
@@ -70,6 +71,9 @@ type Deps struct {
 	// SecretReloadEvery is how often a driver reads rotated secrets again
 	// (INGEST_TLS_RELOAD_SEC); 0 means never.
 	SecretReloadEvery time.Duration
+	// Emplacements is the in-memory view of the emplacements table, for the
+	// drivers that report as emplacements (nil when there is none).
+	Emplacements EmplacementSource
 }
 
 // DensityPublisher sends a feed's density grids to the density.events
@@ -95,6 +99,14 @@ type Location struct {
 type ShapeSource interface {
 	Geofences(ctx context.Context) ([]Geofence, error)
 	Locations(ctx context.Context) ([]Location, error)
+}
+
+// EmplacementSource is the ingest service's in-memory view of the
+// emplacements table (emplacement.Cache).
+type EmplacementSource interface {
+	All() []emplacement.Emplacement
+	Get(id string) (emplacement.Emplacement, bool)
+	OnChange(fn func(id string)) (cancel func())
 }
 
 // Sink receives what a driver produces. Implementations are safe for
@@ -264,6 +276,10 @@ type Definition struct {
 	New          Factory
 	// Listen is set by drivers whose feeds may bind a port.
 	Listen ListenFunc
+	// Internal drivers run Sentinel's own built-in feeds (the emplacements
+	// mirror): nobody creates a feed with one, and the client's new-connection
+	// picker leaves them out.
+	Internal bool
 }
 
 // HasCapability reports whether the definition advertises cap.

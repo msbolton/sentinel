@@ -270,7 +270,8 @@ func TestListAndFilters(t *testing.T) {
 		t.Fatalf("driver filter = %s", body)
 	}
 	_, body = do(t, srv, "GET", "/feeds?enabled=true", "", reqOpts{})
-	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 0 {
+	// Only the emplacements mirror is enabled out of the box: it needs no credentials.
+	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 1 || feeds[0].ID != "emplacements" {
 		t.Fatalf("enabled filter = %s", body)
 	}
 	// Every built-in feed is a source: direction=in lists all, out none.
@@ -1124,5 +1125,24 @@ func TestSecretPolicyIsEnforcedOnSave(t *testing.T) {
 	resp, out = do(t, srv, "POST", "/feeds", tls, operator)
 	if resp.StatusCode != 422 || !strings.Contains(string(out), "/config/transport/tls/certFile") || strings.Contains(string(out), "tls/keyFile") {
 		t.Errorf("tls files: %d %s", resp.StatusCode, out)
+	}
+}
+
+func TestCreateRefusesInternalDrivers(t *testing.T) {
+	srv, store, _ := newServer(t, "")
+	resp, out := do(t, srv, "POST", "/feeds", `{"name":"Second mirror","driver":"emplacement","config":{}}`, operator)
+	if resp.StatusCode != 422 {
+		t.Fatalf("status %d: %s", resp.StatusCode, out)
+	}
+	var e errorResponse
+	_ = json.Unmarshal(out, &e)
+	// "internal" tells this refusal from the one for an unknown driver, which
+	// is also a 422 at /driver.
+	if len(e.Details) == 0 || e.Details[0].Path != "/driver" || !strings.Contains(e.Details[0].Message, "internal") {
+		t.Fatalf("details = %+v", e.Details)
+	}
+	// The store starts with the builtins; the refused feed is not among them.
+	if feeds, _ := store.List(context.Background()); len(feeds) != len(registry.Builtins) {
+		t.Fatalf("a feed was stored: %d feeds, want the %d builtins", len(feeds), len(registry.Builtins))
 	}
 }
