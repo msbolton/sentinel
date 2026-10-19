@@ -14,7 +14,7 @@ An emplacement is a place observations come from: a radar site, a mast, a ship's
 | Field | Meaning and limits |
 |-------|--------------------|
 | `id` | UUID, assigned on create. |
-| `name` | Required, at most 255 characters. Unique among live emplacements, whatever its case (`Lizard` and `lizard` collide). The name of a deleted emplacement can be used again. |
+| `name` | Required, at most 255 bytes. Unique among live emplacements, whatever its case (`Lizard` and `lizard` collide). The name of a deleted emplacement can be used again. |
 | `description` | Free text. |
 | `mobility` | `FIXED` or `MOBILE`. |
 | `sensorType` | `RADAR`, `EO_IR`, `RF`, `ACOUSTIC`, `AIS_RECEIVER`, `ADSB_RECEIVER`, `HUMAN` or `OTHER`. |
@@ -40,7 +40,7 @@ Served by the ingest service on `HTTP_ADDR` (`/emplacements`) and proxied by the
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/emplacements?feedId=&mobility=&active=` | The emplacements the caller may see (array). `feedId` filters on the bound connection, `mobility` is `FIXED` or `MOBILE`, `active` is `true` or `false`. |
+| GET | `/emplacements?feedId=&mobility=&active=` | The emplacements the caller may see (array). `feedId` filters on the bound connection, `mobility` is `FIXED` or `MOBILE`, `active=true` lists the active ones; any other non-empty value lists the inactive ones. |
 | POST | `/emplacements` | Create. The body takes the fields above, without the read-only ones. Answers 201 with the emplacement and an `ETag`. |
 | GET | `/emplacements/{id}` | One emplacement, with `ETag: "<version>"`. |
 | PATCH | `/emplacements/{id}` | Merge patch: a field that is absent is left alone. Takes `If-Match: "<version>"` (the client always sends it); without the header the write is unconditional. Answers 200 with the new `ETag`. |
@@ -66,7 +66,7 @@ Served by the ingest service on `HTTP_ADDR` (`/emplacements`) and proxied by the
 
 ## The built-in `emplacements` feed
 
-The `emplacements` feed (driver `emplacement`) reports each emplacement as an entity, so it is in search, can anchor a geofence ring and, when mobile, has a track. It is built in and enabled by default, because it needs no credentials. The driver is internal: no connection can be created on it, and the new-connection picker hides it. The Connections page still shows its row, where it can be disabled and its heartbeat changed.
+The `emplacements` feed (driver `emplacement`) reports each emplacement as an entity, so it is in search and can anchor a geofence ring. A mobile emplacement's entity does not yet follow a live position: see the age-out note below. It is built in and enabled by default, because it needs no credentials. The driver is internal: no connection can be created on it, and the new-connection picker hides it. The Connections page still shows its row, where it can be disabled and its heartbeat changed.
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
@@ -75,7 +75,7 @@ The `emplacements` feed (driver `emplacement`) reports each emplacement as an en
 What it reports:
 
 - Every active emplacement that has a position, once at start and again on every change.
-- Fixed emplacements again on every heartbeat. Mobile ones are reported on change only.
+- Fixed emplacements again on every heartbeat. Mobile ones are reported only when the feed starts and when they change, never on the heartbeat, so until their own position reports arrive over gRPC (see What comes next) a mobile emplacement's entity goes stale and ages out unless it is edited (see Age-out).
 - Each as an entity of type `SENSOR`, with a source entity id equal to the emplacement id, the emplacement's name, classification and exercise flag, and its boresight as the heading. A fixed emplacement is a ground entity.
 - Under the canonical `EMPLACEMENT` identity, so the entity service always fuses an emplacement's reports into the same entity.
 
@@ -89,12 +89,12 @@ The sensor type picks the source label:
 | `HUMAN` | `HUMINT` |
 | anything else | `MASINT` |
 
-**Age-out.** `db/schema/72_emplacements.sql` seeds a stale and age-out row for each of these sources on the `emplacements` feed: an entity goes stale after 3 minutes without a report and ages out after 10, which is three and ten missed heartbeats at the default. **Deactivating or deleting** an emplacement stops its reports, so its entity goes stale and then ages out on that schedule; it does not disappear at once. Editing it again, or setting it active, reports it at once.
+**Age-out.** `db/schema/72_emplacements.sql` seeds a stale and age-out row for each of these sources on the `emplacements` feed: an entity goes stale after 3 minutes without a report and ages out after 10, which is three and ten missed heartbeats at the default for a fixed emplacement. The thresholds make no exception for mobility: because a mobile emplacement is reported only at start and on change, its SENSOR entity goes stale after 3 minutes and ages out after 10 unless it is edited, until its own position reports over gRPC arrive (sub-project 2). **Deactivating or deleting** an emplacement stops its reports, so its entity goes stale and then ages out on that schedule; it does not disappear at once. Editing it again, or setting it active, reports it at once.
 
 ## The client
 
 - **Panel.** The Emplacements panel (nav key `e`, route `#/emplacements`) lists emplacements and edits one at a time. **Pick on map** lets you click the map for the position, and a preview of the footprint follows the form's boresight and range as you type. Saving keeps it. A conflict (412) is reported in the form and the emplacement can be reloaded.
-- **Coverage.** A **Coverage** checkbox in the panel shows or hides the footprints. It is remembered per user. A fixed emplacement is drawn with a marker and its coverage as a sector (a sector across the antimeridian is one wedge). A mobile one is an outlined (hollow) marker, and it and its footprint follow its live position. An omnidirectional coverage (360°) is a circle, or a ring when `minRangeM` is above 0. Inactive emplacements are not drawn unless selected.
+- **Coverage.** A **Coverage** checkbox in the panel shows or hides the footprints. The choice is remembered per browser. A fixed emplacement is drawn with a marker and its coverage as a sector (a sector across the antimeridian is one wedge). A mobile one is an outlined (hollow) marker, and it and its footprint follow its live position. An omnidirectional coverage (360°) is a circle, or a ring when `minRangeM` is above 0. Inactive emplacements are not drawn unless selected.
 - **Layer.** The built-in feed's row in the layers pill shows or hides the whole layer (markers and footprints). A layer that was hidden stays hidden when the map loads.
 - **Entity detail.** The detail panel of a sensor entity that comes from an emplacement shows **Emplacement: <name>**, which opens the panel with it selected.
 
