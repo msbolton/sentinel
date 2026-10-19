@@ -7,8 +7,8 @@ import { FieldHint } from '../../shared/components/schema-form/schema-form.compo
 import { ListenPort, ListenPorts, PortRange } from '../../shared/models/feed.model';
 import { ListenInfo, joinHostPort, listenOf } from './listen-config';
 
-/** Where a suggestion starts when the server offers no free port of its own. */
-export const PORT_BASE = 6001;
+/** Where a suggestion starts when the server offers no free port of its own, as the server's own search does (its `SuggestFrom`). */
+export const PORT_BASE = 6000;
 
 /** The ports a listener may bind, until the server says otherwise. */
 const PORT_MIN = 1024;

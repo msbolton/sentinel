@@ -286,7 +286,7 @@ export interface ListenPort {
  * are Sentinel's own (INGEST_RESERVED_PORTS), `taken` are held by connections. `suggested` is a free port per
  * protocol for a connection that has none yet. The form offers it when it is free there too; one inside `min`
  * and `max` that is not free is where the search for a free port starts instead (from the next port), and a
- * missing one, or one outside them, is ignored (the search starts at 6001).
+ * missing one, or one outside them, is ignored (the search starts at 6000).
  */
 export interface ListenPorts {
   min: number;

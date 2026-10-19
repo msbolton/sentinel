@@ -3,7 +3,7 @@ import { ListenPort, ListenPorts } from '../../shared/models/feed.model';
 
 /**
  * What `GET /api/v1/feeds/ports` answers. Its suggestions differ from what the form would work out for itself
- * (6001 and 6002 are taken), so a test that offers one shows the server's was used.
+ * (6000, 6001 and 6002 are taken, and the form starts at 6000), so a test that offers one shows the server's was used.
  */
 const ports: ListenPorts = {
   min: 1024,
@@ -13,6 +13,7 @@ const ports: ListenPorts = {
     { from: 5432, to: 5432 },
   ],
   taken: [
+    { protocol: 'tcp', port: 6000, feedId: 'base', feedName: 'Base feed', enabled: true },
     { protocol: 'tcp', port: 6001, feedId: 'radar', feedName: 'Radar feed', enabled: true },
     { protocol: 'tcp', port: 6002, feedId: 'gate', feedName: 'Gate feed', enabled: false },
     { protocol: 'udp', port: 10110, feedId: 'pier', feedName: 'Pier AIS', enabled: false },
@@ -209,9 +210,11 @@ describe('connectionHints', () => {
     const suggest = (suggested: ListenPorts['suggested'], answer: ListenPorts = ports) =>
       connectionHints({ driverId: 'tcp', config: { mode: 'listen', allow }, ports: { ...answer, suggested } })[0].action?.value;
 
-    // nothing offered: from the base, past what is taken
-    expect(PORT_BASE).toBe(6001);
+    // nothing offered: from the base, which is where the server's own search starts, past what is taken
+    expect(PORT_BASE).toBe(6000);
     expect(suggest({})).toBe(6003);
+    // and at the base itself while that is free
+    expect(suggest({}, { ...ports, taken: [] })).toBe(6000);
     expect(suggest({ udp: 10111 })).toBe(6003);
     // nothing that could be a port: the same
     for (const bad of [0, -1, 1.5, 80, 70000, '6500', null]) {
