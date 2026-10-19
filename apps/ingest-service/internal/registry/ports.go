@@ -103,8 +103,11 @@ func CheckPorts(f Feed, others []Feed, reserved PortSet) []Problem {
 	if f.Driver == "stream" {
 		path = "/config/transport/address"
 	}
-	if port < MinPort || port > MaxPort {
+	if port >= 1 && port < MinPort {
 		return []Problem{{Path: path, Message: fmt.Sprintf("port %d is outside %d-%d; %d is a policy floor, not a kernel limit, so the well-known ports stay with the host's own services", port, MinPort, MaxPort, MinPort)}}
+	}
+	if port < MinPort || port > MaxPort { // 0 (no usable port in the address) or beyond the range
+		return []Problem{{Path: path, Message: fmt.Sprintf("port %d is outside %d-%d", port, MinPort, MaxPort)}}
 	}
 	if reserved[port] {
 		return []Problem{{Path: path, Message: fmt.Sprintf("port %d is used by Sentinel itself", port)}}

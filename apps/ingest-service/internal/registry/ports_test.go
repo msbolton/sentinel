@@ -64,9 +64,17 @@ func TestPortRules(t *testing.T) {
 		t.Errorf("reserved port: %s", msg(ps))
 	}
 	// A listening transport without a numeric port is refused, not skipped.
-	for _, addr := range []string{"localhost", ":http", ":abc", ":0"} {
-		if ps := CheckPorts(udpStream("noport", addr, true), nil, reserved); !strings.Contains(msg(ps), "1024") {
-			t.Errorf("address %q: %s", addr, msg(ps))
+	// The floor is explained only to a port that is under it; 0 and a number
+	// above the range get the range and nothing about a policy.
+	for _, addr := range []string{"localhost", ":http", ":abc", ":0", ":65536", ":70000"} {
+		m := msg(CheckPorts(udpStream("noport", addr, true), nil, reserved))
+		if !strings.Contains(m, "1024-65535") || strings.Contains(m, "floor") || strings.Contains(m, "kernel") {
+			t.Errorf("address %q: %s", addr, m)
+		}
+	}
+	for _, addr := range []string{":1", ":514", ":1023"} {
+		if m := msg(CheckPorts(udpStream("low", addr, true), nil, reserved)); !strings.Contains(m, "policy floor, not a kernel limit") {
+			t.Errorf("address %q: %s", addr, m)
 		}
 	}
 	// Connections that do not listen are not checked.
