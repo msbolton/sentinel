@@ -2,7 +2,9 @@ import { Component, computed, CUSTOM_ELEMENTS_SCHEMA, DestroyRef, effect, inject
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { CommonModule } from '@angular/common';
 import { AnalyticsService } from '../../core/services/analytics.service';
+import { Router } from '@angular/router';
 import { AuthService } from '../../core/services/auth.service';
+import { EmplacementService } from '../../core/services/emplacement.service';
 import { FeedService } from '../../core/services/feed.service';
 import { LocationService } from '../../core/services/location.service';
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
@@ -10,6 +12,7 @@ import { FlightPathService } from '../../core/services/flight-path.service';
 import { FLIGHT_PATH_DAYS } from '../models/flight-path.model';
 import { pathSummary } from '../../features/map/flight-path';
 import { Entity, EntitySource } from '../models/entity.model';
+import { emplacementIdOf } from '../models/emplacement.model';
 import { EntityBaseline, EntityPlace, Finding, findingKindLabel, formatDuration, formatMetres } from '../models/finding.model';
 import { Location } from '../models/location.model';
 import { formatAltitude, formatCoordinate } from '../geo-format';
@@ -615,6 +618,12 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                     <span class="field-label">Source</span>
                     <span class="chip chip-source">{{ e.source }}</span>
                   </div>
+                  @if (emplacementName(); as name) {
+                    <div class="field-row">
+                      <span class="field-label">Emplacement</span>
+                      <button type="button" class="field-value field-link" (click)="openEmplacement()">{{ name }}</button>
+                    </div>
+                  }
                   @if (cotUid(); as uid) {
                     <div class="field-row">
                       <span class="field-label">TAK uid</span>
@@ -1026,6 +1035,17 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       }
     }
 
+    .field-link {
+      background: none;
+      border: 0;
+      padding: 0;
+      font: inherit;
+      color: var(--accent-blue);
+      cursor: pointer;
+      text-align: right;
+      &:hover { text-decoration: underline; }
+    }
+
     .behaviour-note {
       margin: 0;
       font-size: 0.78rem;
@@ -1344,6 +1364,22 @@ export class EntityDetailPanelComponent {
   private readonly analytics = inject(AnalyticsService);
   private readonly auth = inject(AuthService);
   private readonly locations = inject(LocationService);
+  private readonly emplacementService = inject(EmplacementService);
+  private readonly router = inject(Router);
+
+  /** The emplacement a SENSOR entity stands for, by name when it is loaded. */
+  protected emplacementName = computed(() => {
+    const id = emplacementIdOf(this.entity() ?? {});
+    if (!id) return null;
+    return this.emplacementService.emplacements().find((e) => e.id === id)?.name ?? id;
+  });
+
+  protected openEmplacement(): void {
+    const id = emplacementIdOf(this.entity() ?? {});
+    if (!id) return;
+    this.emplacementService.select(id);
+    this.router.navigateByUrl('/emplacements');
+  }
   protected readonly orbit = inject(OrbitOverlayService);
   protected readonly flightPath = inject(FlightPathService);
   protected readonly flightPathDays = FLIGHT_PATH_DAYS;

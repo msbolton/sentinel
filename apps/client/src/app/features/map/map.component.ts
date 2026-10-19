@@ -16,7 +16,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, NavigationEnd } from '@angular/router';
 import { EntityDetailPanelComponent } from '../../shared/components/entity-detail-panel.component';
 import { IconComponent } from '../../shared/components/icon.component';
-import { Subscription, debounceTime, Subject, throttleTime, bufferTime, filter } from 'rxjs';
+import { Subscription, debounceTime, Subject, throttleTime, bufferTime, filter, timer, switchMap, catchError, EMPTY } from 'rxjs';
 import {
   Entity,
   EntityType,
@@ -62,6 +62,9 @@ import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine, type GeoPoint } from '
 import { formatAltitude } from '../../shared/geo-format';
 import { GeofenceService } from '../../core/services/geofence.service';
 import { DRAFT_ID, GeofenceLayer } from './geofence-layer';
+import { EMPLACEMENTS_LAYER, EMPLACEMENT_DRAFT_ID, EmplacementLayer } from './emplacement-layer';
+import { EmplacementService } from '../../core/services/emplacement.service';
+import { emplacementIdOf } from '../../shared/models/emplacement.model';
 import { GeofenceDrawTool } from './geofence-draw';
 import { GeofenceToolbarComponent } from './geofence-toolbar.component';
 import { DrawSession, addPoint, canFinish, draftFromSession, finishShape, newSession, setAnchor, setCursor, setRadius } from './geofence-draw-state';
@@ -205,6 +208,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private clusterSources = new Map<string, any>();
   /** Saved geofences drawn on the globe; see geofence-layer.ts. */
   private geofenceLayer: GeofenceLayer | null = null;
+  private emplacementLayer: EmplacementLayer | null = null;
+  /** The SENSOR entities that stand for emplacements, by entity id; the emplacement layer draws them. */
+  private readonly emplacementEntities = new Map<string, Entity>();
   /** The geofence being drawn, or null; see geofence-draw-state.ts and geofence-draw.ts. */
   readonly drawSession = signal<DrawSession | null>(null);
   private drawTool: GeofenceDrawTool | null = null;
@@ -246,6 +252,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly mapViewport: MapViewportService,
     private readonly geofences: GeofenceService,
     private readonly flightPath: FlightPathService,
+    private readonly emplacements: EmplacementService,
   ) {
     // Entities stay in the viewer when their layer is hidden (show=false) so
     // dead reckoning keeps advancing them; this flips `show` when the user's
@@ -292,6 +299,28 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.geofences.anchors();
       this.ngZone.runOutsideAngular(() => untracked(() => this.geofenceLayer?.sync(zones, selectedId, (id) => this.geofenceAnchorPosition(id), draft)));
     });
+
+    // Emplacements, their coverage and the form's unsaved preview, on the
+    // built-in emplacements feed's layer.
+    effect(() => {
+      const list = this.emplacements.emplacements();
+      const selectedId = this.emplacements.selectedId();
+      const draft = this.emplacements.draft();
+      const coverage = this.emplacements.showCoverage();
+      const visible = this.layerVisibility.isVisible(EMPLACEMENTS_LAYER);
+      this.ngZone.runOutsideAngular(() =>
+        untracked(() => this.emplacementLayer?.sync(visible ? list : [], selectedId, visible ? draft : null, coverage, (id) => this.emplacementPosition(id))),
+      );
+    });
+    // Emplacements change rarely; refresh them every 30 s while their layer is shown.
+    this.subscriptions.add(
+      timer(0, 30_000)
+        .pipe(
+          filter(() => this.layerVisibility.isVisible(EMPLACEMENTS_LAYER)),
+          switchMap(() => this.emplacements.load().pipe(catchError(() => EMPTY))),
+        )
+        .subscribe(),
+    );
 
     // A selected aircraft, drone or satellite shows how high it flies: a line to the ground.
     effect(() => {
@@ -353,6 +382,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     this.geofenceLayer?.destroy();
     this.geofenceLayer = null;
+    this.emplacementLayer?.destroy();
+    this.emplacementLayer = null;
     this.clearOrbitOverlay();
     this.clearFlightPath();
     if (this.ageoutConfigTimer) clearInterval(this.ageoutConfigTimer);
@@ -399,8 +430,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.viewer = new Cesium.Viewer(container, viewerOptions);
       this.setupClusterSources();
       this.geofenceLayer = new GeofenceLayer(this.viewer, Cesium);
+      this.emplacementLayer = new EmplacementLayer(this.viewer, Cesium);
       this.drawTool = new GeofenceDrawTool(this.viewer, Cesium);
       this.geofenceLayer.sync(this.geofences.zones(), this.geofences.selectedId(), (id) => this.geofenceAnchorPosition(id));
+      this.emplacementLayer.sync(this.emplacements.emplacements(), this.emplacements.selectedId(), this.emplacements.draft(), this.emplacements.showCoverage(), (id) => this.emplacementPosition(id));
 
       // Set dark atmosphere
       this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
@@ -447,6 +480,12 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     handler.setInputAction((click: any) => {
       const pickedObject = this.viewer.scene.pick(click.position);
 
+      if (this.emplacements.picking()) {
+        const p = this.pickLngLat(click.position);
+        if (p) this.ngZone.run(() => this.emplacements.pickAt(p[1], p[0]));
+        return;
+      }
+
       if (this.drawSession()) {
         this.drawClick(click.position, pickedObject);
         this.viewer.selectedEntity = undefined; // the viewer's own bracket means nothing while drawing
@@ -460,6 +499,17 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         const zoneId = pickedObject.id._sentinelGeofence as string;
         this.viewer.selectedEntity = undefined; // the zone's handles mark the selection, not the viewer's bracket
         if (zoneId !== DRAFT_ID) this.ngZone.run(() => this.geofences.select(zoneId));
+        return;
+      }
+      if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelEmplacement) {
+        const id = pickedObject.id._sentinelEmplacement as string;
+        this.viewer.selectedEntity = undefined;
+        if (id !== EMPLACEMENT_DRAFT_ID) {
+          this.ngZone.run(() => {
+            this.emplacements.select(id);
+            this.router.navigateByUrl('/emplacements');
+          });
+        }
         return;
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelDensity) {
@@ -729,6 +779,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   private addOrUpdateCesiumEntity(entity: Entity): void {
     if (!this.viewer || !this.Cesium) return;
+    // An emplacement's own SENSOR entity is drawn by the emplacement layer.
+    if (emplacementIdOf(entity)) {
+      this.emplacementEntities.set(entity.id, entity);
+      return;
+    }
     if (!entity.position) {
       console.warn(`[Map] Entity ${entity.id} has no position, skipping`);
       return;
@@ -1150,6 +1205,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   private removeCesiumEntity(entityId: string): void {
+    this.emplacementEntities.delete(entityId);
     this.deadReckoning.remove(entityId);
     this.satellites.remove(entityId);
     if (entityId === this.orbit.forId) this.clearOrbitOverlay();
@@ -1329,6 +1385,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (geo) return [geo.lon, geo.lat];
     const stored = this.geofences.anchors().get(entityId);
     return stored?.position ? [stored.position.longitude, stored.position.latitude] : null;
+  }
+
+  /** Where a mobile emplacement is now: its SENSOR entity's last fix, while it is on the stream. */
+  private emplacementPosition(emplacementId: string): { lon: number; lat: number; heading: number | null } | null {
+    for (const e of this.emplacementEntities.values()) {
+      if (e.position && e.ageoutState !== 'AGED_OUT' && emplacementIdOf(e) === emplacementId) {
+        return { lon: e.position.longitude, lat: e.position.latitude, heading: e.heading ?? null };
+      }
+    }
+    return null;
   }
 
   /** Redraw the geofence layer from the service's current state. */
