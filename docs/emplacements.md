@@ -46,7 +46,7 @@ Served by the ingest service on `HTTP_ADDR` (`/emplacements`) and proxied by the
 | PATCH | `/emplacements/{id}` | Merge patch: a field that is absent is left alone. Takes `If-Match: "<version>"` (the client always sends it); without the header the write is unconditional. Answers 200 with the new `ETag`. |
 | DELETE | `/emplacements/{id}` | Soft delete. Answers 204. |
 
-**Optimistic writes.** Every response carries `ETag: "<version>"`. A PATCH sends it back in `If-Match` (`"3"`, `3` and `W/"3"` are all read as version 3); a stale value answers 412 and changes nothing, so two editors cannot overwrite each other. `GET` only returns the `ETag`; it does not read `If-Match`. The Emplacements panel handles this by telling the second editor that the emplacement was changed by someone else.
+**Optimistic writes.** Every response carries `ETag: "<version>"`. A PATCH sends it back in `If-Match` (`"3"`, `3` and `W/"3"` are all read as version 3); a stale value answers 412 and changes nothing, so two editors cannot overwrite each other. `GET` only returns the `ETag`; it does not read `If-Match`. The Emplacements panel sends the version the editor opened, even when the map's 30 s refresh has since loaded a newer one. On a 412 it tells the second editor that the emplacement was changed by someone else, loads the latest and keeps the editor's changes for the next save, which claims the latest version. An emplacement deleted since it was opened is reported as deleted by someone else, and nothing is sent.
 
 **Statuses.**
 
@@ -76,8 +76,9 @@ What it reports:
 
 - Every active emplacement that has a position, once at start and again on every change.
 - Fixed emplacements again on every heartbeat. Mobile ones are reported only when the feed starts and when they change, never on the heartbeat, so until their own position reports arrive over gRPC (see What comes next) a mobile emplacement's entity goes stale and ages out unless it is edited (see Age-out).
-- Each as an entity of type `SENSOR`, with a source entity id equal to the emplacement id, the emplacement's name, classification and exercise flag, and its boresight as the heading. A fixed emplacement is a ground entity.
-- Under the canonical `EMPLACEMENT` identity, so the entity service always fuses an emplacement's reports into the same entity.
+- Each as an entity of type `SENSOR`, with a source entity id equal to the emplacement id, the emplacement's name, classification and exercise flag, and, when the boresight is measured from `TRUE_NORTH`, the boresight as the heading. A `PLATFORM` boresight is relative to the platform's own heading, so it is not reported as one. A fixed emplacement is a ground entity.
+- Under the canonical `EMPLACEMENT` identity, so the entity service always fuses an emplacement's reports into the same entity. Only the service gives a report that identity: the feed runner drops every `EMPLACEMENT` identity a sender supplies, so no other report can join an emplacement's entity or hide behind one.
+- Never suppressed as a repeat. The runner's repeat suppression drops a fix that repeats the last position within a second; the `emplacement` driver turns it off, so an edit that keeps the position (a new name, a raised classification) always reaches the entity.
 
 The sensor type picks the source label:
 
@@ -93,7 +94,7 @@ The sensor type picks the source label:
 
 ## The client
 
-- **Panel.** The Emplacements panel (nav key `e`, route `#/emplacements`) lists emplacements and edits one at a time. **Pick on map** lets you click the map for the position, and a preview of the footprint follows the form's boresight and range as you type. Saving keeps it. A conflict (412) is reported in the form and the emplacement can be reloaded.
+- **Panel.** The Emplacements panel (nav key `e`, route `#/emplacements`) lists emplacements, filtered by mobility, sensor type and state (active or inactive), and edits one at a time. **Pick on map** lets you click the map for the position, and a preview of the footprint follows the form's boresight and range as you type. Saving keeps it. A conflict (412) is reported in the form, the latest is loaded and the edits are kept for another save.
 - **Coverage.** A **Coverage** checkbox in the panel shows or hides the footprints. The choice is remembered per browser. A fixed emplacement is drawn with a marker and its coverage as a sector (a sector across the antimeridian is one wedge). A mobile one is an outlined (hollow) marker, and it and its footprint follow its live position. An omnidirectional coverage (360°) is a circle, or a ring when `minRangeM` is above 0. Inactive emplacements are not drawn unless selected.
 - **Layer.** The built-in feed's row in the layers pill shows or hides the whole layer (markers and footprints). A layer that was hidden stays hidden when the map loads.
 - **Entity detail.** The detail panel of a sensor entity that comes from an emplacement shows **Emplacement: <name>**, which opens the panel with it selected.

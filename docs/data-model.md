@@ -90,12 +90,12 @@ Stale and age-out thresholds in milliseconds, per feed (`"feedId"`), per source 
 
 ### sentinel.emplacements (`db/schema/72_emplacements.sql`)
 
-The places observations come from (see `docs/emplacements.md`). One row per emplacement; a delete sets `"deletedAt"` (soft delete).
+The places observations come from (see `docs/emplacements.md`). One row per emplacement; a delete sets `"deletedAt"` (soft delete). `db/seed/seed.sql` adds one demo emplacement, `Lizard Point radar` (fixed, no connection), under a fixed id, so re-running the seed neither duplicates it nor brings it back once deleted.
 
 | Column | Content |
 |--------|---------|
 | `id` | UUID primary key, generated |
-| `name` | Up to 255 characters |
+| `name` | Up to 255 bytes |
 | `description` | Free text, default empty |
 | `mobility` | `FIXED` or `MOBILE`; a CHECK requires a `position` when `FIXED` |
 | `"sensorType"` | `RADAR`, `EO_IR`, `RF`, `ACOUSTIC`, `AIS_RECEIVER`, `ADSB_RECEIVER`, `HUMAN` or `OTHER` |
