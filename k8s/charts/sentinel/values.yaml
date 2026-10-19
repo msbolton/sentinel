@@ -122,10 +122,10 @@ ingestService:
       memory: 512Mi
   # Both ingest Deployments (the listener runs the same image) run as 10001, the
   # user of apps/ingest-service/Dockerfile, with every capability dropped: the
-  # service binds only ports from 1024 up. fsGroup makes the Secret files
-  # mounted with mode 0440 (secretFiles) readable by the group. A platform that
-  # assigns the ids itself needs runAsUser, runAsGroup and fsGroup dropped: set
-  # each to null, as in
+  # service binds only ports from 1024 up. fsGroup makes the Secret files (tak
+  # and secretFiles, both mounted with mode 0440) readable by the group. A
+  # platform that assigns the ids itself needs runAsUser, runAsGroup and fsGroup
+  # dropped: set each to null, as in
   # --set ingestService.podSecurityContext.runAsUser=null.
   podSecurityContext:
     runAsNonRoot: true
@@ -154,10 +154,10 @@ ingestService:
     tickSec: 2
     rebalanceSec: 30
   env: {}
-  # TAK connection certificates, mounted at mountPath so feeds can reference
-  # them as file:/etc/sentinel/tak/client.pem etc. Either name an existing
-  # Secret with keys tak-client-cert, tak-client-key and tak-ca, or set the
-  # PEM values here and the chart creates one.
+  # TAK connection certificates, mounted at mountPath (mode 0440) so feeds can
+  # reference them as file:/etc/sentinel/tak/client.pem etc. Either name an
+  # existing Secret with keys tak-client-cert, tak-client-key and tak-ca, or set
+  # the PEM values here and the chart creates one.
   tak:
     existingSecret: ""
     clientCert: ""

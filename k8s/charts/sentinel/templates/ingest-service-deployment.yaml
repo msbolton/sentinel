@@ -122,6 +122,8 @@ spec:
           secret:
             secretName: {{ default (printf "%s-ingest-tak" (include "sentinel.fullname" .)) .Values.ingestService.tak.existingSecret }}
             optional: true
+            # Group-readable by the pod's fsGroup only, like the secret-files volume.
+            defaultMode: 0440
             items:
               - key: tak-client-cert
                 path: client.pem
