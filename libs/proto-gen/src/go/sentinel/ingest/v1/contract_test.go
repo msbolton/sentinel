@@ -42,3 +42,10 @@ func TestIngestServiceContract(t *testing.T) {
 		t.Errorf("IDENTITY_TYPE_EMPLACEMENT = %d, want 10", sentinelv1.IdentityType_IDENTITY_TYPE_EMPLACEMENT)
 	}
 }
+
+func TestReportNamesItsEmplacement(t *testing.T) {
+	f := (&ingestv1.Report{}).ProtoReflect().Descriptor().Fields().ByName("emplacement_id")
+	if f == nil || f.Number() != 4 || f.ContainingOneof() != nil {
+		t.Fatalf("Report.emplacement_id must be field 4, outside the body oneof: %v", f)
+	}
+}

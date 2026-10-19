@@ -53,17 +53,23 @@ message UpsertEmplacementResponse {
 
 // Report is one thing a sender says: an observation, or a mobile
 // emplacement's own position. client_ref comes back on the ack.
+// emplacement_id names the emplacement the report comes from; the service
+// checks it against the emplacements bound to the connection (an empty one
+// means the connection's only emplacement, when it has exactly one).
 message Report {
   string client_ref = 1;
   oneof body {
     sentinel.v1.Observation observation = 2;
     sentinel.v1.EmplacementState emplacement_state = 3;
   }
+  string emplacement_id = 4;
 }
 
 // AckStatus is what happened to one report.
 enum AckStatus {
   ACK_STATUS_UNSPECIFIED = 0;
+  // Accepted into the ingest service's publisher queue. Not yet durable:
+  // a crash before the queue drains can lose it.
   ACK_STATUS_OK = 1;
   ACK_STATUS_REJECTED = 2;
   ACK_STATUS_DEAD_LETTERED = 3;

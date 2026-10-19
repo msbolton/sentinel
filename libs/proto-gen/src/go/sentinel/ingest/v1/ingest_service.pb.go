@@ -26,7 +26,9 @@ const (
 type AckStatus int32
 
 const (
-	AckStatus_ACK_STATUS_UNSPECIFIED   AckStatus = 0
+	AckStatus_ACK_STATUS_UNSPECIFIED AckStatus = 0
+	// Accepted into the ingest service's publisher queue. Not yet durable:
+	// a crash before the queue drains can lose it.
 	AckStatus_ACK_STATUS_OK            AckStatus = 1
 	AckStatus_ACK_STATUS_REJECTED      AckStatus = 2
 	AckStatus_ACK_STATUS_DEAD_LETTERED AckStatus = 3
@@ -373,6 +375,9 @@ func (x *UpsertEmplacementResponse) GetEmplacement() *v1.Emplacement {
 
 // Report is one thing a sender says: an observation, or a mobile
 // emplacement's own position. client_ref comes back on the ack.
+// emplacement_id names the emplacement the report comes from; the service
+// checks it against the emplacements bound to the connection (an empty one
+// means the connection's only emplacement, when it has exactly one).
 type Report struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	ClientRef string                 `protobuf:"bytes,1,opt,name=client_ref,json=clientRef,proto3" json:"client_ref,omitempty"`
@@ -381,6 +386,7 @@ type Report struct {
 	//	*Report_Observation
 	//	*Report_EmplacementState
 	Body          isReport_Body `protobuf_oneof:"body"`
+	EmplacementId string        `protobuf:"bytes,4,opt,name=emplacement_id,json=emplacementId,proto3" json:"emplacement_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -445,6 +451,13 @@ func (x *Report) GetEmplacementState() *v1.EmplacementState {
 		}
 	}
 	return nil
+}
+
+func (x *Report) GetEmplacementId() string {
+	if x != nil {
+		return x.EmplacementId
+	}
+	return ""
 }
 
 type isReport_Body interface {
@@ -720,12 +733,13 @@ const file_sentinel_ingest_v1_ingest_service_proto_rawDesc = "" +
 	"\x18UpsertEmplacementRequest\x12:\n" +
 	"\vemplacement\x18\x01 \x01(\v2\x18.sentinel.v1.EmplacementR\vemplacement\"W\n" +
 	"\x19UpsertEmplacementResponse\x12:\n" +
-	"\vemplacement\x18\x01 \x01(\v2\x18.sentinel.v1.EmplacementR\vemplacement\"\xbb\x01\n" +
+	"\vemplacement\x18\x01 \x01(\v2\x18.sentinel.v1.EmplacementR\vemplacement\"\xe2\x01\n" +
 	"\x06Report\x12\x1d\n" +
 	"\n" +
 	"client_ref\x18\x01 \x01(\tR\tclientRef\x12<\n" +
 	"\vobservation\x18\x02 \x01(\v2\x18.sentinel.v1.ObservationH\x00R\vobservation\x12L\n" +
-	"\x11emplacement_state\x18\x03 \x01(\v2\x1d.sentinel.v1.EmplacementStateH\x00R\x10emplacementStateB\x06\n" +
+	"\x11emplacement_state\x18\x03 \x01(\v2\x1d.sentinel.v1.EmplacementStateH\x00R\x10emplacementState\x12%\n" +
+	"\x0eemplacement_id\x18\x04 \x01(\tR\remplacementIdB\x06\n" +
 	"\x04body\"s\n" +
 	"\x03Ack\x12\x1d\n" +
 	"\n" +

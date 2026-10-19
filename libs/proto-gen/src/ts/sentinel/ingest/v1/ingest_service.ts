@@ -13,6 +13,10 @@ import { Observation } from "../../v1/observation";
 /** AckStatus is what happened to one report. */
 export enum AckStatus {
   UNSPECIFIED = "UNSPECIFIED",
+  /**
+   * OK - Accepted into the ingest service's publisher queue. Not yet durable:
+   * a crash before the queue drains can lose it.
+   */
   OK = "OK",
   REJECTED = "REJECTED",
   DEAD_LETTERED = "DEAD_LETTERED",
@@ -98,11 +102,15 @@ export interface UpsertEmplacementResponse {
 /**
  * Report is one thing a sender says: an observation, or a mobile
  * emplacement's own position. client_ref comes back on the ack.
+ * emplacement_id names the emplacement the report comes from; the service
+ * checks it against the emplacements bound to the connection (an empty one
+ * means the connection's only emplacement, when it has exactly one).
  */
 export interface Report {
   clientRef: string;
   observation?: Observation | undefined;
   emplacementState?: EmplacementState | undefined;
+  emplacementId: string;
 }
 
 export interface Ack {
@@ -557,7 +565,7 @@ export const UpsertEmplacementResponse = {
 };
 
 function createBaseReport(): Report {
-  return { clientRef: "", observation: undefined, emplacementState: undefined };
+  return { clientRef: "", observation: undefined, emplacementState: undefined, emplacementId: "" };
 }
 
 export const Report = {
@@ -570,6 +578,9 @@ export const Report = {
     }
     if (message.emplacementState !== undefined) {
       EmplacementState.encode(message.emplacementState, writer.uint32(26).fork()).ldelim();
+    }
+    if (message.emplacementId !== "") {
+      writer.uint32(34).string(message.emplacementId);
     }
     return writer;
   },
@@ -602,6 +613,13 @@ export const Report = {
 
           message.emplacementState = EmplacementState.decode(reader, reader.uint32());
           continue;
+        case 4:
+          if (tag !== 34) {
+            break;
+          }
+
+          message.emplacementId = reader.string();
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -616,6 +634,7 @@ export const Report = {
       clientRef: isSet(object.clientRef) ? globalThis.String(object.clientRef) : "",
       observation: isSet(object.observation) ? Observation.fromJSON(object.observation) : undefined,
       emplacementState: isSet(object.emplacementState) ? EmplacementState.fromJSON(object.emplacementState) : undefined,
+      emplacementId: isSet(object.emplacementId) ? globalThis.String(object.emplacementId) : "",
     };
   },
 
@@ -629,6 +648,9 @@ export const Report = {
     }
     if (message.emplacementState !== undefined) {
       obj.emplacementState = EmplacementState.toJSON(message.emplacementState);
+    }
+    if (message.emplacementId !== "") {
+      obj.emplacementId = message.emplacementId;
     }
     return obj;
   },
@@ -645,6 +667,7 @@ export const Report = {
     message.emplacementState = (object.emplacementState !== undefined && object.emplacementState !== null)
       ? EmplacementState.fromPartial(object.emplacementState)
       : undefined;
+    message.emplacementId = object.emplacementId ?? "";
     return message;
   },
 };
