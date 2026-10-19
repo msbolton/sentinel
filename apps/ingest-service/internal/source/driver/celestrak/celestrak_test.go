@@ -324,6 +324,12 @@ func TestUnparseableResponseIsDeadLettered(t *testing.T) {
 	if h := drv.Health(); !strings.Contains(h.LastError, "omm json") || h.Connected {
 		t.Errorf("health = %+v", h)
 	}
+	// The parse error is in the driver's per-selection errors too. The management
+	// API empties those strings for callers not cleared for the feed, and finds
+	// them by this key and shape (mgmt.blankedDetailKeys).
+	if errs, ok := drv.Health().Detail["errors"].(map[string]string); !ok || !strings.Contains(errs["group:active"], "omm json") {
+		t.Errorf("per-selection errors = %v, want the parse error under group:active", drv.Health().Detail["errors"])
+	}
 	// A short response is sent whole.
 	if got := sample([]byte("[1,")); string(got) != "[1," {
 		t.Errorf("sample of a short response = %q", got)

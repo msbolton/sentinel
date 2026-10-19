@@ -240,6 +240,59 @@ func TestLastErrorThatIsAConnectionErrorStaysVisible(t *testing.T) {
 	})
 }
 
+// Two drivers keep an account of their own failures in the status detail, and
+// after a parse failure the decode text is in it: celestrak under errors, one
+// entry for each selection, and httpjson under lastError. A caller who may not
+// see the feed's decoder texts gets the same fields with the texts emptied, so
+// a client finds the shape it expects.
+func TestDriverSpecificErrorTextsAreGatedLikeTheRest(t *testing.T) {
+	const celestrakFull = `{"satellites":3,"pinned":0,"emitted":12,"polls":2,"selections":2,"lastStatus":403,` +
+		`"errors":{"group:active":"omm json: invalid character '<' looking for beginning of value","group:stations":"remote returned 403: one download per update"}}`
+	const celestrakBlank = `{"satellites":3,"pinned":0,"emitted":12,"polls":2,"selections":2,"lastStatus":403,` +
+		`"errors":{"group:active":"","group:stations":""}}`
+	const httpjsonFull = `{"host":"api.example.org","method":"GET","requireArea":false,"polls":4,` +
+		`"lastError":"json: cannot unmarshal object into Go value of type []interface {}"}`
+	const httpjsonBlank = `{"host":"api.example.org","method":"GET","requireArea":false,"polls":4,"lastError":""}`
+
+	srv, store, _ := newServer(t, "")
+	running := func(detail string) *registry.Status {
+		return &registry.Status{Owner: "me", State: registry.StateRunning, Health: registry.HealthWarn, Detail: json.RawMessage(detail)}
+	}
+	cel := store.feeds["celestrak"]
+	cel.Config = json.RawMessage(`{"groups":["active"],"classification":"SECRET"}`)
+	cel.Status = running(celestrakFull)
+	store.feeds["celestrak"] = cel
+	store.feeds["ops-json"] = registry.Feed{
+		ID: "ops-json", Name: "Ops JSON", Driver: "httpjson", Enabled: true, SecretRefs: map[string]string{},
+		Config: json.RawMessage(`{"url":"https://api.example.org/v1/tracks","classification":"SECRET"}`),
+		Status: running(httpjsonFull),
+	}
+
+	for _, feed := range []struct{ id, full, blank string }{
+		{"celestrak", celestrakFull, celestrakBlank},
+		{"ops-json", httpjsonFull, httpjsonBlank},
+	} {
+		for _, path := range []string{"/feeds", "/feeds/" + feed.id, "/feeds/" + feed.id + "/status"} {
+			for _, c := range statusCallers {
+				t.Run(feed.id+path+"/"+c.name, func(t *testing.T) {
+					resp, body := do(t, srv, "GET", path, "", reqOpts{roles: "sentinel-operator", class: c.class})
+					if resp.StatusCode != 200 {
+						t.Fatalf("GET %s: %d %s", path, resp.StatusCode, body)
+					}
+					want := feed.blank
+					if c.sees {
+						want = feed.full
+					}
+					got, _ := statusOf(t, path, body, feed.id)["detail"].(map[string]any)
+					if !reflect.DeepEqual(got, decodeObject(t, []byte(want))) {
+						t.Errorf("detail for a caller with clearance %q:\n got %v\nwant %s", c.class, got, want)
+					}
+				})
+			}
+		}
+	}
+}
+
 // The status a replica holds in memory is what GET returns for a feed that runs
 // there, so it is held to the same rule as the stored row.
 func TestLiveStatusErrorTextsAreHeldToTheSameRule(t *testing.T) {
@@ -346,10 +399,25 @@ func TestWithoutErrorTexts(t *testing.T) {
 			`{"senders":[{"remote":"a:1","malformed":1,"lastReason":"parse_error"},{"remote":"b:2","messages":3}]}`,
 		},
 		{
-			"a lastError elsewhere is not a decoder text",
-			`{"lastError":"dial tcp: refused","connections":[{"name":"a","lastError":"Api Key Is Not Valid"}],"senders":[{"remote":"a:1","lastError":"bad"}]}`,
-			`{"connections":[{"name":"a","lastError":"Api Key Is Not Valid"}],"lastError":"dial tcp: refused","senders":[{"remote":"a:1"}]}`,
+			// aisstream's connections report their own dial and subscription errors,
+			// which say nothing of a payload.
+			"a lastError nested elsewhere is a connection's own",
+			`{"connections":{"area":{"connected":false,"lastError":"Api Key Is Not Valid"}},"senders":[{"remote":"a:1","lastError":"bad"}]}`,
+			`{"connections":{"area":{"connected":false,"lastError":"Api Key Is Not Valid"}},"senders":[{"remote":"a:1"}]}`,
 		},
+		// The driver-specific keys that can hold a parse failure's text keep their
+		// shape and lose their strings.
+		{"httpjson's last error is blanked, its key kept", `{"polls":4,"lastError":"json: cannot unmarshal object"}`, `{"polls":4,"lastError":""}`},
+		{"a last error that is empty already", `{"lastError":""}`, `{"lastError":""}`},
+		{"a last error that is null", `{"lastError":null}`, `{"lastError":null}`},
+		{
+			"celestrak's errors keep their selections and lose their texts",
+			`{"lastStatus":403,"errors":{"group:active":"omm json: invalid character '<'","group:stations":"remote returned 403: one download per update"}}`,
+			`{"lastStatus":403,"errors":{"group:active":"","group:stations":""}}`,
+		},
+		{"errors that are a count stay", `{"errors":7}`, `{"errors":7}`},
+		{"errors that are none", `{"errors":{}}`, `{"errors":{}}`},
+		{"errors nested deeper keep what is not text", `{"errors":{"a":{"msg":"text","n":2,"ok":true,"none":null},"b":["x",3]}}`, `{"errors":{"a":{"msg":"","n":2,"ok":true,"none":null},"b":["",3]}}`},
 		{"an empty sender list", `{"senders":[]}`, `{"senders":[]}`},
 		// What cannot be read cannot be shown to be free of the texts.
 		{"senders that are not a list", `{"malformed":1,"senders":"10.0.0.5: bad"}`, `{"malformed":1}`},
@@ -395,8 +463,8 @@ func TestWithoutErrorTextsHidesWhatTheTransportWrites(t *testing.T) {
 
 // Counts are not rounded on their way through: decoding them into float64 would.
 func TestWithoutErrorTextsKeepsNumbersExact(t *testing.T) {
-	got := string(withoutErrorTexts(json.RawMessage(`{"messages":12345678901234567890,"senders":[{"messages":9007199254740993,"lastError":"x"}]}`)))
-	for _, digits := range []string{"12345678901234567890", "9007199254740993"} {
+	got := string(withoutErrorTexts(json.RawMessage(`{"messages":12345678901234567890,"senders":[{"messages":9007199254740993,"lastError":"x"}],"errors":{"a":"x","n":18446744073709551617}}`)))
+	for _, digits := range []string{"12345678901234567890", "9007199254740993", "18446744073709551617"} {
 		if !strings.Contains(got, digits) {
 			t.Errorf("%s lost its digits: %s", digits, got)
 		}

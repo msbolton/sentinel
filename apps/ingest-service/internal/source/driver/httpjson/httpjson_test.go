@@ -359,7 +359,10 @@ func TestDecodeErrorDeadLetters(t *testing.T) {
 	if len(sink.dead) != 1 || sink.dead[0] != "parse_error" || len(sink.success) != 0 {
 		t.Errorf("dead = %v success = %v", sink.dead, sink.success)
 	}
-	if h := d.Health(); h.LastError == "" || h.Detail["lastError"] == "" {
+	// The parse error is in the detail too, under lastError, as a string. The
+	// management API empties it for callers not cleared for the feed, and finds it
+	// by this key (mgmt.blankedDetailKeys).
+	if h := d.Health(); h.LastError == "" || h.Detail["lastError"] != h.LastError {
 		t.Errorf("health = %+v", h)
 	}
 	// A document without records is skipped, not dead-lettered, and the poll succeeds.

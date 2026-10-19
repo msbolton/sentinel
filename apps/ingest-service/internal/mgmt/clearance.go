@@ -1,6 +1,7 @@
 package mgmt
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 
@@ -20,8 +21,9 @@ func clearedFor(r *http.Request, f registry.Feed) bool {
 }
 
 // withoutDecoderTexts returns a status without the texts a decoder's error can
-// repeat from what a sender sent: the ones withoutErrorTexts takes out of the
-// detail, and the status's last error when it is the feed's last decode error.
+// repeat from what a sender sent: the ones withoutErrorTexts removes or empties
+// in the detail, and the status's last error when it is the feed's last decode
+// error.
 //
 // The last error is that when it is the same text as detail.lastDecodeError.
 // The feed runner records a payload's decode error as the last error, and the
@@ -52,10 +54,27 @@ func lastDecodeError(detail json.RawMessage) string {
 	return text
 }
 
+// blankedDetailKeys are the keys at the top of a status detail whose strings
+// the gate empties, keeping the keys and the rest of their shape so that a
+// client reading them finds the fields it expects. Both are a driver's account
+// of how its own requests went, and after a response that would not parse the
+// decoder's text is in it:
+//
+//	lastError  httpjson: the last error of its poll
+//	errors     celestrak: the error of each selection's last fetch, by selection
+//
+// Where a driver uses a key for a number (intelsky and aisstream count their
+// failures under errors) the number stays: only strings are emptied.
+// TestEveryErrorKeyIsAccountedFor holds this list, and the keys that are
+// removed instead, to the keys the code writes.
+var blankedDetailKeys = []string{"errors", "lastError"}
+
 // withoutErrorTexts returns a status detail without the texts a decoder's
-// error can repeat from what a sender sent: the feed's lastDecodeError and each
-// sender's lastError. Counts, times and reason codes stay, and so does every
-// other key, wherever it is named lastError. A detail that cannot be read as
+// error can repeat from what a sender sent. It removes the feed's
+// lastDecodeError and each sender's lastError, and empties the strings under
+// the keys in blankedDetailKeys. Counts, times and reason codes stay, and so
+// does every other key, a lastError nested elsewhere included (aisstream's
+// connections report their own dial errors). A detail that cannot be read as
 // expected is cut down rather than passed on: a detail that is not an object
 // becomes {}, and senders that are not a list of objects are left out.
 //
@@ -70,6 +89,11 @@ func withoutErrorTexts(detail json.RawMessage) json.RawMessage {
 		return detail
 	}
 	delete(d, "lastDecodeError")
+	for _, key := range blankedDetailKeys {
+		if raw, ok := d[key]; ok {
+			d[key] = blankStrings(raw)
+		}
+	}
 	if raw, ok := d["senders"]; ok {
 		if cut, ok := withoutSenderErrors(raw); ok {
 			d["senders"] = cut
@@ -82,6 +106,40 @@ func withoutErrorTexts(detail json.RawMessage) json.RawMessage {
 		return json.RawMessage("{}")
 	}
 	return out
+}
+
+// blankStrings returns a JSON value with every string in it empty: the shape,
+// the keys and the numbers stay, as they were written, so a count is neither
+// hidden nor rounded. A value that cannot be read becomes an empty string.
+func blankStrings(raw json.RawMessage) json.RawMessage {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return json.RawMessage(`""`)
+	}
+	out, err := json.Marshal(blank(v))
+	if err != nil {
+		return json.RawMessage(`""`)
+	}
+	return out
+}
+
+// blank empties the strings of a decoded JSON value, in place.
+func blank(v any) any {
+	switch x := v.(type) {
+	case string:
+		return ""
+	case map[string]any:
+		for k, e := range x {
+			x[k] = blank(e)
+		}
+	case []any:
+		for i, e := range x {
+			x[i] = blank(e)
+		}
+	}
+	return v
 }
 
 // withoutSenderErrors drops lastError from each sender; it reports false for
