@@ -79,11 +79,20 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Resumption is of no use to senders that send and go, and a TLS 1.3 server
+	// sends a session ticket just after the handshake. A sender that writes and
+	// closes at once never reads it, so its close finds unread data and becomes
+	// a RST, which can take the message with it. Like asking for certificates,
+	// this is the listener's decision, not the shared builder's, which dialers
+	// use too.
+	if t != nil {
+		t.SessionTicketsDisabled = true
+	}
 	// Asking senders for certificates is this listener's decision, not the
-	// shared TLS builder's, which dialers use too. It can check them only
-	// against a client CA.
+	// shared TLS builder's. It can check them only against a client CA, and a
+	// listener without a TLS config at all has nothing to check them with.
 	if mutualTLS {
-		if t.ClientCAs == nil {
+		if t == nil || t.ClientCAs == nil {
 			return nil, errors.New("tcpserver: requiring client certificates needs a client CA")
 		}
 		t.ClientAuth = tls.RequireAndVerifyClientCert

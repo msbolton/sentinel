@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -802,4 +804,123 @@ func TestTLSHandshakeFailureIsLoggedAtDebug(t *testing.T) {
 	if n := detailInt(tr.State(), "tlsFailed"); n != 1 {
 		t.Errorf("tlsFailed = %d, want 1", n)
 	}
+}
+
+// tlsFixture is a running TLS listener and the config of a sender that trusts it.
+type tlsFixture struct {
+	addr   string
+	tr     transport.Transport
+	col    *transporttest.Collector
+	sender *tls.Config
+}
+
+// startTLS runs a TLS listener, with or without mutual TLS, until the test ends.
+func startTLS(t *testing.T, mutual bool) *tlsFixture {
+	t.Helper()
+	ca := transporttest.NewCA(t)
+	server := ca.Issue(t, "localhost")
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(ca.CertPEM)
+	cfg := transport.Config{Kind: "tcpserver", Address: transporttest.FreePort(t), Framing: "line",
+		TLS: &transport.TLS{Enabled: true, RequireClientCert: mutual}, CertPEM: server.CertPEM, KeyPEM: server.KeyPEM}
+	sender := &tls.Config{RootCAs: roots, ServerName: "localhost"}
+	if mutual {
+		cfg.ClientCAPEM = ca.CertPEM
+		pair := ca.Issue(t, "sender")
+		cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sender.Certificates = []tls.Certificate{cert}
+	}
+	tr, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	col := &transporttest.Collector{}
+	t.Cleanup(transporttest.Run(t, tr, col.Emit))
+	return &tlsFixture{addr: cfg.Address, tr: tr, col: col, sender: sender}
+}
+
+// dialTLS connects once the listener is up.
+func (f *tlsFixture) dialTLS(t *testing.T, cfg *tls.Config) *tls.Conn {
+	t.Helper()
+	var c *tls.Conn
+	if !transporttest.WaitFor(func() bool {
+		var err error
+		c, err = tls.Dial("tcp", f.addr, cfg)
+		return err == nil
+	}, 2*time.Second) {
+		t.Fatal("could not connect to the listener")
+	}
+	return c
+}
+
+// ticketCache is a client's session cache that only counts the session tickets
+// it is given. A Go client asks for tickets when it has a cache, as OpenSSL
+// based senders do by default.
+type ticketCache struct{ tickets atomic.Int32 }
+
+func (*ticketCache) Get(string) (*tls.ClientSessionState, bool) { return nil, false }
+func (c *ticketCache) Put(string, *tls.ClientSessionState)      { c.tickets.Add(1) }
+
+// A TLS 1.3 sender that writes its message and closes at once never reads what
+// the server sent after the handshake. If that includes a session ticket, the
+// sender's close finds unread data in its receive buffer and becomes a RST,
+// which can take the message with it. Senders have no use for resumption, so the
+// listener issues no tickets and leaves nothing unread. Whether the RST costs
+// the message depends on the host's TCP stack (a loopback on macOS delivers it
+// regardless), so TestListenerIssuesNoSessionTickets checks the cause itself.
+func TestSenderThatClosesAtOnceLosesNothing(t *testing.T) {
+	for _, mutual := range []bool{false, true} {
+		name := map[bool]string{false: "server authentication", true: "mutual TLS"}[mutual]
+		t.Run(name, func(t *testing.T) {
+			f := startTLS(t, mutual)
+			sender := f.sender.Clone()
+			sender.ClientSessionCache = &ticketCache{}
+			const senders = 100
+			for i := 0; i < senders; i++ {
+				c := f.dialTLS(t, sender)
+				if _, err := fmt.Fprintf(c, "message %d\n", i); err != nil {
+					t.Fatalf("sender %d: %v", i, err)
+				}
+				c.Close() // at once: no read, no pause
+			}
+			if !transporttest.WaitFor(func() bool { return f.col.Count() >= senders }, 5*time.Second) {
+				t.Errorf("%d of %d messages arrived: a sender that closed at once lost the rest (tlsFailed %d, lastError %q)",
+					f.col.Count(), senders, detailInt(f.tr.State(), "tlsFailed"), f.tr.State().LastError)
+			}
+		})
+	}
+}
+
+// The listener sends no session tickets, whichever way it authenticates: a
+// client that asks for them (it has a session cache) reads what comes after the
+// handshake and is given none.
+func TestListenerIssuesNoSessionTickets(t *testing.T) {
+	for _, mutual := range []bool{false, true} {
+		name := map[bool]string{false: "server authentication", true: "mutual TLS"}[mutual]
+		t.Run(name, func(t *testing.T) {
+			f := startTLS(t, mutual)
+			cache := &ticketCache{}
+			sender := f.sender.Clone()
+			sender.ClientSessionCache = cache
+			c := f.dialTLS(t, sender)
+			defer c.Close()
+			// A client takes a ticket in when it next reads. The handshake is
+			// over, so this waits for whatever the server sends next, if anything.
+			_ = c.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+			if _, err := c.Read(make([]byte, 1)); !isTimeout(err) {
+				t.Fatalf("read after the handshake = %v, want a timeout: the listener has nothing to send first", err)
+			}
+			if n := cache.tickets.Load(); n != 0 {
+				t.Errorf("the listener issued %d session tickets, want none: a sender that writes and closes at once leaves them unread", n)
+			}
+		})
+	}
+}
+
+func isTimeout(err error) bool {
+	ne, ok := err.(net.Error)
+	return ok && ne.Timeout()
 }

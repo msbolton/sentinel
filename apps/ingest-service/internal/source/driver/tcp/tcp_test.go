@@ -319,6 +319,56 @@ func TestListenLogsAFailedTLSHandshakeToTheFeedsLogger(t *testing.T) {
 	}
 }
 
+// A listen-mode connection with TLS, requireClientCert and a clientCa secret
+// asks every sender for a certificate: one that presents none fails the
+// handshake and is counted in tlsFailed, one the CA signed gets in. The tcpserver
+// tests prove the transport; this one proves the driver hands it the flag and the
+// CA.
+func TestListenRequiresClientCertificates(t *testing.T) {
+	ca := transporttest.NewCA(t)
+	server := ca.Issue(t, "localhost")
+	sender := ca.Issue(t, "sender")
+	pair, err := tls.X509KeyPair(sender.CertPEM, sender.KeyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(ca.CertPEM)
+
+	port := freePort(t)
+	d, sink := start(t, map[string]any{"mode": "listen", "port": port, "address": "127.0.0.1", "encoding": "json",
+		"tls": map[string]any{"enabled": true, "requireClientCert": true}},
+		map[string]string{"tlsCert": string(server.CertPEM), "tlsKey": string(server.KeyPEM), "clientCa": string(ca.CertPEM)})
+	tlsFailed := func() int64 { n, _ := d.Health().Detail["tlsFailed"].(int64); return n }
+	message := []byte(`{"sourceEntityId":"s1","position":{"latitude":1,"longitude":2}}` + "\n")
+
+	// The sender with a certificate goes first: its connecting proves the
+	// listener is up, so that nothing else has to knock on the door.
+	good := dial(t, port, &tls.Config{RootCAs: roots, ServerName: "localhost", Certificates: []tls.Certificate{pair}})
+	_, _ = good.Write(message)
+	if !transporttest.WaitFor(func() bool { return sink.count() == 1 }, waitTimeout) {
+		t.Fatal("a sender with a certificate the client CA signed was not let in")
+	}
+	if n := tlsFailed(); n != 0 {
+		t.Errorf("tlsFailed = %d after the signed sender, want 0", n)
+	}
+
+	// With TLS 1.3 the client finishes its side of the handshake first, so the
+	// server's refusal reaches it with its next read.
+	anon := dial(t, port, &tls.Config{RootCAs: roots, ServerName: "localhost"})
+	_ = anon.SetDeadline(time.Now().Add(waitTimeout))
+	_, _ = anon.Write(message)
+	if _, err := anon.Read(make([]byte, 1)); err == nil || isTimeout(err) {
+		t.Errorf("a sender with no certificate was not turned away: read = %v", err)
+	}
+	if !transporttest.WaitFor(func() bool { return tlsFailed() == 1 }, waitTimeout) {
+		t.Errorf("tlsFailed = %d, want the refused handshake counted once", tlsFailed())
+	}
+	if n := sink.count(); n != 1 {
+		t.Errorf("%d observations, want only the signed sender's", n)
+	}
+}
+
 // TLS material comes from the secrets only. A config that carries file
 // paths (it never passes the schema, but New can be called without it) must
 // not make the host read them.
