@@ -237,3 +237,40 @@ func TestRunnerPropagatesPublishError(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// The cause of an undecodable payload is kept apart from the other errors a
+// runner records: its text can repeat the payload, and the status shows it
+// under a key of its own.
+func TestRunnerKeepsTheLastDecodeErrorApart(t *testing.T) {
+	const decodeText = `proto: (line 1:2): unknown field "launchCode"`
+	drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+		sink.DeadLetter([]byte("garbage"), "parse_error", errors.New(decodeText))
+		return nil
+	}}
+	r := NewRunner("feed-x", "stream", drv, &memPublisher{}, metrics.New(nil), zap.NewNop(), RunnerOptions{})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st := r.Stats(); st.LastError != decodeText || st.LastDecodeError != decodeText {
+		t.Fatalf("after a dead letter: last error %q, last decode error %q; want both %q", st.LastError, st.LastDecodeError, decodeText)
+	}
+
+	// A driver-level failure replaces the last error but not the decode error,
+	// which stays what it was: the last undecodable payload.
+	r.Failed(errors.New("connection lost"))
+	if st := r.Stats(); st.LastError != "connection lost" || st.LastDecodeError != decodeText {
+		t.Errorf("after a failure: last error %q, last decode error %q", st.LastError, st.LastDecodeError)
+	}
+
+	// A dead letter that says nothing of why leaves both as they were.
+	r.DeadLetter([]byte("x"), "parse_error", nil)
+	if st := r.Stats(); st.LastError != "connection lost" || st.LastDecodeError != decodeText {
+		t.Errorf("after a dead letter with no cause: last error %q, last decode error %q", st.LastError, st.LastDecodeError)
+	}
+
+	// The next one replaces the decode error as it replaces the last error.
+	r.DeadLetterFrom([]byte("y"), "missing_identity", errors.New("missing_identity: no identity"), driver.Provenance{Decoder: "sentinel"})
+	if st := r.Stats(); st.LastError != "missing_identity: no identity" || st.LastDecodeError != "missing_identity: no identity" {
+		t.Errorf("after another: last error %q, last decode error %q", st.LastError, st.LastDecodeError)
+	}
+}

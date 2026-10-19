@@ -62,7 +62,7 @@ func toFeedDTO(f registry.Feed, catalog *drivers.Catalog, cleared bool) feedDTO 
 		dto.Status = registry.Status{State: registry.StateStopped, Health: registry.HealthUnknown}
 	}
 	if !cleared {
-		dto.Status.Detail = withoutErrorTexts(dto.Status.Detail)
+		dto.Status = withoutDecoderTexts(dto.Status)
 	}
 	if len(dto.Status.Detail) == 0 {
 		dto.Status.Detail = json.RawMessage("{}")

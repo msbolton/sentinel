@@ -19,6 +19,39 @@ func clearedFor(r *http.Request, f registry.Feed) bool {
 	return classification.Rank(middleware.Classification(r.Context())) >= classification.Rank(f.Common().Classification)
 }
 
+// withoutDecoderTexts returns a status without the texts a decoder's error can
+// repeat from what a sender sent: the ones withoutErrorTexts takes out of the
+// detail, and the status's last error when it is the feed's last decode error.
+//
+// The last error is that when it is the same text as detail.lastDecodeError.
+// The feed runner records a payload's decode error as the last error, and the
+// supervisor reports that same text under lastDecodeError whichever driver the
+// feed runs (feed.Supervisor.statusOf), so the two are one text exactly when
+// the last error came from a decode. Any other last error, a failed dial say,
+// says nothing of what a sender sent and is left. The status is a copy; what
+// the caller holds is not changed.
+func withoutDecoderTexts(st registry.Status) registry.Status {
+	if st.LastError != "" && st.LastError == lastDecodeError(st.Detail) {
+		st.LastError = ""
+	}
+	st.Detail = withoutErrorTexts(st.Detail)
+	return st
+}
+
+// lastDecodeError is the detail's lastDecodeError, or "" when it has none or
+// the detail cannot be read.
+func lastDecodeError(detail json.RawMessage) string {
+	var d map[string]json.RawMessage
+	if json.Unmarshal(detail, &d) != nil {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(d["lastDecodeError"], &text) != nil {
+		return ""
+	}
+	return text
+}
+
 // withoutErrorTexts returns a status detail without the texts a decoder's
 // error can repeat from what a sender sent: the feed's lastDecodeError and each
 // sender's lastError. Counts, times and reason codes stay, and so does every

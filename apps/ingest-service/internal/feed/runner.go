@@ -59,6 +59,11 @@ type Stats struct {
 	LastSuccessAt time.Time
 	EntitiesLast  int
 	LastError     string
+	// LastDecodeError is the cause of the last payload that could not be
+	// decoded. DeadLetterFrom records it as LastError too, but a later failure
+	// replaces LastError and not this. Its text can repeat the payload, so the
+	// status reports it under a key the management API knows to hide.
+	LastDecodeError string
 
 	Outbound *outbound.Counters
 }
@@ -241,6 +246,7 @@ func (r *Runner) DeadLetterFrom(raw []byte, reason string, cause error, p driver
 	r.stats.ErrorsTotal++
 	if cause != nil {
 		r.stats.LastError = cause.Error()
+		r.stats.LastDecodeError = r.stats.LastError
 	}
 	r.mu.Unlock()
 	if r.metrics != nil {

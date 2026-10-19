@@ -313,3 +313,110 @@ func TestRunStopsEverythingOnCancel(t *testing.T) {
 		t.Errorf("shutdown: stopped=%d released=%v status=%+v", d.stopped.Load(), reg.released, reg.status("a"))
 	}
 }
+
+// detailOf reads the detail of a status.
+func detailOf(t *testing.T, st registry.Status) map[string]any {
+	t.Helper()
+	var detail map[string]any
+	if err := json.Unmarshal(st.Detail, &detail); err != nil {
+		t.Fatalf("detail %s: %v", st.Detail, err)
+	}
+	return detail
+}
+
+// The management API hides the text of a decoder's error from callers not
+// cleared for the feed, and finds it under detail.lastDecodeError. When that
+// text is also the status's last error, the two must be the same text whatever
+// driver the feed runs: only the stream driver reports the key itself, so the
+// supervisor writes it from the runner's record of the dead letter.
+func TestStatusNamesTheDecodeErrorWhateverTheDriver(t *testing.T) {
+	const decodeText = `omm json: invalid character '<' looking for beginning of value`
+	deadLetters := func(ctx context.Context, sink driver.Sink) error {
+		sink.DeadLetter([]byte("<html>"), "parse_error", errors.New(decodeText))
+		<-ctx.Done()
+		return nil
+	}
+	for _, tc := range []struct {
+		name         string
+		drv          *scriptedDriver
+		wantLast     string // the status's last error
+		wantDecode   string // detail.lastDecodeError, "" for none
+		decodeAbsent bool
+	}{
+		{
+			name:       "a driver that reports nothing of it",
+			drv:        &scriptedDriver{run: deadLetters, health: driver.Health{Detail: map[string]any{"polls": 3}}},
+			wantLast:   decodeText,
+			wantDecode: decodeText,
+		},
+		{
+			// The stream driver keeps its own copy, written a moment before the
+			// runner's; the status says what the runner recorded with its last
+			// error, so that the two cannot differ.
+			name:       "a driver that reports its own text for it",
+			drv:        &scriptedDriver{run: deadLetters, health: driver.Health{Detail: map[string]any{"lastDecodeError": "the driver's own, newer text"}}},
+			wantLast:   decodeText,
+			wantDecode: decodeText,
+		},
+		{
+			name: "a connection error and no decode error",
+			drv: &scriptedDriver{
+				run:    func(ctx context.Context, _ driver.Sink) error { <-ctx.Done(); return nil },
+				health: driver.Health{LastError: "dial tcp 10.0.0.9:4001: connect: connection refused"},
+			},
+			wantLast:     "dial tcp 10.0.0.9:4001: connect: connection refused",
+			decodeAbsent: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := newFakeRegistry()
+			sup := newSupervisor(reg, func(driver.Spec) (driver.Driver, error) { return tc.drv, nil })
+			t.Cleanup(sup.shutdown)
+			ctx := context.Background()
+			reg.set(feedSpec("a", 1, true))
+			sup.Reconcile(ctx)
+			if !waitFor(func() bool { st, _ := sup.Snapshot("a"); return st.LastError != "" }, 2*time.Second) {
+				st, _ := sup.Snapshot("a")
+				t.Fatalf("no last error in %+v", st)
+			}
+			st, _ := sup.Snapshot("a")
+			detail := detailOf(t, st)
+			got, has := detail["lastDecodeError"]
+			if st.LastError != tc.wantLast || (tc.decodeAbsent && has) || (!tc.decodeAbsent && got != tc.wantDecode) {
+				t.Errorf("last error %q, detail.lastDecodeError %v (present %v); want %q and %q (absent %v)", st.LastError, got, has, tc.wantLast, tc.wantDecode, tc.decodeAbsent)
+			}
+			// What the replica stores for the others to read says the same.
+			sup.flushStatus(ctx)
+			row := reg.status("a")
+			if row.LastError != st.LastError || detailOf(t, row)["lastDecodeError"] != detail["lastDecodeError"] {
+				t.Errorf("stored status: last error %q, detail.lastDecodeError %v; the snapshot has %q and %v", row.LastError, detailOf(t, row)["lastDecodeError"], st.LastError, detail["lastDecodeError"])
+			}
+		})
+	}
+}
+
+// A feed that stops with an error shows that error, not a decode error that
+// came before it, and an instance that is not running carries no decode text.
+func TestStatusOfAFailedFeedIsNotADecodeError(t *testing.T) {
+	reg := newFakeRegistry()
+	sup := newSupervisor(reg, func(driver.Spec) (driver.Driver, error) {
+		return &scriptedDriver{run: func(_ context.Context, sink driver.Sink) error {
+			sink.DeadLetter([]byte("x"), "parse_error", errors.New("bad json"))
+			return errors.New("listen tcp :6001: address already in use")
+		}}, nil
+	})
+	t.Cleanup(sup.shutdown)
+	reg.set(feedSpec("a", 1, true))
+	sup.Reconcile(context.Background())
+	if !waitFor(func() bool { st, _ := sup.Snapshot("a"); return st.State == registry.StateError }, 2*time.Second) {
+		st, _ := sup.Snapshot("a")
+		t.Fatalf("the failure was not noticed: %+v", st)
+	}
+	st, _ := sup.Snapshot("a")
+	if st.LastError != "listen tcp :6001: address already in use" {
+		t.Errorf("last error = %q, want the failure that stopped the feed", st.LastError)
+	}
+	if _, has := detailOf(t, st)["lastDecodeError"]; has {
+		t.Errorf("detail = %s: a feed that is not running reports a decode error", st.Detail)
+	}
+}

@@ -272,6 +272,64 @@ func TestBadRecordsAreDeadLetteredAndSixDigitIdsKept(t *testing.T) {
 	}
 }
 
+// deadSink keeps what is dead-lettered.
+type deadSink struct {
+	memSink
+	raws   [][]byte
+	causes []error
+}
+
+func (s *deadSink) DeadLetter(raw []byte, reason string, cause error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dead = append(s.dead, reason)
+	s.raws = append(s.raws, raw)
+	s.causes = append(s.causes, cause)
+}
+
+// A response that arrives but is not an element list at all is dead-lettered,
+// as a response a poller cannot parse is by opensky, httpjson and intelsky.
+// Its error text can repeat what came back, so it has to reach the status the
+// way their decoder errors do, through the dead letter: kept apart from the
+// driver's own health, which the management API does not hide.
+func TestUnparseableResponseIsDeadLettered(t *testing.T) {
+	body := "<html>" + strings.Repeat("x", 3*deadLetterSample)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	drv := newDriver(t, srv.URL, `{"groups":["active"]}`)
+	sink := &deadSink{}
+	defer run(t, drv, sink)()
+
+	if !waitFor(func() bool { sink.mu.Lock(); defer sink.mu.Unlock(); return len(sink.dead) >= 1 }, 5*time.Second) {
+		t.Fatal("the response was not dead-lettered")
+	}
+	sink.mu.Lock()
+	reason, raw, cause := sink.dead[0], sink.raws[0], sink.causes[0]
+	sink.mu.Unlock()
+	if reason != "parse_error" {
+		t.Errorf("reason = %q, want parse_error", reason)
+	}
+	// The start of the response, which is what says what came back; the whole
+	// of it can be megabytes.
+	if len(raw) != deadLetterSample || string(raw) != body[:deadLetterSample] {
+		t.Errorf("dead letter holds %d bytes, want the first %d of the response", len(raw), deadLetterSample)
+	}
+	// The cause names the selection whose response it was and says why.
+	if cause == nil || !strings.HasPrefix(cause.Error(), "group:active: omm json: ") {
+		t.Errorf("cause = %v, want the selection and the parse error", cause)
+	}
+	// Nothing else about the failure changed: it is still the driver's last error.
+	if h := drv.Health(); !strings.Contains(h.LastError, "omm json") || h.Connected {
+		t.Errorf("health = %+v", h)
+	}
+	// A short response is sent whole.
+	if got := sample([]byte("[1,")); string(got) != "[1," {
+		t.Errorf("sample of a short response = %q", got)
+	}
+}
+
 func TestHealthRecordsErrorsAndRetryAfter(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

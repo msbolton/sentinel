@@ -953,6 +953,16 @@ func (s *Supervisor) statusOf(inst *instance, now time.Time) registry.Status {
 	for k, v := range health.Detail {
 		detail[k] = v
 	}
+	// Whichever driver the feed runs, the cause of the last undecodable payload
+	// is reported under lastDecodeError. The management API hides that text from
+	// callers not cleared for the feed and, when the status's last error is the
+	// same text, hides that too. Only the stream driver keeps a copy of its own,
+	// written a moment before the runner records the cause; the runner's is the
+	// one reported, because it was recorded together with LastError and so
+	// cannot differ from it.
+	if stats.LastDecodeError != "" {
+		detail["lastDecodeError"] = stats.LastDecodeError
+	}
 	if areaAware {
 		detail["idle"] = as.Idle
 		detail["active"] = as.Active

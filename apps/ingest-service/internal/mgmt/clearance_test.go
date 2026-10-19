@@ -69,10 +69,16 @@ func withoutTexts(t *testing.T, full map[string]any) map[string]any {
 	return out
 }
 
+// decodeError is the text of the last decode error in rejectedDetail.
+const decodeError = `proto: (line 1:2): unknown field "launchCode"`
+
+// connectionError is the kind of last error that has nothing to do with a decoder.
+const connectionError = "dial tcp 10.0.0.9:4001: connect: connection refused"
+
 // classifiedFeedServer is a server whose opensky feed is classified SECRET and
 // whose celestrak feed is not classified, both with a status that holds the
-// decoder error texts.
-func classifiedFeedServer(t *testing.T) (run func(method, path, body string, o reqOpts) (int, []byte), rt *fakeRuntime) {
+// decoder error texts and lastError as its last error.
+func classifiedFeedServer(t *testing.T, lastError string) (run func(method, path, body string, o reqOpts) (int, []byte), rt *fakeRuntime) {
 	t.Helper()
 	srv, store, fake := newServer(t, "")
 	for id, config := range map[string]string{"opensky": openskySecret, "celestrak": ""} {
@@ -80,7 +86,7 @@ func classifiedFeedServer(t *testing.T) (run func(method, path, body string, o r
 		if config != "" {
 			f.Config = json.RawMessage(config)
 		}
-		f.Status = &registry.Status{Owner: "me", State: registry.StateRunning, Health: registry.HealthHealthy, Detail: json.RawMessage(rejectedDetail)}
+		f.Status = &registry.Status{Owner: "me", State: registry.StateRunning, Health: registry.HealthHealthy, LastError: lastError, Detail: json.RawMessage(rejectedDetail)}
 		store.feeds[id] = f
 	}
 	return func(method, path, body string, o reqOpts) (int, []byte) {
@@ -89,46 +95,84 @@ func classifiedFeedServer(t *testing.T) (run func(method, path, body string, o r
 	}, fake
 }
 
-// statusDetailOf finds the status detail in what a route answered: a status, a
-// feed, or a list of feeds (where id picks the feed).
-func statusDetailOf(t *testing.T, path string, body []byte, id string) map[string]any {
+// statusOf finds the status in what a route answered: a status, a feed, or a
+// list of feeds (where id picks the feed). It is the status as a client reads
+// it, so a field that was left out is missing from the map.
+func statusOf(t *testing.T, path string, body []byte, id string) map[string]any {
 	t.Helper()
-	var st struct {
-		Detail map[string]any `json:"detail"`
-	}
 	switch {
 	case strings.HasSuffix(path, "/status"):
-		if err := json.Unmarshal(body, &st); err != nil {
-			t.Fatalf("%s: %v", body, err)
-		}
+		return decodeObject(t, body)
 	case path == "/feeds":
-		var feeds []struct {
-			ID     string `json:"id"`
-			Status struct {
-				Detail map[string]any `json:"detail"`
-			} `json:"status"`
-		}
+		var feeds []map[string]any
 		if err := json.Unmarshal(body, &feeds); err != nil {
 			t.Fatalf("%s: %v", body, err)
 		}
 		for _, f := range feeds {
-			if f.ID == id {
-				return f.Status.Detail
+			if f["id"] == id {
+				return f["status"].(map[string]any)
 			}
 		}
 		t.Fatalf("%s: no feed %s in %s", path, id, body)
-	default:
-		var f struct {
-			Status struct {
-				Detail map[string]any `json:"detail"`
-			} `json:"status"`
-		}
-		if err := json.Unmarshal(body, &f); err != nil {
-			t.Fatalf("%s: %v", body, err)
-		}
-		st.Detail = f.Status.Detail
 	}
-	return st.Detail
+	return decodeObject(t, body)["status"].(map[string]any)
+}
+
+// statusRoutes are the routes that return a feed's status, in the feed or alone.
+var statusRoutes = []struct{ name, method, path, body string }{
+	{"list", "GET", "/feeds", ""},
+	{"get", "GET", "/feeds/opensky", ""},
+	{"status", "GET", "/feeds/opensky/status", ""},
+	{"replace", "PUT", "/feeds/opensky", `{"name":"OpenSky Network","config":` + openskySecret + `,"enabled":true}`},
+	{"patch", "PATCH", "/feeds/opensky", `{"description":"classified"}`},
+	{"enable", "POST", "/feeds/opensky/enable", ""},
+	{"disable", "POST", "/feeds/opensky/disable", ""},
+}
+
+// statusCallers are callers of the SECRET opensky feed; sees says whether the
+// clearance reaches it.
+var statusCallers = []struct {
+	name  string
+	class string
+	sees  bool
+}{
+	{"no clearance header", "", false},
+	{"UNCLASSIFIED", "UNCLASSIFIED", false},
+	{"CONFIDENTIAL", "CONFIDENTIAL", false},
+	{"SECRET", "SECRET", true},
+	{"TOP_SECRET", "TOP_SECRET", true},
+	{"SECRET in lower case", "secret", true},
+}
+
+// eachStatus asks every route that returns the opensky feed's status for it as
+// every caller, as an operator so that the routes that change a feed are open
+// to them, and hands what the route answered to check.
+func eachStatus(t *testing.T, run func(method, path, body string, o reqOpts) (int, []byte), check func(t *testing.T, sees bool, class string, st map[string]any)) {
+	t.Helper()
+	for _, route := range statusRoutes {
+		for _, c := range statusCallers {
+			t.Run(route.name+"/"+c.name, func(t *testing.T) {
+				status, body := run(route.method, route.path, route.body, reqOpts{roles: "sentinel-operator", user: "u1", class: c.class})
+				if status != 200 {
+					t.Fatalf("%s %s: %d %s", route.method, route.path, status, body)
+				}
+				check(t, c.sees, c.class, statusOf(t, route.path, body, "opensky"))
+			})
+		}
+	}
+}
+
+// checkDetail compares the detail of a status with the detail a caller may see.
+func checkDetail(t *testing.T, sees bool, class string, st map[string]any) {
+	t.Helper()
+	full := decodeObject(t, []byte(rejectedDetail))
+	want := withoutTexts(t, full)
+	if sees {
+		want = full
+	}
+	if got, _ := st["detail"].(map[string]any); !reflect.DeepEqual(got, want) {
+		t.Errorf("detail for a caller with clearance %q:\n got %v\nwant %v", class, got, want)
+	}
 }
 
 // The error texts a decoder produces can repeat what the sender sent, so a
@@ -136,89 +180,156 @@ func statusDetailOf(t *testing.T, path string, body []byte, id string) map[strin
 // classification: the rule the dead-letter endpoint applies. Counts, times and
 // reason codes stay for everyone. Every route that returns a status applies it.
 func TestStatusErrorTextsAreShownOnlyToCallersClearedForTheFeed(t *testing.T) {
-	run, _ := classifiedFeedServer(t)
-	full := decodeObject(t, []byte(rejectedDetail))
-	hidden := withoutTexts(t, full)
-
-	routes := []struct{ name, method, path, body string }{
-		{"list", "GET", "/feeds", ""},
-		{"get", "GET", "/feeds/opensky", ""},
-		{"status", "GET", "/feeds/opensky/status", ""},
-		{"replace", "PUT", "/feeds/opensky", `{"name":"OpenSky Network","config":` + openskySecret + `,"enabled":true}`},
-		{"patch", "PATCH", "/feeds/opensky", `{"description":"classified"}`},
-		{"enable", "POST", "/feeds/opensky/enable", ""},
-		{"disable", "POST", "/feeds/opensky/disable", ""},
+	if got := decodeObject(t, []byte(rejectedDetail))["lastDecodeError"]; got != decodeError {
+		t.Fatalf("the fixture's decode error is %q, not %q", got, decodeError)
 	}
-	callers := []struct {
-		name  string
-		class string
-		sees  bool
-	}{
-		{"no clearance header", "", false},
-		{"UNCLASSIFIED", "UNCLASSIFIED", false},
-		{"CONFIDENTIAL", "CONFIDENTIAL", false},
-		{"SECRET", "SECRET", true},
-		{"TOP_SECRET", "TOP_SECRET", true},
-		{"SECRET in lower case", "secret", true},
-	}
-	for _, route := range routes {
-		for _, c := range callers {
-			t.Run(route.name+"/"+c.name, func(t *testing.T) {
-				// An operator, so that the routes that change a feed are open to the caller.
-				status, body := run(route.method, route.path, route.body, reqOpts{roles: "sentinel-operator", user: "u1", class: c.class})
-				if status != 200 {
-					t.Fatalf("%s %s: %d %s", route.method, route.path, status, body)
-				}
-				got := statusDetailOf(t, route.path, body, "opensky")
-				want := hidden
-				if c.sees {
-					want = full
-				}
-				if !reflect.DeepEqual(got, want) {
-					t.Errorf("detail for a caller with clearance %q:\n got %v\nwant %v", c.class, got, want)
-				}
-			})
-		}
-	}
+	run, _ := classifiedFeedServer(t, "")
+	eachStatus(t, run, checkDetail)
 
 	// A feed with no classification is open to every caller, whatever their clearance.
+	full := decodeObject(t, []byte(rejectedDetail))
 	for _, class := range []string{"", "UNCLASSIFIED"} {
 		_, body := run("GET", "/feeds/celestrak", "", reqOpts{class: class})
-		if got := statusDetailOf(t, "/feeds/celestrak", body, ""); !reflect.DeepEqual(got, full) {
+		if got, _ := statusOf(t, "/feeds/celestrak", body, "")["detail"].(map[string]any); !reflect.DeepEqual(got, full) {
 			t.Errorf("an unclassified feed read with clearance %q lost part of its detail: %v", class, got)
 		}
 	}
 }
 
-// The status a replica holds in memory is what GET returns for a feed that runs
-// there, so it is held to the same rule as the stored row.
-func TestLiveStatusErrorTextsAreHeldToTheSameRule(t *testing.T) {
-	run, rt := classifiedFeedServer(t)
-	rt.snaps = map[string]registry.Status{"opensky": {Owner: "me", State: registry.StateRunning, Health: registry.HealthHealthy, Detail: json.RawMessage(rejectedDetail)}}
-	full := decodeObject(t, []byte(rejectedDetail))
-
-	for _, path := range []string{"/feeds", "/feeds/opensky", "/feeds/opensky/status"} {
-		_, body := run("GET", path, "", reqOpts{class: "CONFIDENTIAL"})
-		if got := statusDetailOf(t, path, body, "opensky"); !reflect.DeepEqual(got, withoutTexts(t, full)) {
-			t.Errorf("%s for a CONFIDENTIAL caller: %v", path, got)
+// When a decode error is also the status's last error, which is where the
+// operator's list shows it, it is the same text and is hidden with the rest:
+// blank to a caller who may not see the feed's decoder texts, as it is
+// everywhere the status is returned.
+func TestLastErrorThatIsADecodeErrorIsHiddenWithTheOtherDecoderTexts(t *testing.T) {
+	run, _ := classifiedFeedServer(t, decodeError)
+	eachStatus(t, run, func(t *testing.T, sees bool, class string, st map[string]any) {
+		checkDetail(t, sees, class, st)
+		last, present := st["lastError"]
+		switch {
+		case sees && last != decodeError:
+			t.Errorf("a caller with clearance %q sees last error %v, want the decode error", class, last)
+		case !sees && present:
+			t.Errorf("a caller with clearance %q sees last error %v: the decoder's text, which can repeat the payload", class, last)
 		}
-		_, body = run("GET", path, "", reqOpts{class: "SECRET"})
-		if got := statusDetailOf(t, path, body, "opensky"); !reflect.DeepEqual(got, full) {
-			t.Errorf("%s for a SECRET caller: %v", path, got)
+		// The rest of the status is the caller's whatever their clearance.
+		if st["state"] != registry.StateRunning && st["state"] != registry.StateStopped {
+			t.Errorf("state = %v", st["state"])
+		}
+	})
+
+	// A feed that is not classified shows its last error to every caller.
+	for _, class := range []string{"", "UNCLASSIFIED"} {
+		_, body := run("GET", "/feeds/celestrak/status", "", reqOpts{class: class})
+		if got := statusOf(t, "/feeds/celestrak/status", body, "")["lastError"]; got != decodeError {
+			t.Errorf("an unclassified feed read with clearance %q: last error %v, want %q", class, got, decodeError)
 		}
 	}
 }
 
-// Nothing is hidden but the two texts: the rest of the response is the same for
-// a caller who may not see them.
+// A last error that is not a decoder's, such as a dial failure, says nothing of
+// what a sender sent and stays visible to every caller, which is how an
+// operator finds out why a connection is down. The decoder texts beside it are
+// still hidden.
+func TestLastErrorThatIsAConnectionErrorStaysVisible(t *testing.T) {
+	run, _ := classifiedFeedServer(t, connectionError)
+	eachStatus(t, run, func(t *testing.T, sees bool, class string, st map[string]any) {
+		checkDetail(t, sees, class, st)
+		if got := st["lastError"]; got != connectionError {
+			t.Errorf("a caller with clearance %q sees last error %v, want the connection error", class, got)
+		}
+	})
+}
+
+// The status a replica holds in memory is what GET returns for a feed that runs
+// there, so it is held to the same rule as the stored row.
+func TestLiveStatusErrorTextsAreHeldToTheSameRule(t *testing.T) {
+	run, rt := classifiedFeedServer(t, "")
+	rt.snaps = map[string]registry.Status{"opensky": {Owner: "me", State: registry.StateRunning, Health: registry.HealthHealthy, LastError: decodeError, Detail: json.RawMessage(rejectedDetail)}}
+	full := decodeObject(t, []byte(rejectedDetail))
+
+	for _, path := range []string{"/feeds", "/feeds/opensky", "/feeds/opensky/status"} {
+		_, body := run("GET", path, "", reqOpts{class: "CONFIDENTIAL"})
+		st := statusOf(t, path, body, "opensky")
+		if got, _ := st["detail"].(map[string]any); !reflect.DeepEqual(got, withoutTexts(t, full)) {
+			t.Errorf("%s for a CONFIDENTIAL caller: %v", path, got)
+		}
+		if last, present := st["lastError"]; present {
+			t.Errorf("%s for a CONFIDENTIAL caller: last error %v", path, last)
+		}
+		_, body = run("GET", path, "", reqOpts{class: "SECRET"})
+		st = statusOf(t, path, body, "opensky")
+		if got, _ := st["detail"].(map[string]any); !reflect.DeepEqual(got, full) {
+			t.Errorf("%s for a SECRET caller: %v", path, got)
+		}
+		if st["lastError"] != decodeError {
+			t.Errorf("%s for a SECRET caller: last error %v", path, st["lastError"])
+		}
+	}
+}
+
+// Nothing is hidden but the decoder texts: the rest of the response is the same
+// for a caller who may not see them.
 func TestHidingErrorTextsChangesNothingElse(t *testing.T) {
-	run, _ := classifiedFeedServer(t)
+	run, _ := classifiedFeedServer(t, decodeError)
 	_, cleared := run("GET", "/feeds/opensky", "", reqOpts{class: "SECRET"})
 	_, below := run("GET", "/feeds/opensky", "", reqOpts{class: "CONFIDENTIAL"})
 	want, got := decodeObject(t, cleared), decodeObject(t, below)
-	want["status"].(map[string]any)["detail"] = withoutTexts(t, decodeObject(t, []byte(rejectedDetail)))
+	status := want["status"].(map[string]any)
+	status["detail"] = withoutTexts(t, decodeObject(t, []byte(rejectedDetail)))
+	delete(status, "lastError")
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the feed read below its classification differs by more than the texts:\n got %v\nwant %v", got, want)
+	}
+}
+
+func TestWithoutDecoderTexts(t *testing.T) {
+	status := func(lastError, detail string) registry.Status {
+		return registry.Status{
+			Owner: "me", State: registry.StateRunning, Health: registry.HealthWarn, LastError: lastError,
+			MessagesTotal: 12, ErrorsTotal: 3, Detail: json.RawMessage(detail),
+		}
+	}
+	for _, tc := range []struct {
+		name          string
+		lastError     string
+		detail        string
+		wantLastError string
+	}{
+		{"the last error is the decode error", "bad json", `{"lastDecodeError":"bad json"}`, ""},
+		{"the last error is something else", "connection refused", `{"lastDecodeError":"bad json"}`, "connection refused"},
+		{"no decode error to be", "bad json", `{"malformed":2}`, "bad json"},
+		{"nothing to hide", "", `{"lastDecodeError":"bad json"}`, ""},
+		{"both empty", "", `{"lastDecodeError":""}`, ""},
+		{"the decode error is not text", "7", `{"lastDecodeError":7}`, "7"},
+		// The texts are the same only if they are the same text.
+		{"a different case", "Bad JSON", `{"lastDecodeError":"bad json"}`, "Bad JSON"},
+		{"the selection that prefixed it", "group:active: omm json: bad", `{"lastDecodeError":"omm json: bad"}`, "group:active: omm json: bad"},
+		{"the decode error of a sender is not the feed's", "bad json", `{"senders":[{"remote":"a:1","lastError":"bad json"}]}`, "bad json"},
+		// A detail that cannot be read has no decode error to compare with.
+		{"a detail that is not an object", "bad json", `["bad json"]`, "bad json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := status(tc.lastError, tc.detail)
+			got := withoutDecoderTexts(in)
+			if got.LastError != tc.wantLastError {
+				t.Errorf("last error = %q, want %q", got.LastError, tc.wantLastError)
+			}
+			// Everything else of the status is as it was, and the detail is cut down
+			// as before.
+			want := in
+			want.LastError = tc.wantLastError
+			want.Detail = withoutErrorTexts(in.Detail)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("status = %+v, want %+v", got, want)
+			}
+		})
+	}
+
+	// The status the caller passes in is not changed.
+	in := status("bad json", `{"lastDecodeError":"bad json"}`)
+	_ = withoutDecoderTexts(in)
+	if in.LastError != "bad json" || string(in.Detail) != `{"lastDecodeError":"bad json"}` {
+		t.Errorf("withoutDecoderTexts changed the status it was given: %+v", in)
 	}
 }
 
