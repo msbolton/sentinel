@@ -8,8 +8,11 @@ import { DeadLettersComponent } from './dead-letters.component';
 const LIST = '/api/v1/feeds/sensor-tcp/deadletters?limit=20';
 const WITH_PAYLOAD = `${LIST}&payload=true`;
 
-/** The fields the server may leave out of an older reject. */
+/** The fields an older server may leave out of a reject altogether. */
 type Unrecorded = 'error' | 'driver' | 'decoder' | 'sender' | 'payload' | 'payloadEncoding' | 'payloadTruncated';
+
+/** What Go writes for a `time.Time` nobody set: the way the server says it does not know when a reject came. */
+const ZERO_TIME = '0001-01-01T00:00:00Z';
 
 /** A reject as the server lists it (Task 23's contract); the payload fields come only with `payload=true`. */
 function letter(over: Partial<DeadLetter> = {}): DeadLetter {
@@ -177,10 +180,27 @@ describe('DeadLettersComponent', () => {
       [timeOf('2026-10-18T11:58:30Z'), 'oversize', 'nmea-ais', '10.0.0.6:4001', 'frame of 70000 bytes exceeds the 65536 limit', '70,000 B'],
     ]);
 
+    // The Error cell keeps the line breaks of what it says, so any space round the text in the page would be shown.
+    expect(rows().map((row) => row.querySelector('td.error')!.textContent)).toEqual([
+      'not a sentinel.v1.Observation in JSON: …',
+      'frame of 70000 bytes exceeds the 65536 limit',
+    ]);
+
     // The time is a time: exact in the machine-readable attribute, and with where it sits in the topic for anyone who goes looking.
     const time = rows()[0].querySelector('time')!;
     expect(time.getAttribute('datetime')).toBe('2026-10-18T12:00:00Z');
     expect(time.getAttribute('title')).toBe('2026-10-18T12:00:00Z (partition 0, offset 42)');
+  });
+
+  it('lets the keyboard reach a table wider than the panel, and names it for the one it belongs to', async () => {
+    await openWith(page([letter()]));
+
+    const scroll = el.querySelector('.scroll')!;
+    expect(scroll.getAttribute('tabindex')).toBe('0');
+    expect(scroll.getAttribute('role')).toBe('region');
+    // the page has one panel per connection, so the name says which
+    expect(scroll.getAttribute('aria-label')).toBe('Recent rejects table of sensor-tcp');
+    expect(scroll.contains(el.querySelector('table'))).toBe(true);
   });
 
   it('is a table a screen reader can read: a caption and column headers', async () => {
@@ -194,16 +214,53 @@ describe('DeadLettersComponent', () => {
     expect(status()).toBe('1 reject in the last 120 scanned, newest first');
   });
 
-  it('shows a dash for what an older reject did not record', async () => {
-    // A reject written before the sender and the decoder were recorded, and one without an error text.
-    await openWith(page([without(letter({ offset: 7 }), 'sender', 'decoder', 'driver', 'error'), letter()]));
+  it('shows a dash for what a reject does not record: a key left out, the empty text the server writes, the zero time', async () => {
+    await openWith(
+      page([
+        // from a server that did not record the sender and the decoder, and left their keys out
+        without(letter({ offset: 7 }), 'sender', 'decoder', 'driver', 'error'),
+        // from one that writes every key, "" for what it does not know (an unknown sender, say)
+        letter({ offset: 6, sender: '', decoder: '', driver: '', error: '' }),
+        // and Go's zero time for a time it does not know
+        letter({ offset: 5, at: ZERO_TIME }),
+        letter(),
+      ]),
+    );
 
-    const [old, current] = rows().map(cellsOf);
-    expect(old).toEqual([timeOf('2026-10-18T12:00:00Z'), 'parse_error', '—', '—', '—', '17 B']);
+    const [absent, empty, noTime, current] = rows().map(cellsOf);
+    const unknown = [timeOf('2026-10-18T12:00:00Z'), 'parse_error', '—', '—', '—', '17 B'];
+    expect(absent).toEqual(unknown);
+    expect(empty).toEqual(unknown);
+    expect(noTime).toEqual(['—', ...current.slice(1)]);
     expect(current[2]).toBe('sentinel');
     // a dash says it is missing; it is not a value
-    expect(rows()[0].querySelectorAll('td [title="Not recorded"]')).toHaveLength(3);
-    expect(rows()[1].querySelectorAll('[title="Not recorded"]')).toHaveLength(0);
+    expect(rows().map((row) => row.querySelectorAll('td [title="Not recorded"]').length)).toEqual([3, 3, 1, 0]);
+    // and there is no time to make of the zero one
+    expect(rows().map((row) => row.querySelector('time') !== null)).toEqual([true, true, false, true]);
+  });
+
+  // The decoder's words, the payload and the sender's address all come from whoever sent the message.
+  it('shows what a sender controls as the text it is, whatever markup it holds', async () => {
+    const image = '<img src=x onerror=alert(1)>';
+    const script = '</pre><script>x</script>';
+    await openWith(page([letter({ error: image, sender: script, decoder: image })]));
+    press('Show payload');
+    http
+      .expectOne(WITH_PAYLOAD)
+      .flush(page([withPayload({ error: image, sender: script, decoder: image, payload: `${script}${image}` })]));
+    fixture.detectChanges();
+
+    // none of it became an element, and none of it closed one of the panel's own
+    expect(el.querySelector('img,script')).toBeNull();
+    expect(el.querySelector('[onerror]')).toBeNull();
+    expect(el.querySelectorAll('table')).toHaveLength(1);
+    expect(pre()).toHaveLength(1);
+    // it is all there as it was sent
+    const [row] = rows();
+    expect(text(row.cells[2])).toBe(image);
+    expect(text(row.cells[3])).toBe(script);
+    expect(row.cells[4].textContent).toBe(image);
+    expect(pre()[0].textContent).toBe(`${script}${image}`);
   });
 
   it('fetches the payload on request', async () => {
@@ -276,18 +333,40 @@ describe('DeadLettersComponent', () => {
     expect(figures.map((f) => f.querySelector('pre')!.textContent)).toEqual(['AP+A', 'GET / HTTP/1.1', 'AAECAw==']);
   });
 
-  it('names each payload block for a screen reader', async () => {
+  it('names each payload block for the reject it belongs to, and describes how it is shown', async () => {
     await openWith(page([letter()]));
     press('Show payload');
-    http.expectOne(WITH_PAYLOAD).flush(page([withPayload(), withPayload({ offset: 41 })]));
+    http.expectOne(WITH_PAYLOAD).flush(
+      page([
+        withPayload(),
+        withPayload({
+          at: '2026-10-18T11:58:30Z',
+          reason: 'oversize',
+          size: 9000,
+          offset: 41,
+          payload: 'AAECAw==',
+          payloadEncoding: 'base64',
+          payloadTruncated: true,
+        }),
+        withPayload({ at: ZERO_TIME, offset: 40 }),
+      ]),
+    );
     fixture.detectChanges();
 
     const blocks = pre();
-    const names = blocks.map((p) => document.getElementById(p.getAttribute('aria-labelledby') ?? '')?.textContent?.trim());
-    expect(names).toEqual(['Payload', 'Payload']);
+    // the name says which reject, as its row does; a reject with no time is named by what is left
+    expect(blocks.map((p) => p.getAttribute('aria-label'))).toEqual([
+      `Payload of the reject at ${timeOf('2026-10-18T12:00:00Z')} (parse_error)`,
+      `Payload of the reject at ${timeOf('2026-10-18T11:58:30Z')} (oversize)`,
+      'Payload of the reject (parse_error)',
+    ]);
+    // and the caption, which says how the text is encoded or cut, is read after it
+    const described = blocks.map((p) => document.getElementById(p.getAttribute('aria-describedby') ?? '')?.textContent?.trim());
+    expect(described).toEqual(['Payload', 'Payload · binary (base64) · cut to 1 KiB of 9,000 bytes', 'Payload']);
     // the ids are the page's own, one per block
-    expect(new Set(blocks.map((p) => p.getAttribute('aria-labelledby'))).size).toBe(2);
-    expect(blocks.every((p) => p.getAttribute('role') === 'group')).toBe(true);
+    expect(new Set(blocks.map((p) => p.getAttribute('aria-describedby'))).size).toBe(3);
+    expect(blocks.every((p) => p.getAttribute('role') === 'group' && p.getAttribute('tabindex') === '0')).toBe(true);
+    expect(blocks.some((p) => p.hasAttribute('aria-labelledby'))).toBe(false);
   });
 
   it('says so when a reject has no payload, or an empty one', async () => {
@@ -316,6 +395,24 @@ describe('DeadLettersComponent', () => {
     expect(status()).toBe('Dead-letter viewing is not enabled on this server');
     expect(button('Retry')).toBeNull();
     expect(button('Refresh')).toBeNull();
+    expect(el.querySelector('table')).toBeNull();
+  });
+
+  it('says so when the connection is gone, and offers no way to ask again', async () => {
+    await openFailing(404);
+    expect(status()).toBe('This connection no longer exists');
+    expect(button('Retry')).toBeNull();
+    expect(button('Refresh')).toBeNull();
+    expect(el.querySelector('table')).toBeNull();
+
+    // as when the connection goes while a list is on show
+    render();
+    await openWith(page([letter()]));
+    press('Refresh');
+    http.expectOne(LIST).flush({ error: 'not found' }, { status: 404, statusText: 'Not Found' });
+    fixture.detectChanges();
+    expect(status()).toBe('This connection no longer exists');
+    expect(button('Show payload')).toBeNull();
     expect(el.querySelector('table')).toBeNull();
   });
 
@@ -375,16 +472,138 @@ describe('DeadLettersComponent', () => {
     expect(document.activeElement).toBe(refresh);
   });
 
-  it('keeps asking for the payload when a failed request is retried', async () => {
+  // The failure takes the list away, and with it the button that says whether the payloads are on. A Retry that
+  // asked for them would ask for what nothing shows as asked for, so it asks for the plain list, and Show payload
+  // is there to ask again.
+  it('asks for the plain list when Retry follows a failed request for the payloads', async () => {
     await openWith(page([letter()]));
     press('Show payload');
     http.expectOne(WITH_PAYLOAD).flush('down', { status: 502, statusText: 'Bad Gateway' });
     fixture.detectChanges();
+    expect(status()).toBe("Couldn't load rejects");
 
     press('Retry');
+    http.expectOne(LIST).flush(page([letter()]));
+    fixture.detectChanges();
+    expect(rows()).toHaveLength(1);
+    expect(pre()).toHaveLength(0);
+    expect(button('Show payload')).not.toBeNull();
+
+    // and they come when they are asked for again
+    press('Show payload');
     http.expectOne(WITH_PAYLOAD).flush(page([withPayload()]));
     fixture.detectChanges();
     expect(pre().map((p) => p.textContent)).toEqual(['not json']);
+  });
+
+  it('keeps asking for the plain list when a failed refresh of it is retried', async () => {
+    await openWith(page([letter()]));
+    press('Refresh');
+    http.expectOne(LIST).flush('down', { status: 502, statusText: 'Bad Gateway' });
+    fixture.detectChanges();
+
+    press('Retry');
+    http.expectOne(LIST).flush(page([letter()]));
+    fixture.detectChanges();
+    expect(rows()).toHaveLength(1);
+  });
+
+  // The failure takes the list away, and the Show payload button that belonged to it; a keyboard user who had just
+  // pressed it must not be sent back to the top of the page.
+  it('moves the focus to Retry when the failure removes the button it was on', async () => {
+    await openWith(page([letter()]));
+    button('Show payload')!.focus();
+    press('Show payload');
+    expect(document.activeElement).toBe(button('Hide payload'));
+
+    http.expectOne(WITH_PAYLOAD).flush('down', { status: 502, statusText: 'Bad Gateway' });
+    fixture.detectChanges();
+
+    expect(button('Hide payload')).toBeNull();
+    expect(button('Show payload')).toBeNull();
+    expect(document.activeElement).toBe(button('Retry'));
+  });
+
+  it('leaves the focus alone when it was not on a button the failure removes', async () => {
+    await openWith(page([letter()]));
+    const elsewhere = document.createElement('button');
+    document.body.appendChild(elsewhere);
+    try {
+      elsewhere.focus();
+      press('Show payload');
+      http.expectOne(WITH_PAYLOAD).flush('down', { status: 502, statusText: 'Bad Gateway' });
+      fixture.detectChanges();
+
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
+  });
+
+  // Here the failure takes every button away, Refresh as well as Show payload: the summary is what is left.
+  it('moves the focus to the summary when nothing is left to press', async () => {
+    for (const [code, said] of [
+      [403, "You are not cleared to see this connection's rejects"],
+      [404, 'This connection no longer exists'],
+      [501, 'Dead-letter viewing is not enabled on this server'],
+    ] as const) {
+      for (const [pressed, asked] of [
+        ['Refresh', LIST],
+        ['Show payload', WITH_PAYLOAD],
+      ] as const) {
+        render();
+        await openWith(page([letter()]));
+        button(pressed)!.focus();
+        press(pressed);
+        http.expectOne(asked).flush({ error: 'no' }, { status: code, statusText: 'No' });
+        fixture.detectChanges();
+
+        expect(status()).toBe(said);
+        expect(el.querySelector('.actions')).toBeNull();
+        expect(document.activeElement).toBe(el.querySelector('summary'));
+      }
+    }
+  });
+
+  it('moves the focus to Refresh when the list that comes back has no rejects to show the payload of', async () => {
+    await openWith(page([letter()]));
+    button('Show payload')!.focus();
+    press('Show payload');
+    http.expectOne(WITH_PAYLOAD).flush(page([]));
+    fixture.detectChanges();
+
+    expect(button('Show payload')).toBeNull();
+    expect(button('Hide payload')).toBeNull();
+    expect(document.activeElement).toBe(button('Refresh'));
+  });
+
+  it('says that there may be more when the list is as long as the one it asked for', async () => {
+    const newest = (n: number) => Array.from({ length: n }, (_, i) => letter({ offset: 100 - i }));
+    const lines = () => Array.from(el.querySelectorAll('[role=status] p')).map(text);
+
+    await openWith(page(newest(19)));
+    expect(lines()).toEqual(['19 rejects in the last 120 scanned, newest first']);
+
+    press('Refresh');
+    http.expectOne(LIST).flush(page(newest(20)));
+    fixture.detectChanges();
+    expect(rows()).toHaveLength(20);
+    expect(lines()).toEqual(['The newest 20 rejects in the last 120 scanned; there may be more']);
+
+    // beside the other thing it can say about the scan
+    press('Refresh');
+    http.expectOne(LIST).flush(page(newest(20), { partial: true }));
+    fixture.detectChanges();
+    expect(lines()).toEqual([
+      'The newest 20 rejects in the last 120 scanned; there may be more',
+      'Partial: the scan stopped at its time limit, so some rejects may be missing',
+    ]);
+
+    // and not when it is one reject, or none
+    press('Refresh');
+    http.expectOne(LIST).flush(page(newest(1)));
+    fixture.detectChanges();
+    expect(lines()).toEqual(['1 reject in the last 120 scanned, newest first']);
   });
 
   it('says how far it looked when there are no rejects', async () => {
@@ -440,6 +659,23 @@ describe('DeadLettersComponent', () => {
     payload.flush(page([withPayload()]));
     fixture.detectChanges();
     expect(pre()).toHaveLength(1);
+  });
+
+  // The buttons are refused while a request is out, but a caller that is not a button would not be, and the newer
+  // question's answer must not be replaced by the older one's. No button can call `load`, so the test does.
+  it('lets only the latest question be answered, whoever asks it', async () => {
+    await toggle();
+    fixture.componentInstance['load']();
+    const [older, newer] = http.match(LIST);
+
+    expect(older.cancelled).toBe(true);
+    expect(newer.cancelled).toBe(false);
+    newer.flush(page([letter({ offset: 2 })]));
+    fixture.detectChanges();
+    expect(rows().map((row) => row.querySelector('time')!.getAttribute('title'))).toEqual([
+      '2026-10-18T12:00:00Z (partition 0, offset 2)',
+    ]);
+    expect(button('Refresh')!.getAttribute('aria-disabled')).toBeNull();
   });
 
   it('stops waiting for an answer when it goes away', async () => {

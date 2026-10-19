@@ -1,5 +1,5 @@
 <details class="dead-letters" (toggle)="onToggle($event)">
-  <summary>Recent rejects</summary>
+  <summary #summaryRef>Recent rejects</summary>
   <div class="panel">
     <div class="bar">
       <!-- Always in the page, so a screen reader announces what appears in it. -->
@@ -10,12 +10,17 @@
           <p>You are not cleared to see this connection's rejects</p>
         } @else if (problem() === 'disabled') {
           <p>Dead-letter viewing is not enabled on this server</p>
+        } @else if (problem() === 'gone') {
+          <p>This connection no longer exists</p>
         } @else if (problem() === 'failed') {
           <p class="warn">Couldn't load rejects</p>
         } @else {
           @if (page(); as p) {
             @if (p.letters.length === 0) {
               <p>No rejects in the last {{ p.scanned | number }} scanned</p>
+            } @else if (p.letters.length >= limit) {
+              <!-- As many as it asked for: these are the newest, and the server may have older ones. -->
+              <p>The newest {{ limit | number }} rejects in the last {{ p.scanned | number }} scanned; there may be more</p>
             } @else {
               <p>{{ p.letters.length | number }} reject{{ p.letters.length === 1 ? '' : 's' }} in the last {{ p.scanned | number }} scanned, newest first</p>
             }
@@ -25,22 +30,21 @@
           }
         }
       </div>
-      @if (problem() !== 'forbidden' && problem() !== 'disabled') {
+      @if (actionable()) {
         <div class="actions">
           <!-- aria-disabled, not disabled: a button that goes disabled under the keyboard drops its focus. -->
-          <button type="button" class="btn" [attr.aria-disabled]="loading() || null" (click)="reload()">{{ problem() === 'failed' ? 'Retry' : 'Refresh' }}</button>
-          @if (page(); as p) {
-            @if (p.letters.length > 0) {
-              <button type="button" class="btn" [attr.aria-disabled]="loading() || null" (click)="togglePayloads()">{{ payloads() ? 'Hide payload' : 'Show payload' }}</button>
-            }
+          <button #reloadRef type="button" class="btn" [attr.aria-disabled]="loading() || null" (click)="reload()">{{ problem() === 'failed' ? 'Retry' : 'Refresh' }}</button>
+          @if (payloadToggle()) {
+            <button #payloadRef type="button" class="btn" [attr.aria-disabled]="loading() || null" (click)="togglePayloads()">{{ payloads() ? 'Hide payload' : 'Show payload' }}</button>
           }
         </div>
       }
     </div>
     @if (page(); as p) {
       @if (p.letters.length > 0) {
-        <!-- Busy while it is asked again; the status above is not, so that what it says is announced. -->
-        <div class="scroll" [attr.aria-busy]="loading()">
+        <!-- Busy while it is asked again; the status above is not, so that what it says is announced.
+             A table wider than the panel scrolls here, which the keyboard reaches only if this can take the focus. -->
+        <div class="scroll" tabindex="0" role="region" [attr.aria-label]="'Recent rejects table of ' + feedId()" [attr.aria-busy]="loading()">
           <table class="rejects">
             <caption>Recent rejects, newest first</caption>
             <thead>
@@ -58,7 +62,7 @@
                 <tr class="reject">
                   <td class="time mono">
                     @if (time(l.at); as at) {
-                      <time [attr.datetime]="at" [attr.title]="at + ' (partition ' + l.partition + ', offset ' + l.offset + ')'">{{ at | date: 'MMM d HH:mm:ss' }}</time>
+                      <time [attr.datetime]="at" [attr.title]="at + ' (partition ' + l.partition + ', offset ' + l.offset + ')'">{{ at | date: timeFormat }}</time>
                     } @else {
                       <span title="Not recorded">—</span>
                     }
@@ -79,8 +83,9 @@
                     }
                   </td>
                   <td class="mono error">
+                    <!-- No space round the text: this cell keeps the line breaks and spaces of what it says. -->
                     @if (l.error) {
-                      {{ l.error }}
+                      <span>{{ l.error }}</span>
                     } @else {
                       <span title="Not recorded">—</span>
                     }
@@ -97,7 +102,7 @@
                       } @else {
                         <figure class="block">
                           <figcaption [id]="captionId(l)">{{ captionOf(l) }}</figcaption>
-                          <pre class="mono" tabindex="0" role="group" [attr.aria-labelledby]="captionId(l)">{{ l.payload }}</pre>
+                          <pre class="mono" tabindex="0" role="group" [attr.aria-label]="payloadNameOf(l)" [attr.aria-describedby]="captionId(l)">{{ l.payload }}</pre>
                         </figure>
                       }
                     </td>

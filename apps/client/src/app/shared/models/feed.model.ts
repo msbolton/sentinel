@@ -300,11 +300,13 @@ export interface ListenPorts {
 export const DEAD_LETTERS_LIMIT = 20;
 
 /**
- * One message a connection rejected, as `GET /api/v1/feeds/{id}/deadletters` lists it. Only `at`, `reason`, `size`,
- * `partition` and `offset` are always there; a reject written before the rest was recorded lacks them.
+ * One message a connection rejected, as `GET /api/v1/feeds/{id}/deadletters` lists it. The server writes every field
+ * except `payload` and `payloadEncoding`, which come only with `payload=true`. What it does not know therefore arrives
+ * empty, not left out: `""` for `error`, `driver`, `decoder` and `sender`, and Go's zero time (`0001-01-01T00:00:00Z`)
+ * for `at`. A server that leaves such a key out instead is read the same way: either is "not recorded".
  */
 export interface DeadLetter {
-  /** When the connection rejected it. */
+  /** When the connection rejected it; Go's zero time when the server does not know. */
   at: string;
   /** Why, as a short code (`parse_error`…). */
   reason: string;
@@ -312,7 +314,7 @@ export interface DeadLetter {
   error?: string;
   driver?: string;
   decoder?: string;
-  /** Who sent it: `ip:port`. */
+  /** Who sent it: `ip:port`, or `""` when the driver could not tell. */
   sender?: string;
   /** The size of the whole message in bytes, whatever part of it `payload` holds. */
   size: number;
