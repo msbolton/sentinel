@@ -133,19 +133,37 @@ func readIn(dir, rel string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return readBounded(f, rel)
+}
+
+// ReadFile reads a file with no folder policy, as os.ReadFile does, but with
+// the bounds of the confined read: it must be a regular file (a FIFO is refused
+// without waiting for a writer) of at most MaxFileBytes.
+func ReadFile(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|openNonblock, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return readBounded(f, filepath.Base(path))
+}
+
+// readBounded reads an opened file that must be regular and at most
+// MaxFileBytes; name is what the errors call it.
+func readBounded(f *os.File, name string) ([]byte, error) {
 	info, err := f.Stat()
 	if err != nil {
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s is %w", rel, errNotRegular)
+		return nil, fmt.Errorf("%s is %w", name, errNotRegular)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(data) > MaxFileBytes {
-		return nil, fmt.Errorf("%s is larger than %d bytes: %w", rel, MaxFileBytes, errTooLarge)
+		return nil, fmt.Errorf("%s is larger than %d bytes: %w", name, MaxFileBytes, errTooLarge)
 	}
 	return data, nil
 }

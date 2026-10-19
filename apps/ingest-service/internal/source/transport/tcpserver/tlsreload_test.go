@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -49,11 +50,36 @@ func leafOf(t *testing.T, p transporttest.Pair) *x509.Certificate {
 
 func serialOf(t *testing.T, p transporttest.Pair) *big.Int { return leafOf(t, p).SerialNumber }
 
-// writePair writes the certificate and key of p to cert.pem and key.pem in dir.
+// writePair puts the certificate and key of p at cert.pem and key.pem in dir,
+// all at once, as the kubelet rotates a mounted secret: both files go into a new
+// folder, and the link ..data that cert.pem and key.pem go through is re-pointed
+// at it by a rename. A reload that runs while this happens sees the old pair or
+// the new one, never a certificate beside the other's key. (The tests of a
+// half-written pair write one file through the link by hand.)
 func writePair(t *testing.T, dir string, p transporttest.Pair) {
 	t.Helper()
-	writeFile(t, filepath.Join(dir, "key.pem"), p.KeyPEM)
-	writeFile(t, filepath.Join(dir, "cert.pem"), p.CertPEM)
+	version := fmt.Sprintf("..v%d", time.Now().UnixNano())
+	if err := os.Mkdir(filepath.Join(dir, version), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, version, "key.pem"), p.KeyPEM)
+	writeFile(t, filepath.Join(dir, version, "cert.pem"), p.CertPEM)
+	tmp := filepath.Join(dir, "..data_tmp")
+	_ = os.Remove(tmp)
+	if err := os.Symlink(version, tmp); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, "..data")); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"key.pem", "cert.pem"} {
+		link := filepath.Join(dir, name)
+		if _, err := os.Lstat(link); err != nil {
+			if err := os.Symlink(filepath.Join("..data", name), link); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 }
 
 func writeFile(t *testing.T, path string, b []byte) {
@@ -392,4 +418,30 @@ func TestTLSReloadLoopStopsWithTheTransport(t *testing.T) {
 	_, _, _, stop := fileListener(t, first, 5*time.Millisecond, nil)
 	time.Sleep(30 * time.Millisecond)
 	stop() // Run returns only once the loop has ended; transporttest fails the test if it hangs
+}
+
+// While a reload fails the transport's own last error is not lost: the reload
+// error comes first and the other follows it.
+func TestFailingReloadKeepsTheEarlierLastError(t *testing.T) {
+	first := transporttest.NewCA(t).Issue(t, "localhost")
+	srv, _, dir, _ := fileListener(t, first, time.Hour, nil)
+	srv.Set(func(st *transport.State) { st.LastError = "read tcp 10.0.0.1:5000: connection reset" })
+	if got := srv.State().LastError; got != "read tcp 10.0.0.1:5000: connection reset" {
+		t.Fatalf("LastError = %q before any failure", got)
+	}
+	writeFile(t, filepath.Join(dir, "cert.pem"), first.CertPEM[:len(first.CertPEM)/2])
+	if err := srv.tlsrc.Reload(); err == nil {
+		t.Fatal("a certificate cut short was accepted")
+	}
+	got := srv.State().LastError
+	if !strings.HasPrefix(got, "TLS reload failed: ") || !strings.HasSuffix(got, "; read tcp 10.0.0.1:5000: connection reset") {
+		t.Errorf("LastError = %q, want the reload failure followed by the earlier error", got)
+	}
+	writePair(t, dir, first)
+	if err := srv.tlsrc.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.State().LastError; got != "read tcp 10.0.0.1:5000: connection reset" {
+		t.Errorf("LastError = %q after the reload recovered, want the earlier error alone", got)
+	}
 }

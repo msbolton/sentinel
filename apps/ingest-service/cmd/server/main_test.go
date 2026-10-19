@@ -24,6 +24,16 @@ import (
 // found columns missing. A timeout or a permissions error says nothing about
 // the schema, and telling the operator to apply db/schema for one would hide
 // the real cause.
+func TestOnceRunsTheCloseOnceWithTheFirstBound(t *testing.T) {
+	var got []time.Duration
+	f := once(func(d time.Duration) { got = append(got, d) })
+	f(time.Second)
+	f(time.Hour)
+	if len(got) != 1 || got[0] != time.Second {
+		t.Errorf("close ran with %v, want once with the first bound", got)
+	}
+}
+
 func TestSchemaCheckMessage(t *testing.T) {
 	missing := &registry.SchemaError{Missing: []registry.SchemaColumn{
 		{Table: "ingest_replicas", Column: "listener", File: "db/schema/70_feeds.sql"},

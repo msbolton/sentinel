@@ -110,3 +110,20 @@ func TestReadUnderRefusesAnOversizeFile(t *testing.T) {
 		t.Errorf("a file of exactly the cap: %d bytes, %v; want it read", len(got), err)
 	}
 }
+
+// ReadFile, the read with no folder policy, has the same cap.
+func TestReadFileRefusesAnOversizeFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), MaxFileBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadFile(path); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("an oversize file: %v, want it refused", err)
+	}
+	if err := os.WriteFile(path, []byte("small"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadFile(path); err != nil || string(got) != "small" {
+		t.Errorf("a small file: %q, %v", got, err)
+	}
+}

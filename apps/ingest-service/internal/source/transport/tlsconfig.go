@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"os"
 )
 
 // TLSConfig builds a crypto/tls config from the options, or nil when TLS
@@ -62,7 +61,8 @@ func (c Config) TLSConfig() (*tls.Config, error) {
 // file. The file is read each time, by the path as configured, never a path
 // resolved once, so a rotated certificate (a mounted secret whose link is
 // re-pointed) is followed by whatever builds a TLS config again: a listener's
-// reload, a dialer's next dial (see TLSSource). With dirs set (a non-nil list)
+// reload, a dialer's next dial (see TLSSource; an MQTT broker over ws or wss, or
+// behind all_proxy, is the one exception and keeps its start-time config). With dirs set (a non-nil list)
 // the read is confined to those folders, links followed inside them and never
 // out; with nil dirs it is a plain read.
 func pemOrFile(pemBytes []byte, file, what string, dirs []string) ([]byte, error) {
@@ -75,7 +75,7 @@ func pemOrFile(pemBytes []byte, file, what string, dirs []string) ([]byte, error
 	var b []byte
 	var err error
 	if dirs == nil {
-		b, err = os.ReadFile(file)
+		b, err = ReadFile(file)
 	} else {
 		b, err = ReadUnder(file, dirs)
 		if errors.Is(err, ErrOutsideDirs) {

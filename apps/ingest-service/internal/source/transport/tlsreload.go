@@ -169,8 +169,8 @@ func (s *TLSSource) Run(ctx context.Context) {
 
 // Apply adds the TLS part of a transport's health to st: the reload counts, the
 // expiry of the certificate in use (RFC 3339, UTC) when it has one, and, while
-// the latest reload is failing, that as the last error: it is what the operator
-// has to act on. The error names a file or says why material did not parse; it
+// the latest reload is failing, that in front of the transport's own last error:
+// it is what the operator has to act on, and the other is kept after it. The error names a file or says why material did not parse; it
 // holds no payload.
 func (s *TLSSource) Apply(st *State) {
 	if s == nil {
@@ -184,7 +184,11 @@ func (s *TLSSource) Apply(st *State) {
 		st.Detail["tlsCertNotAfter"] = na
 	}
 	if failing := s.lastErr.Load(); failing != nil {
-		st.LastError = "TLS reload failed: " + *failing
+		msg := "TLS reload failed: " + *failing
+		if st.LastError != "" {
+			msg += "; " + st.LastError // a handshake, read or dial error is not hidden by it
+		}
+		st.LastError = msg
 	}
 }
 

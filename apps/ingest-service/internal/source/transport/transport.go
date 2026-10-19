@@ -135,7 +135,9 @@ type Config struct {
 	// (CertFile and the others), which are read again too. With ReloadEvery above
 	// zero every transport that uses TLS follows a rotation: a listener (tcpserver)
 	// polls and swaps what it serves at each tick, a transport that dials builds
-	// its config again before each dial. A reload that fails keeps what is in use.
+	// its config again before each dial. The exception is an MQTT broker reached
+	// over ws:// or wss://, or with all_proxy set, which keeps the config it
+	// started with. A reload that fails keeps what is in use.
 	// Nil, or a zero ReloadEvery, turns reloading off. Set by the stream driver,
 	// never from the feed's JSON.
 	ReloadTLS   func() (TLSMaterial, error) `json:"-"`

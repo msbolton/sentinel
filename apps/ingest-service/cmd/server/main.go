@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -221,8 +222,9 @@ func main() {
 	// until the deadline and then gives up on what it still holds (and logs how
 	// much), the HTTP server gets what is left of the deadline (at most 5 s), and
 	// the producer's one flush happens in its close, for the time then left but
-	// at least a second. The process thus ends at most about a second after
-	// the deadline, inside the grace period the orchestrator allows.
+	// at least a second, and the dead-letter reader's close after it has the same
+	// floor. The process thus ends at most about two seconds after the deadline,
+	// inside the grace period the orchestrator allows.
 	publisher.CloseWithin(time.Until(deadline))
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), min(5*time.Second, max(time.Until(deadline), 0)))
@@ -267,7 +269,17 @@ func serveDeadLetters(h *mgmt.Handler, cfg *config.Config, logger *zap.Logger) (
 	}
 	reader := dlq.NewKafkaReader(cfg.KafkaBrokers, cfg.KafkaDeadLetterTopic, cfg.DLQPeekMaxScan, logger)
 	h.DeadLetters = reader
-	return reader.CloseWithin
+	return once(reader.CloseWithin)
+}
+
+// once makes a close that takes a time bound run a single time: the first call
+// does the work with its bound, and the later ones return at once. The explicit
+// close at the end of shutdown thereby disarms the deferred one, so that a read
+// stuck in the consumer, which made the first give up, is not waited on again
+// past the orchestrator's grace period.
+func once(f func(time.Duration)) func(time.Duration) {
+	var o sync.Once
+	return func(d time.Duration) { o.Do(func() { f(d) }) }
 }
 
 func driverIDs(c *drivers.Catalog) []string {
