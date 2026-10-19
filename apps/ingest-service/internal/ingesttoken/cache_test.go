@@ -2,6 +2,7 @@ package ingesttoken
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -15,20 +16,36 @@ type memLoader struct {
 	mu   sync.Mutex
 	rows map[string]Stored // by id
 	used map[string]time.Time
+
+	err           error  // returned by All, ForFeed and MarkUsed when set
+	afterSnapshot func() // called by All after it has copied the rows, before it returns
+
+	duringMarkUsed func() // called by MarkUsed before it answers, with no lock held
 }
 
 func (m *memLoader) All(context.Context) ([]Stored, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	if m.err != nil {
+		defer m.mu.Unlock()
+		return nil, m.err
+	}
 	out := []Stored{}
 	for _, s := range m.rows {
 		out = append(out, s)
+	}
+	hook := m.afterSnapshot
+	m.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
 	return out, nil
 }
 func (m *memLoader) ForFeed(_ context.Context, feed string) ([]Stored, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.err != nil {
+		return nil, m.err
+	}
 	out := []Stored{}
 	for _, s := range m.rows {
 		if s.FeedID == feed {
@@ -39,7 +56,16 @@ func (m *memLoader) ForFeed(_ context.Context, feed string) ([]Stored, error) {
 }
 func (m *memLoader) MarkUsed(_ context.Context, used map[string]time.Time) error {
 	m.mu.Lock()
+	hook := m.duringMarkUsed
+	m.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
 	if m.used == nil {
 		m.used = map[string]time.Time{}
 	}
@@ -49,12 +75,62 @@ func (m *memLoader) MarkUsed(_ context.Context, used map[string]time.Time) error
 	return nil
 }
 
-func add(m *memLoader, id, feed string) string {
-	secret, display, hash, _ := secrettoken.Generate(Prefix)
+func (m *memLoader) setErr(err error) {
+	m.mu.Lock()
+	m.err = err
+	m.mu.Unlock()
+}
+
+func (m *memLoader) mutate(id string, fn func(*Stored)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.rows[id]
+	fn(&r)
+	m.rows[id] = r
+}
+
+func (m *memLoader) remove(id string) {
+	m.mu.Lock()
+	delete(m.rows, id)
+	m.mu.Unlock()
+}
+
+func add(t *testing.T, m *memLoader, id, feed string) string {
+	t.Helper()
+	secret, display, hash, err := secrettoken.Generate(Prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
 	m.mu.Lock()
 	m.rows[id] = Stored{Token: Token{ID: id, FeedID: feed, Prefix: display, Classification: "SECRET"}, Hash: hash}
 	m.mu.Unlock()
 	return secret
+}
+
+func mustLoad(t *testing.T, c *Cache) {
+	t.Helper()
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustRefresh(t *testing.T, c *Cache, feed string) {
+	t.Helper()
+	if err := c.RefreshFeed(context.Background(), feed); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// recordRevokes subscribes and returns a reader of the ids seen so far.
+func recordRevokes(c *Cache) func() []string {
+	var mu sync.Mutex
+	var gone []string
+	c.OnRevoke(func(tk Token) { mu.Lock(); gone = append(gone, tk.ID); mu.Unlock() })
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), gone...)
+	}
 }
 
 func TestFeedsChannelMatchesRegistry(t *testing.T) {
@@ -67,11 +143,9 @@ func TestFeedsChannelMatchesRegistry(t *testing.T) {
 func TestAuthenticate(t *testing.T) {
 	ctx := context.Background()
 	l := &memLoader{rows: map[string]Stored{}}
-	good := add(l, "t1", "grpc-1")
+	good := add(t, l, "t1", "grpc-1")
 	c := NewCache(l, nil, nil)
-	if err := c.Load(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustLoad(t, c)
 	tok, ok := c.Authenticate(good)
 	if !ok || tok.ID != "t1" || tok.FeedID != "grpc-1" || tok.Classification != "SECRET" {
 		t.Fatalf("good secret = %+v %v", tok, ok)
@@ -82,12 +156,8 @@ func TestAuthenticate(t *testing.T) {
 		}
 	}
 	past := time.Now().Add(-time.Minute)
-	l.mu.Lock()
-	r := l.rows["t1"]
-	r.ExpiresAt = &past
-	l.rows["t1"] = r
-	l.mu.Unlock()
-	_ = c.RefreshFeed(ctx, "grpc-1")
+	l.mutate("t1", func(s *Stored) { s.ExpiresAt = &past })
+	mustRefresh(t, c, "grpc-1")
 	if _, ok := c.Authenticate(good); ok {
 		t.Error("an expired token authenticated")
 	}
@@ -101,58 +171,203 @@ func TestAuthenticate(t *testing.T) {
 
 // Review focus 1 and 2.
 func TestRevokeAndFeedDeletionFireOnce(t *testing.T) {
-	ctx := context.Background()
 	l := &memLoader{rows: map[string]Stored{}}
-	s1 := add(l, "t1", "grpc-1")
-	add(l, "t2", "grpc-1")
-	s3 := add(l, "t3", "grpc-2")
+	s1 := add(t, l, "t1", "grpc-1")
+	s2 := add(t, l, "t2", "grpc-1")
+	s3 := add(t, l, "t3", "grpc-2")
 	c := NewCache(l, nil, nil)
-	_ = c.Load(ctx)
-	var mu sync.Mutex
-	var gone []string
-	c.OnRevoke(func(tk Token) { mu.Lock(); gone = append(gone, tk.ID); mu.Unlock() })
+	mustLoad(t, c)
+	gone := recordRevokes(c)
 
 	now := time.Now()
-	l.mu.Lock()
-	r := l.rows["t1"]
-	r.RevokedAt = &now
-	l.rows["t1"] = r
-	l.mu.Unlock()
-	_ = c.RefreshFeed(ctx, "grpc-1")
-	_ = c.RefreshFeed(ctx, "grpc-1") // a second refresh must not fire again
+	l.mutate("t1", func(s *Stored) { s.RevokedAt = &now })
+	mustRefresh(t, c, "grpc-1")
+	mustRefresh(t, c, "grpc-1") // a second refresh must not fire again
 	if _, ok := c.Authenticate(s1); ok {
 		t.Error("a revoked token authenticated")
 	}
+	if _, ok := c.Authenticate(s2); !ok {
+		t.Error("a sibling of the revoked token stopped authenticating")
+	}
 
-	l.mu.Lock()
-	delete(l.rows, "t3") // the feed was deleted: the cascade sent no token notice
-	l.mu.Unlock()
-	_ = c.RefreshFeed(ctx, "grpc-2") // driven by the sentinel_feeds notice
+	l.remove("t3")              // the feed was deleted: the cascade sent no token notice
+	mustRefresh(t, c, "grpc-2") // driven by the sentinel_feeds notice
 	if _, ok := c.Authenticate(s3); ok {
 		t.Error("a deleted feed's token authenticated")
 	}
+	if _, ok := c.Authenticate(s2); !ok {
+		t.Error("a token of another feed stopped authenticating")
+	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	if len(gone) != 2 || gone[0] != "t1" || gone[1] != "t3" {
-		t.Fatalf("OnRevoke saw %v, want [t1 t3]", gone)
+	if got := gone(); len(got) != 2 || got[0] != "t1" || got[1] != "t3" {
+		t.Fatalf("OnRevoke saw %v, want [t1 t3]", got)
+	}
+}
+
+func TestExpiredTokenDoesNotFireWhenItsFeedIsDeleted(t *testing.T) {
+	l := &memLoader{rows: map[string]Stored{}}
+	add(t, l, "t1", "grpc-1")
+	past := time.Now().Add(-time.Minute)
+	l.mutate("t1", func(s *Stored) { s.ExpiresAt = &past })
+	c := NewCache(l, nil, nil)
+	mustLoad(t, c)
+	gone := recordRevokes(c)
+	l.remove("t1")
+	mustRefresh(t, c, "grpc-1")
+	if got := gone(); len(got) != 0 {
+		t.Fatalf("OnRevoke saw %v for a token that was already unusable", got)
+	}
+}
+
+// A feed deleted and recreated under the same id: its old tokens are gone with
+// it, and a token of the new feed works.
+func TestSameIDFeedRecreated(t *testing.T) {
+	l := &memLoader{rows: map[string]Stored{}}
+	old := add(t, l, "t3", "grpc-2")
+	c := NewCache(l, nil, nil)
+	mustLoad(t, c)
+	gone := recordRevokes(c)
+
+	l.remove("t3")
+	fresh := add(t, l, "t4", "grpc-2")
+	mustRefresh(t, c, "grpc-2")
+	if _, ok := c.Authenticate(old); ok {
+		t.Error("the old feed's secret authenticated after the feed was recreated")
+	}
+	if tok, ok := c.Authenticate(fresh); !ok || tok.ID != "t4" {
+		t.Errorf("the new feed's secret = %+v %v", tok, ok)
+	}
+	if got := gone(); len(got) != 1 || got[0] != "t3" {
+		t.Fatalf("OnRevoke saw %v, want [t3]", got)
 	}
 }
 
 func TestLoadReportsTokensGoneWhileAway(t *testing.T) {
+	l := &memLoader{rows: map[string]Stored{}}
+	add(t, l, "t1", "grpc-1")
+	add(t, l, "t2", "grpc-1")
+	c := NewCache(l, nil, nil)
+	mustLoad(t, c)
+	gone := recordRevokes(c)
+	l.remove("t2")
+	mustLoad(t, c) // a reconnect's reload
+	if got := gone(); len(got) != 1 || got[0] != "t2" {
+		t.Fatalf("reload reported %v, want [t2]", got)
+	}
+}
+
+func TestLoaderErrorLeavesTheCacheUnchanged(t *testing.T) {
 	ctx := context.Background()
 	l := &memLoader{rows: map[string]Stored{}}
-	add(l, "t1", "grpc-1")
-	add(l, "t2", "grpc-1")
+	s1 := add(t, l, "t1", "grpc-1")
 	c := NewCache(l, nil, nil)
-	_ = c.Load(ctx)
-	var gone []string
-	c.OnRevoke(func(tk Token) { gone = append(gone, tk.ID) })
+	mustLoad(t, c)
+	gone := recordRevokes(c)
+
+	boom := errors.New("database down")
+	l.setErr(boom)
+	l.remove("t1") // would drop the token if the failed read were applied
+	if err := c.Load(ctx); !errors.Is(err, boom) {
+		t.Fatalf("Load = %v, want %v", err, boom)
+	}
+	if err := c.RefreshFeed(ctx, "grpc-1"); !errors.Is(err, boom) {
+		t.Fatalf("RefreshFeed = %v, want %v", err, boom)
+	}
+	if _, ok := c.Authenticate(s1); !ok {
+		t.Error("a failed read dropped a token")
+	}
+	if got := gone(); len(got) != 0 {
+		t.Fatalf("a failed read fired OnRevoke for %v", got)
+	}
+}
+
+// A Load whose read went stale while a revocation was refreshed must not
+// bring the revoked token back.
+func TestLoadCannotUndoAConcurrentRefresh(t *testing.T) {
+	ctx := context.Background()
+	l := &memLoader{rows: map[string]Stored{}}
+	secret := add(t, l, "t1", "grpc-1")
+	c := NewCache(l, nil, nil)
+	mustLoad(t, c)
+	gone := recordRevokes(c)
+
+	snapped := make(chan struct{})
+	release := make(chan struct{})
 	l.mu.Lock()
-	delete(l.rows, "t2")
+	l.afterSnapshot = func() { close(snapped); <-release }
 	l.mu.Unlock()
-	_ = c.Load(ctx) // a reconnect's reload
-	if len(gone) != 1 || gone[0] != "t2" {
-		t.Fatalf("reload reported %v, want [t2]", gone)
+
+	loadDone := make(chan error, 1)
+	go func() { loadDone <- c.Load(ctx) }()
+	<-snapped // the Load holds a snapshot that still shows t1 usable
+
+	now := time.Now()
+	l.mutate("t1", func(s *Stored) { s.RevokedAt = &now })
+	refreshDone := make(chan error, 1)
+	go func() { refreshDone <- c.RefreshFeed(ctx, "grpc-1") }()
+	time.Sleep(50 * time.Millisecond) // let the refresh run, or queue behind the Load
+
+	close(release)
+	if err := <-loadDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-refreshDone; err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Authenticate(secret); ok {
+		t.Error("a stale Load brought a revoked token back")
+	}
+	if got := gone(); len(got) != 1 || got[0] != "t1" {
+		t.Fatalf("OnRevoke saw %v, want [t1] once", got)
+	}
+}
+
+func TestFlushUsedKeepsUsesWhenTheWriteFails(t *testing.T) {
+	ctx := context.Background()
+	l := &memLoader{rows: map[string]Stored{}}
+	secret := add(t, l, "t1", "grpc-1")
+	c := NewCache(l, nil, nil)
+	mustLoad(t, c)
+
+	if _, ok := c.Authenticate(secret); !ok {
+		t.Fatal("did not authenticate")
+	}
+	l.setErr(errors.New("database down"))
+	if err := c.FlushUsed(ctx); err == nil {
+		t.Fatal("FlushUsed hid the failure")
+	}
+	l.setErr(nil)
+	if _, ok := c.Authenticate(secret); !ok { // a later use of the same token
+		t.Fatal("did not authenticate")
+	}
+	if err := c.FlushUsed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := l.used["t1"]; !ok {
+		t.Fatal("the use was lost with the failed flush")
+	}
+
+	// The later time wins when a failed flush is merged back over a use
+	// recorded while the flush was under way.
+	early, late := time.Unix(100, 0), time.Unix(200, 0)
+	c.usedMu.Lock()
+	c.used["t1"] = late
+	c.usedMu.Unlock()
+	l.mu.Lock()
+	l.err = errors.New("database down")
+	l.duringMarkUsed = func() {
+		c.usedMu.Lock()
+		c.used["t1"] = early
+		c.usedMu.Unlock()
+	}
+	l.mu.Unlock()
+	if err := c.FlushUsed(ctx); err == nil {
+		t.Fatal("FlushUsed hid the failure")
+	}
+	c.usedMu.Lock()
+	got := c.used["t1"]
+	c.usedMu.Unlock()
+	if !got.Equal(late) {
+		t.Fatalf("merged use = %v, want %v", got, late)
 	}
 }

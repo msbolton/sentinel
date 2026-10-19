@@ -1,0 +1,85 @@
+package ingesttoken
+
+import (
+	"context"
+	"testing"
+	"time"
+)
+
+// within polls cond for up to five seconds.
+func within(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Run, on a real pool, follows token notices and feed notices.
+func TestRunFollowsRevocationAndFeedDeletion(t *testing.T) {
+	pool, ctx := testPool(t)
+	store := NewPGStore(pool)
+	cache := NewCache(store, pool, nil)
+	revoked := make(chan Token, 8)
+	cache.OnRevoke(func(tk Token) { revoked <- tk })
+
+	runCtx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); cache.Run(runCtx) }()
+	t.Cleanup(func() { stop(); <-done }) // registered after the pool's, so it runs first
+
+	authenticates := func(secret string) func() bool {
+		return func() bool { _, ok := cache.Authenticate(secret); return ok }
+	}
+	expectRevoked := func(id string) {
+		t.Helper()
+		select {
+		case tk := <-revoked:
+			if tk.ID != id {
+				t.Fatalf("OnRevoke saw %s, want %s", tk.ID, id)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("OnRevoke did not fire for %s", id)
+		}
+	}
+
+	// A created token becomes usable, a revoked one stops, and its subscribers hear once.
+	tok, secret, hash := newToken("test-tok-a", "sensor one")
+	created, err := store.Create(ctx, tok, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	within(t, "the created token to authenticate", authenticates(secret))
+	if err := store.Revoke(ctx, "test-tok-a", created.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	within(t, "the revoked token to stop authenticating", func() bool { return !authenticates(secret)() })
+	expectRevoked(created.ID)
+
+	// Deleting a feed cascades its tokens away with only a feed notice.
+	tok, secret, hash = newToken("test-tok-b", "sensor two")
+	created, err = store.Create(ctx, tok, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	within(t, "the second token to authenticate", authenticates(secret))
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `DELETE FROM sentinel.feeds WHERE id = $1`, "test-tok-b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, feedsChannel, "test-tok-b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	within(t, "the deleted feed's token to stop authenticating", func() bool { return !authenticates(secret)() })
+	expectRevoked(created.ID)
+}

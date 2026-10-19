@@ -19,8 +19,15 @@ import (
 // registry; a test keeps the two equal.)
 const feedsChannel = "sentinel_feeds"
 
-// flushEvery is how often recorded uses are written to lastUsedAt.
-const flushEvery = 60 * time.Second
+const (
+	// flushEvery is how often recorded uses are written to lastUsedAt.
+	flushEvery = 60 * time.Second
+	// finalFlushTimeout bounds the flush Run makes as it stops.
+	finalFlushTimeout = 5 * time.Second
+	// minBackoff and maxBackoff bound the wait before reconnecting.
+	minBackoff = time.Second
+	maxBackoff = 30 * time.Second
+)
 
 // Loader is what the cache reads tokens through (the Store).
 type Loader interface {
@@ -37,6 +44,10 @@ type Cache struct {
 	pool   *pgxpool.Pool
 	logger *zap.Logger
 	now    func() time.Time
+
+	// refreshMu serializes Load and RefreshFeed across both the read and the
+	// swap, so a read that went stale while waiting cannot overwrite a newer one.
+	refreshMu sync.Mutex
 
 	mu     sync.RWMutex
 	byHash map[string]Stored // key: string(hash)
@@ -61,6 +72,8 @@ func NewCache(loader Loader, pool *pgxpool.Pool, logger *zap.Logger) *Cache {
 
 // Load replaces every token with what the loader lists now.
 func (c *Cache) Load(ctx context.Context) error {
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
 	all, err := c.loader.All(ctx)
 	if err != nil {
 		return err
@@ -71,6 +84,8 @@ func (c *Cache) Load(ctx context.Context) error {
 
 // RefreshFeed replaces one feed's tokens with what the loader lists now.
 func (c *Cache) RefreshFeed(ctx context.Context, feedID string) error {
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
 	rows, err := c.loader.ForFeed(ctx, feedID)
 	if err != nil {
 		return err
@@ -86,6 +101,7 @@ func (c *Cache) replace(in func(Stored) bool, rows []Stored) {
 	for _, r := range rows {
 		next[string(r.Hash)] = r
 	}
+	now := c.now()
 	var lost []Token
 	c.mu.Lock()
 	for key, old := range c.byHash {
@@ -93,7 +109,7 @@ func (c *Cache) replace(in func(Stored) bool, rows []Stored) {
 			continue
 		}
 		cur, still := next[key]
-		if old.RevokedAt == nil && (!still || cur.RevokedAt != nil) {
+		if old.Usable(now) && (!still || cur.RevokedAt != nil) {
 			lost = append(lost, old.Token)
 		}
 		delete(c.byHash, key)
@@ -127,7 +143,8 @@ func (c *Cache) Authenticate(secret string) (Token, bool) {
 
 // OnRevoke registers fn, called once for each token that stops being usable
 // by revocation or deletion (not by expiry, which callers check with
-// Usable). fn runs on the refreshing goroutine and must not block.
+// Usable). fn runs on the refreshing goroutine and must not block. A call
+// already under way may still reach fn once after cancel returns.
 func (c *Cache) OnRevoke(fn func(Token)) (cancel func()) {
 	c.subMu.Lock()
 	id := c.nextSub
@@ -164,19 +181,40 @@ func (c *Cache) FlushUsed(ctx context.Context) error {
 	used := c.used
 	c.used = map[string]time.Time{}
 	c.usedMu.Unlock()
-	return c.loader.MarkUsed(ctx, used)
+	if len(used) == 0 {
+		return nil
+	}
+	err := c.loader.MarkUsed(ctx, used)
+	if err != nil {
+		// Keep the uses for the next flush, the later time winning per token.
+		c.usedMu.Lock()
+		for id, at := range used {
+			if cur, ok := c.used[id]; !ok || at.After(cur) {
+				c.used[id] = at
+			}
+		}
+		c.usedMu.Unlock()
+	}
+	return err
 }
 
 // Run follows token and feed notifications until ctx ends, reloading every
-// token after each (re)connect and flushing recorded uses every minute.
+// token after each (re)connect and flushing recorded uses every minute. It
+// returns once the final flush is done.
 func (c *Cache) Run(ctx context.Context) {
+	flushed := make(chan struct{})
 	go func() {
+		defer close(flushed)
 		t := time.NewTicker(flushEvery)
 		defer t.Stop()
 		for {
 			select {
 			case <-ctx.Done():
-				_ = c.FlushUsed(context.Background())
+				fctx, cancel := context.WithTimeout(context.Background(), finalFlushTimeout)
+				defer cancel()
+				if err := c.FlushUsed(fctx); err != nil {
+					c.logger.Warn("recording ingest token uses at shutdown failed", zap.Error(err))
+				}
 				return
 			case <-t.C:
 				if err := c.FlushUsed(ctx); err != nil {
@@ -185,18 +223,26 @@ func (c *Cache) Run(ctx context.Context) {
 			}
 		}
 	}()
+	defer func() { <-flushed }()
+
+	backoff := minBackoff
 	for ctx.Err() == nil {
-		if err := c.listen(ctx); err != nil && ctx.Err() == nil {
-			c.logger.Warn("ingest token watch disconnected; reconnecting", zap.Error(err))
-			select {
-			case <-ctx.Done():
-			case <-time.After(time.Second):
-			}
+		err := c.listen(ctx, func() { backoff = minBackoff })
+		if err == nil || ctx.Err() != nil {
+			continue
 		}
+		c.logger.Warn("ingest token watch disconnected; reconnecting", zap.Error(err), zap.Duration("in", backoff))
+		select {
+		case <-ctx.Done():
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, maxBackoff)
 	}
 }
 
-func (c *Cache) listen(ctx context.Context) error {
+// listen holds one connection: LISTEN, reload every token, then refresh on
+// each notice. ready is called once the reload has succeeded.
+func (c *Cache) listen(ctx context.Context, ready func()) error {
 	pooled, err := c.pool.Acquire(ctx)
 	if err != nil {
 		return err
@@ -211,6 +257,7 @@ func (c *Cache) listen(ctx context.Context) error {
 	if err := c.Load(ctx); err != nil {
 		return err
 	}
+	ready()
 	for {
 		n, err := conn.WaitForNotification(ctx)
 		if err != nil {
@@ -222,6 +269,12 @@ func (c *Cache) listen(ctx context.Context) error {
 				FeedID string `json:"feedId"`
 			}
 			if json.Unmarshal([]byte(n.Payload), &m) != nil || m.FeedID == "" {
+				// Which token changed is unknown, so reload them all rather
+				// than risk a revoked one staying usable.
+				c.logger.Warn("unreadable ingest token notice; reloading every token", zap.String("payload", n.Payload))
+				if err := c.Load(ctx); err != nil {
+					return err
+				}
 				continue
 			}
 			feed = m.FeedID
