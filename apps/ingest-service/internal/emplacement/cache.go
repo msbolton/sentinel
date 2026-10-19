@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -161,7 +162,8 @@ func (c *Cache) notify(ids []string) {
 
 // Run follows notifications until ctx ends. Every connection reloads the
 // whole table after it starts listening, so what changed while it was down
-// is not lost.
+// is not lost. A notification whose refresh fails drops the connection, so
+// the reload on the next one repairs the entry instead of leaving it stale.
 func (c *Cache) Run(ctx context.Context) {
 	for ctx.Err() == nil {
 		if err := c.listen(ctx); err != nil && ctx.Err() == nil {
@@ -192,14 +194,24 @@ func (c *Cache) listen(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		var msg struct {
-			ID string `json:"id"`
-		}
-		if json.Unmarshal([]byte(n.Payload), &msg) != nil || msg.ID == "" {
-			continue
-		}
-		if err := c.Refresh(ctx, msg.ID); err != nil {
-			c.logger.Warn("refreshing an emplacement failed", zap.String("id", msg.ID), zap.Error(err))
+		if err := c.handle(ctx, n.Payload); err != nil {
+			c.logger.Warn("emplacement refresh failed; reconnecting to reload", zap.Error(err))
+			return err
 		}
 	}
+}
+
+// handle applies one notification payload. A payload without an id is
+// ignored. A refresh error is returned, so the caller can reconnect.
+func (c *Cache) handle(ctx context.Context, payload string) error {
+	var msg struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal([]byte(payload), &msg) != nil || msg.ID == "" {
+		return nil
+	}
+	if err := c.Refresh(ctx, msg.ID); err != nil {
+		return fmt.Errorf("refreshing %s: %w", msg.ID, err)
+	}
+	return nil
 }

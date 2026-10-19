@@ -2,9 +2,11 @@ package emplacement
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"testing"
+	"time"
 )
 
 type memLoader struct {
@@ -114,5 +116,113 @@ func TestCacheReloadReportsWhatChangedWhileAway(t *testing.T) {
 	}
 	if _, ok := c.Get("b"); ok {
 		t.Fatal("b must be gone")
+	}
+}
+
+var errTransient = errors.New("connection reset")
+
+// getFailLoader is a memLoader whose Get fails with a transient error while fail is set.
+type getFailLoader struct {
+	*memLoader
+	fail bool
+}
+
+func (g *getFailLoader) Get(ctx context.Context, id string) (Emplacement, error) {
+	if g.fail {
+		return Emplacement{}, errTransient
+	}
+	return g.memLoader.Get(ctx, id)
+}
+
+func TestCacheHandleReturnsRefreshFailureAndKeepsEntry(t *testing.T) {
+	ctx := context.Background()
+	l := &getFailLoader{memLoader: &memLoader{rows: map[string]Emplacement{"a": row("a", "A", 1, "")}}}
+	c := NewCache(l, nil, nil)
+	if err := c.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	c.OnChange(func(id string) { seen = append(seen, id) })
+
+	l.put(row("a", "A", 2, "")) // changed in the store, but the read fails
+	l.fail = true
+	if err := c.handle(ctx, `{"id":"a","op":"upsert"}`); !errors.Is(err, errTransient) {
+		t.Fatalf("handle err = %v, want the transient Get error", err)
+	}
+	if e, ok := c.Get("a"); !ok || e.Version != 1 {
+		t.Fatalf("entry after a failed refresh = version %d (present %v), want the old version 1", e.Version, ok)
+	}
+	if len(seen) != 0 {
+		t.Fatalf("subscriber saw %v after a failed refresh", seen)
+	}
+}
+
+func TestCacheHandleDeletedIDLeavesCache(t *testing.T) {
+	ctx := context.Background()
+	l := &memLoader{rows: map[string]Emplacement{"a": row("a", "A", 1, "")}}
+	c := NewCache(l, nil, nil)
+	if err := c.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	c.OnChange(func(id string) { seen = append(seen, id) })
+
+	l.drop("a")
+	if err := c.handle(ctx, `{"id":"a","op":"delete"}`); err != nil {
+		t.Fatalf("handle of a deleted id = %v, want nil", err)
+	}
+	if _, ok := c.Get("a"); ok {
+		t.Fatal("a deleted emplacement must leave the cache")
+	}
+	if !slices.Equal(seen, []string{"a"}) {
+		t.Fatalf("subscriber saw %v, want [a]", seen)
+	}
+}
+
+func TestCacheHandleIgnoresPayloadWithoutID(t *testing.T) {
+	ctx := context.Background()
+	c := NewCache(&memLoader{rows: map[string]Emplacement{}}, nil, nil)
+	var seen []string
+	c.OnChange(func(id string) { seen = append(seen, id) })
+
+	for _, p := range []string{"", "not json", `{"op":"delete"}`, `{"id":"","op":"upsert"}`} {
+		if err := c.handle(ctx, p); err != nil {
+			t.Fatalf("handle(%q) = %v, want nil", p, err)
+		}
+	}
+	if len(seen) != 0 {
+		t.Fatalf("subscriber saw %v for payloads without an id", seen)
+	}
+}
+
+// Needs TEST_DATABASE_URL: a real write reaches the cache through Run's LISTEN.
+func TestCacheFollowsStoreWrites(t *testing.T) {
+	pool, ctx := testPool(t)
+	store := NewPGStore(pool)
+	c := NewCache(store, pool, nil)
+	changed := make(chan string, 64)
+	c.OnChange(func(id string) { changed <- id })
+
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go c.Run(runCtx)
+
+	created, err := store.Create(ctx, fixed("test-cache-follows"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeout := time.After(10 * time.Second)
+	for {
+		select {
+		case id := <-changed:
+			if id != created.ID {
+				continue
+			}
+			if e, ok := c.Get(created.ID); ok && e.Version == created.Version {
+				return
+			}
+		case <-timeout:
+			t.Fatal("the cache never reported the created emplacement")
+		}
 	}
 }
