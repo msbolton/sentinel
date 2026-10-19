@@ -19,6 +19,7 @@ import (
 
 	"github.com/sentinel/ingest-service/internal/config"
 	"github.com/sentinel/ingest-service/internal/density"
+	"github.com/sentinel/ingest-service/internal/dlq"
 	"github.com/sentinel/ingest-service/internal/drivers"
 	"github.com/sentinel/ingest-service/internal/feed"
 	"github.com/sentinel/ingest-service/internal/health"
@@ -152,6 +153,11 @@ func main() {
 	healthHandler := health.NewHandler(producer, promReg, logger)
 	healthHandler.RegisterRoutes(mux)
 	mgmtHandler := mgmt.NewHandler(reg, catalog, sup, logger)
+	// GET /feeds/{id}/deadletters reads observations.dlq with a consumer of its
+	// own, created when the first request comes.
+	dlqReader := dlq.NewKafkaReader(cfg.KafkaBrokers, cfg.KafkaDeadLetterTopic, cfg.DLQPeekMaxScan, logger)
+	defer dlqReader.Close()
+	mgmtHandler.DeadLetters = dlqReader
 	mgmtHandler.StaleAfter = 3 * cfg.LeaseTick * 2
 	if cfg.LeaseEnabled {
 		mgmtHandler.StaleAfter = cfg.LeaseTTL

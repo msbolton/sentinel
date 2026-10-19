@@ -15,9 +15,11 @@ type AuthOptions struct {
 	ServiceToken string
 }
 
-// Roles allowed to change feeds. The gateway enforces the same rule; the
-// check here protects the service when it is reached without the gateway.
-var mutatingRoles = []string{"sentinel-operator", "sentinel-admin"}
+// Roles that manage connections: they may change feeds and read their dead
+// letters. The gateway enforces the same rule for changes; the check here
+// protects the service when it is reached without the gateway, and is the only
+// check on reading dead letters, which the gateway lets any GET through.
+var operatorRoles = []string{"sentinel-operator", "sentinel-admin"}
 
 // Auth returns middleware that requires the service token (when configured)
 // on every request and an operator or admin identity on mutations. PUT on
@@ -37,7 +39,7 @@ func Auth(opts AuthOptions) func(http.Handler) http.Handler {
 			}
 			if isMutation(r) && !isAreaPush(r) {
 				roles := strings.Split(r.Header.Get(middleware.HeaderUserRoles), ",")
-				if !hasAny(roles, mutatingRoles) {
+				if !hasAny(roles, operatorRoles) {
 					writeError(w, http.StatusForbidden, "operator or admin role required")
 					return
 				}
@@ -45,6 +47,11 @@ func Auth(opts AuthOptions) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// isOperator reports whether the caller has an operator or admin role.
+func isOperator(r *http.Request) bool {
+	return hasAny(middleware.UserRoles(r.Context()), operatorRoles)
 }
 
 func isMutation(r *http.Request) bool {

@@ -46,6 +46,7 @@ type Config struct {
 	FrameBuffer        int // FRAME_BUFFER (default: 1024) frames queued between a transport and its decoder
 	RawPayloadMaxBytes int // RAW_PAYLOAD_MAX_BYTES (default: 4096) raw bytes kept per observation under the bounded policy
 	DLQRatePerSec      int // DLQ_RATE_PER_SEC (default: 10) dead letters per feed per second
+	DLQPeekMaxScan     int // DLQ_PEEK_MAX_SCAN (default: 2000) messages of each partition read to find a connection's recent dead letters
 
 	FeedStaleWarn     time.Duration // FEED_STALE_WARN_SEC (default: 120) default health thresholds
 	FeedStaleCritical time.Duration // FEED_STALE_CRITICAL_SEC (default: 300)
@@ -88,6 +89,7 @@ func Load() *Config {
 		FrameBuffer:        envOrInt("FRAME_BUFFER", 1024),
 		RawPayloadMaxBytes: envOrInt("RAW_PAYLOAD_MAX_BYTES", 4096),
 		DLQRatePerSec:      envOrInt("DLQ_RATE_PER_SEC", 10),
+		DLQPeekMaxScan:     envOrInt("DLQ_PEEK_MAX_SCAN", 2000),
 
 		FeedStaleWarn:     envOrSeconds("FEED_STALE_WARN_SEC", 120),
 		FeedStaleCritical: envOrSeconds("FEED_STALE_CRITICAL_SEC", 300),
@@ -121,6 +123,9 @@ func (c *Config) Validate() error {
 	}
 	if c.RawPayloadMaxBytes < 0 || c.DLQRatePerSec <= 0 {
 		return errors.New("RAW_PAYLOAD_MAX_BYTES must be non-negative and DLQ_RATE_PER_SEC positive")
+	}
+	if c.DLQPeekMaxScan <= 0 {
+		return errors.New("DLQ_PEEK_MAX_SCAN must be positive")
 	}
 	for name, d := range map[string]time.Duration{"FEED_STALE_WARN_SEC": c.FeedStaleWarn, "FEED_STALE_CRITICAL_SEC": c.FeedStaleCritical, "FEED_RETRY_MIN_SEC": c.FeedRetryMin, "FEED_RETRY_MAX_SEC": c.FeedRetryMax, "SHUTDOWN_TIMEOUT_SEC": c.ShutdownTimeout} {
 		if d <= 0 {

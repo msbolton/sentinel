@@ -78,3 +78,24 @@ func TestListenerSharedNeedsListener(t *testing.T) {
 		}
 	}
 }
+
+func TestDLQPeekMaxScan(t *testing.T) {
+	t.Setenv("DLQ_PEEK_MAX_SCAN", "") // an empty value reads as unset
+	if got := Load().DLQPeekMaxScan; got != 2000 {
+		t.Errorf("default = %d, want 2000 messages per partition", got)
+	}
+	t.Setenv("DLQ_PEEK_MAX_SCAN", "500")
+	if got := Load().DLQPeekMaxScan; got != 500 {
+		t.Errorf("override = %d, want 500", got)
+	}
+	if err := Load().Validate(); err != nil {
+		t.Errorf("a positive scan bound is valid: %v", err)
+	}
+	for _, bad := range []string{"0", "-1"} {
+		t.Setenv("DLQ_PEEK_MAX_SCAN", bad)
+		err := Load().Validate()
+		if err == nil || !strings.Contains(err.Error(), "DLQ_PEEK_MAX_SCAN") {
+			t.Errorf("DLQ_PEEK_MAX_SCAN=%s: Validate() = %v, want an error that names the variable", bad, err)
+		}
+	}
+}

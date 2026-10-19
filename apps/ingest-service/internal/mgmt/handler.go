@@ -19,6 +19,7 @@ import (
 	"github.com/sentinel/go-common/middleware"
 
 	"github.com/sentinel/ingest-service/internal/aoi"
+	"github.com/sentinel/ingest-service/internal/dlq"
 	"github.com/sentinel/ingest-service/internal/drivers"
 	"github.com/sentinel/ingest-service/internal/registry"
 	"github.com/sentinel/ingest-service/internal/source/driver"
@@ -60,6 +61,9 @@ type Handler struct {
 	StaleAfter time.Duration
 	// Reserved are the ports a listening connection may not bind (Sentinel's own).
 	Reserved registry.PortSet
+	// DeadLetters reads a connection's recent dead letters for GET
+	// /feeds/{id}/deadletters. Nil leaves the route answering 501.
+	DeadLetters dlq.Reader
 }
 
 // NewHandler wires the handler. runtime may be nil (status-only replicas).
@@ -176,6 +180,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, guard func(http.Handler) ht
 	route("POST /feeds/{id}/enable", h.setEnabled(true))
 	route("POST /feeds/{id}/disable", h.setEnabled(false))
 	route("GET /feeds/{id}/status", h.status)
+	route("GET /feeds/{id}/deadletters", h.deadLetters)
 	route("GET /feeds/{id}/area", h.getArea)
 	route("PUT /feeds/{id}/area", h.putArea)
 	route("GET /drivers", h.listDrivers)
