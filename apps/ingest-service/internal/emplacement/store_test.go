@@ -223,3 +223,46 @@ func containsID(list []Emplacement, id string) bool {
 	}
 	return false
 }
+
+func TestStoreTouchIsQuiet(t *testing.T) {
+	pool, ctx := testPool(t)
+	s := NewPGStore(pool)
+	e := fixed("test-touch")
+	e.Mobility, e.Position = MobilityMobile, &Point{Lat: 50, Lon: -4}
+	created, err := s.Create(ctx, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notices := listen(t, ctx, pool)
+	at := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+
+	if err := s.Touch(ctx, created.ID, &Point{Lat: 50.5, Lon: -4.5}, at); err != nil {
+		t.Fatal(err)
+	}
+	expectNoNotice(t, notices)
+	got, _ := s.Get(ctx, created.ID)
+	if got.Version != created.Version || got.Position == nil || got.Position.Lat != 50.5 || got.Position.Lon != -4.5 ||
+		got.LastReportAt == nil || !got.LastReportAt.Equal(at) {
+		t.Fatalf("after touch = %+v", got)
+	}
+
+	later := at.Add(time.Minute)
+	if err := s.Touch(ctx, created.ID, nil, later); err != nil { // no position: only the report time moves
+		t.Fatal(err)
+	}
+	got, _ = s.Get(ctx, created.ID)
+	if got.Position.Lat != 50.5 || !got.LastReportAt.Equal(later) || got.Version != created.Version {
+		t.Fatalf("touch without position = %+v", got)
+	}
+
+	if err := s.Delete(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	<-notices // the delete's own notice
+	if err := s.Touch(ctx, created.ID, nil, later); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("touch after delete = %v", err)
+	}
+	if err := s.Touch(ctx, "not-a-uuid", nil, later); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("touch malformed id = %v", err)
+	}
+}
