@@ -755,6 +755,7 @@ services:
       # How long a graceful shutdown may take (the default). Keep stop_grace_period above it.
       SHUTDOWN_TIMEOUT_SEC: "25"
     volumes:
+      # Runs as 10001:10001: Linux hosts need both folders readable by gid 10001 (docs/development.md).
       # Certificates and other files that secretRefs reference as file:/etc/sentinel/tak/...
       # (gitignored; empty is fine).
       - ./secrets/tak:/etc/sentinel/tak:ro
@@ -831,6 +832,7 @@ services:
       INGEST_RESERVED_PORTS: ${INGEST_RESERVED_PORTS:-}
       SHUTDOWN_TIMEOUT_SEC: "25"
     volumes:
+      # As for ingest-service: Linux hosts need both folders readable by gid 10001 (docs/development.md).
       - ./secrets/tak:/etc/sentinel/tak:ro
       - ./secrets/ingest:/etc/sentinel/secrets:ro
     depends_on:

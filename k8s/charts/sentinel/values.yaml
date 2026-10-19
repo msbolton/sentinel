@@ -175,10 +175,10 @@ ingestService:
   # A Secret whose keys become environment variables of the ingest and listener
   # pods, for secretRefs to name as env:KEY (env above takes plain values only).
   # Every key of it reaches both pods, through envFrom, and can set any
-  # configuration the chart leaves unset (INGEST_LISTENER_SHARED or
-  # LEASE_ENABLED, for example). So the keys should be secret material, named
-  # for the INGEST_SECRET_ENV_ALLOW policy of the ingest service (default
-  # OPENSKY_*,AISSTREAM_*,SENTINEL_SECRET_*), and nothing else.
+  # configuration the chart leaves unset (LEASE_ENABLED or
+  # FEEDS_BOOTSTRAP_ENABLED, for example). So the keys should be secret
+  # material, named for the INGEST_SECRET_ENV_ALLOW policy of the ingest service
+  # (default OPENSKY_*,AISSTREAM_*,SENTINEL_SECRET_*), and nothing else.
   # Leave existingSecret empty to add none.
   secretEnv:
     existingSecret: ""
