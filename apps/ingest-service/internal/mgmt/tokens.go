@@ -2,9 +2,11 @@ package mgmt
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"go.uber.org/zap"
 
@@ -94,6 +96,8 @@ func (h *Handler) createToken(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" || len(name) > 255 {
 		problems = append(problems, drivers.Problem{Path: "/name", Message: "is required, at most 255 bytes"})
+	} else if strings.IndexFunc(name, unicode.IsControl) >= 0 {
+		problems = append(problems, drivers.Problem{Path: "/name", Message: "must not contain control characters"})
 	}
 	level := feedLevel
 	if req.Classification != "" {
@@ -121,6 +125,11 @@ func (h *Handler) createToken(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := h.Tokens.Create(r.Context(), ingesttoken.Token{FeedID: feedID, Name: name, Prefix: display,
 		Classification: classification.Normalize(level), CreatedBy: middleware.UserID(r.Context()), ExpiresAt: req.ExpiresAt}, hash)
+	if errors.Is(err, ingesttoken.ErrNotFound) {
+		// The feed was deleted after tokenFeed read it: the foreign key refused the row.
+		writeError(w, http.StatusNotFound, "feed not found")
+		return
+	}
 	if err != nil {
 		h.fail(w, err)
 		return

@@ -19,11 +19,16 @@ type memTokens struct {
 	mu   sync.Mutex
 	rows map[string]ingesttoken.Token
 	n    int
+	// createErr, when set, is what Create returns.
+	createErr error
 }
 
 func (m *memTokens) Create(_ context.Context, t ingesttoken.Token, hash []byte) (ingesttoken.Token, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.createErr != nil {
+		return ingesttoken.Token{}, m.createErr
+	}
 	if len(hash) != 32 {
 		panic("hash must be a SHA-256")
 	}
@@ -95,7 +100,9 @@ func TestTokenLifecycle(t *testing.T) {
 		ingesttoken.Token
 		Secret string `json:"token"`
 	}
-	_ = json.Unmarshal(out, &created)
+	if err := json.Unmarshal(out, &created); err != nil {
+		t.Fatalf("create body: %v: %s", err, out)
+	}
 	if !strings.HasPrefix(created.Secret, "si_") || len(created.Secret) != 46 || created.Prefix != created.Secret[:11] ||
 		created.Classification != "CONFIDENTIAL" || created.CreatedBy != "u1" || created.FeedID != "ew-1" {
 		t.Fatalf("created = %+v", created)
@@ -156,5 +163,87 @@ func TestTokensDisabledWithoutAStore(t *testing.T) {
 	srv := newTokenServer(t, nil, grpcFeed("ew-1", "UNCLASSIFIED"))
 	if resp, _ := do(t, srv, "GET", "/feeds/ew-1/tokens", "", reqOpts{roles: "sentinel-operator", user: "u1", class: "SECRET"}); resp.StatusCode != http.StatusNotImplemented {
 		t.Fatalf("no store: %d", resp.StatusCode)
+	}
+}
+
+func TestTokenRoutesHoldTheCallerToTheFeed(t *testing.T) {
+	tokens := &memTokens{rows: map[string]ingesttoken.Token{}}
+	srv := newTokenServer(t, tokens, grpcFeed("ew-1", "CONFIDENTIAL"), grpcFeed("ew-2", "CONFIDENTIAL"))
+	secretOp := reqOpts{roles: "sentinel-operator", user: "u1", class: "SECRET"}
+
+	resp, out := do(t, srv, "POST", "/feeds/ew-1/tokens", `{"name":"x"}`, secretOp)
+	var created ingesttoken.Token
+	if err := json.Unmarshal(out, &created); err != nil || resp.StatusCode != 201 {
+		t.Fatalf("create: %d %s", resp.StatusCode, out)
+	}
+
+	// Another feed's token is not found through this feed's path, and stays usable.
+	if resp, _ := do(t, srv, "DELETE", "/feeds/ew-2/tokens/"+created.ID, "", secretOp); resp.StatusCode != 404 {
+		t.Errorf("revoking through another feed: %d", resp.StatusCode)
+	}
+	if tokens.rows[created.ID].RevokedAt != nil {
+		t.Error("a token was revoked through another feed's path")
+	}
+
+	notCleared := reqOpts{roles: "sentinel-operator", user: "u1", class: "UNCLASSIFIED"}
+	if resp, _ := do(t, srv, "GET", "/feeds/ew-1/tokens", "", notCleared); resp.StatusCode != 403 {
+		t.Errorf("list without clearance: %d", resp.StatusCode)
+	}
+	if resp, _ := do(t, srv, "DELETE", "/feeds/ew-1/tokens/"+created.ID, "", notCleared); resp.StatusCode != 403 {
+		t.Errorf("revoke without clearance: %d", resp.StatusCode)
+	}
+	viewer := reqOpts{roles: "sentinel-viewer", user: "u1", class: "SECRET"}
+	if resp, _ := do(t, srv, "DELETE", "/feeds/ew-1/tokens/"+created.ID, "", viewer); resp.StatusCode != 403 {
+		t.Errorf("a viewer revoked a token: %d", resp.StatusCode)
+	}
+	if tokens.rows[created.ID].RevokedAt != nil {
+		t.Error("a refused revoke still revoked the token")
+	}
+}
+
+func TestTokenDefaultsAndBounds(t *testing.T) {
+	tokens := &memTokens{rows: map[string]ingesttoken.Token{}}
+	plain := grpcFeed("plain", "")
+	plain.Config = json.RawMessage(`{"port":6100}`)
+	srv := newTokenServer(t, tokens, plain, grpcFeed("ew-1", "UNCLASSIFIED"))
+	op := reqOpts{roles: "sentinel-operator", user: "u1", class: "SECRET"}
+
+	resp, out := do(t, srv, "POST", "/feeds/plain/tokens", `{"name":"x"}`, op)
+	var got ingesttoken.Token
+	if err := json.Unmarshal(out, &got); err != nil || resp.StatusCode != 201 || got.Classification != "UNCLASSIFIED" {
+		t.Errorf("feed without a classification: %d %s", resp.StatusCode, out)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	body := func(name string) string {
+		b, _ := json.Marshal(map[string]string{"name": name})
+		return string(b)
+	}
+	cases := []struct {
+		name, body string
+		want       int
+	}{
+		{"expiresAt is now", `{"name":"x","expiresAt":"` + now + `"}`, 422},
+		{"254 bytes of multibyte", body(strings.Repeat("é", 127)), 201},
+		{"256 bytes of multibyte", body(strings.Repeat("é", 128)), 422},
+		{"255 bytes", body(strings.Repeat("a", 255)), 201},
+		{"a NUL in the name", `{"name":"a\u0000b"}`, 422},
+		{"a newline in the name", `{"name":"a\nb"}`, 422},
+	}
+	for _, c := range cases {
+		if resp, out := do(t, srv, "POST", "/feeds/ew-1/tokens", c.body, op); resp.StatusCode != c.want {
+			t.Errorf("%s: %d %.200s", c.name, resp.StatusCode, out)
+		}
+	}
+}
+
+// A feed deleted between the lookup and the insert fails the foreign key, which
+// the store reports as ErrNotFound: the caller is told about the feed.
+func TestTokenCreateOnAFeedDeletedMidRequest(t *testing.T) {
+	tokens := &memTokens{rows: map[string]ingesttoken.Token{}, createErr: ingesttoken.ErrNotFound}
+	srv := newTokenServer(t, tokens, grpcFeed("ew-1", "UNCLASSIFIED"))
+	resp, out := do(t, srv, "POST", "/feeds/ew-1/tokens", `{"name":"x"}`, reqOpts{roles: "sentinel-operator", user: "u1", class: "SECRET"})
+	if resp.StatusCode != 404 || !strings.Contains(string(out), "feed not found") {
+		t.Fatalf("got %d %s", resp.StatusCode, out)
 	}
 }

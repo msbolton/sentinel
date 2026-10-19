@@ -141,7 +141,11 @@ func main() {
 	// grpc driver authenticates senders with.
 	tokStore := ingesttoken.NewPGStore(reg.Pool())
 	tokCache := ingesttoken.NewCache(tokStore, reg.Pool(), logger)
-	go tokCache.Run(ctx)
+	tokDone := make(chan struct{})
+	go func() {
+		defer close(tokDone)
+		tokCache.Run(ctx)
+	}()
 
 	// Supervisor: runs the feeds this replica owns and reports status.
 	supOpts := feed.Options{
@@ -227,7 +231,7 @@ func main() {
 	}
 
 	// Graceful shutdown, bounded by SHUTDOWN_TIMEOUT_SEC: readiness 503 →
-	// supervisor stops drivers → publisher drains → HTTP shutdown → producer
+	// supervisor stops drivers → token cache flushes → publisher drains → HTTP shutdown → producer
 	// flushes → dead-letter reader closes.
 	logger.Info("initiating graceful shutdown", zap.Duration("timeout", cfg.ShutdownTimeout))
 	deadline := time.Now().Add(cfg.ShutdownTimeout)
@@ -237,6 +241,13 @@ func main() {
 	case <-supervisorDone:
 	case <-time.After(time.Until(deadline)):
 		logger.Warn("feed supervisor did not stop in time")
+	}
+	// The token cache writes its last lastUsedAt batch (up to 5 s) once the
+	// context is cancelled; wait for it before the pool closes.
+	select {
+	case <-tokDone:
+	case <-time.After(max(time.Until(deadline), 0)):
+		logger.Warn("ingest token cache did not finish its last write in time")
 	}
 	// With Kafka unreachable nothing drains: the shards cannot hand their
 	// observations over and a flush delivers none. So the publisher waits only
