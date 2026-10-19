@@ -103,7 +103,7 @@ func ReadUnder(path string, dirs []string) ([]byte, error) {
 	if errors.Is(lastErr, os.ErrNotExist) {
 		return nil, lastErr
 	}
-	return nil, fmt.Errorf("%w (a link inside an allowed folder must be relative and stay inside it)", lastErr)
+	return nil, fmt.Errorf("%w (a link inside an allowed folder must be relative and stay inside it; an absolute link is refused even when it points back inside)", lastErr)
 }
 
 // readIn reads rel inside dir without leaving it.

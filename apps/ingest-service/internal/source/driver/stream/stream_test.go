@@ -28,6 +28,7 @@ import (
 	_ "github.com/sentinel/ingest-service/internal/source/transport/tcpclient"
 	_ "github.com/sentinel/ingest-service/internal/source/transport/tcpserver"
 	_ "github.com/sentinel/ingest-service/internal/source/transport/udp"
+	_ "github.com/sentinel/ingest-service/internal/source/transport/websocket"
 )
 
 type memSink struct {
@@ -865,37 +866,37 @@ func TestNewHoldsTLSFilesToFileDirs(t *testing.T) {
 	}
 }
 
-// New writes the paths the TLS files' links lead to back into the transport
-// config, so the files read on every dial are the files that were checked; a
-// link swapped afterwards is not followed.
-func TestNewKeepsTheCheckedTLSPaths(t *testing.T) {
+// New keeps the TLS file paths as configured, links and all, and passes the
+// folders on to the transport so that every read of the files is confined to
+// them again: a rotated certificate is then followed, and a link re-pointed
+// out of the folder is refused when it is read.
+func TestNewKeepsTheConfiguredTLSPathsAndPassesTheFolders(t *testing.T) {
 	root := t.TempDir()
 	allowed := filepath.Join(root, "allowed")
 	if err := os.MkdirAll(allowed, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	real := filepath.Join(allowed, "cert-2024.pem")
-	if err := os.WriteFile(real, []byte("x"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(allowed, "ca-2024.pem"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(allowed, "cert.pem")
-	if err := os.Symlink("cert-2024.pem", link); err != nil {
+	link := filepath.Join(allowed, "ca.pem")
+	if err := os.Symlink("ca-2024.pem", link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	saved := FileDirs
 	defer func() { FileDirs = saved }()
 	FileDirs = []string{allowed}
-	orig := &transport.TLS{Enabled: true, CertFile: link, KeyFile: link}
-	got, err := checkTLSFiles(orig)
+	cfg := `{"transport":{"kind":"websocket","url":"wss://127.0.0.1:1/x","tls":{"enabled":true,"caFile":"` + link + `"}},"framing":"message","decoder":{"name":"sbs"}}`
+	d, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := filepath.EvalSymlinks(real)
-	if got.CertFile != want || got.KeyFile != want {
-		t.Errorf("files = %q and %q, want the resolved %q", got.CertFile, got.KeyFile, want)
+	tc := d.(*Driver).tcfg
+	if tc.TLS.CAFile != link {
+		t.Errorf("caFile = %q, want the configured %q", tc.TLS.CAFile, link)
 	}
-	if orig.CertFile != link {
-		t.Error("the parsed config was changed in place")
+	if !slices.Equal(tc.FileDirs, []string{allowed}) {
+		t.Errorf("FileDirs = %v", tc.FileDirs)
 	}
 }
 

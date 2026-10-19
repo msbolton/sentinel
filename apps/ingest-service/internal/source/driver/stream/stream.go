@@ -100,7 +100,7 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	if tcfg.TLS, err = checkTLSFiles(tcfg.TLS); err != nil {
+	if err := checkTLSFiles(tcfg.TLS); err != nil {
 		return nil, err
 	}
 	// A tcpserver is capped unless the config says otherwise. This is decided
@@ -128,31 +128,27 @@ func setsMaxConnections(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &probe) == nil && probe.MaxConnections != nil
 }
 
-// checkTLSFiles refuses a TLS file outside FileDirs and returns the config
-// with each file named by the path its links lead to, which is the path the
-// transport then reads on every dial, so a link swapped later is not followed.
-func checkTLSFiles(t *transport.TLS) (*transport.TLS, error) {
+// checkTLSFiles refuses a TLS file outside FileDirs once, at start, so that
+// a feed whose files are out of bounds fails to start with a clear error. The
+// config keeps the path as written and every read of the file is confined to
+// FileDirs again (transport.Config.FileDirs), so a rotated certificate is
+// followed and a link re-pointed out of the folder is refused when it is read.
+func checkTLSFiles(t *transport.TLS) error {
 	if t == nil || FileDirs == nil {
-		return t, nil
+		return nil
 	}
-	checked := *t
-	for _, f := range []struct {
-		field string
-		path  *string
-	}{{"certFile", &checked.CertFile}, {"keyFile", &checked.KeyFile}, {"caFile", &checked.CAFile}, {"clientCaFile", &checked.ClientCAFile}} {
-		if *f.path == "" {
+	for _, f := range []struct{ field, path string }{{"certFile", t.CertFile}, {"keyFile", t.KeyFile}, {"caFile", t.CAFile}, {"clientCaFile", t.ClientCAFile}} {
+		if f.path == "" {
 			continue
 		}
-		resolved, err := transport.ResolveUnder(*f.path, FileDirs)
-		if errors.Is(err, transport.ErrOutsideDirs) {
-			return nil, fmt.Errorf("tls.%s: %s", f.field, transport.OutsideMessage(*f.path))
+		if _, err := transport.ResolveUnder(f.path, FileDirs); err != nil {
+			if errors.Is(err, transport.ErrOutsideDirs) {
+				return fmt.Errorf("tls.%s: %s", f.field, transport.OutsideMessage(f.path))
+			}
+			return fmt.Errorf("tls.%s: %w", f.field, err)
 		}
-		if err != nil {
-			return nil, fmt.Errorf("tls.%s: %w", f.field, err)
-		}
-		*f.path = resolved
 	}
-	return &checked, nil
+	return nil
 }
 
 // NewFromParts builds a stream driver from an already parsed transport
@@ -181,6 +177,7 @@ func NewFromParts(spec driver.Spec, deps driver.Deps, tcfg transport.Config, fra
 	}
 	ApplySecrets(&tcfg, spec.Secrets)
 	tcfg.Logger = deps.Logger
+	tcfg.FileDirs = FileDirs
 	t, err := tdef.New(tcfg)
 	if err != nil {
 		return nil, err

@@ -19,7 +19,7 @@ func (c Config) TLSConfig() (*tls.Config, error) {
 		return nil, nil
 	}
 	t := &tls.Config{InsecureSkipVerify: c.TLS.InsecureSkipVerify, ServerName: c.TLS.ServerName, MinVersion: tls.VersionTLS12} //nolint:gosec // operator choice
-	ca, err := pemOrFile(c.CAPEM, c.TLS.CAFile, "CA")
+	ca, err := pemOrFile(c.CAPEM, c.TLS.CAFile, "CA", c.FileDirs)
 	if err != nil {
 		return nil, err
 	}
@@ -28,11 +28,11 @@ func (c Config) TLSConfig() (*tls.Config, error) {
 			return nil, err
 		}
 	}
-	cert, err := pemOrFile(c.CertPEM, c.TLS.CertFile, "certificate")
+	cert, err := pemOrFile(c.CertPEM, c.TLS.CertFile, "certificate", c.FileDirs)
 	if err != nil {
 		return nil, err
 	}
-	key, err := pemOrFile(c.KeyPEM, c.TLS.KeyFile, "key")
+	key, err := pemOrFile(c.KeyPEM, c.TLS.KeyFile, "key", c.FileDirs)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func (c Config) TLSConfig() (*tls.Config, error) {
 		}
 		t.Certificates = []tls.Certificate{pair}
 	}
-	clientCA, err := pemOrFile(c.ClientCAPEM, c.TLS.ClientCAFile, "client CA")
+	clientCA, err := pemOrFile(c.ClientCAPEM, c.TLS.ClientCAFile, "client CA", c.FileDirs)
 	if err != nil {
 		return nil, err
 	}
@@ -58,14 +58,28 @@ func (c Config) TLSConfig() (*tls.Config, error) {
 	return t, nil
 }
 
-func pemOrFile(pemBytes []byte, file, what string) ([]byte, error) {
+// pemOrFile returns the PEM from a secret reference, or else the contents of
+// file. The file is read each time, by the path as configured, so a rotated
+// certificate (a mounted secret whose link is re-pointed) is followed. With
+// dirs set (a non-nil list) the read is confined to those folders, links
+// followed inside them and never out; with nil dirs it is a plain read.
+func pemOrFile(pemBytes []byte, file, what string, dirs []string) ([]byte, error) {
 	if len(pemBytes) > 0 {
 		return pemBytes, nil
 	}
 	if file == "" {
 		return nil, nil
 	}
-	b, err := os.ReadFile(file)
+	var b []byte
+	var err error
+	if dirs == nil {
+		b, err = os.ReadFile(file)
+	} else {
+		b, err = ReadUnder(file, dirs)
+		if errors.Is(err, ErrOutsideDirs) {
+			return nil, fmt.Errorf("reading %s file: %s", what, OutsideMessage(file))
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("reading %s file: %w", what, err)
 	}

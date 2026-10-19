@@ -144,6 +144,10 @@ type Config struct {
 	MaxFrameBytes int `json:"maxFrameBytes"`
 	// ReadTimeoutSec closes an idle stream connection (0 = none).
 	ReadTimeoutSec int `json:"readTimeoutSec"`
+	// FileDirs confines the TLS files (TLS.CAFile and the others) to these
+	// folders every time they are read; nil reads them as they are. Set by the
+	// driver from the secret policy, never from the feed's JSON.
+	FileDirs []string `json:"-"`
 	// Framing names the framer for stream transports (default line).
 	Framing string `json:"-"`
 }
