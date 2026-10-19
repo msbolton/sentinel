@@ -262,21 +262,41 @@ func (s *Senders) evict() {
 // first. A stamp is usually the newest yet, which goes in front at once; one
 // older than another row's (two goroutines that stamped in one order and
 // recorded in another, a clock that stepped back, a sender with no stamp yet)
-// goes behind the rows it is older than.
+// goes behind the rows it is older than. A row already in the list has its
+// element moved, not replaced, so a message from a sender the table holds
+// allocates nothing.
 func (s *Senders) place(e *senderRow) {
-	s.unplace(e)
-	front, back := s.idle.Front(), s.idle.Back()
+	// The rows other than e, from either end.
+	first, last := s.idle.Front(), s.idle.Back()
+	if first != nil && first == e.at {
+		first = first.Next()
+	}
+	if last != nil && last == e.at {
+		last = last.Prev()
+	}
+	var before *list.Element // the row e goes in front of; nil: behind all of them
 	switch {
-	case front == nil || !e.LastAt.Before(front.Value.(*senderRow).LastAt):
-		e.at = s.idle.PushFront(e)
-	case !e.LastAt.After(back.Value.(*senderRow).LastAt):
-		e.at = s.idle.PushBack(e)
+	case first == nil: // alone
+	case !e.LastAt.Before(first.Value.(*senderRow).LastAt):
+		before = first
+	case !e.LastAt.After(last.Value.(*senderRow).LastAt):
 	default:
-		el := front.Next()
-		for e.LastAt.Before(el.Value.(*senderRow).LastAt) {
-			el = el.Next()
+		for el := first.Next(); el != nil; el = el.Next() {
+			if el != e.at && !e.LastAt.Before(el.Value.(*senderRow).LastAt) {
+				before = el
+				break
+			}
 		}
-		e.at = s.idle.InsertBefore(e, el)
+	}
+	switch {
+	case e.at != nil && before != nil:
+		s.idle.MoveBefore(e.at, before)
+	case e.at != nil:
+		s.idle.MoveToBack(e.at)
+	case before != nil:
+		e.at = s.idle.InsertBefore(e, before)
+	default:
+		e.at = s.idle.PushBack(e)
 	}
 }
 

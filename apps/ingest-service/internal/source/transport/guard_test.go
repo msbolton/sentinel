@@ -612,6 +612,31 @@ func TestSendersEvictionMatchesAScanOfTheTable(t *testing.T) {
 	}
 }
 
+// A message from a sender the table already holds is the common case on a busy
+// datagram listener, so it allocates nothing: whether the sender is the newest
+// (front), older than some (the middle) or older than all (the back), and whether
+// it is idle or has just hung up.
+func TestSendersSeenOfAHeldSenderDoesNotAllocate(t *testing.T) {
+	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	s := NewSenders(100)
+	for i := range 20 {
+		s.Seen(fmt.Sprintf("10.0.0.%d", i), t0.Add(time.Duration(i)*time.Second))
+	}
+	step := 0
+	for name, stamp := range map[string]func() time.Time{
+		"the newest yet":  func() time.Time { step++; return t0.Add(time.Hour + time.Duration(step)*time.Second) },
+		"older than some": func() time.Time { return t0.Add(10*time.Second + 500*time.Millisecond) },
+		"older than all":  func() time.Time { return t0.Add(-time.Hour) },
+	} {
+		for _, key := range []string{"10.0.0.0", "10.0.0.7", "10.0.0.19"} {
+			if n := testing.AllocsPerRun(200, func() { s.Seen(key, stamp()) }); n != 0 {
+				t.Errorf("Seen of %s with a stamp %s allocated %v times per call, want none", key, name, n)
+			}
+		}
+	}
+	checkSendersOrder(t, s)
+}
+
 // checkSendersOrder checks the table's idle list against its rows: it holds
 // exactly the rows that are not connected, each once, newest stamp first.
 func checkSendersOrder(t *testing.T, s *Senders) {
