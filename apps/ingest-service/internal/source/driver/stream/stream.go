@@ -38,7 +38,9 @@ var FrameBuffer = 1024
 
 // FileDirs are the folders the TLS files of a transport (certFile, keyFile,
 // caFile, clientCaFile) may be read from, as the secret references' files
-// are; set from configuration before feeds start. Empty restricts nothing.
+// are; set from configuration before feeds start. Nil restricts nothing, as
+// the zero secret policy does; a non-nil list, even an empty one, restricts to
+// its folders, so a policy that allows no folders allows no TLS file.
 var FileDirs []string
 
 const mqttBlockFor = 2 * time.Second
@@ -98,7 +100,7 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := checkTLSFiles(tcfg.TLS); err != nil {
+	if tcfg.TLS, err = checkTLSFiles(tcfg.TLS); err != nil {
 		return nil, err
 	}
 	// A tcpserver is capped unless the config says otherwise. This is decided
@@ -126,24 +128,31 @@ func setsMaxConnections(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &probe) == nil && probe.MaxConnections != nil
 }
 
-// checkTLSFiles refuses a TLS file outside FileDirs, after following links, so
-// that a link inside an allowed folder cannot lead out of it.
-func checkTLSFiles(t *transport.TLS) error {
-	if t == nil || len(FileDirs) == 0 {
-		return nil
+// checkTLSFiles refuses a TLS file outside FileDirs and returns the config
+// with each file named by the path its links lead to, which is the path the
+// transport then reads on every dial, so a link swapped later is not followed.
+func checkTLSFiles(t *transport.TLS) (*transport.TLS, error) {
+	if t == nil || FileDirs == nil {
+		return t, nil
 	}
-	for _, f := range []struct{ field, path string }{{"certFile", t.CertFile}, {"keyFile", t.KeyFile}, {"caFile", t.CAFile}, {"clientCaFile", t.ClientCAFile}} {
-		if f.path == "" {
+	checked := *t
+	for _, f := range []struct {
+		field string
+		path  *string
+	}{{"certFile", &checked.CertFile}, {"keyFile", &checked.KeyFile}, {"caFile", &checked.CAFile}, {"clientCaFile", &checked.ClientCAFile}} {
+		if *f.path == "" {
 			continue
 		}
-		if _, err := transport.ResolveUnder(f.path, FileDirs); err != nil {
-			if errors.Is(err, transport.ErrOutsideDirs) {
-				return fmt.Errorf("tls.%s: file %s is not under an allowed folder (INGEST_SECRET_FILE_DIRS decides)", f.field, f.path)
-			}
-			return fmt.Errorf("tls.%s: %w", f.field, err)
+		resolved, err := transport.ResolveUnder(*f.path, FileDirs)
+		if errors.Is(err, transport.ErrOutsideDirs) {
+			return nil, fmt.Errorf("tls.%s: %s", f.field, transport.OutsideMessage(*f.path))
 		}
+		if err != nil {
+			return nil, fmt.Errorf("tls.%s: %w", f.field, err)
+		}
+		*f.path = resolved
 	}
-	return nil
+	return &checked, nil
 }
 
 // NewFromParts builds a stream driver from an already parsed transport

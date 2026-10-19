@@ -864,3 +864,57 @@ func TestNewHoldsTLSFilesToFileDirs(t *testing.T) {
 		t.Errorf("no FileDirs: %v", err)
 	}
 }
+
+// New writes the paths the TLS files' links lead to back into the transport
+// config, so the files read on every dial are the files that were checked; a
+// link swapped afterwards is not followed.
+func TestNewKeepsTheCheckedTLSPaths(t *testing.T) {
+	root := t.TempDir()
+	allowed := filepath.Join(root, "allowed")
+	if err := os.MkdirAll(allowed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(allowed, "cert-2024.pem")
+	if err := os.WriteFile(real, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(allowed, "cert.pem")
+	if err := os.Symlink("cert-2024.pem", link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	saved := FileDirs
+	defer func() { FileDirs = saved }()
+	FileDirs = []string{allowed}
+	orig := &transport.TLS{Enabled: true, CertFile: link, KeyFile: link}
+	got, err := checkTLSFiles(orig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := filepath.EvalSymlinks(real)
+	if got.CertFile != want || got.KeyFile != want {
+		t.Errorf("files = %q and %q, want the resolved %q", got.CertFile, got.KeyFile, want)
+	}
+	if orig.CertFile != link {
+		t.Error("the parsed config was changed in place")
+	}
+}
+
+// A non-nil FileDirs restricts, an empty one to nothing at all, as a secret
+// policy with no folders does; nil, the zero policy, restricts nothing.
+func TestNewWithNoAllowedFolders(t *testing.T) {
+	saved := FileDirs
+	defer func() { FileDirs = saved }()
+	cfg := `{"transport":{"kind":"tcpserver","address":"127.0.0.1:0","tls":{"enabled":true,"caFile":"/etc/sentinel/ca.pem"}},"framing":"line","decoder":{"name":"sbs"}}`
+	build := func() error {
+		_, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+		return err
+	}
+	FileDirs = []string{}
+	if err := build(); err == nil || !strings.Contains(err.Error(), "tls.caFile") || !strings.Contains(err.Error(), "outside the folders INGEST_SECRET_FILE_DIRS allows") || strings.Contains(err.Error(), "secret reference") {
+		t.Errorf("empty folders: %v", err)
+	}
+	FileDirs = nil
+	if err := build(); err != nil && strings.Contains(err.Error(), "INGEST_SECRET_FILE_DIRS") {
+		t.Errorf("nil folders: %v", err)
+	}
+}

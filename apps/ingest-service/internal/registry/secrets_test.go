@@ -315,3 +315,66 @@ func TestValidatorAppliesTheFolderPolicyToStreamTLSFiles(t *testing.T) {
 		t.Errorf("zero policy: %v", err)
 	}
 }
+
+// Only the zero policy restricts nothing: one with a list set and the other
+// empty allows nothing of the empty kind.
+func TestPartialSecretPolicyDeniesTheEmptyKind(t *testing.T) {
+	envOnly := SecretPolicy{EnvAllow: []string{"OPENSKY_*"}}
+	if envOnly.Unrestricted() || envOnly.Check("env:OPENSKY_X") != nil || envOnly.Check("file:/etc/sentinel/k") == nil {
+		t.Error("EnvAllow alone: files must be denied")
+	}
+	filesOnly := SecretPolicy{FileDirs: []string{"/etc/sentinel"}}
+	if filesOnly.Unrestricted() || filesOnly.Check("file:/etc/sentinel/k") != nil || filesOnly.Check("env:OPENSKY_X") == nil {
+		t.Error("FileDirs alone: variables must be denied")
+	}
+	if !(SecretPolicy{}).Unrestricted() {
+		t.Error("the zero policy is unrestricted")
+	}
+	// The validator agrees about TLS files.
+	v := newValidator()
+	v.Secrets = envOnly
+	f := &Feed{ID: "s", Name: "s", Driver: "stream", Config: json.RawMessage(
+		`{"transport":{"kind":"tcpserver","address":":47100","tls":{"enabled":true,"caFile":"/etc/sentinel/ca.pem"}},"decoder":{"name":"cot"}}`)}
+	var ve *ValidationError
+	if err := v.Validate(f); !errors.As(err, &ve) || len(ve.Problems) != 1 || ve.Problems[0].Path != "/config/transport/tls/caFile" {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// A TLS file field is not a secret reference, and its refusal does not say so.
+func TestTLSFileRefusalDoesNotCallItASecretReference(t *testing.T) {
+	v := newValidator()
+	v.Secrets = defaultPolicy()
+	f := &Feed{ID: "s", Name: "s", Driver: "stream", Config: json.RawMessage(
+		`{"transport":{"kind":"tcpserver","address":":47100","tls":{"enabled":true,"certFile":"/etc/passwd"}},"decoder":{"name":"cot"}}`)}
+	var ve *ValidationError
+	if err := v.Validate(f); !errors.As(err, &ve) || len(ve.Problems) != 1 {
+		t.Fatalf("err = %v", err)
+	}
+	const want = "file /etc/passwd is outside the folders INGEST_SECRET_FILE_DIRS allows (default /etc/sentinel)"
+	if m := ve.Problems[0].Message; m != want {
+		t.Errorf("message %q, want %q", m, want)
+	}
+}
+
+// With no injected reader the file is read confined to its folder: a link that
+// stays inside works as before, an absolute one is refused with the reason.
+func TestResolveReadsConfinedToTheFolder(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "real"), []byte("real\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real", filepath.Join(root, "rel")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(root, "real"), filepath.Join(root, "abs")); err != nil {
+		t.Fatal(err)
+	}
+	p := SecretPolicy{EnvAllow: []string{"*"}, FileDirs: []string{root}}
+	if got, err := p.Resolve(map[string]string{"k": "file:" + filepath.Join(root, "rel")}, nil, nil); err != nil || got["k"] != "real" {
+		t.Errorf("relative link: %v %v", got, err)
+	}
+	if _, err := p.Resolve(map[string]string{"k": "file:" + filepath.Join(root, "abs")}, nil, nil); err == nil || !strings.Contains(err.Error(), "must be relative") {
+		t.Errorf("absolute link: %v", err)
+	}
+}

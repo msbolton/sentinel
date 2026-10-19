@@ -139,7 +139,7 @@ var tlsFileFields = []string{"certFile", "keyFile", "caFile", "clientCaFile"}
 // secret files may come from. The keys are read the way the driver decodes
 // them, ignoring case (see rawAt).
 func (v *Validator) checkTLSFiles(f *Feed) []Problem {
-	if f.Driver != "stream" || v.Secrets.unrestricted() {
+	if f.Driver != "stream" || v.Secrets.Unrestricted() {
 		return nil
 	}
 	var problems []Problem

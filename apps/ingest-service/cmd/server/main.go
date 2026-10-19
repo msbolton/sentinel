@@ -69,7 +69,9 @@ func main() {
 	)
 	stream.FrameBuffer = cfg.FrameBuffer
 	secretPolicy := cfg.SecretPolicy()
-	stream.FileDirs = secretPolicy.FileDirs
+	if !secretPolicy.Unrestricted() {
+		stream.FileDirs = append([]string{}, secretPolicy.FileDirs...) // non-nil: restricted
+	}
 
 	promReg := prometheus.NewRegistry()
 	promReg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))

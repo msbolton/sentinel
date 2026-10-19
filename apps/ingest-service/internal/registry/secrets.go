@@ -35,11 +35,14 @@ const (
 const SecretPolicyHint = "by default only SENTINEL_SECRET_…, OPENSKY_… and AISSTREAM_… names are allowed, or files under /etc/sentinel; " +
 	"INGEST_SECRET_ENV_ALLOW and INGEST_SECRET_FILE_DIRS decide"
 
-// FileOutsideMessage is the refusal of a file path outside the allowed
-// folders, whether it is a secret reference or a TLS file of a stream
-// transport.
-func FileOutsideMessage(path string) string {
-	return fmt.Sprintf("file %s is not allowed in a secret reference: %s", path, SecretPolicyHint)
+// FileOutsideMessage is the refusal of a file outside the allowed folders. It
+// fits anything that names a file, such as a TLS file of a stream transport.
+func FileOutsideMessage(path string) string { return transport.OutsideMessage(path) }
+
+// secretFileOutsideMessage is that refusal for a secret reference, which may
+// also name a variable.
+func secretFileOutsideMessage(path string) string {
+	return FileOutsideMessage(path) + "; a secret reference may otherwise name only SENTINEL_SECRET_…, OPENSKY_… and AISSTREAM_… variables by default, and INGEST_SECRET_ENV_ALLOW decides"
 }
 
 // SecretPolicy limits what a secret reference may name. EnvAllow lists
@@ -49,7 +52,9 @@ func FileOutsideMessage(path string) string {
 // simple; the service configuration always fills both lists.
 type SecretPolicy struct{ EnvAllow, FileDirs []string }
 
-func (p SecretPolicy) unrestricted() bool { return len(p.EnvAllow) == 0 && len(p.FileDirs) == 0 }
+// Unrestricted reports whether the policy is the zero value. A policy with
+// only one of its lists set is restricted: the other list then allows nothing.
+func (p SecretPolicy) Unrestricted() bool { return len(p.EnvAllow) == 0 && len(p.FileDirs) == 0 }
 
 var envAllowEntryRe = regexp.MustCompile(`^([A-Z][A-Z0-9_]*\*?|\*)$`)
 
@@ -91,7 +96,7 @@ func (p SecretPolicy) envAllowed(name string) bool {
 // first ("/etc/sentinel/../shadow" is "/etc/shadow"); links are followed only
 // when the file is read (Resolve). A reference of another form is refused.
 func (p SecretPolicy) Check(ref string) error {
-	if p.unrestricted() {
+	if p.Unrestricted() {
 		return nil
 	}
 	switch {
@@ -101,7 +106,7 @@ func (p SecretPolicy) Check(ref string) error {
 		}
 	case strings.HasPrefix(ref, "file:"):
 		if path := strings.TrimPrefix(ref, "file:"); !transport.PathUnder(path, p.FileDirs) {
-			return errors.New(FileOutsideMessage(path))
+			return errors.New(secretFileOutsideMessage(path))
 		}
 	default:
 		return errors.New("unsupported reference: use env:NAME or file:/absolute/path")
@@ -119,14 +124,17 @@ type ReadFile func(path string) ([]byte, error)
 // first, and a file is read only after its links are followed and the place
 // they lead to is checked too, so a link inside an allowed folder cannot reach
 // outside it. A reference that resolves to nothing is an error, so a feed
-// never starts with a silently empty secret. A nil lookup or readFile means
-// os.LookupEnv or os.ReadFile.
+// never starts with a silently empty secret. A nil lookup means os.LookupEnv. A
+// nil readFile means os.ReadFile under a zero policy, and a read confined to
+// the allowed folders (transport.ReadUnder) otherwise, which closes the gap
+// between checking a link and reading through it.
 func (p SecretPolicy) Resolve(refs map[string]string, lookup Lookup, readFile ReadFile) (map[string]string, error) {
 	if lookup == nil {
 		lookup = os.LookupEnv
 	}
-	if readFile == nil {
-		readFile = os.ReadFile
+	read := readFile
+	if read == nil {
+		read = os.ReadFile
 	}
 	out := make(map[string]string, len(refs))
 	for key, ref := range refs {
@@ -143,17 +151,25 @@ func (p SecretPolicy) Resolve(refs map[string]string, lookup Lookup, readFile Re
 			out[key] = val
 		case strings.HasPrefix(ref, "file:"):
 			path := strings.TrimPrefix(ref, "file:")
-			if !p.unrestricted() {
-				resolved, err := transport.ResolveUnder(path, p.FileDirs)
-				switch {
-				case errors.Is(err, transport.ErrOutsideDirs):
-					return nil, fmt.Errorf("secret %q: %s", key, FileOutsideMessage(path))
-				case err != nil:
-					return nil, fmt.Errorf("secret %q: reading %s: %w", key, path, err)
+			var data []byte
+			var err error
+			switch {
+			case p.Unrestricted():
+				data, err = read(path)
+			case readFile == nil:
+				// The read is confined to the folder, so a link swapped in after
+				// the check cannot lead out of it.
+				data, err = transport.ReadUnder(path, p.FileDirs)
+			default:
+				// An injected reader (tests) gets the path the links lead to.
+				var resolved string
+				if resolved, err = transport.ResolveUnder(path, p.FileDirs); err == nil {
+					data, err = read(resolved)
 				}
-				path = resolved
 			}
-			data, err := readFile(path)
+			if errors.Is(err, transport.ErrOutsideDirs) {
+				return nil, fmt.Errorf("secret %q: %s", key, secretFileOutsideMessage(path))
+			}
 			if err != nil {
 				return nil, fmt.Errorf("secret %q: reading %s: %w", key, path, err)
 			}

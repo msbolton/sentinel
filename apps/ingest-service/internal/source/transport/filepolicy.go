@@ -2,6 +2,8 @@ package transport
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,4 +64,59 @@ func ResolveUnder(path string, dirs []string) (string, error) {
 		}
 	}
 	return "", ErrOutsideDirs
+}
+
+// OutsideMessage is the refusal of a file outside the allowed folders, for
+// anything that names a file: a TLS file of a transport, or a file reference.
+func OutsideMessage(path string) string {
+	return fmt.Sprintf("file %s is outside the folders INGEST_SECRET_FILE_DIRS allows (default /etc/sentinel)", path)
+}
+
+// ReadUnder reads path, which must be inside one of dirs. It checks as
+// ResolveUnder does, for a clear refusal, and then reads through an os.Root
+// opened on the folder, so that a link swapped in between the check and the
+// read still cannot lead out of the folder: the read itself is confined. The
+// price is that a link inside the folder must be relative and stay inside it
+// (Kubernetes' ..data links do); an absolute link is refused even when it
+// points back inside.
+func ReadUnder(path string, dirs []string) ([]byte, error) {
+	if _, err := ResolveUnder(path, dirs); err != nil {
+		return nil, err
+	}
+	path = filepath.Clean(path)
+	var lastErr error
+	for _, dir := range dirs {
+		dir = filepath.Clean(dir)
+		rel, err := filepath.Rel(dir, path)
+		if err != nil || !PathUnder(path, []string{dir}) {
+			continue
+		}
+		data, err := readIn(dir, rel)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		return nil, ErrOutsideDirs
+	}
+	if errors.Is(lastErr, os.ErrNotExist) {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("%w (a link inside an allowed folder must be relative and stay inside it)", lastErr)
+}
+
+// readIn reads rel inside dir without leaving it.
+func readIn(dir, rel string) ([]byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	f, err := root.Open(rel)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
 }
