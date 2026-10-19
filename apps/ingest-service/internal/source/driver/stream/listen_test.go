@@ -23,6 +23,12 @@ func TestStreamListen(t *testing.T) {
 		`{"transport":{"kind":"udp","address":":abc"}}`:      {"udp", 0, true},
 		`{"transport":{"kind":"udp","address":":http"}}`:     {"udp", 0, true},
 		`{"transport":{"kind":"udp","address":"localhost"}}`: {"udp", 0, true},
+		// The transport reads digits only, so a signed or out-of-range port is
+		// no port here either: it must not be taken for 8080 by the uniqueness
+		// check while the transport refuses the address.
+		`{"transport":{"kind":"udp","address":":+8080"}}`:       {"udp", 0, true},
+		`{"transport":{"kind":"tcpserver","address":":-1"}}`:    {"tcp", 0, true},
+		`{"transport":{"kind":"tcpserver","address":":70000"}}`: {"tcp", 0, true},
 		// Unrelated mistyped fields do not hide a listener.
 		`{"transport":{"kind":"udp","address":":6000","allow":"10.0.0.0/8"}}`: {"udp", 6000, true},
 		`{"transport":{"kind":"tcpserver","address":""}}`:                     {"tcp", 0, true},

@@ -225,11 +225,13 @@ func listenOf(raw json.RawMessage) (string, int, bool) {
 	if err != nil {
 		return network, 0, true
 	}
-	port, err := strconv.Atoi(p)
+	// Digits only, as the transports read a port: Atoi would take "+8080" for
+	// 8080 and let the uniqueness check count a port the transport refuses.
+	port, err := strconv.ParseUint(p, 10, 16)
 	if err != nil {
 		return network, 0, true
 	}
-	return network, port, true
+	return network, int(port), true
 }
 
 // Run pumps frames from the transport through the decoder into the sink.
