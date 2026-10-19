@@ -43,5 +43,5 @@ func (t Token) Usable(now time.Time) bool {
 // Stored is a token with its hash, as the cache holds it.
 type Stored struct {
 	Token
-	Hash []byte
+	Hash []byte `json:"-"`
 }
