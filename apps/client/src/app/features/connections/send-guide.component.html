@@ -7,6 +7,9 @@
         @if (t.tls) {
           TLS required{{ t.requireClientCert ? ', with a client certificate signed by the configured CA' : '' }}.
         }
+        @if (jsonSample()) {
+          A line may also hold a JSON array of up to {{ jsonBatchMax }} observations.
+        }
       </p>
     } @else {
       <h4 [id]="idBase() + '-h'">Connects to <code>{{ endpoint() }}</code></h4>
@@ -35,6 +38,9 @@
       }
       @if (jsonSample(); as sample) {
         <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: sample }" />
+      }
+      @if (jsonBatchSample(); as batch) {
+        <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: batch }" />
       }
       @if (showExamples()) {
         <details class="examples">
@@ -70,6 +76,9 @@
             @if (showSince()) {
               <th scope="col">Connected since</th>
             }
+            @if (hasRateLimited()) {
+              <th scope="col">Rate limited</th>
+            }
             @if (hasDiagnostics()) {
               <th scope="col">Undecodable</th>
               <th scope="col">Last reason</th>
@@ -96,6 +105,9 @@
                     —
                   }
                 </td>
+              }
+              @if (hasRateLimited()) {
+                <td>{{ s.rateLimited ?? 0 | number }}</td>
               }
               @if (hasDiagnostics()) {
                 <td>{{ s.malformed ?? 0 | number }}</td>

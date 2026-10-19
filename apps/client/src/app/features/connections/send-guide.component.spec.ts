@@ -1,7 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Feed } from '../../shared/models/feed.model';
 import { SendGuideComponent } from './send-guide.component';
-import { COUNTERS, FRAMING_NOTES, jsonExample } from './send-guide';
+import { COUNTERS, FRAMING_NOTES, jsonBatchExample, jsonExample } from './send-guide';
 
 function makeFeed(over: { id?: string; driver: string; config: Record<string, unknown>; detail?: Record<string, unknown>; lastError?: string }): Feed {
   return {
@@ -128,7 +128,7 @@ describe('SendGuideComponent', () => {
     expect(text(el.querySelector('.format'))).toContain('TLS required');
     expect(text(el.querySelector('.format'))).not.toContain('client certificate');
     const test = blocks().find((b) => b.includes('openssl s_client'))!;
-    expect(test).toContain('-connect sentinel.example:6000 -servername sentinel.example -CAfile ca.pem');
+    expect(test).toContain('-connect sentinel.example:6000 -servername sentinel.example -verify_hostname sentinel.example -CAfile ca.pem');
     expect(test).not.toContain('-cert');
     expect(blocks().some((b) => /\bnc\b/.test(b))).toBe(false);
     // The command says where ca.pem comes from.
@@ -169,12 +169,17 @@ describe('SendGuideComponent', () => {
 
     // JSON in another framing has no one-line command, but its message is still shown.
     render(makeFeed({ driver: 'tcp', config: { mode: 'listen', port: 6000, encoding: 'json', framing: 'lengthprefix' }, detail: listening('tcp', 6000) }));
-    expect(blocks()).toEqual([jsonExample()]);
+    expect(blocks()).toEqual([jsonExample(), jsonBatchExample()]);
+    // A line may hold an array of observations, and the format text says so.
+    expect(text(el.querySelector('.format'))).toContain('JSON array of up to 100 observations');
+    expect(Array.from(el.querySelectorAll('figcaption')).map(text)).toEqual(['Sample message (JSON)', 'Several observations in one message (a JSON array of up to 100)']);
     expect(text(el.querySelector('.format'))).toContain(FRAMING_NOTES['lengthprefix']);
 
     // Binary protobuf has no text sample.
     render(makeFeed({ driver: 'tcp', config: { mode: 'listen', port: 6000 }, detail: listening('tcp', 6000) }));
     expect(blocks()).not.toContain(jsonExample());
+    expect(blocks()).not.toContain(jsonBatchExample());
+    expect(text(el.querySelector('.format'))).not.toContain('JSON array');
   });
 
   it('describes the framing the connection runs, from the server first', () => {
@@ -508,6 +513,27 @@ describe('SendGuideComponent', () => {
     expect(text(rowsOf()[0][4])).toBe('parse_error');
   });
 
+  it('shows a Rate limited column once any sender was rate limited', () => {
+    const sender = (remote: string, rateLimited?: number) => ({ remote, since: '2026-10-18T10:00:00Z', lastAt: '2026-10-18T10:00:05Z', messages: 3, connected: true, ...(rateLimited === undefined ? {} : { rateLimited }) });
+    const config = { mode: 'listen', port: 6000 };
+
+    // Older servers send no count, and zero is nothing to show.
+    render(makeFeed({ driver: 'tcp', config, detail: listening('tcp', 6000, { senders: [sender('10.0.0.5:4000')] }) }));
+    expect(headers()).not.toContain('Rate limited');
+    render(makeFeed({ driver: 'tcp', config, detail: listening('tcp', 6000, { senders: [sender('10.0.0.5:4000', 0)] }) }));
+    expect(headers()).not.toContain('Rate limited');
+
+    // One sender over its limit gives every row the column.
+    render(makeFeed({ driver: 'tcp', config, detail: listening('tcp', 6000, { senders: [sender('10.0.0.5:4000', 0), sender('10.0.0.6:4001', 12_345), sender('10.0.0.7:4002')] }) }));
+    expect(headers()).toEqual(['Sender', 'Messages', 'Last', 'Connected since', 'Rate limited']);
+    expect(rowsOf().map((cells) => text(cells[4]))).toEqual(['0', '12,345', '0']);
+
+    // Beside the undecodable columns, on UDP too.
+    render(makeFeed({ driver: 'udp', config: { port: 10110 }, detail: listening('udp', 10110, { senders: [{ ...sender('10.0.0.5:4000', 2), connected: false, malformed: 1, lastReason: 'parse_error' }] }) }));
+    expect(headers()).toEqual(['Sender', 'Messages', 'Last', 'Rate limited', 'Undecodable', 'Last reason']);
+    expect(rowsOf().map((cells) => text(cells[3]))).toEqual(['2']);
+  });
+
   it('copies a snippet, falling back to selecting it', async () => {
     const writeText = jest.fn().mockResolvedValue(undefined);
     setClipboard({ writeText });
@@ -551,13 +577,13 @@ describe('SendGuideComponent', () => {
 
     copyButtons()[0].click();
     await settle();
-    expect(copyButtons().map(text)).toEqual(['Copied', 'Copy']);
+    expect(copyButtons().map(text)).toEqual(['Copied', 'Copy', 'Copy']);
     jest.advanceTimersByTime(1900);
     await settle();
-    expect(copyButtons().map(text)).toEqual(['Copied', 'Copy']);
+    expect(copyButtons().map(text)).toEqual(['Copied', 'Copy', 'Copy']);
     jest.advanceTimersByTime(200);
     await settle();
-    expect(copyButtons().map(text)).toEqual(['Copy', 'Copy']);
+    expect(copyButtons().map(text)).toEqual(['Copy', 'Copy', 'Copy']);
   });
 
   it('labels code blocks and makes them focusable', () => {

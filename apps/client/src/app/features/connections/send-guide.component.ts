@@ -8,6 +8,8 @@ import {
   PROTO_FILES,
   endpointLabel,
   goSnippet,
+  JSON_BATCH_MAX,
+  jsonBatchExample,
   jsonExample,
   netcatCommand,
   protobufExamplesFit,
@@ -30,6 +32,8 @@ interface Sender {
   malformed?: number;
   lastReason?: string;
   lastError?: string;
+  /** Messages from this sender dropped for going over its own rate limit; older servers send no count. */
+  rateLimited?: number;
 }
 
 /** A block of text to try or copy: its id within the guide, what it is, and the text itself. */
@@ -120,6 +124,11 @@ export class SendGuideComponent {
     const t = this.target();
     return t && t.mode === 'listen' && t.format === 'sentinel' && t.encoding === 'json' ? { key: 'json', title: 'Sample message (JSON)', text: jsonExample() } : null;
   });
+  /** The same JSON as an array, which a line may hold in place of one object. */
+  readonly jsonBatchSample = computed<Snippet | null>(() =>
+    this.jsonSample() ? { key: 'json-batch', title: `Several observations in one message (a JSON array of up to ${JSON_BATCH_MAX})`, text: jsonBatchExample() } : null,
+  );
+  readonly jsonBatchMax = JSON_BATCH_MAX;
   /** The Go and Python senders write binary Sentinel protobuf in one framing, so they only fit that. */
   readonly showExamples = computed(() => {
     const t = this.target();
@@ -172,6 +181,8 @@ export class SendGuideComponent {
   });
   /** The undecodable columns appear once any sender has something to show in them. */
   readonly hasDiagnostics = computed(() => this.senders().some((s) => (s.malformed ?? 0) > 0 || !!s.lastReason));
+  /** The rate-limited column appears once any sender was held back. */
+  readonly hasRateLimited = computed(() => this.senders().some((s) => (s.rateLimited ?? 0) > 0));
   readonly counters = computed(() => {
     const t = this.target();
     const detail = this.detail();

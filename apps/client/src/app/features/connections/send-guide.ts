@@ -114,10 +114,12 @@ export function shellQuote(value: string): string {
 }
 
 /**
- * A double-quoted string literal for Go or Python source, which spell these escapes alike. The quote,
- * the backslash and every control or non-ASCII character are escaped, as strconv.Quote and Python's
- * repr would, so a value can neither end the literal nor start new code. A lone surrogate is not
- * text, so it becomes the replacement character.
+ * A double-quoted string literal for Go or Python source, which spell these escapes alike. Printable
+ * ASCII is kept as it is. The quote and the backslash get a backslash, and newline, carriage return
+ * and tab are written \n, \r and \t. Every other character, the other control characters and DEL
+ * as well as all non-ASCII text (printable or not), is written as \xNN, \uNNNN or \UNNNNNNNN, so a
+ * value can neither end the literal nor start new code. A lone surrogate is not text, so it
+ * becomes U+FFFD.
  */
 function stringLiteral(value: string): string {
   let out = '"';
@@ -150,7 +152,27 @@ export function jsonExample(): string {
   });
 }
 
-/** Whether a sender writes Sentinel's own messages as one JSON object per line. */
+/** Up to this many observations fit in one JSON array line (the server's sentinelobs maxBatch). */
+export const JSON_BATCH_MAX = 100;
+
+/** Two observations as the JSON array one line may hold, in place of a single object. */
+export function jsonBatchExample(): string {
+  const first = JSON.parse(jsonExample()) as Record<string, unknown>;
+  return JSON.stringify([
+    first,
+    {
+      sourceEntityId: 'example-2',
+      entityType: 'ENTITY_TYPE_VEHICLE',
+      displayName: 'Example 2',
+      position: { latitude: 51.51, longitude: -0.13 },
+    },
+  ]);
+}
+
+/**
+ * Whether a sender writes Sentinel's own messages as JSON, one object per line (or, to batch, one
+ * array of up to JSON_BATCH_MAX observations per line).
+ */
 function sendsJsonLines(t: SendTarget): boolean {
   return t.mode === 'listen' && t.format === 'sentinel' && t.encoding === 'json' && t.framing === 'line';
 }
@@ -186,14 +208,15 @@ export function netcatCommand(t: SendTarget): string | null {
 }
 
 /**
- * A one-line test with OpenSSL for JSON over TLS. ca.pem is the CA that signed the listener's
+ * A one-line test with OpenSSL for JSON over TLS. -servername only says which name to ask for;
+ * -verify_hostname makes openssl check the certificate against it. ca.pem is the CA that signed the listener's
  * certificate; a listener that requires client certificates also needs client.pem and client.key.
  */
 export function tlsTestCommand(t: SendTarget): string | null {
   if (!t.tls || t.protocol !== 'tcp' || !sendsJsonLines(t)) return null;
   const host = hostOf(t);
   const client = t.requireClientCert ? ' -cert client.pem -key client.key' : '';
-  return `echo ${shellQuote(jsonExample())} | openssl s_client -quiet -no_ign_eof -verify_return_error -connect ${shellQuote(joinHostPort(host, t.port))} -servername ${shellQuote(host)} -CAfile ca.pem${client}`;
+  return `echo ${shellQuote(jsonExample())} | openssl s_client -quiet -no_ign_eof -verify_return_error -connect ${shellQuote(joinHostPort(host, t.port))} -servername ${shellQuote(host)} -verify_hostname ${shellQuote(host)} -CAfile ca.pem${client}`;
 }
 
 /** Go source is written here with two-space indents and handed out with tabs, as gofmt lays it out. */
@@ -327,8 +350,10 @@ data = obs.SerializeToString()`;
 
   let send: string;
   if (!tcp) {
-    send = `with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-    s.sendto(data, (${stringLiteral(host)}, ${t.port}))  # one datagram per observation`;
+    send = `# The first address the name resolves to, IPv4 or IPv6.
+family, socktype, proto, _, addr = socket.getaddrinfo(${stringLiteral(host)}, ${t.port}, type=socket.SOCK_DGRAM)[0]
+with socket.socket(family, socktype, proto) as s:
+    s.sendto(data, addr)  # one datagram per observation`;
   } else if (tls) {
     const clientCert = t.requireClientCert ? `ctx.load_cert_chain("client.pem", "client.key")  # a certificate the listener's client CA signed\n` : '';
     send = `ctx = ssl.create_default_context(cafile="ca.pem")  # the CA that signed the listener's certificate
@@ -401,7 +426,7 @@ export const COUNTERS: CounterDef[] = [
   {
     key: 'kernelDropped',
     label: 'Dropped by the OS',
-    help: 'Datagrams the operating system threw away because its receive buffer was full, before Sentinel could read them.',
+    help: 'Datagrams the operating system dropped on this socket before Sentinel read them, usually because the receive buffer was full (Linux only).',
     applies: (t) => listens(t) && t.protocol === 'udp',
   },
   {
