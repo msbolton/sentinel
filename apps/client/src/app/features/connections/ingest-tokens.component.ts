@@ -32,6 +32,9 @@ export class IngestTokensComponent implements OnInit {
   protected readonly name = signal('');
   protected readonly level = signal('');
   protected readonly expiresAt = signal('');
+  /** A create is out: a second one would mint a token whose secret overwrites the first's. */
+  protected readonly issuing = signal(false);
+  protected readonly copyState = signal<'copied' | 'failed' | null>(null);
 
   /** The connection's level up to the user's clearance: a lower ceiling would refuse every report. */
   protected readonly levels = computed(() => {
@@ -44,35 +47,64 @@ export class IngestTokensComponent implements OnInit {
     this.reload();
   }
 
-  protected reload(): void {
+  /** `keepError` leaves a message already on screen (a failed revoke) in place when the list arrives. */
+  protected reload(keepError = false): void {
     this.service.list(this.feed().id).subscribe({
-      next: (list) => this.tokens.set(list ?? []),
+      next: (list) => {
+        this.tokens.set(list ?? []);
+        if (!keepError) this.error.set(null);
+      },
       error: (err) => this.error.set(messageOf(err)),
     });
   }
 
   protected issue(event: Event): void {
     event.preventDefault();
+    // One secret at a time: the operator copies it and clicks Done before issuing the next token.
+    if (this.issuing() || this.secret() !== null) return;
     this.error.set(null);
+    this.issuing.set(true);
     const body: { name: string; classification: string; expiresAt?: string } = { name: this.name().trim(), classification: this.level() };
     if (this.expiresAt()) body.expiresAt = new Date(this.expiresAt()).toISOString();
     this.service.create(this.feed().id, body).subscribe({
       next: (created) => {
+        this.issuing.set(false);
+        this.copyState.set(null);
         this.secret.set(created.token);
         this.name.set('');
         this.reload();
       },
-      error: (err) => this.error.set(messageOf(err)),
+      error: (err) => {
+        this.issuing.set(false);
+        this.error.set(messageOf(err));
+      },
     });
   }
 
+  protected dismiss(): void {
+    this.secret.set(null);
+    this.copyState.set(null);
+  }
+
+  protected expired(t: IngestToken): boolean {
+    return !t.revokedAt && !!t.expiresAt && new Date(t.expiresAt).getTime() <= Date.now();
+  }
+
   protected revoke(t: IngestToken): void {
+    this.error.set(null);
     if (this.confirming() !== t.id) {
       this.confirming.set(t.id);
       return;
     }
     this.confirming.set(null);
-    this.service.revoke(this.feed().id, t.id).subscribe({ next: () => this.reload(), error: (err) => this.error.set(messageOf(err)) });
+    this.service.revoke(this.feed().id, t.id).subscribe({
+      next: () => this.reload(),
+      error: (err) => {
+        this.error.set(messageOf(err));
+        // Another operator may have removed it already: show what is there now, and keep the message.
+        this.reload(true);
+      },
+    });
   }
 
   protected async copy(): Promise<void> {
@@ -80,8 +112,10 @@ export class IngestTokensComponent implements OnInit {
     if (!s) return;
     try {
       await navigator.clipboard.writeText(s);
+      this.copyState.set('copied');
     } catch {
-      // no clipboard (insecure origin, tests): the secret stays on screen to copy by hand
+      // no clipboard (insecure origin): the secret stays on screen to copy by hand
+      this.copyState.set('failed');
     }
   }
 
