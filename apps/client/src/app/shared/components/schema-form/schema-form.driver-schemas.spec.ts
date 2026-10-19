@@ -317,14 +317,15 @@ describe('SchemaFormComponent with the driver schemas', () => {
   });
 
   it('stream: shows the listener settings only for the transports that listen', () => {
-    const settings = ['allow', 'maxConnections', 'maxMessagesPerSec'];
+    const settings = ['allow', 'maxConnections', 'maxMessagesPerSec', 'maxMessagesPerSecPerSender', 'receiveBufferBytes'];
     const shownFor = (kind: string, pointers: string[]) => {
       render('stream', { transport: { kind } });
       return pointers.filter((name) => shown(`/config/transport/${name}`));
     };
 
-    expect(shownFor('tcpserver', settings)).toEqual(['allow', 'maxConnections', 'maxMessagesPerSec']);
-    expect(shownFor('udp', settings)).toEqual(['allow', 'maxMessagesPerSec']);
+    // the per-sender limit is for both listeners; only a UDP socket has a receive buffer
+    expect(shownFor('tcpserver', settings)).toEqual(['allow', 'maxConnections', 'maxMessagesPerSec', 'maxMessagesPerSecPerSender']);
+    expect(shownFor('udp', settings)).toEqual(['allow', 'maxMessagesPerSec', 'maxMessagesPerSecPerSender', 'receiveBufferBytes']);
     expect(shownFor('mqtt', settings)).toEqual([]);
 
     // mutual TLS is offered once TLS is on
@@ -333,6 +334,66 @@ describe('SchemaFormComponent with the driver schemas', () => {
     render('stream', { transport: { kind: 'tcpserver', tls: { enabled: true, requireClientCert: true } } });
     expect(shown('/config/transport/tls/requireClientCert')).toBe(true);
     expect((last().config['transport'] as { tls: Record<string, unknown> }).tls['requireClientCert']).toBe(true);
+  });
+
+  it('stream: an nmea-gps decoder needs its options, and no other decoder does', () => {
+    const transport = { kind: 'tcpserver', address: ':4001' };
+    render('stream', { transport, decoder: { name: 'nmea-gps' } });
+
+    expect(marked('/config/decoder/options')).toBe(true);
+    expect(last().valid).toBe(false);
+    component.markAllTouched();
+    fixture.detectChanges();
+    expect(messagesOf('/config/decoder/options')).toEqual(['Required.']);
+
+    setInput('textarea[name="options"]', '{"sourceEntityId": "truck-1"}');
+    expect(last().valid).toBe(true);
+    expect(messagesOf('/config/decoder/options')).toEqual([]);
+
+    const others = (schemaOf('stream').properties?.['decoder']?.properties?.['name']?.enum ?? []).filter((name) => name !== 'nmea-gps');
+    expect(others.length).toBeGreaterThan(0);
+    for (const name of others) {
+      render('stream', { transport, decoder: { name } });
+      expect(marked('/config/decoder/options')).toBe(false);
+      expect(last().valid).toBe(true);
+    }
+  });
+
+  it('stream: the client CA file appears only with TLS and client certificates', () => {
+    const clientCaFile = '/config/transport/tls/clientCaFile';
+    const shownWith = (tls: Record<string, unknown>) => {
+      render('stream', { transport: { kind: 'tcpserver', address: ':4001', tls } });
+      return shown(clientCaFile);
+    };
+
+    expect(shownWith({})).toBe(false);
+    expect(shownWith({ enabled: true })).toBe(false);
+    // asking for client certificates without TLS is nothing to configure
+    expect(shownWith({ enabled: false, requireClientCert: true })).toBe(false);
+    expect(shownWith({ enabled: true, requireClientCert: true })).toBe(true);
+  });
+
+  it('tak: the client certificate, its key and the server CA appear only with TLS', () => {
+    const secrets = secretsOf('tak');
+    expect(secrets).toEqual(['clientCert', 'clientKey', 'caCert']);
+    const shownSecrets = () => secrets.filter((name) => shown(`/secretRefs/${name}`));
+
+    render('tak', { address: 'tak.example:8089', tls: { enabled: false } }, secrets);
+    expect(shownSecrets()).toEqual([]);
+    expect(el.querySelector('.sf-section-secrets')).toBeNull();
+
+    render('tak', { address: 'tak.example:8089', tls: { enabled: true } }, secrets);
+    expect(shownSecrets()).toEqual(['clientCert', 'clientKey', 'caCert']);
+    expect(el.querySelector('input[name="clientCert"]')?.getAttribute('placeholder')).toBe('file:/etc/sentinel/tak/client.pem');
+
+    // turned off again, the references go with the fields
+    render('tak', { address: 'tak.example:8089', tls: { enabled: true } }, secrets);
+    setInput('input[name="clientCert"]', 'file:/etc/sentinel/tak/client.pem');
+    expect(last().secretRefs).toEqual({ clientCert: 'file:/etc/sentinel/tak/client.pem' });
+    component.control('/config/tls/enabled')?.setValue(false);
+    fixture.detectChanges();
+    expect(shownSecrets()).toEqual([]);
+    expect(last().secretRefs).toEqual({});
   });
 
   it('httpjson: keeps headers and an object body through an edit', () => {

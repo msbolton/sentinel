@@ -152,13 +152,16 @@
     <p class="sf-hint" [class.sf-hint-warn]="hint.level === 'warn'" [id]="noteId(def, 'hint', i)">
       @if (hint.level === 'warn') {<span class="sf-hint-level">Warning: </span>}{{ hint.message }}
       @if (hint.action; as action) {
-        <button
-          type="button"
-          class="sf-hint-action"
-          [disabled]="disabled()"
-          [attr.aria-label]="action.label + ' for ' + def.label"
-          (click)="applyHint(def, hint)"
-        >{{ action.label }}</button>
+        @if (def.control) {
+          <!-- A constant or a group has no control to put the value in. -->
+          <button
+            type="button"
+            class="sf-hint-action"
+            [disabled]="disabled()"
+            [attr.aria-label]="action.label + ' for ' + def.label"
+            (click)="applyHint(def, hint)"
+          >{{ action.label }}</button>
+        }
       }
     </p>
   }

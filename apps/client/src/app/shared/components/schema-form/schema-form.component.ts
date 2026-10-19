@@ -97,7 +97,8 @@ export interface FieldDef {
   parent?: FormGroup;
 }
 
-export const SECRET_REF_PATTERN = /^(env:[A-Z0-9_]+|file:\/\S+)$/;
+/** The shape of a reference, as the ingest service reads it: a name that starts with a letter, or an absolute path. */
+export const SECRET_REF_PATTERN = /^(env:[A-Z][A-Z0-9_]*|file:\/\S+)$/;
 
 /**
  * The ingest service reads a reference only if its `INGEST_SECRET_ENV_ALLOW` allows the variable (by default
@@ -109,8 +110,9 @@ const SECRET_ENV_PREFIX = 'SENTINEL_SECRET_';
 
 /** What a secret field says when it holds something that is not a reference: what to enter, and who decides. */
 const SECRET_REF_ADVICE =
-  'Use a reference, never the value: env:SENTINEL_SECRET_… (OPENSKY_… and AISSTREAM_… names work too) or ' +
-  "file:/etc/sentinel/… for a mounted file. The server's INGEST_SECRET_ENV_ALLOW decides which variable names are allowed.";
+  'Use a reference, never the value: by default env:SENTINEL_SECRET_… (OPENSKY_… and AISSTREAM_… names work too) or ' +
+  "file:/etc/sentinel/… for a mounted file. The server's INGEST_SECRET_ENV_ALLOW and INGEST_SECRET_FILE_DIRS decide " +
+  'which variables and folders are allowed.';
 
 /**
  * Builds a reactive form from a driver's JSON Schema. Driver options and

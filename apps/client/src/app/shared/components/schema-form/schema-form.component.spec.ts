@@ -224,6 +224,7 @@ describe('SchemaFormComponent', () => {
     expect(intro).toContain('file:/etc/sentinel/…');
     expect(intro).toContain('INGEST_SECRET_ENV_ALLOW');
     expect(intro).toContain('INGEST_SECRET_FILE_DIRS');
+    expect(intro).toContain('defaults');
     expect(intro).not.toContain('env:VARIABLE_NAME');
 
     setInput('input[name="clientSecret"]', 'plain-text-secret');
@@ -236,7 +237,10 @@ describe('SchemaFormComponent', () => {
     expect(refusal).toContain('OPENSKY_…');
     expect(refusal).toContain('AISSTREAM_…');
     expect(refusal).toContain('file:/etc/sentinel/…');
+    // the refusal speaks of defaults, as the intro does, and names both settings that decide
+    expect(refusal).toContain('by default');
     expect(refusal).toContain('INGEST_SECRET_ENV_ALLOW');
+    expect(refusal).toContain('INGEST_SECRET_FILE_DIRS');
     expect(refusal).not.toContain('MY_SECRET');
 
     setInput('input[name="clientSecret"]', 'env:OPENSKY_CLIENT_SECRET');
@@ -248,6 +252,24 @@ describe('SchemaFormComponent', () => {
     });
     expect(last().config['apiKey']).toBeUndefined();
     expect(last().config['clientSecret']).toBeUndefined();
+  });
+
+  it('reads an environment reference as the server does: a name that starts with a letter', () => {
+    render(streamLikeSchema, { secretFields: ['clientSecret'] });
+    const check = (ref: string) => {
+      setInput('input[name="clientSecret"]', ref);
+      return component.control('/secretRefs/clientSecret')?.valid;
+    };
+
+    expect(check('env:X')).toBe(true);
+    expect(check('env:X9_Y')).toBe(true);
+    // a name cannot start with a digit or an underscore
+    expect(check('env:9X')).toBe(false);
+    expect(check('env:_X')).toBe(false);
+    expect(check('env:')).toBe(false);
+    expect(check('env:lower')).toBe(false);
+    expect(check('file:/etc/sentinel/key.pem')).toBe(true);
+    expect(check('file:relative')).toBe(false);
   });
 
   it('omits empty optional fields from the emitted config', () => {
@@ -1729,6 +1751,28 @@ describe('SchemaFormComponent', () => {
       // it counts as an edit of the field
       expect(component.control('/config/port')?.dirty).toBe(true);
       expect(component.control('/config/port')?.touched).toBe(true);
+    });
+
+    it('shows the message of a hint with an action, but no button, on a field with nothing to set', () => {
+      render({
+        type: 'object',
+        properties: {
+          kind: { const: 'fixed', title: 'Kind' },
+          port: { type: 'integer', title: 'Port' },
+          transport: { type: 'object', title: 'Transport', properties: { address: { type: 'string', title: 'Address' } } },
+        },
+      } as JsonSchema);
+      setHints([
+        { path: '/config/kind', message: 'About the kind.', action: { label: 'Use other', value: 'other' } },
+        { path: '/config/transport', message: 'About the transport.', action: { label: 'Use udp', value: {} } },
+        { path: '/config/port', message: 'About the port.', action: { label: 'Use 6001', value: 6001 } },
+      ]);
+
+      expect(hintsAt('/config/kind').map((h) => textOf(h))).toEqual(['About the kind.']);
+      expect(hintsAt('/config/transport').map((h) => textOf(h))).toEqual(['About the transport.']);
+      expect(el.querySelectorAll('[data-pointer="/config/kind"] .sf-hint-action, fieldset[data-pointer="/config/transport"] > .sf-hint .sf-hint-action')).toHaveLength(0);
+      // a field with a control keeps its button
+      expect(hintsAt('/config/port')[0].querySelector('button')?.textContent?.trim()).toBe('Use 6001');
     });
 
     it('marks a warning, and shows a remark with no action as plain text', () => {
