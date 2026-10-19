@@ -17,7 +17,7 @@ import (
 
 func init() {
 	transport.Register(transport.Definition{
-		Kind: "udp", Type: transport.KindMessage, Listens: true,
+		Kind: "udp", Type: transport.KindMessage,
 		Description: "Listen on a UDP port; every datagram is one frame (AIS-catcher, GPS NMEA broadcasters).",
 		New:         New,
 	})
@@ -65,8 +65,9 @@ func New(cfg transport.Config) (transport.Transport, error) {
 		return nil, errors.New("udp: address must be host:port")
 	}
 	// A service name such as "domain" would resolve inside ListenPacket to a
-	// port the listener policy never sees, so only a number in range is accepted.
-	if p, err := strconv.Atoi(port); err != nil || p < 0 || p > 65535 {
+	// port the listener policy never sees, so only a number in range is accepted:
+	// decimal digits alone, as ParseUint reads them (Atoi would take "+25" for 25).
+	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
 		return nil, fmt.Errorf("udp: address port must be a number from 0 to 65535, not %q", port)
 	}
 	// The schema holds a config to the same range; this is for one that skipped it.

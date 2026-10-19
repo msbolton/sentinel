@@ -44,6 +44,112 @@ func TestAllowlistMatchesMappedIPv4(t *testing.T) {
 	}
 }
 
+// allowedBothWays checks a sender against the list as text (Allows) and as the
+// parsed address (AllowsAddr), which must answer alike: a stream listener asks
+// the first and a datagram listener the second.
+func allowedBothWays(t *testing.T, a Allowlist, remote string, want bool) {
+	t.Helper()
+	if got := a.Allows(remote); got != want {
+		t.Errorf("Allows(%q) = %v, want %v", remote, got, want)
+	}
+	var addr netip.Addr
+	if ap, err := netip.ParseAddrPort(remote); err == nil {
+		addr = ap.Addr()
+	} else if ip, err := netip.ParseAddr(remote); err == nil {
+		addr = ip
+	} else {
+		t.Fatalf("%q is not an address", remote)
+	}
+	if got := a.AllowsAddr(addr); got != want {
+		t.Errorf("AllowsAddr(%v) = %v, want %v: it must answer as Allows(%q) does", addr, got, want, remote)
+	}
+}
+
+// A link-local sender reaches the listener with a zone, the interface it came
+// in on ("fe80::1%en0"). The zone is not part of who the sender is, and a CIDR
+// cannot carry one (a prefix with a zone does not parse, and a prefix never
+// contains an address that has one), so the list matches on the address alone.
+func TestAllowlistZonedIPv6(t *testing.T) {
+	a, err := ParseAllowlist([]string{"fe80::/10", "2001:db8::/32", "fd00::7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for remote, want := range map[string]bool{
+		"[fe80::1%en0]:9":    true,  // in fe80::/10
+		"[fe80::1%eth0]:9":   true,  // whatever the zone
+		"[febf::1%en0]:9":    true,  // the last address of the /10
+		"[fec0::1%en0]:9":    false, // the first one past it
+		"[2001:db8::1%lo]:9": true,
+		"[2001:db9::1%lo]:9": false,
+		"[fd00::7%en0]:9":    true, // a single address
+		"[fd00::8%en0]:9":    false,
+		"fe80::1%en0":        true, // a bare address
+		"[fe80::1]:9":        true, // no zone, as before
+	} {
+		allowedBothWays(t, a, remote, want)
+	}
+
+	// A zone written in an entry is dropped as well: the entry names an address.
+	zoned, err := ParseAllowlist([]string{"fe80::5%en0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for remote, want := range map[string]bool{
+		"[fe80::5%en0]:9": true,
+		"[fe80::5%en1]:9": true,
+		"[fe80::5]:9":     true,
+		"[fe80::6%en0]:9": false,
+	} {
+		allowedBothWays(t, zoned, remote, want)
+	}
+
+	sender := netip.MustParseAddr("fe80::1%en0")
+	if n := testing.AllocsPerRun(100, func() { a.AllowsAddr(sender) }); n != 0 {
+		t.Errorf("AllowsAddr allocated %v times per call for a zoned sender, want none: it runs for every datagram", n)
+	}
+}
+
+// An entry written as an IPv4-mapped IPv6 CIDR ("::ffff:10.0.0.0/104") means
+// the IPv4 range inside it. A sender is matched as its IPv4 address, however its
+// address reaches a dual-stack socket, so an entry left as IPv6 could never
+// match one.
+func TestAllowlist4in6CIDR(t *testing.T) {
+	cases := []struct {
+		entry   string
+		allowed []string
+		refused []string
+	}{
+		{"::ffff:10.0.0.0/104",
+			[]string{"10.0.0.1:1", "10.255.255.255:1", "[::ffff:10.1.2.3]:1"},
+			[]string{"11.0.0.1:1", "9.255.255.255:1", "[::ffff:11.0.0.1]:1", "[2001:db8::1]:1"}},
+		{"::ffff:192.168.1.20/128",
+			[]string{"192.168.1.20:1", "[::ffff:192.168.1.20]:1"},
+			[]string{"192.168.1.21:1", "[::ffff:192.168.1.21]:1"}},
+		// The whole mapped block is every IPv4 address, and no IPv6 one.
+		{"::ffff:0.0.0.0/96",
+			[]string{"8.8.8.8:1", "10.1.2.3:1", "[::ffff:8.8.8.8]:1"},
+			[]string{"[2001:db8::1]:1", "[::1]:1"}},
+		// A prefix that is not wholly inside the mapped block is no IPv4 range
+		// and stays the IPv6 range it says: here ::/64, which holds ::1 and
+		// none of IPv4.
+		{"::ffff:10.0.0.0/64",
+			[]string{"[::1]:1"},
+			[]string{"10.1.2.3:1", "[::ffff:10.1.2.3]:1"}},
+	}
+	for _, tc := range cases {
+		a, err := ParseAllowlist([]string{tc.entry})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.entry, err)
+		}
+		for _, remote := range tc.allowed {
+			t.Run(tc.entry+" allows "+remote, func(t *testing.T) { allowedBothWays(t, a, remote, true) })
+		}
+		for _, remote := range tc.refused {
+			t.Run(tc.entry+" refuses "+remote, func(t *testing.T) { allowedBothWays(t, a, remote, false) })
+		}
+	}
+}
+
 // AllowsAddr is the check for a sender whose address is already parsed, as a
 // datagram listener's is: it must answer as Allows does for the same address,
 // and cost no allocation, since it runs for every datagram.
@@ -452,5 +558,21 @@ func TestBindError(t *testing.T) {
 	other := errors.New("boom")
 	if BindError("udp", ":1", other) != other {
 		t.Error("other errors pass through")
+	}
+}
+
+// An address that names no port cannot be shortened to one: the message gives
+// the address, where it would otherwise read "port /tcp is already in use".
+func TestBindErrorWithoutPort(t *testing.T) {
+	inUse := &net.OpError{Op: "listen", Err: syscall.EADDRINUSE}
+	for address, want := range map[string]string{
+		"somesocket": "address somesocket/tcp is already in use on the listener host",
+		"127.0.0.1":  "address 127.0.0.1/tcp is already in use on the listener host",
+		"host:":      "address host:/tcp is already in use on the listener host",
+		":6000":      "port 6000/tcp is already in use on the listener host", // with a port, as before
+	} {
+		if err := BindError("tcp", address, inUse); err == nil || err.Error() != want {
+			t.Errorf("BindError(tcp, %q) = %v, want %q", address, err, want)
+		}
 	}
 }

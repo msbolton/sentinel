@@ -5,12 +5,18 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/sentinel/ingest-service/internal/source/transport"
 	"github.com/sentinel/ingest-service/internal/source/transport/transporttest"
@@ -89,6 +95,21 @@ func TestRefusesNonNumericPorts(t *testing.T) {
 	}
 	if _, err := New(transport.Config{Kind: "tcpserver", Address: "127.0.0.1:0"}); err != nil {
 		t.Errorf("port 0 should stay allowed: %v", err)
+	}
+}
+
+// A port is decimal digits. strconv.Atoi also takes a sign, so "+25" would pass
+// for 25 and bind a port the operator did not write.
+func TestRefusesSignedPorts(t *testing.T) {
+	for _, addr := range []string{":+25", "127.0.0.1:+8080", "[::1]:+25", ":+0", ":-0", ":-25"} {
+		if _, err := New(transport.Config{Kind: "tcpserver", Address: addr}); err == nil {
+			t.Errorf("%s: a signed port was accepted", addr)
+		}
+	}
+	for _, addr := range []string{":25", "127.0.0.1:0", "[::1]:65535"} {
+		if _, err := New(transport.Config{Kind: "tcpserver", Address: addr}); err != nil {
+			t.Errorf("%s: %v", addr, err)
+		}
 	}
 }
 
@@ -650,5 +671,135 @@ func TestBindConflictIsExplained(t *testing.T) {
 	err = tr.Run(t.Context(), (&transporttest.Collector{}).Emit)
 	if err == nil || !strings.Contains(err.Error(), "already in use on the listener host") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// A read that times out ends the connection quietly only when the listener set a
+// read timeout, for then the timeout is the idle close it asked for. Without
+// one, a timeout is the network's: a peer that died without a word, which TCP
+// keepalive gives up on with ETIMEDOUT, and LastError should say so.
+func TestDeadPeerTimeoutKeepsLastErrorWithoutReadTimeout(t *testing.T) {
+	deadPeer := &net.OpError{Op: "read", Net: "tcp", Err: os.NewSyscallError("read", syscall.ETIMEDOUT)}
+	idle := &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}
+	for _, err := range []error{deadPeer, idle} {
+		if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+			t.Fatalf("setup: %v is not a timeout", err)
+		}
+	}
+	for _, tc := range []struct {
+		name           string
+		readTimeoutSec int
+		err            error
+		wantLastError  string
+	}{
+		{"a dead peer, no read timeout set", 0, deadPeer, deadPeer.Error()},
+		{"an idle close, read timeout set", 30, idle, ""},
+		{"another read error, read timeout set", 30, io.ErrUnexpectedEOF, io.ErrUnexpectedEOF.Error()},
+	} {
+		tr, err := New(transport.Config{Kind: "tcpserver", Address: "127.0.0.1:0", Framing: "line", ReadTimeoutSec: tc.readTimeoutSec})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tr.(*Server).readEnded(tc.err)
+		if got := tr.State().LastError; got != tc.wantLastError {
+			t.Errorf("%s: LastError = %q, want %q", tc.name, got, tc.wantLastError)
+		}
+	}
+}
+
+// A handshake that shutdown cuts short is not the sender's failure, so it is not
+// counted as one. The server's TLS config stalls the handshake once it has the
+// ClientHello, which is how the test knows the listener is inside it when the
+// context ends.
+func TestShutdownDuringHandshakeIsNotTLSFailed(t *testing.T) {
+	ca := transporttest.NewCA(t)
+	server := ca.Issue(t, "localhost")
+	addr := transporttest.FreePort(t)
+	tr, err := New(transport.Config{Kind: "tcpserver", Address: addr, Framing: "line", TLS: &transport.TLS{Enabled: true}, CertPEM: server.CertPEM, KeyPEM: server.KeyPEM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inHandshake, release := make(chan struct{}), make(chan struct{})
+	tr.(*Server).tls.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+		close(inHandshake)
+		<-release
+		return nil, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- tr.Run(ctx, (&transporttest.Collector{}).Emit) }()
+
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(ca.CertPEM)
+	go func() {
+		var c *tls.Conn
+		if !transporttest.WaitFor(func() bool {
+			var err error
+			c, err = tls.Dial("tcp", addr, &tls.Config{RootCAs: roots, ServerName: "localhost"})
+			return err == nil || ctx.Err() != nil
+		}, 5*time.Second) || c == nil {
+			return
+		}
+		c.Close()
+	}()
+	select {
+	case <-inHandshake:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the listener never started a handshake")
+	}
+
+	cancel()
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run returned %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the listener did not stop")
+	}
+	if n := detailInt(tr.State(), "tlsFailed"); n != 0 {
+		t.Errorf("tlsFailed = %d, want 0: shutdown ended the handshake, not the sender", n)
+	}
+}
+
+// A failed handshake is counted, and the counter cannot say who it was. The
+// debug log does: it names the remote and the reason.
+func TestTLSHandshakeFailureIsLoggedAtDebug(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	server := transporttest.NewCA(t).Issue(t, "localhost")
+	addr := transporttest.FreePort(t)
+	tr, err := New(transport.Config{Kind: "tcpserver", Address: addr, Framing: "line", TLS: &transport.TLS{Enabled: true},
+		CertPEM: server.CertPEM, KeyPEM: server.KeyPEM, Logger: zap.New(core)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := transporttest.Run(t, tr, (&transporttest.Collector{}).Emit)
+	defer stop()
+	c := dial(t, addr)
+	remote := c.LocalAddr().String()
+	_, _ = c.Write([]byte("plain text\n")) // not a ClientHello
+	c.Close()
+
+	failures := func() []observer.LoggedEntry { return logs.FilterMessage("tcpserver TLS handshake failed").All() }
+	if !transporttest.WaitFor(func() bool { return len(failures()) > 0 }, 2*time.Second) {
+		t.Fatalf("no log of the failed handshake: %v (%+v)", logs.All(), tr.State().Detail)
+	}
+	if len(failures()) != 1 {
+		t.Errorf("logged %d failed handshakes, want 1: %v", len(failures()), failures())
+	}
+	e := failures()[0]
+	if e.Level != zapcore.DebugLevel {
+		t.Errorf("logged at %v, want debug: a port scan must not fill the log", e.Level)
+	}
+	if got := e.ContextMap()["remote"]; got != remote {
+		t.Errorf("remote = %v, want %v", got, remote)
+	}
+	if e.ContextMap()["error"] == nil {
+		t.Errorf("no error in %v: the log must say why the handshake failed", e.ContextMap())
+	}
+	if n := detailInt(tr.State(), "tlsFailed"); n != 1 {
+		t.Errorf("tlsFailed = %d, want 1", n)
 	}
 }

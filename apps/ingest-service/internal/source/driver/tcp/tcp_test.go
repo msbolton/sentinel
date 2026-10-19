@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/sentinel/ingest-service/internal/obs"
@@ -281,6 +283,39 @@ func TestListenTLSFromSecrets(t *testing.T) {
 	}
 	if d.Health().Detail["tls"] != true {
 		t.Errorf("tls detail = %v", d.Health().Detail["tls"])
+	}
+}
+
+// The feed's logger reaches the listener: a sender whose TLS handshake fails is
+// named in that feed's debug log, which is where an operator looks when the
+// tlsFailed counter climbs.
+func TestListenLogsAFailedTLSHandshakeToTheFeedsLogger(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	pair := transporttest.NewCA(t).Issue(t, "localhost")
+	port := freePort(t)
+	s := spec(t, map[string]any{"mode": "listen", "port": port, "address": "127.0.0.1", "tls": map[string]any{"enabled": true}},
+		map[string]string{"tlsCert": string(pair.CertPEM), "tlsKey": string(pair.KeyPEM)})
+	d, err := New(s, driver.Deps{Logger: zap.New(core).With(zap.String("feed", "f"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = d.Run(ctx, &memSink{}) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	c := dial(t, port, nil) // plain text into a TLS listener
+	remote := c.LocalAddr().String()
+	_, _ = c.Write([]byte("plain text\n"))
+	_ = c.Close()
+
+	failed := func() []observer.LoggedEntry { return logs.FilterMessage("tcpserver TLS handshake failed").All() }
+	if !transporttest.WaitFor(func() bool { return len(failed()) > 0 }, waitTimeout) {
+		t.Fatalf("the feed's logger heard nothing of the failed handshake: %v", logs.All())
+	}
+	ctxMap := failed()[0].ContextMap()
+	if ctxMap["remote"] != remote || ctxMap["feed"] != "f" {
+		t.Errorf("logged %v, want remote %s on the feed's own logger (feed f)", ctxMap, remote)
 	}
 }
 

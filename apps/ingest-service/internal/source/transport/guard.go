@@ -20,12 +20,19 @@ import (
 // Allowlist holds the IPs and CIDRs a listener accepts senders from.
 type Allowlist struct{ prefixes []netip.Prefix }
 
-// ParseAllowlist parses IPs ("10.0.0.5", "2001:db8::1") and CIDRs.
+// ParseAllowlist parses IPs ("10.0.0.5", "2001:db8::1") and CIDRs. A CIDR
+// written inside the IPv4-mapped block ("::ffff:10.0.0.0/104") means the IPv4
+// range it holds ("10.0.0.0/8"): a sender is matched as its IPv4 address, so
+// the entry would otherwise match nobody.
 func ParseAllowlist(entries []string) (Allowlist, error) {
 	var a Allowlist
 	for _, e := range entries {
 		if p, err := netip.ParsePrefix(e); err == nil {
-			a.prefixes = append(a.prefixes, p.Masked())
+			p = p.Masked()
+			if p.Addr().Is4In6() && p.Bits() >= 96 {
+				p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+			}
+			a.prefixes = append(a.prefixes, p)
 			continue
 		}
 		addr, err := netip.ParseAddr(e)
@@ -41,7 +48,8 @@ func ParseAllowlist(entries []string) (Allowlist, error) {
 func (a Allowlist) Open() bool { return len(a.prefixes) == 0 }
 
 // Allows reports whether the sender at remote ("host:port" or a bare IP)
-// may send. IPv4-mapped IPv6 addresses match IPv4 entries.
+// may send. IPv4-mapped IPv6 addresses match IPv4 entries, and an IPv6 zone
+// ("fe80::1%en0") is ignored.
 func (a Allowlist) Allows(remote string) bool {
 	if a.Open() {
 		return true
@@ -66,7 +74,9 @@ func (a Allowlist) AllowsAddr(addr netip.Addr) bool {
 	if a.Open() {
 		return true
 	}
-	addr = addr.Unmap()
+	// A prefix never contains an address that has a zone (the interface a
+	// link-local sender came in on), and the zone is no part of who it is.
+	addr = addr.Unmap().WithZone("")
 	for _, p := range a.prefixes {
 		if p.Contains(addr) {
 			return true
@@ -344,11 +354,14 @@ func (c *ListenCounters) Detail() map[string]any {
 	}
 }
 
-// BindError explains an address already in use; other errors pass through.
+// BindError explains an address already in use; other errors pass through. It
+// names the port, or the address itself where that has none to name.
 func BindError(network, address string, err error) error {
 	if !errors.Is(err, syscall.EADDRINUSE) {
 		return err
 	}
-	_, port, _ := net.SplitHostPort(address)
-	return fmt.Errorf("port %s/%s is already in use on the listener host", port, network)
+	if _, port, splitErr := net.SplitHostPort(address); splitErr == nil && port != "" {
+		return fmt.Errorf("port %s/%s is already in use on the listener host", port, network)
+	}
+	return fmt.Errorf("address %s/%s is already in use on the listener host", address, network)
 }

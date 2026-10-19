@@ -15,13 +15,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/sentinel/ingest-service/internal/source/transport"
 	"github.com/sentinel/ingest-service/internal/source/transport/framing"
 )
 
 func init() {
 	transport.Register(transport.Definition{
-		Kind: "tcpserver", Type: transport.KindStream, Listens: true,
+		Kind: "tcpserver", Type: transport.KindStream,
 		Description: "Listen on a TCP port and read a framed byte stream from every connection (optional TLS).",
 		New:         New,
 	})
@@ -42,6 +44,7 @@ const (
 // Server is the tcpserver transport.
 type Server struct {
 	cfg       transport.Config
+	log       *zap.Logger
 	tls       *tls.Config
 	allow     transport.Allowlist
 	limit     *transport.Limiter       // shared by every sender
@@ -61,8 +64,9 @@ func New(cfg transport.Config) (transport.Transport, error) {
 		return nil, errors.New("tcpserver: address must be host:port")
 	}
 	// A service name such as "smtp" would resolve inside Listen to a port the
-	// listener policy never sees, so only a number in range is accepted.
-	if p, err := strconv.Atoi(port); err != nil || p < 0 || p > 65535 {
+	// listener policy never sees, so only a number in range is accepted: decimal
+	// digits alone, as ParseUint reads them (Atoi would take "+25" for 25).
+	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
 		return nil, fmt.Errorf("tcpserver: address port must be a number from 0 to 65535, not %q", port)
 	}
 	// A client CA verifies only the certificates a listener asks for: set
@@ -91,8 +95,12 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if err != nil {
 		return nil, err
 	}
+	log := cfg.Logger
+	if log == nil {
+		log = zap.NewNop()
+	}
 	return &Server{
-		cfg: cfg, tls: t, allow: allow,
+		cfg: cfg, log: log, tls: t, allow: allow,
 		limit:     transport.NewLimiter(cfg.MaxMessagesPerSec),
 		perSender: transport.NewSenderLimiter(cfg.MaxMessagesPerSecPerSender, transport.SenderLimiterKeys),
 		senders:   transport.NewSenders(maxSenders),
@@ -178,7 +186,13 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 				err := tc.HandshakeContext(hctx)
 				cancel()
 				if err != nil {
-					s.counts.TLSFailed.Add(1)
+					// A handshake that shutdown cut short is not the sender's
+					// failure. The log comes first, so that whoever sees the
+					// counter move can find the sender in it.
+					if ctx.Err() == nil {
+						s.log.Debug("tcpserver TLS handshake failed", zap.String("remote", remote), zap.Error(err))
+						s.counts.TLSFailed.Add(1)
+					}
 					return
 				}
 				conn = tc
@@ -188,24 +202,33 @@ func (s *Server) Run(ctx context.Context, emit transport.Emit) error {
 			s.senders.Connect(remote, time.Now().UTC())
 			s.Set(func(st *transport.State) { st.Connections = int(live.Load()) })
 			if err := transport.ScanConn(ctx, conn, s.cfg, connEmit); err != nil && ctx.Err() == nil {
-				if errors.Is(err, errTLSClient) {
-					s.counts.TLSFailed.Add(1) // closed and counted; not a read error worth LastError
-					return
-				}
-				var ne net.Error
-				if errors.As(err, &ne) && ne.Timeout() {
-					return // the read timeout closed an idle sender, as configured
-				}
-				if errors.Is(err, bufio.ErrTooLong) || errors.Is(err, framing.ErrFrameTooLong) {
-					s.counts.Oversize.Add(1)
-				}
-				s.Set(func(st *transport.State) { st.LastError = err.Error() })
+				s.readEnded(err)
 			}
 		}()
 	}
 	wg.Wait()
 	s.Set(func(st *transport.State) { st.Connected = false })
 	return nil
+}
+
+// readEnded records why a connection's read loop ended with err, which was not
+// the listener shutting down.
+func (s *Server) readEnded(err error) {
+	if errors.Is(err, errTLSClient) {
+		s.counts.TLSFailed.Add(1) // closed and counted; not a read error worth LastError
+		return
+	}
+	// With a read timeout set, a timeout is the idle close it asked for. With
+	// none, it is the network's: a dead peer, which keepalive gives up on with
+	// ETIMEDOUT, and LastError should show it.
+	var ne net.Error
+	if s.cfg.ReadTimeoutSec > 0 && errors.As(err, &ne) && ne.Timeout() {
+		return
+	}
+	if errors.Is(err, bufio.ErrTooLong) || errors.Is(err, framing.ErrFrameTooLong) {
+		s.counts.Oversize.Add(1)
+	}
+	s.Set(func(st *transport.State) { st.LastError = err.Error() })
 }
 
 // guard is the emit for the connection of the sender at host, its IP, which is

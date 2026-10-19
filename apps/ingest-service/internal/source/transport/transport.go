@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // Frame is one unit of input handed to a decoder.
@@ -128,6 +130,11 @@ type Config struct {
 	// TLS material from secret references; never part of the config JSON.
 	CertPEM, KeyPEM, ClientCAPEM, CAPEM []byte `json:"-"`
 
+	// Logger receives a transport's diagnostics (a TLS handshake that failed,
+	// and who it was with); nil is silent. The stream driver sets it to its
+	// feed's logger.
+	Logger *zap.Logger `json:"-"`
+
 	// ReceiveBufferBytes is the socket receive buffer a datagram listener (udp)
 	// asks the OS for; 0 = DefaultReceiveBufferBytes. The OS may grant another
 	// size, which the listener reports in its health.
@@ -188,10 +195,7 @@ type Definition struct {
 	Kind        string
 	Type        Kind
 	Description string
-	// Listens is true for transports that bind a local port and so run on a
-	// listener replica (or on the replica the feed is pinned to).
-	Listens bool
-	New     Factory
+	New         Factory
 }
 
 var (

@@ -414,6 +414,21 @@ func TestUDPRefusesNonNumericPorts(t *testing.T) {
 	}
 }
 
+// A port is decimal digits. strconv.Atoi also takes a sign, so "+25" would pass
+// for 25 and bind a port the operator did not write.
+func TestRefusesSignedPorts(t *testing.T) {
+	for _, addr := range []string{":+25", "127.0.0.1:+8080", "[::1]:+25", ":+0", ":-0", ":-25"} {
+		if _, err := New(transport.Config{Kind: "udp", Address: addr}); err == nil {
+			t.Errorf("%s: a signed port was accepted", addr)
+		}
+	}
+	for _, addr := range []string{":25", "127.0.0.1:0", "[::1]:65535"} {
+		if _, err := New(transport.Config{Kind: "udp", Address: addr}); err != nil {
+			t.Errorf("%s: %v", addr, err)
+		}
+	}
+}
+
 func TestUDPStateTruncatesSendersButCountsThemAll(t *testing.T) {
 	tr, err := New(transport.Config{Kind: "udp", Address: "127.0.0.1:9"})
 	if err != nil {

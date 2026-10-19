@@ -142,6 +142,7 @@ func NewFromParts(spec driver.Spec, deps driver.Deps, tcfg transport.Config, fra
 		tcfg.Framing = framingName
 	}
 	ApplySecrets(&tcfg, spec.Secrets)
+	tcfg.Logger = deps.Logger
 	t, err := tdef.New(tcfg)
 	if err != nil {
 		return nil, err
