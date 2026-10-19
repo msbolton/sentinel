@@ -1712,6 +1712,8 @@ describe('SchemaFormComponent', () => {
 
       const use = hint.querySelector('button')!;
       expect(use.textContent?.trim()).toBe('Use 6001');
+      // read alone, among the buttons of a page, "Use 6001" does not say what it is for
+      expect(use.getAttribute('aria-label')).toBe('Use 6001 for Port');
       // inside the form, a button must not submit it
       expect(use.type).toBe('button');
 
@@ -1933,6 +1935,60 @@ describe('SchemaFormComponent', () => {
         expect(el.querySelector('#sf-fixed__help')?.textContent).toBe('Never changes.');
       });
 
+      // The constant is a read-only box, but a server problem can still be addressed to it, and the parent can
+      // still have a remark about it: those are shown, so that what the box names is there to be read.
+      it('shows the problems and hints addressed to a constant, and names only those', () => {
+        render(kindsSchema);
+        fixture.componentRef.setInput('problems', [{ path: '/config/fixed', message: 'must be "fixed"' }]);
+        setHints([{ path: '/config/fixed', level: 'warn', message: 'Set by the driver.' }]);
+
+        const field = el.querySelector('[data-pointer="/config/fixed"]')!;
+        expect(Array.from(field.querySelectorAll(':scope > .sf-error-server')).map(textOf)).toEqual(['must be "fixed"']);
+        expect(hintsAt('/config/fixed').map(textOf)).toEqual(['Warning: Set by the driver.']);
+        expect(field.classList.contains('has-issue')).toBe(true);
+
+        const ids = field.querySelector('input[name="fixed"]')!.getAttribute('aria-describedby')!.split(' ');
+        expect(ids.map((id) => textOf(el.querySelector(`[id="${id}"]`)))).toEqual([
+          'Never changes.',
+          'must be "fixed"',
+          'Warning: Set by the driver.',
+        ]);
+      });
+
+      it('names only notes that are on the page, whatever the kind of field', () => {
+        render(kindsSchema, { secretFields: ['token'], value: { port: 80 } });
+        component.markAllTouched();
+        const pointers = [
+          '/config/label',
+          '/config/port',
+          '/config/mode',
+          '/config/enabled',
+          '/config/options',
+          '/config/fixed',
+          '/config/transport',
+          '/config/transport/address',
+          '/secretRefs/token',
+        ];
+        fixture.componentRef.setInput(
+          'problems',
+          pointers.map((path) => ({ path, message: `Problem with ${path}.` })),
+        );
+        setHints(pointers.map((path) => ({ path, message: `Hint for ${path}.` })));
+
+        const described = Array.from(el.querySelectorAll('[aria-describedby]'));
+        const dangling = described.flatMap((node) =>
+          node
+            .getAttribute('aria-describedby')!
+            .split(' ')
+            .filter((id) => el.querySelector(`[id="${id}"]`) === null)
+            .map((id) => `${node.getAttribute('name') ?? node.getAttribute('data-pointer')} names ${id}`),
+        );
+
+        // every one of them is described, and what each names is there
+        expect(described).toHaveLength(pointers.length);
+        expect(dangling).toEqual([]);
+      });
+
       it('leaves aria-describedby off a field that nothing describes', () => {
         render(kindsSchema);
         const label = () => el.querySelector('input[name="label"]');
@@ -1943,6 +1999,22 @@ describe('SchemaFormComponent', () => {
 
         setHints([]);
         expect(label()?.hasAttribute('aria-describedby')).toBe(false);
+      });
+
+      it('says which field a hint button is for, as the text alone ("Use 6003") does not', () => {
+        render(kindsSchema, { secretFields: ['token'] });
+        setHints([
+          { path: '/config/port', message: 'Try this.', action: { label: 'Use 6003', value: 6003 } },
+          { path: '/config/transport/address', message: 'Try this.', action: { label: 'Use :6003', value: ':6003' } },
+          { path: '/secretRefs/token', message: 'Try this.', action: { label: 'Use it', value: 'env:SENTINEL_SECRET_TOKEN' } },
+        ]);
+
+        const nameOf = (pointer: string) => hintsAt(pointer)[0].querySelector('button')!.getAttribute('aria-label');
+        expect(nameOf('/config/port')).toBe('Use 6003 for Port');
+        expect(nameOf('/config/transport/address')).toBe('Use :6003 for Address');
+        expect(nameOf('/secretRefs/token')).toBe('Use it for Token');
+        // what is shown is still the action's own text, which the name begins with
+        expect(hintsAt('/config/port')[0].querySelector('button')!.textContent?.trim()).toBe('Use 6003');
       });
 
       it('says Warning in words for a warning, not by colour alone', () => {
