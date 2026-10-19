@@ -138,38 +138,62 @@ func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 		// The sender's bucket is asked on received, whose monotonic reading
 		// survives a step of the wall clock; frames and rows are stamped with
 		// its UTC form, which has none (see SenderLimiter.Allow).
-		received := time.Now()
-		now := received.UTC()
-		// The two forms of the address are built only for a datagram that is
-		// taken, so one that is turned away costs no text.
-		remote, sender := ap.String(), ap.Addr().String()
-		parts := split(buf[:n], l.cfg.Framing)
-		for i, part := range parts {
-			// The sender's own bucket is asked before the listener's, so a
-			// flooder spends none of the shared budget. The datagram's
-			// messages are all asked at the one instant, so once one is
-			// refused the rest are too, and are counted together. The
-			// sender's row is updated before the listener's counter, so that
-			// whoever waits for the counter to move finds the row already moved.
-			if !l.perSender.Allow(sender, received) {
-				dropped := int64(len(parts) - i)
-				l.senders.RateLimited(sender, dropped)
-				l.counts.SenderRateLimited.Add(dropped)
-				break
-			}
-			if !l.limit.Allow() {
-				l.counts.RateLimited.Add(1)
-				continue
-			}
-			l.senders.Seen(sender, now)
-			l.counts.Accepted.Add(1)
-			payload := make([]byte, len(part))
-			copy(payload, part)
-			if err := emit(ctx, transport.Frame{Payload: payload, ReceivedAt: now, Remote: remote}); err != nil && !errors.Is(err, transport.ErrBackpressure) {
-				return nil
-			}
+		if err := l.deliver(ctx, ap, buf[:n], time.Now(), emit); err != nil {
+			return nil
 		}
 	}
+}
+
+// deliver hands the messages of one datagram, from ap and received at the given
+// time, to emit, after the sender's own limit and the listener's. It returns
+// emit's error when that ends the run (anything but backpressure).
+//
+// The sender's bucket is asked for the first message before anything is built
+// for the datagram, so that a flooder's datagram, turned away whole, costs the
+// sender's text (the name of its row and the key of its bucket) and nothing
+// else: not the ip:port text of the frame's remote, not the slices of the
+// split. The messages of a datagram are all asked at the one instant, so once
+// one is refused the rest are too, and are counted together. The sender's row
+// is updated before the listener's counter, so that whoever waits for the
+// counter to move finds the row already moved. A datagram of the sender that is
+// taken is split with the sender's bucket asked again for each message after
+// the first.
+func (l *Listener) deliver(ctx context.Context, ap netip.AddrPort, data []byte, received time.Time, emit transport.Emit) error {
+	now := received.UTC()
+	sender := ap.Addr().String()
+	total := count(data, l.cfg.Framing)
+	if total > 0 && !l.perSender.Allow(sender, received) {
+		l.dropForSender(sender, int64(total))
+		return nil
+	}
+	remote := ap.String()
+	parts := split(data, l.cfg.Framing)
+	for i, part := range parts {
+		// The sender's own bucket is asked before the listener's, so a
+		// flooder spends none of the shared budget.
+		if i > 0 && !l.perSender.Allow(sender, received) {
+			l.dropForSender(sender, int64(len(parts)-i))
+			break
+		}
+		if !l.limit.Allow() {
+			l.counts.RateLimited.Add(1)
+			continue
+		}
+		l.senders.Seen(sender, now)
+		l.counts.Accepted.Add(1)
+		payload := make([]byte, len(part))
+		copy(payload, part)
+		if err := emit(ctx, transport.Frame{Payload: payload, ReceivedAt: now, Remote: remote}); err != nil && !errors.Is(err, transport.ErrBackpressure) {
+			return err
+		}
+	}
+	return nil
+}
+
+// dropForSender counts n messages dropped by a sender's own limit.
+func (l *Listener) dropForSender(sender string, n int64) {
+	l.senders.RateLimited(sender, n)
+	l.counts.SenderRateLimited.Add(n)
 }
 
 // sizeReceiveBuffer asks the OS for the socket's receive buffer and records the
@@ -203,6 +227,27 @@ func split(b []byte, framing string) [][]byte {
 		out = append(out, tail)
 	}
 	return out
+}
+
+// count is how many messages split would cut data into, without building them.
+func count(b []byte, framing string) int {
+	if framing != "" && framing != "line" {
+		return 1
+	}
+	n := 0
+	start := 0
+	for i, c := range b {
+		if c == '\n' {
+			if len(trimCR(b[start:i])) > 0 {
+				n++
+			}
+			start = i + 1
+		}
+	}
+	if len(trimCR(b[start:])) > 0 {
+		n++
+	}
+	return n
 }
 
 func trimCR(b []byte) []byte {

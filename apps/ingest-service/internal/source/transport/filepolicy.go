@@ -100,23 +100,52 @@ func ReadUnder(path string, dirs []string) ([]byte, error) {
 	if lastErr == nil {
 		return nil, ErrOutsideDirs
 	}
-	if errors.Is(lastErr, os.ErrNotExist) {
+	if errors.Is(lastErr, os.ErrNotExist) || errors.Is(lastErr, errNotRegular) || errors.Is(lastErr, errTooLarge) {
 		return nil, lastErr
 	}
 	return nil, fmt.Errorf("%w (a link inside an allowed folder must be relative and stay inside it; an absolute link is refused even when it points back inside)", lastErr)
 }
 
-// readIn reads rel inside dir without leaving it.
+// MaxFileBytes is the most a secret or TLS file read through the folder policy
+// may hold. A key, a certificate or a CA bundle is a few kilobytes, so a file
+// past this is not one, and is refused instead of being read whole into memory.
+const MaxFileBytes = 1 << 20
+
+var (
+	errNotRegular = errors.New("not a regular file")
+	errTooLarge   = errors.New("file is too large")
+)
+
+// readIn reads rel inside dir without leaving it. What it reads is checked on
+// the file it opened: a regular file, so that a FIFO (opened for reading it
+// would wait for a writer, and the feed with it) or a device is refused; and
+// read through a bound of MaxFileBytes, so that a file that grows, or was never
+// small, cannot fill the memory. The open does not wait either, for the case of
+// a FIFO put in place of the file after the folder was checked.
 func readIn(dir, rel string) ([]byte, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, err
 	}
 	defer root.Close()
-	f, err := root.Open(rel)
+	f, err := root.OpenFile(rel, os.O_RDONLY|openNonblock, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return io.ReadAll(f)
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is %w", rel, errNotRegular)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > MaxFileBytes {
+		return nil, fmt.Errorf("%s is larger than %d bytes: %w", rel, MaxFileBytes, errTooLarge)
+	}
+	return data, nil
 }

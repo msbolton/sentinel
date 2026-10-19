@@ -27,7 +27,7 @@ const Name = "sentinel"
 func init() {
 	decoder.Register(decoder.Definition{
 		Name:        Name,
-		Description: "Sentinel's own sentinel.v1.Observation, as binary protobuf or its JSON form.",
+		Description: fmt.Sprintf("Sentinel's own sentinel.v1.Observation, as binary protobuf or its JSON form. A JSON line may also hold a JSON array of up to %d observations.", maxBatch),
 		ContentType: "application/x-protobuf",
 		New:         New,
 	})

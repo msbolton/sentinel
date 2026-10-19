@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -17,6 +18,7 @@ import (
 
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
+	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/obs"
 )
 
@@ -423,5 +425,67 @@ func TestEmitsRacingCloseLoseNothingThatWasAccepted(t *testing.T) {
 		if got := int64(len(fp.byTopic("observations.raw"))); abandoned != 0 || got != accepted.Load() {
 			t.Fatalf("round %d: %d accepted, %d produced, %d abandoned", round, accepted.Load(), got, abandoned)
 		}
+	}
+}
+
+// A dead letter that arrives once the publisher is closing is dropped and
+// counted: the producer is about to be flushed and closed, and a letter handed
+// to it then is lost without a trace.
+func TestDeadLetterAfterCloseProducesNothing(t *testing.T) {
+	fp := &fakeProducer{}
+	m := metrics.New(nil)
+	pub := New(fp, m, nil, Options{})
+	pub.Start()
+	pub.Close()
+	pub.DeadLetter(obs.DeadLetter{FeedID: "late", Reason: "parse_error", Raw: []byte("garbage")})
+	if got := fp.calls.Load(); got != 0 {
+		t.Errorf("Produce was called %d times for a dead letter after Close, want none", got)
+	}
+	if got := testutil.ToFloat64(m.DeadLetterDropped.WithLabelValues("late")); got != 1 {
+		t.Errorf("dead_letter_dropped = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.DeadLetterTotal.WithLabelValues("late", "parse_error")); got != 0 {
+		t.Errorf("dead_letter_total = %v, want 0", got)
+	}
+}
+
+// blockingProducer holds a Produce until it is let go.
+type blockingProducer struct {
+	fakeProducer
+	in      chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingProducer) Produce(msg *kafka.Message) error {
+	b.in <- struct{}{}
+	<-b.release
+	return b.fakeProducer.Produce(msg)
+}
+
+// A dead letter already on its way to the producer when the publisher closes is
+// finished first: the close waits for it, so the producer is flushed after it
+// and not before.
+func TestCloseWaitsForADeadLetterInFlight(t *testing.T) {
+	bp := &blockingProducer{in: make(chan struct{}), release: make(chan struct{})}
+	pub := New(bp, nil, nil, Options{})
+	pub.Start()
+	go pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "parse_error"})
+	<-bp.in // inside Produce
+
+	closed := make(chan struct{})
+	go func() { pub.Close(); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a dead letter was still inside Produce")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(bp.release)
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return once the dead letter was produced")
+	}
+	if got := len(bp.byTopic("observations.dlq")); got != 1 {
+		t.Errorf("dead letters produced = %d, want the one that was in flight", got)
 	}
 }

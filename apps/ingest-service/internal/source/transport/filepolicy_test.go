@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -87,5 +88,25 @@ func TestReadInConfinesTheRead(t *testing.T) {
 		if got, err := readIn(allowed, rel); err == nil {
 			t.Errorf("%s: read %q through the root", rel, got)
 		}
+	}
+}
+
+// Secrets and certificates are small: a file past the cap is refused, not read
+// whole into memory.
+func TestReadUnderRefusesAnOversizeFile(t *testing.T) {
+	allowed, _ := fileTree(t)
+	big := filepath.Join(allowed, "big")
+	if err := os.WriteFile(big, bytes.Repeat([]byte("x"), MaxFileBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadUnder(big, []string{allowed}); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("an oversize file: %v, want it refused as larger than the cap", err)
+	}
+	exact := filepath.Join(allowed, "exact")
+	if err := os.WriteFile(exact, bytes.Repeat([]byte("x"), MaxFileBytes), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadUnder(exact, []string{allowed}); err != nil || len(got) != MaxFileBytes {
+		t.Errorf("a file of exactly the cap: %d bytes, %v; want it read", len(got), err)
 	}
 }

@@ -69,9 +69,9 @@
     }
   },
   "x-secrets": {
-    "tlsCert": { "title": "TLS certificate (PEM)" },
-    "tlsKey": { "title": "TLS private key (PEM)" },
-    "clientCa": { "title": "Client CA (PEM)", "showWhen": { "transport/kind": "tcpserver", "transport/tls/enabled": true, "transport/tls/requireClientCert": true } },
-    "serverCa": { "title": "Server CA (PEM)" }
+    "tlsCert": { "title": "TLS certificate (PEM)", "examples": ["file:/etc/sentinel/secrets/server.pem"] },
+    "tlsKey": { "title": "TLS private key (PEM)", "examples": ["file:/etc/sentinel/secrets/server.key"] },
+    "clientCa": { "title": "Client CA (PEM)", "examples": ["file:/etc/sentinel/secrets/clients-ca.pem"], "showWhen": { "transport/kind": "tcpserver", "transport/tls/enabled": true, "transport/tls/requireClientCert": true } },
+    "serverCa": { "title": "Server CA (PEM)", "examples": ["file:/etc/sentinel/secrets/ca.pem"] }
   }
 }

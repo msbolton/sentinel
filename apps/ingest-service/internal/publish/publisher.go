@@ -166,15 +166,27 @@ func (p *Publisher) Emit(ctx context.Context, o *obs.Observation) error {
 // them, at most DLQRatePerSec per feed; excess is counted and dropped so a
 // misconfigured feed cannot flood Kafka. received-at is when the frame
 // arrived, or when it was dead-lettered for a payload that was never a frame.
+//
+// Once the publisher is closing a dead letter is dropped and counted with the
+// ones over the rate: the producer is about to be flushed and closed, and a
+// letter handed to it then would be lost unseen. The gate is held for the whole
+// call, Produce included (which does not wait for Kafka), so that the close
+// waits for a letter on its way, and the producer is flushed after it.
 func (p *Publisher) DeadLetter(dl obs.DeadLetter) {
 	feedID := dl.FeedID
 	if feedID == "" {
 		feedID = "unknown"
 	}
+	p.gate.RLock()
+	defer p.gate.RUnlock()
+	select {
+	case <-p.done:
+		p.dropDeadLetter(feedID)
+		return
+	default:
+	}
 	if !p.limiter(feedID).Allow() {
-		if p.metrics != nil {
-			p.metrics.DeadLetterDropped.WithLabelValues(feedID).Inc()
-		}
+		p.dropDeadLetter(feedID)
 		return
 	}
 	receivedAt := dl.ReceivedAt
@@ -205,6 +217,13 @@ func (p *Publisher) DeadLetter(dl obs.DeadLetter) {
 	}
 	if p.metrics != nil {
 		p.metrics.DeadLetterTotal.WithLabelValues(feedID, dl.Reason).Inc()
+	}
+}
+
+// dropDeadLetter counts a dead letter that was not sent.
+func (p *Publisher) dropDeadLetter(feedID string) {
+	if p.metrics != nil {
+		p.metrics.DeadLetterDropped.WithLabelValues(feedID).Inc()
 	}
 }
 

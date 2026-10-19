@@ -418,10 +418,12 @@ func (d *Driver) decodeOne(ctx context.Context, f transport.Frame, sink driver.S
 		if errors.Is(err, errPanic) {
 			reason = "panic"
 		}
-		d.malformed.Add(1)
+		// The sender's row is updated before the counter, so that whoever waits
+		// for the counter to move finds the row already moved.
 		if d.noter != nil {
 			d.noter.NoteMalformed(remote, reason, msg)
 		}
+		d.malformed.Add(1)
 		if ps, ok := sink.(driver.ProvenanceSink); ok {
 			ps.DeadLetterFrom(f.Payload, reason, err, driver.Provenance{Decoder: d.ddef.Name, Sender: remote, ReceivedAt: f.ReceivedAt})
 		} else {
