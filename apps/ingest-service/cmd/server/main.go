@@ -153,11 +153,8 @@ func main() {
 	healthHandler := health.NewHandler(producer, promReg, logger)
 	healthHandler.RegisterRoutes(mux)
 	mgmtHandler := mgmt.NewHandler(reg, catalog, sup, logger)
-	// GET /feeds/{id}/deadletters reads observations.dlq with a consumer of its
-	// own, created when the first request comes.
-	dlqReader := dlq.NewKafkaReader(cfg.KafkaBrokers, cfg.KafkaDeadLetterTopic, cfg.DLQPeekMaxScan, logger)
-	defer dlqReader.Close()
-	mgmtHandler.DeadLetters = dlqReader
+	stopDeadLetters := serveDeadLetters(mgmtHandler, cfg, logger)
+	defer stopDeadLetters()
 	mgmtHandler.StaleAfter = 3 * cfg.LeaseTick * 2
 	if cfg.LeaseEnabled {
 		mgmtHandler.StaleAfter = cfg.LeaseTTL
@@ -239,6 +236,21 @@ func schemaCheckMessage(err error) string {
 		return "database schema is out of date"
 	}
 	return "checking the database schema failed"
+}
+
+// serveDeadLetters gives the management API a reader of observations.dlq for
+// GET /feeds/{id}/deadletters, and returns what releases it. The reader makes
+// its own Kafka consumer when the first request comes, so a Kafka that is down
+// at startup does not stop the service. With DLQ_PEEK_MAX_SCAN=0 it gives the
+// API none: the endpoint then answers 501, and nothing is created.
+func serveDeadLetters(h *mgmt.Handler, cfg *config.Config, logger *zap.Logger) (stop func()) {
+	if cfg.DLQPeekMaxScan <= 0 {
+		logger.Info("dead-letter viewing is off", zap.Int("dlq_peek_max_scan", cfg.DLQPeekMaxScan))
+		return func() {}
+	}
+	reader := dlq.NewKafkaReader(cfg.KafkaBrokers, cfg.KafkaDeadLetterTopic, cfg.DLQPeekMaxScan, logger)
+	h.DeadLetters = reader
+	return reader.Close
 }
 
 func driverIDs(c *drivers.Catalog) []string {

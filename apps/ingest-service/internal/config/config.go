@@ -46,7 +46,7 @@ type Config struct {
 	FrameBuffer        int // FRAME_BUFFER (default: 1024) frames queued between a transport and its decoder
 	RawPayloadMaxBytes int // RAW_PAYLOAD_MAX_BYTES (default: 4096) raw bytes kept per observation under the bounded policy
 	DLQRatePerSec      int // DLQ_RATE_PER_SEC (default: 10) dead letters per feed per second
-	DLQPeekMaxScan     int // DLQ_PEEK_MAX_SCAN (default: 2000) messages of each partition read to find a connection's recent dead letters
+	DLQPeekMaxScan     int // DLQ_PEEK_MAX_SCAN (default: 2000) messages of each partition read to find a connection's recent dead letters; 0 turns viewing them off
 
 	FeedStaleWarn     time.Duration // FEED_STALE_WARN_SEC (default: 120) default health thresholds
 	FeedStaleCritical time.Duration // FEED_STALE_CRITICAL_SEC (default: 300)
@@ -124,8 +124,8 @@ func (c *Config) Validate() error {
 	if c.RawPayloadMaxBytes < 0 || c.DLQRatePerSec <= 0 {
 		return errors.New("RAW_PAYLOAD_MAX_BYTES must be non-negative and DLQ_RATE_PER_SEC positive")
 	}
-	if c.DLQPeekMaxScan <= 0 {
-		return errors.New("DLQ_PEEK_MAX_SCAN must be positive")
+	if c.DLQPeekMaxScan < 0 {
+		return errors.New("DLQ_PEEK_MAX_SCAN must not be negative (0 turns dead-letter viewing off)")
 	}
 	for name, d := range map[string]time.Duration{"FEED_STALE_WARN_SEC": c.FeedStaleWarn, "FEED_STALE_CRITICAL_SEC": c.FeedStaleCritical, "FEED_RETRY_MIN_SEC": c.FeedRetryMin, "FEED_RETRY_MAX_SEC": c.FeedRetryMax, "SHUTDOWN_TIMEOUT_SEC": c.ShutdownTimeout} {
 		if d <= 0 {

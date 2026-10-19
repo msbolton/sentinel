@@ -91,11 +91,20 @@ func TestDLQPeekMaxScan(t *testing.T) {
 	if err := Load().Validate(); err != nil {
 		t.Errorf("a positive scan bound is valid: %v", err)
 	}
-	for _, bad := range []string{"0", "-1"} {
-		t.Setenv("DLQ_PEEK_MAX_SCAN", bad)
-		err := Load().Validate()
-		if err == nil || !strings.Contains(err.Error(), "DLQ_PEEK_MAX_SCAN") {
-			t.Errorf("DLQ_PEEK_MAX_SCAN=%s: Validate() = %v, want an error that names the variable", bad, err)
-		}
+
+	// Zero turns dead-letter viewing off. It is a setting, not a missing value:
+	// the default does not replace it.
+	t.Setenv("DLQ_PEEK_MAX_SCAN", "0")
+	c := Load()
+	if c.DLQPeekMaxScan != 0 {
+		t.Errorf("DLQ_PEEK_MAX_SCAN=0 reads as %d, want 0", c.DLQPeekMaxScan)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("DLQ_PEEK_MAX_SCAN=0 turns the endpoint off and must be valid: %v", err)
+	}
+
+	t.Setenv("DLQ_PEEK_MAX_SCAN", "-1")
+	if err := Load().Validate(); err == nil || !strings.Contains(err.Error(), "DLQ_PEEK_MAX_SCAN") {
+		t.Errorf("DLQ_PEEK_MAX_SCAN=-1: Validate() = %v, want an error that names the variable", err)
 	}
 }
