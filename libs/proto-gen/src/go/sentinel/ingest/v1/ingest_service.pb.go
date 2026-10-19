@@ -28,7 +28,8 @@ type AckStatus int32
 const (
 	AckStatus_ACK_STATUS_UNSPECIFIED AckStatus = 0
 	// Accepted into the ingest service's publisher queue. Not yet durable:
-	// a crash before the queue drains can lose it.
+	// a crash before the queue drains can lose it. Also covers a report the
+	// service recognised as a repeat of the previous one.
 	AckStatus_ACK_STATUS_OK            AckStatus = 1
 	AckStatus_ACK_STATUS_REJECTED      AckStatus = 2
 	AckStatus_ACK_STATUS_DEAD_LETTERED AckStatus = 3
@@ -378,6 +379,8 @@ func (x *UpsertEmplacementResponse) GetEmplacement() *v1.Emplacement {
 // emplacement_id names the emplacement the report comes from; the service
 // checks it against the emplacements bound to the connection (an empty one
 // means the connection's only emplacement, when it has exactly one).
+// For an emplacement_state body, its own emplacement_id must be empty or
+// equal this one; an empty one takes this one.
 type Report struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	ClientRef string                 `protobuf:"bytes,1,opt,name=client_ref,json=clientRef,proto3" json:"client_ref,omitempty"`

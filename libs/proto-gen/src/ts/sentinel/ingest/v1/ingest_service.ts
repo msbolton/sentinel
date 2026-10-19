@@ -15,7 +15,8 @@ export enum AckStatus {
   UNSPECIFIED = "UNSPECIFIED",
   /**
    * OK - Accepted into the ingest service's publisher queue. Not yet durable:
-   * a crash before the queue drains can lose it.
+   * a crash before the queue drains can lose it. Also covers a report the
+   * service recognised as a repeat of the previous one.
    */
   OK = "OK",
   REJECTED = "REJECTED",
@@ -105,6 +106,8 @@ export interface UpsertEmplacementResponse {
  * emplacement_id names the emplacement the report comes from; the service
  * checks it against the emplacements bound to the connection (an empty one
  * means the connection's only emplacement, when it has exactly one).
+ * For an emplacement_state body, its own emplacement_id must be empty or
+ * equal this one; an empty one takes this one.
  */
 export interface Report {
   clientRef: string;
