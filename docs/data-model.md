@@ -116,6 +116,25 @@ The places observations come from (see `docs/emplacements.md`). One row per empl
 
 A partial unique index on `lower(name)` where `"deletedAt" IS NULL` keeps live names unique whatever their case and frees a deleted emplacement's name. A GIST index covers `position`, and a partial index covers `"feedId"` for live rows. Each write sends a NOTIFY on the channel `sentinel_emplacements` with the payload `{"id": "<uuid>", "op": "upsert"|"delete"}`; every ingest replica follows it to keep its cache current. The file also seeds the `feed_ageout_config` rows of the built-in `emplacements` feed (stale after 180000 ms, aged out after 600000 ms, for each of the sources `RADAR`, `AIS`, `ADS_B`, `HUMINT`, `SIGINT` and `MASINT`).
 
+### sentinel.ingest_tokens (`db/schema/76_ingest_tokens.sql`)
+
+The bearer tokens senders present to a gRPC connection (`si_` followed by 43 base64url characters). Only the SHA-256 of the secret is stored (`hash`, unique); the secret is shown once, in the response that creates the token, and cannot be read back.
+
+| Column | Content |
+|--------|---------|
+| `id` | UUID primary key, generated |
+| `"feedId"` | The connection (`feeds.id`) the token belongs to; `ON DELETE CASCADE` |
+| `name` | Up to 255 bytes |
+| `prefix` | The first characters of the secret, for lists |
+| `hash` | SHA-256 of the secret, unique |
+| `classification` | The token's ceiling, `UNCLASSIFIED` (default) to `TOP_SECRET`: no report above it is accepted |
+| `"createdBy"`, `"createdAt"` | Provenance and creation time |
+| `"lastUsedAt"` | When the token last authenticated |
+| `"expiresAt"` | Optional expiry |
+| `"revokedAt"` | Set by a revoke; revoking again keeps the first time |
+
+An index covers `"feedId"`. Every create and revoke sends a NOTIFY on the channel `sentinel_ingest_tokens` with the payload `{"id","feedId","op"}` (`op` is `create` or `revoke`); each ingest replica's token cache re-reads that feed's tokens on it. Deleting a feed removes its tokens by cascade and sends no token notice, so the cache also follows `sentinel_feeds` and re-reads the feed's tokens on every feed notice. Writes to `"lastUsedAt"` are batched (about every 60 seconds, per replica) and send no notice. As a guard against a silent LISTEN connection, a connected cache also reloads every token every two minutes.
+
 ### sentinel.alerts and sentinel.alert_rules
 
 | Column | Description |
