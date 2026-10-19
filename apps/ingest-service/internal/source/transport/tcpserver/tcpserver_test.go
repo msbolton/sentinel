@@ -680,9 +680,9 @@ func TestBindConflictIsExplained(t *testing.T) {
 }
 
 // A read that times out ends the connection quietly only when the listener set a
-// read timeout, for then the timeout is the idle close it asked for. Without
-// one, a timeout is the network's: a peer that died without a word, which TCP
-// keepalive gives up on with ETIMEDOUT, and LastError should say so.
+// read timeout, and then only the expiry of its read deadline is the idle close
+// it asked for. Any other timeout is the network's: a peer that died without a
+// word, which TCP keepalive gives up on with ETIMEDOUT, and LastError says so.
 func TestDeadPeerTimeoutKeepsLastErrorWithoutReadTimeout(t *testing.T) {
 	deadPeer := &net.OpError{Op: "read", Net: "tcp", Err: os.NewSyscallError("read", syscall.ETIMEDOUT)}
 	idle := &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}
@@ -699,6 +699,9 @@ func TestDeadPeerTimeoutKeepsLastErrorWithoutReadTimeout(t *testing.T) {
 	}{
 		{"a dead peer, no read timeout set", 0, deadPeer, deadPeer.Error()},
 		{"an idle close, read timeout set", 30, idle, ""},
+		// A read timeout does not make a dead peer's ETIMEDOUT an idle close:
+		// only the read deadline that the timeout set expiring is.
+		{"a dead peer, read timeout set", 30, deadPeer, deadPeer.Error()},
 		{"another read error, read timeout set", 30, io.ErrUnexpectedEOF, io.ErrUnexpectedEOF.Error()},
 	} {
 		tr, err := New(transport.Config{Kind: "tcpserver", Address: "127.0.0.1:0", Framing: "line", ReadTimeoutSec: tc.readTimeoutSec})

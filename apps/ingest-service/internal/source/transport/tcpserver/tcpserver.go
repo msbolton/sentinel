@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -227,11 +228,10 @@ func (s *Server) readEnded(err error) {
 		s.counts.TLSFailed.Add(1) // closed and counted; not a read error worth LastError
 		return
 	}
-	// With a read timeout set, a timeout is the idle close it asked for. With
-	// none, it is the network's: a dead peer, which keepalive gives up on with
-	// ETIMEDOUT, and LastError should show it.
-	var ne net.Error
-	if s.cfg.ReadTimeoutSec > 0 && errors.As(err, &ne) && ne.Timeout() {
+	// The read deadline that ReadTimeoutSec sets expiring is the idle close it
+	// asked for. Any other timeout is the network's: a dead peer, which keepalive
+	// gives up on with ETIMEDOUT, and LastError should show it.
+	if s.cfg.ReadTimeoutSec > 0 && errors.Is(err, os.ErrDeadlineExceeded) {
 		return
 	}
 	if errors.Is(err, bufio.ErrTooLong) || errors.Is(err, framing.ErrFrameTooLong) {
