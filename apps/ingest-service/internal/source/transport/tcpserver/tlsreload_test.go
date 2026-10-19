@@ -135,9 +135,12 @@ func TestTLSReloadServesNewCertificate(t *testing.T) {
 	if !transporttest.WaitFor(func() bool { return serial(t, addr).Cmp(serialOf(t, second)) == 0 }, 3*time.Second) {
 		t.Fatalf("the listener still serves serial %v after the files were overwritten, want %v", serial(t, addr), serialOf(t, second))
 	}
-	detail := srv.State().Detail
-	if detail["tlsReloads"] != int64(1) || detail["tlsReloadFailed"] != int64(0) {
-		t.Errorf("after one rotation: tlsReloads = %v, tlsReloadFailed = %v, want 1 and 0", detail["tlsReloads"], detail["tlsReloadFailed"])
+	// The certificate and the key are two reads, so a tick can fall between
+	// them during the rename and fail once before the next one swaps, as it
+	// can when the kubelet rotates a Secret. Only the swap count is exact;
+	// TestTLSReloadToleratesHalfWrittenPair pins the failure path.
+	if got := srv.State().Detail["tlsReloads"]; got != int64(1) {
+		t.Errorf("after one rotation: tlsReloads = %v, want 1", got)
 	}
 }
 
