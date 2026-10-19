@@ -71,6 +71,12 @@ func ScanConn(ctx context.Context, conn net.Conn, cfg Config, emit Emit) error {
 		if len(b) == 0 {
 			continue
 		}
+		// The scanner's bound is the limit plus the varint allowance, so a line,
+		// xmlevent or beast token can be up to that much over the limit and still
+		// be scanned. It is oversize all the same.
+		if len(b) > cfg.MaxFrame() {
+			return framing.ErrFrameTooLong
+		}
 		payload := make([]byte, len(b))
 		copy(payload, b)
 		if err := emit(ctx, Frame{Payload: payload, ReceivedAt: time.Now().UTC(), Remote: remote}); err != nil {

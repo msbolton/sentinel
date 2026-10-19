@@ -302,7 +302,7 @@ func TestScanConnReadsFramesWithALimitAtTheIntCeiling(t *testing.T) {
 // them the scanner's bound is the frame limit. While every connection started
 // with a 64 KiB buffer, that buffer was the effective limit and a 256-byte
 // limit let a line of nearly 64 KiB through. The bound allows a few bytes past
-// the limit (the varint allowance), so the cases stay well clear of the edge.
+// the limit (the varint allowance), which ScanConn itself refuses.
 func TestScanConnLineFramingHonoursSmallMaxFrame(t *testing.T) {
 	cfg := Config{Framing: framing.Line, MaxFrameBytes: 256}
 	short := strings.Repeat("a", 100)
@@ -314,6 +314,22 @@ func TestScanConnLineFramingHonoursSmallMaxFrame(t *testing.T) {
 		}
 		if len(got) != 1 || string(got[0]) != short {
 			t.Errorf("emitted %d frames, want the one 100-byte line", len(got))
+		}
+	})
+
+	// The scanner holds a few bytes more than the limit (the varint allowance),
+	// so a line only just over it is scanned: it is still oversize.
+	t.Run("a line at the limit passes, a few bytes over is oversize", func(t *testing.T) {
+		atLimit := strings.Repeat("c", 256)
+		for _, over := range []int{1, 5, binary.MaxVarintLen64 - 1} {
+			stream := []byte(short + "\n" + atLimit + "\n" + strings.Repeat("d", 256+over) + "\n" + short + "\n")
+			got, err := scanStream(t, cfg, stream)
+			if !errors.Is(err, framing.ErrFrameTooLong) {
+				t.Errorf("%d over: ScanConn = %v, want %v", over, err, framing.ErrFrameTooLong)
+			}
+			if len(got) != 2 || string(got[0]) != short || string(got[1]) != atLimit {
+				t.Errorf("%d over: emitted %d frames, want the short line and the one at the limit", over, len(got))
+			}
 		}
 	})
 

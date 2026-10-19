@@ -55,9 +55,9 @@ func TestPortRules(t *testing.T) {
 	if ps := CheckPorts(udpStream("low", ":514", true), nil, reserved); !strings.Contains(msg(ps), "1024") {
 		t.Errorf("privileged port: %s", msg(ps))
 	}
-	// 1024 is a policy floor, not a kernel limit, and the message must not
-	// suggest the port needs root.
-	if m := msg(CheckPorts(udpStream("low", ":514", true), nil, reserved)); !strings.Contains(m, "policy floor, not a kernel limit") || strings.Contains(m, "root") {
+	// 1024 is a policy floor, and the non-root image could not bind the port
+	// anyway: the message says both, and does not suggest running as root.
+	if m := msg(CheckPorts(udpStream("low", ":514", true), nil, reserved)); !strings.Contains(m, "policy floor") || !strings.Contains(m, "non-root image could not bind") || strings.Contains(m, "as root") {
 		t.Errorf("port floor message: %s", m)
 	}
 	if ps := CheckPorts(udpStream("res", ":5432", true), nil, reserved); !strings.Contains(msg(ps), "Sentinel") {
@@ -68,12 +68,12 @@ func TestPortRules(t *testing.T) {
 	// above the range get the range and nothing about a policy.
 	for _, addr := range []string{"localhost", ":http", ":abc", ":0", ":65536", ":70000"} {
 		m := msg(CheckPorts(udpStream("noport", addr, true), nil, reserved))
-		if !strings.Contains(m, "1024-65535") || strings.Contains(m, "floor") || strings.Contains(m, "kernel") {
+		if !strings.Contains(m, "1024-65535") || strings.Contains(m, "floor") || strings.Contains(m, "non-root") {
 			t.Errorf("address %q: %s", addr, m)
 		}
 	}
 	for _, addr := range []string{":1", ":514", ":1023"} {
-		if m := msg(CheckPorts(udpStream("low", addr, true), nil, reserved)); !strings.Contains(m, "policy floor, not a kernel limit") {
+		if m := msg(CheckPorts(udpStream("low", addr, true), nil, reserved)); !strings.Contains(m, "policy floor") || !strings.Contains(m, "non-root") {
 			t.Errorf("address %q: %s", addr, m)
 		}
 	}

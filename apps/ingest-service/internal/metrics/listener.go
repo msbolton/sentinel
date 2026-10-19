@@ -24,7 +24,7 @@ type ListenerSource interface {
 // counter under in its health detail, and the event label it is exported
 // under. A counter is exported by adding a row.
 //
-// tlsReloads, a count of the swaps, has no row either: a rotation is not an
+// tlsReloads, a count of the swaps, has no row: a rotation is not an
 // event to alert on, and tlsCertNotAfter (RFC 3339 text) is exported as the
 // expiry gauge below.
 //

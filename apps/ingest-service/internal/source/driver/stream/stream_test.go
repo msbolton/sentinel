@@ -721,6 +721,16 @@ func TestStreamRefusesClientCAWithoutRequireClientCert(t *testing.T) {
 	}
 }
 
+// A tcpserver feed with requireClientCert and TLS off is refused, with no
+// secrets at all: it would run plain and open.
+func TestStreamRefusesRequireClientCertWithTLSOff(t *testing.T) {
+	cfg := `{"transport":{"kind":"tcpserver","address":"127.0.0.1:0","tls":{"enabled":false,"requireClientCert":true}},"framing":"line","decoder":{"name":"sbs"}}`
+	_, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+	if err == nil || !strings.Contains(err.Error(), "requireClientCert is set but TLS is off") {
+		t.Errorf("err = %v, want the requireClientCert-without-TLS refusal", err)
+	}
+}
+
 // requireClientCert is a listener setting: a transport that dials out has no
 // senders to ask for certificates and ignores the flag, so with TLS on and no
 // client CA it builds like any other. tcpclient and stomp build their TLS

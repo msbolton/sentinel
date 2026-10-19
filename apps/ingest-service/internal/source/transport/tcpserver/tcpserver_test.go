@@ -393,6 +393,8 @@ func TestOversizeFrameIsCounted(t *testing.T) {
 	}{
 		{"declared length", "lengthprefix", 16, append([]byte{0, 100}, make([]byte, 100)...)},
 		{"unterminated line", "line", 1 << 16, []byte(strings.Repeat("x", 2<<16))},
+		// Inside the scanner's allowance past the limit, so it scans: still oversize.
+		{"line a few bytes over", "line", 256, []byte(strings.Repeat("x", 260) + "\n")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -551,6 +553,22 @@ func TestClientCANeedsRequireClientCert(t *testing.T) {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("%s: err = %q, want it to name %q", tc.name, err, want)
 			}
+		}
+	}
+}
+
+// requireClientCert with TLS off would leave a plain, open listener while the
+// operator believes senders are checked: it is refused, with or without a
+// client CA (with one, the client CA rule speaks first).
+func TestRequireClientCertNeedsTLS(t *testing.T) {
+	const want = "tcpserver: tls.requireClientCert is set but TLS is off; turn TLS on or remove requireClientCert"
+	for name, tlsCfg := range map[string]*transport.TLS{
+		"TLS off":       {RequireClientCert: true},
+		"enabled=false": {Enabled: false, RequireClientCert: true},
+	} {
+		_, err := New(transport.Config{Kind: "tcpserver", Address: "127.0.0.1:0", Framing: "line", TLS: tlsCfg})
+		if err == nil || err.Error() != want {
+			t.Errorf("%s: err = %v, want %q", name, err, want)
 		}
 	}
 }

@@ -19,8 +19,9 @@ import (
 // connection may not take them.
 const DefaultReservedPorts = "3000-3005,4000,4010,4200,5000,5001,5432,8080,8600,9000,9001,9092,9093,9200,9600"
 
-// The ports a listening connection may bind. The floor is a policy, not a
-// kernel limit: it leaves the well-known ports to the host's own services.
+// The ports a listening connection may bind. The floor is a policy: it leaves
+// the well-known ports to the host's own services. The non-root image could not
+// bind them either, so the kernel would refuse them as well.
 const (
 	MinPort = 1024
 	MaxPort = 65535
@@ -104,7 +105,7 @@ func CheckPorts(f Feed, others []Feed, reserved PortSet) []Problem {
 		path = "/config/transport/address"
 	}
 	if port >= 1 && port < MinPort {
-		return []Problem{{Path: path, Message: fmt.Sprintf("port %d is outside %d-%d; %d is a policy floor, not a kernel limit, so the well-known ports stay with the host's own services", port, MinPort, MaxPort, MinPort)}}
+		return []Problem{{Path: path, Message: fmt.Sprintf("port %d is outside %d-%d; %d is a policy floor that leaves the well-known ports to the host's own services, and the non-root image could not bind them anyway", port, MinPort, MaxPort, MinPort)}}
 	}
 	if port < MinPort || port > MaxPort { // 0 (no usable port in the address) or beyond the range
 		return []Problem{{Path: path, Message: fmt.Sprintf("port %d is outside %d-%d", port, MinPort, MaxPort)}}

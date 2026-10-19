@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -175,6 +176,63 @@ func TestDeadLetterIsRateLimited(t *testing.T) {
 	other := headers(a[3])
 	if sender, ok := other["sender"]; other["feed-id"] != "feed-b" || !ok || sender != "" || other["error"] != "" {
 		t.Errorf("headers of the other feed's dead letter = %v, want an empty sender and error", other)
+	}
+}
+
+// The rate limit counts what it drops, by reason.
+func TestDeadLetterRateLimitDropIsCounted(t *testing.T) {
+	fp := &fakeProducer{}
+	m := metrics.New(nil)
+	pub := New(fp, m, nil, Options{DLQRatePerSec: 1, DLQBurst: 1})
+	for i := 0; i < 3; i++ {
+		pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "parse_error", Raw: []byte("x")})
+	}
+	if got := testutil.ToFloat64(m.DeadLetterDropped.WithLabelValues("f", "rate_limited")); got != 2 {
+		t.Errorf("dropped rate_limited = %v, want 2", got)
+	}
+}
+
+// A letter the producer refuses is lost, so it is counted as dropped as well as
+// logged: a full queue or a message over the broker's limit is otherwise
+// invisible to anyone watching the metrics.
+func TestDeadLetterProduceFailureIsCounted(t *testing.T) {
+	fp := &fakeProducer{}
+	fp.fullLeft.Store(1)
+	m := metrics.New(nil)
+	pub := New(fp, m, nil, Options{})
+	pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "parse_error", Raw: []byte("x")})
+	pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "parse_error", Raw: []byte("y")})
+	if got := testutil.ToFloat64(m.DeadLetterDropped.WithLabelValues("f", "produce_failed")); got != 1 {
+		t.Errorf("dropped produce_failed = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.DeadLetterTotal.WithLabelValues("f", "parse_error")); got != 1 {
+		t.Errorf("dead letters counted as sent = %v, want only the one that was produced", got)
+	}
+}
+
+// A payload over the cap is cut to it and says so, with the size it arrived
+// with; one at the cap goes whole and without the headers.
+func TestDeadLetterRawIsCapped(t *testing.T) {
+	fp := &fakeProducer{}
+	pub := New(fp, nil, nil, Options{})
+	raw := bytes.Repeat([]byte("a"), 1<<20)
+	pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "oversize", Raw: raw})
+	pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "parse_error", Raw: raw[:DeadLetterRawMax]})
+	msgs := fp.byTopic("observations.dlq")
+	if len(msgs) != 2 {
+		t.Fatalf("dead letters = %d, want 2", len(msgs))
+	}
+	if len(msgs[0].Value) != DeadLetterRawMax {
+		t.Errorf("cut value = %d bytes, want %d", len(msgs[0].Value), DeadLetterRawMax)
+	}
+	if h := headers(msgs[0]); h["raw-truncated"] != "true" || h["raw-size"] != "1048576" {
+		t.Errorf("headers of a cut letter = %v, want raw-truncated=true and raw-size=1048576", h)
+	}
+	if len(raw) != 1<<20 {
+		t.Error("the caller's payload was changed")
+	}
+	if h := headers(msgs[1]); len(msgs[1].Value) != DeadLetterRawMax || h["raw-truncated"] != "" || h["raw-size"] != "" {
+		t.Errorf("a payload at the cap: %d bytes, headers %v; want it whole with no cut headers", len(msgs[1].Value), h)
 	}
 }
 
@@ -441,7 +499,7 @@ func TestDeadLetterAfterCloseProducesNothing(t *testing.T) {
 	if got := fp.calls.Load(); got != 0 {
 		t.Errorf("Produce was called %d times for a dead letter after Close, want none", got)
 	}
-	if got := testutil.ToFloat64(m.DeadLetterDropped.WithLabelValues("late")); got != 1 {
+	if got := testutil.ToFloat64(m.DeadLetterDropped.WithLabelValues("late", "closing")); got != 1 {
 		t.Errorf("dead_letter_dropped = %v, want 1", got)
 	}
 	if got := testutil.ToFloat64(m.DeadLetterTotal.WithLabelValues("late", "parse_error")); got != 0 {

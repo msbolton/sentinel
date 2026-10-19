@@ -103,7 +103,9 @@ func checkDirection(info drivers.Info, f *Feed) []Problem {
 
 // checkSecrets enforces that secrets travel only as references: every
 // secretRefs key must be one the driver declares, every value a supported
-// reference, and none of the declared secret fields may appear in config.
+// reference, none of the declared secret fields may appear in config, and
+// each secret the schema requires under this config (x-secrets requiredWhen)
+// must be there.
 func (v *Validator) checkSecrets(info drivers.Info, f *Feed) []Problem {
 	var problems []Problem
 	declared := map[string]bool{}
@@ -119,6 +121,9 @@ func (v *Validator) checkSecrets(info drivers.Info, f *Feed) []Problem {
 		} else if err := v.Secrets.Check(ref); err != nil {
 			problems = append(problems, Problem{Path: "/secretRefs/" + key, Message: err.Error()})
 		}
+	}
+	for _, key := range requiredSecrets(info, f.Config, f.SecretRefs) {
+		problems = append(problems, Problem{Path: "/secretRefs/" + key, Message: "is required"})
 	}
 	var cfg map[string]json.RawMessage
 	if json.Unmarshal(f.Config, &cfg) == nil {

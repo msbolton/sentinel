@@ -161,6 +161,19 @@ func (p *Publisher) Emit(ctx context.Context, o *obs.Observation) error {
 	}
 }
 
+// DeadLetterRawMax is the most of a payload a dead letter carries. A stream
+// frame can be 1 MiB, which is over librdkafka's message.max.bytes, so the
+// letter would be refused whole; a longer payload is cut and says so (the
+// raw-truncated and raw-size headers).
+const DeadLetterRawMax = 64 << 10
+
+// Reasons a dead letter is counted in deadletter_dropped_total.
+const (
+	dropRateLimited   = "rate_limited"
+	dropClosing       = "closing"
+	dropProduceFailed = "produce_failed"
+)
+
 // DeadLetter sends an undecodable payload to the dead-letter topic, with the
 // decoder that refused it and the sender it came from when the driver knew
 // them, at most DLQRatePerSec per feed; excess is counted and dropped so a
@@ -172,6 +185,10 @@ func (p *Publisher) Emit(ctx context.Context, o *obs.Observation) error {
 // letter handed to it then would be lost unseen. The gate is held for the whole
 // call, Produce included (which does not wait for Kafka), so that the close
 // waits for a letter on its way, and the producer is flushed after it.
+//
+// A payload over DeadLetterRawMax is cut to it. A letter the producer refuses
+// (its queue is full, say) is logged and counted as dropped with the reason
+// produce_failed.
 func (p *Publisher) DeadLetter(dl obs.DeadLetter) {
 	feedID := dl.FeedID
 	if feedID == "" {
@@ -181,12 +198,12 @@ func (p *Publisher) DeadLetter(dl obs.DeadLetter) {
 	defer p.gate.RUnlock()
 	select {
 	case <-p.done:
-		p.dropDeadLetter(feedID)
+		p.dropDeadLetter(feedID, dropClosing)
 		return
 	default:
 	}
 	if !p.limiter(feedID).Allow() {
-		p.dropDeadLetter(feedID)
+		p.dropDeadLetter(feedID, dropRateLimited)
 		return
 	}
 	receivedAt := dl.ReceivedAt
@@ -203,16 +220,24 @@ func (p *Publisher) DeadLetter(dl obs.DeadLetter) {
 		{Key: commonkafka.HeaderError, Value: []byte(errString(dl.Cause))},
 		{Key: "received-at", Value: []byte(receivedAt.UTC().Format(time.RFC3339Nano))},
 	}
+	raw := dl.Raw
+	if len(raw) > DeadLetterRawMax {
+		headers = append(headers,
+			kafka.Header{Key: "raw-truncated", Value: []byte("true")},
+			kafka.Header{Key: "raw-size", Value: []byte(strconv.Itoa(len(raw)))})
+		raw = raw[:DeadLetterRawMax]
+	}
 	topic := p.opts.DeadLetterTopic
 	msg := &kafka.Message{
 		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
 		Key:            []byte(feedID),
-		Value:          dl.Raw,
+		Value:          raw,
 		Headers:        headers,
 		Opaque:         feedID,
 	}
 	if err := p.producer.Produce(msg); err != nil {
 		p.logger.Warn("dead letter not enqueued", zap.String("feed", feedID), zap.Error(err))
+		p.dropDeadLetter(feedID, dropProduceFailed)
 		return
 	}
 	if p.metrics != nil {
@@ -220,10 +245,10 @@ func (p *Publisher) DeadLetter(dl obs.DeadLetter) {
 	}
 }
 
-// dropDeadLetter counts a dead letter that was not sent.
-func (p *Publisher) dropDeadLetter(feedID string) {
+// dropDeadLetter counts a dead letter that was not sent, by why.
+func (p *Publisher) dropDeadLetter(feedID, reason string) {
 	if p.metrics != nil {
-		p.metrics.DeadLetterDropped.WithLabelValues(feedID).Inc()
+		p.metrics.DeadLetterDropped.WithLabelValues(feedID, reason).Inc()
 	}
 }
 

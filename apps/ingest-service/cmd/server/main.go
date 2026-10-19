@@ -53,6 +53,9 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		logger.Fatal("invalid configuration", zap.Error(err))
 	}
+	for _, w := range cfg.Warnings() {
+		logger.Warn(w)
+	}
 	// Parsed with the rest of the configuration, before anything starts: a bad
 	// value must not stop the service once feeds have taken their leases.
 	reserved, err := cfg.ReservedPortSet()

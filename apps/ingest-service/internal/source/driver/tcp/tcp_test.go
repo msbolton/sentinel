@@ -534,6 +534,16 @@ func TestClientCAWithoutRequireClientCert(t *testing.T) {
 	}
 }
 
+// requireClientCert with TLS off is refused whatever the secrets: the listener
+// would run plain and open.
+func TestListenRefusesRequireClientCertWithTLSOff(t *testing.T) {
+	cfg := map[string]any{"mode": "listen", "port": 6000, "tls": map[string]any{"enabled": false, "requireClientCert": true}}
+	_, err := newDriver(t, cfg, nil)
+	if err == nil || !strings.Contains(err.Error(), "requireClientCert is set but TLS is off") {
+		t.Errorf("err = %v, want the requireClientCert-without-TLS refusal", err)
+	}
+}
+
 // requireClientCert is a listener setting. A connection Sentinel dials out has
 // no senders to ask for certificates, so it ignores the flag: with TLS on and
 // no clientCa it builds like any other.

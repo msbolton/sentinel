@@ -509,6 +509,35 @@ func TestRecentCutsThePayloadAtAKilobyte(t *testing.T) {
 	}
 }
 
+// A payload the publisher cut at its cap (64 KiB) still reports the size it
+// arrived with, and is flagged as cut, even when what the topic holds is short
+// enough to show whole.
+func TestRecentReportsTheOriginalSizeOfACutPayload(t *testing.T) {
+	big := msg("feed-a", at(1), strings.Repeat("a", 65536))
+	big.headers["raw-truncated"], big.headers["raw-size"] = "true", "1048576"
+	small := msg("feed-a", at(2), "tiny") // a raw-size that is not a number
+	small.headers["raw-size"] = "garbage"
+	smaller := msg("feed-a", at(3), "tiny")
+	smaller.headers["raw-size"] = "2"
+	src := &fakeSource{parts: map[int32]fakePartition{0: partitionOf(big, small, smaller)}, eof: true}
+	letters, _, _, err := within(5*time.Second, src, 2000, "feed-a", 20)
+	if err != nil || len(letters) != 3 {
+		t.Fatalf("%d letters, %v", len(letters), err)
+	}
+	byOffset := map[int64]Letter{}
+	for _, l := range letters {
+		byOffset[l.Offset] = l
+	}
+	if l := byOffset[0]; l.Size != 1048576 || len(l.Payload) != 1024 || !l.PayloadTruncated {
+		t.Errorf("cut payload: size %d, shown %d, truncated %v; want 1048576, 1024, true", l.Size, len(l.Payload), l.PayloadTruncated)
+	}
+	for _, off := range []int64{1, 2} {
+		if l := byOffset[off]; l.Size != 4 || l.PayloadTruncated {
+			t.Errorf("offset %d: size %d truncated %v, want the value's own 4 and not truncated (an unusable raw-size is ignored)", off, l.Size, l.PayloadTruncated)
+		}
+	}
+}
+
 // What the publisher writes to the headers is what the letter says.
 func TestRecentReadsTheLetterFromItsHeaders(t *testing.T) {
 	full := msg("feed-a", at(10), "payload")

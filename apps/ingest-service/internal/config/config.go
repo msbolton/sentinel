@@ -52,7 +52,7 @@ type Config struct {
 	// restart (INGEST_TLS_RELOAD_SEC, default 60); 0 turns reloading off.
 	TLSReloadSec int
 
-	// loadErrs are the integer settings Load could not read.
+	// loadErrs are the integer and boolean settings Load could not read.
 	loadErrs []error
 
 	PublisherShards    int // PUBLISHER_SHARDS (default: 8)
@@ -95,9 +95,9 @@ func Load() *Config {
 		ReplicaID:             envOr("REPLICA_ID", hostname),
 		FeedsBootstrapEnabled: splitList(envOr("FEEDS_BOOTSTRAP_ENABLED", "")),
 		ReservedPorts:         envOr("INGEST_RESERVED_PORTS", registry.DefaultReservedPorts),
-		Listener:              envOr("INGEST_LISTENER", "false") == "true",
+		Listener:              ld.bool("INGEST_LISTENER", false),
 		ListenerHost:          envOr("INGEST_LISTENER_HOST", ""),
-		ListenerShared:        envOr("INGEST_LISTENER_SHARED", "false") == "true",
+		ListenerShared:        ld.bool("INGEST_LISTENER_SHARED", false),
 		SecretEnvAllow:        splitList(envOr("INGEST_SECRET_ENV_ALLOW", registry.DefaultSecretEnvAllow)),
 		SecretFileDirs:        splitList(envOr("INGEST_SECRET_FILE_DIRS", registry.DefaultSecretFileDirs)),
 		TLSReloadSec:          ld.int("INGEST_TLS_RELOAD_SEC", 60),
@@ -115,7 +115,7 @@ func Load() *Config {
 		FeedRetryMax:      ld.seconds("FEED_RETRY_MAX_SEC", 60),
 		ShutdownTimeout:   ld.seconds("SHUTDOWN_TIMEOUT_SEC", 25),
 
-		LeaseEnabled:   envOr("LEASE_ENABLED", "true") != "false",
+		LeaseEnabled:   ld.bool("LEASE_ENABLED", true),
 		LeaseTTL:       ld.seconds("LEASE_TTL_SEC", 15),
 		LeaseTick:      ld.seconds("LEASE_TICK_SEC", 2),
 		LeaseRebalance: ld.seconds("LEASE_REBALANCE_SEC", 30),
@@ -182,7 +182,22 @@ func (c *Config) Validate() error {
 	if c.ListenerShared && !c.Listener {
 		return errors.New("INGEST_LISTENER_SHARED needs INGEST_LISTENER=true: only a listener replica can share")
 	}
+	// Without leases nothing tells a listener's feeds from the others': it would
+	// run every enabled feed, which a dedicated listener must not.
+	if (c.Listener || c.ListenerShared) && !c.LeaseEnabled {
+		return errors.New("INGEST_LISTENER (or INGEST_LISTENER_SHARED) needs leases: LEASE_ENABLED=false would make the listener run every feed; remove LEASE_ENABLED=false or turn the listener off")
+	}
 	return nil
+}
+
+// Warnings lists settings that are valid but probably not what was meant; the
+// service logs them at startup.
+func (c *Config) Warnings() []string {
+	var out []string
+	if c.Listener && c.ListenerHost == "" {
+		out = append(out, "INGEST_LISTENER_HOST is empty: the send guide will show a blank host to senders; set it to the address they reach this replica at")
+	}
+	return out
 }
 
 func splitList(s string) []string {
@@ -202,8 +217,8 @@ func envOr(key, def string) string {
 	return def
 }
 
-// loader reads the integer settings and remembers the ones that are not
-// integers, for Validate to refuse. A setting that falls back to its default
+// loader reads the integer and boolean settings and remembers the ones that
+// cannot be read, for Validate to refuse. A setting that falls back to its default
 // when it cannot be read does the opposite of what was asked for (a typo for
 // "off" leaves the feature on), so none does.
 type loader struct{ errs []error }
@@ -221,6 +236,23 @@ func (l *loader) int(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+// bool reads key as strconv.ParseBool does (1, t, T, TRUE, true, True, 0, f, F,
+// FALSE, false, False), def when it is unset or empty. Anything else reads as
+// def here and is refused by Validate: "ture" must not leave a feature in the
+// state its default has.
+func (l *loader) bool(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		l.errs = append(l.errs, fmt.Errorf("%s must be true or false, not %q", key, v))
+		return def
+	}
+	return b
 }
 
 func (l *loader) seconds(key string, def int) time.Duration {

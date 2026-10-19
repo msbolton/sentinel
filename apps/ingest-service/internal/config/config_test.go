@@ -218,6 +218,97 @@ func TestIntegerSettingsRefuseText(t *testing.T) {
 	}
 }
 
+// A boolean setting is read as strconv.ParseBool does and refused, naming the
+// variable, when it is anything else: "ture" used to read as false for
+// INGEST_LISTENER and as true for LEASE_ENABLED. The variables are found in
+// the source, so a setting added later is held to this too.
+func TestBooleanSettingsRefuseText(t *testing.T) {
+	src, err := os.ReadFile("config.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := regexp.MustCompile(`\.bool\("([A-Z0-9_]+)"`).FindAllStringSubmatch(string(src), -1)
+	if len(found) < 3 {
+		t.Fatalf("found %d boolean settings in config.go, want the 3 or more it has: the pattern is out of date", len(found))
+	}
+	for _, m := range found {
+		name := m[1]
+		t.Run(name, func(t *testing.T) {
+			for _, bad := range []string{"ture", "yes", "on", "2", "enabled"} {
+				t.Setenv(name, bad)
+				err := Load().Validate()
+				if err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "true or false") {
+					t.Errorf("%s=%q: Validate() = %v, want an error that names the variable and says true or false", name, bad, err)
+				}
+			}
+			t.Setenv(name, "")
+			if err := Load().Validate(); err != nil {
+				t.Errorf("%s unset: %v", name, err)
+			}
+		})
+	}
+}
+
+func TestBooleanSettingsAcceptWhatParseBoolDoes(t *testing.T) {
+	for v, want := range map[string]bool{"true": true, "TRUE": true, "True": true, "t": true, "1": true, "false": false, "False": false, "f": false, "0": false} {
+		t.Setenv("INGEST_LISTENER", v)
+		t.Setenv("LEASE_ENABLED", "true")
+		if got := Load().Listener; got != want {
+			t.Errorf("INGEST_LISTENER=%q read as %v, want %v", v, got, want)
+		}
+	}
+	t.Setenv("INGEST_LISTENER", "")
+	for v, want := range map[string]bool{"0": false, "F": false, "false": false, "1": true, "true": true} {
+		t.Setenv("LEASE_ENABLED", v)
+		if got := Load().LeaseEnabled; got != want {
+			t.Errorf("LEASE_ENABLED=%q read as %v, want %v", v, got, want)
+		}
+	}
+}
+
+// A listener without leases would run every feed, so it is refused, naming the
+// variable; an ordinary replica may still run without leases.
+func TestListenerNeedsLeases(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		listener, shared bool
+		leases, wantErr  bool
+	}{
+		{"dedicated listener, leases", true, false, true, false},
+		{"dedicated listener, no leases", true, false, false, true},
+		{"shared listener, no leases", true, true, false, true},
+		{"ordinary replica, no leases", false, false, false, false},
+	} {
+		c := Load()
+		c.Listener, c.ListenerShared, c.LeaseEnabled = tc.listener, tc.shared, tc.leases
+		err := c.Validate()
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%s: Validate() = %v, want an error: %v", tc.name, err, tc.wantErr)
+		}
+		if err != nil && !strings.Contains(err.Error(), "LEASE_ENABLED") {
+			t.Errorf("%s: the error does not name LEASE_ENABLED: %v", tc.name, err)
+		}
+	}
+}
+
+// A listener with no host is valid, but the send guide would show senders a
+// blank address, so the service warns.
+func TestWarnsOfAListenerWithoutAHost(t *testing.T) {
+	c := Load()
+	c.Listener, c.ListenerHost = true, ""
+	if w := c.Warnings(); len(w) != 1 || !strings.Contains(w[0], "INGEST_LISTENER_HOST") {
+		t.Errorf("warnings = %v, want one naming INGEST_LISTENER_HOST", w)
+	}
+	c.ListenerHost = "ingest.example.com"
+	if w := c.Warnings(); len(w) != 0 {
+		t.Errorf("warnings with a host = %v, want none", w)
+	}
+	c.Listener, c.ListenerHost = false, ""
+	if w := c.Warnings(); len(w) != 0 {
+		t.Errorf("warnings for an ordinary replica = %v, want none", w)
+	}
+}
+
 // INGEST_RESERVED_PORTS is checked with the rest of the configuration, before
 // anything starts, and the parsed set is what the management API gets.
 func TestReservedPortsAreValidated(t *testing.T) {

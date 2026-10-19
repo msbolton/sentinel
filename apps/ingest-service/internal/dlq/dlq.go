@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 	"unicode/utf8"
 
@@ -40,7 +41,9 @@ type Letter struct {
 	Driver  string
 	Decoder string
 	Sender  string // who sent it, as the driver names senders; empty if it did not know
-	// Size is the length of the whole payload. Payload holds its first
+	// Size is the length of the whole payload as it arrived, which can be more
+	// than the topic holds: the publisher cuts a payload at 64 KiB and records
+	// the size (the raw-size header). Payload holds its first
 	// PayloadMax bytes, fewer when the cut would split a character.
 	Size             int
 	Payload          []byte
@@ -314,6 +317,13 @@ func lettersOf(best []entry) []Letter {
 // (publish.Publisher.DeadLetter): the payload as the value, the rest in headers.
 func letterOf(ev event) Letter {
 	payload, truncated := cutPayload(ev.value)
+	// The publisher cuts a payload over its own cap and records the original
+	// size (raw-size); the letter's Size is that, and the payload is then cut
+	// whatever the bytes it holds.
+	size := len(ev.value)
+	if n, err := strconv.Atoi(headerText(ev.headers, "raw-size")); err == nil && n > size {
+		size, truncated = n, true
+	}
 	l := Letter{
 		At:      eventTime(ev),
 		Reason:  headerText(ev.headers, "reason"),
@@ -321,7 +331,7 @@ func letterOf(ev event) Letter {
 		Driver:  headerText(ev.headers, "driver"),
 		Decoder: headerText(ev.headers, "decoder"),
 		Sender:  headerText(ev.headers, "sender"),
-		Size:    len(ev.value), Payload: payload, PayloadTruncated: truncated,
+		Size:    size, Payload: payload, PayloadTruncated: truncated,
 		Partition: ev.partition, Offset: ev.offset,
 	}
 	return l

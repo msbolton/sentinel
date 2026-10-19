@@ -32,7 +32,7 @@ type Metrics struct {
 	ObservationsPublished      *prometheus.CounterVec // feed_id
 	ObservationsDeliveryFailed *prometheus.CounterVec // feed_id
 	DeadLetterTotal            *prometheus.CounterVec // feed_id, reason
-	DeadLetterDropped          *prometheus.CounterVec // feed_id
+	DeadLetterDropped          *prometheus.CounterVec // feed_id, reason
 	PublisherShardDepth        *prometheus.GaugeVec   // shard
 	PublisherBlockedSeconds    prometheus.Counter
 
@@ -82,7 +82,7 @@ func New(reg *prometheus.Registry) *Metrics {
 		ObservationsPublished:       counter("observations_published_total", "Observations handed to the Kafka producer, per feed.", "feed_id"),
 		ObservationsDeliveryFailed:  counter("observations_delivery_failed_total", "Observations Kafka reported as undelivered, per feed.", "feed_id"),
 		DeadLetterTotal:             counter("deadletter_total", "Payloads sent to the dead-letter topic, per feed and reason.", "feed_id", "reason"),
-		DeadLetterDropped:           counter("deadletter_dropped_total", "Dead letters dropped by the per-feed rate limit.", "feed_id"),
+		DeadLetterDropped:           counter("deadletter_dropped_total", "Dead letters not sent, per feed and reason: rate_limited (over the per-feed rate), closing (the publisher was shutting down) or produce_failed (the producer refused the letter).", "feed_id", "reason"),
 		PublisherShardDepth:         gauge("publisher_shard_depth", "Observations waiting in each publisher shard.", "shard"),
 		OutboundEventsTotal:         counter("outbound_events_total", "Updates delivered to a connection's remote, per feed and kind.", "feed_id", "kind"),
 		OutboundDeniedTotal:         counter("outbound_denied_total", "Events the sharing policy kept back, per feed and reason.", "feed_id", "reason"),

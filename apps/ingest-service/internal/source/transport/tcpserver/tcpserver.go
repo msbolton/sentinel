@@ -77,6 +77,11 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if hasClientCA(cfg) && !mutualTLS {
 		return nil, errors.New("tcpserver: a client CA is set (the clientCa secret or tls.clientCaFile) but tls.requireClientCert is off; turn it on (with TLS) to verify senders, or remove the client CA")
 	}
+	// requireClientCert with TLS off asks for a check nothing can make: the
+	// listener would run plain and open. Fail closed, as with the client CA.
+	if cfg.TLS != nil && cfg.TLS.RequireClientCert && !cfg.TLS.Enabled {
+		return nil, errors.New("tcpserver: tls.requireClientCert is set but TLS is off; turn TLS on or remove requireClientCert")
+	}
 	// What is the listener's own decision, not the shared builder's (which
 	// dialers use too), is applied to every config it serves, the first and each
 	// reload (see TLSSource), so a rotation keeps it:
