@@ -7,10 +7,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sentinel/go-common/middleware"
 
 	"github.com/sentinel/ingest-service/internal/registry"
+	"github.com/sentinel/ingest-service/internal/source/transport"
 )
 
 // rejectedDetail is the status detail of a stream feed that has refused
@@ -252,6 +254,32 @@ func TestWithoutErrorTexts(t *testing.T) {
 		})
 	}
 
+}
+
+// A sender's text is hidden by the key the transport writes it under. Here the
+// detail is built from the transport's own type, so renaming the key cannot
+// leave the text showing.
+func TestWithoutErrorTextsHidesWhatTheTransportWrites(t *testing.T) {
+	at := time.Date(2026, 10, 18, 12, 1, 0, 0, time.UTC)
+	detail, err := json.Marshal(map[string]any{"senders": []transport.SenderStat{{
+		Remote: "10.0.0.5:51234", Since: at, LastAt: at, Messages: 9, Connected: true,
+		Malformed: 2, LastReason: "parse_error", LastError: "unknown field \"launchCode\"", LastMalformedAt: &at,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(detail), "launchCode") {
+		t.Fatalf("the transport no longer writes the sender's error text: %s", detail)
+	}
+	got := string(withoutErrorTexts(detail))
+	if strings.Contains(got, "launchCode") {
+		t.Errorf("a sender's error text is still in the detail: %s", got)
+	}
+	for _, kept := range []string{"remote", "since", "lastAt", "messages", "connected", "malformed", "lastReason", "lastMalformedAt"} {
+		if !strings.Contains(got, `"`+kept+`"`) {
+			t.Errorf("%s was lost with the text: %s", kept, got)
+		}
+	}
 }
 
 // Counts are not rounded on their way through: decoding them into float64 would.

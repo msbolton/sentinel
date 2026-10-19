@@ -297,6 +297,11 @@ func TestDeadLetterCarriesProvenanceAndNotesSender(t *testing.T) {
 	if s.Messages != 1 || !s.Connected {
 		t.Errorf("sender = %+v, want its one message counted and the connection still open", s)
 	}
+	// The management API leaves this text out of a status read by a caller not
+	// cleared for the feed, and finds it by this key (mgmt.withoutErrorTexts).
+	if text, _ := d.Health().Detail["lastDecodeError"].(string); text != got.cause.Error() {
+		t.Errorf("detail.lastDecodeError = %q, want the decoder's error %q", text, got.cause)
+	}
 }
 
 // A sink that does not take provenance (every polled driver's tests, and any
