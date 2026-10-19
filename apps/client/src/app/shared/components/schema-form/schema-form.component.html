@@ -190,9 +190,12 @@
     <section class="sf-section sf-section-secrets">
       <h4 class="sf-section-title">Credentials</h4>
       <p class="sf-help">
-        Secrets never leave the environment: enter a reference such as <code>env:VARIABLE_NAME</code> and the ingest
-        service reads the value from that variable, or <code>file:/etc/sentinel/…</code> for a mounted file such as a
-        PEM.
+        Secrets never leave the environment: enter a reference, never the value. With
+        <code>env:SENTINEL_SECRET_…</code> (<code>env:OPENSKY_…</code> and <code>env:AISSTREAM_…</code> work too) the
+        ingest service reads the value from that variable; with <code>file:/etc/sentinel/…</code> it reads a mounted
+        file such as a PEM. These are the server's defaults: its <code>INGEST_SECRET_ENV_ALLOW</code> and
+        <code>INGEST_SECRET_FILE_DIRS</code> decide which variables and folders are allowed, and it refuses any other
+        when you save.
       </p>
       <ng-container *ngTemplateOutlet="fieldList; context: { $implicit: secretDefs() }"></ng-container>
     </section>

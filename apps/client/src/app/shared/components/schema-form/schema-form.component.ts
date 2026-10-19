@@ -100,6 +100,19 @@ export interface FieldDef {
 export const SECRET_REF_PATTERN = /^(env:[A-Z0-9_]+|file:\/\S+)$/;
 
 /**
+ * The ingest service reads a reference only if its `INGEST_SECRET_ENV_ALLOW` allows the variable (by default
+ * `OPENSKY_*`, `AISSTREAM_*` and `SENTINEL_SECRET_*`) or `INGEST_SECRET_FILE_DIRS` the folder of the file (by
+ * default `/etc/sentinel`). The form cannot know those settings: it checks the shape of a reference, suggests names
+ * the defaults allow, and leaves the rest to the server, whose refusal is shown at the field.
+ */
+const SECRET_ENV_PREFIX = 'SENTINEL_SECRET_';
+
+/** What a secret field says when it holds something that is not a reference: what to enter, and who decides. */
+const SECRET_REF_ADVICE =
+  'Use a reference, never the value: env:SENTINEL_SECRET_… (OPENSKY_… and AISSTREAM_… names work too) or ' +
+  "file:/etc/sentinel/… for a mounted file. The server's INGEST_SECRET_ENV_ALLOW decides which variable names are allowed.";
+
+/**
  * Builds a reactive form from a driver's JSON Schema. Driver options and
  * the common runtime options both land in `config`; secret references
  * land in `secretRefs`. Empty optional values are left out of the
@@ -454,7 +467,7 @@ export class SchemaFormComponent {
         kind: 'secret',
         label: meta?.title ?? prop?.title ?? humanize(key),
         help: meta?.description ?? prop?.description,
-        placeholder: meta?.examples?.[0] ?? `env:${toEnvName(key)}`,
+        placeholder: meta?.examples?.[0] ?? `env:${SECRET_ENV_PREFIX}${toEnvName(key)}`,
         required: false,
         showWhen: conditionsOf(meta?.showWhen, true),
         rules: requiredWhen.length > 0 ? [{ when: requiredWhen, required: true }] : [],
@@ -1051,7 +1064,7 @@ function describeErrors(errors: ValidationErrors): string[] {
       case 'pattern':
         out.push(
           detail.requiredPattern === SECRET_REF_PATTERN.toString()
-            ? 'Use a reference like env:MY_SECRET or file:/etc/sentinel/secret, never the value.'
+            ? SECRET_REF_ADVICE
             : 'Does not match the required format.',
         );
         break;

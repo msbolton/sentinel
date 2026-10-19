@@ -205,24 +205,47 @@ describe('SchemaFormComponent', () => {
 
     const credentials = el.querySelector('.sf-section-secrets');
     expect(credentials?.querySelector('.sf-section-title')?.textContent).toContain('Credentials');
-    expect(credentials?.querySelector('input[name="clientSecret"]')?.getAttribute('placeholder')).toBe('env:CLIENT_SECRET');
-    expect(credentials?.querySelector('input[name="apiKey"]')?.getAttribute('placeholder')).toBe('env:API_KEY');
+    // the placeholder is a name the server lets a reference read by default, not just any variable
+    expect(credentials?.querySelector('input[name="clientSecret"]')?.getAttribute('placeholder')).toBe(
+      'env:SENTINEL_SECRET_CLIENT_SECRET',
+    );
+    expect(credentials?.querySelector('input[name="apiKey"]')?.getAttribute('placeholder')).toBe('env:SENTINEL_SECRET_API_KEY');
     expect(el.querySelector('.sf-section-driver input[name="apiKey"]')).toBeNull();
 
     // without x-secrets a label is the property's title, else the humanized name
     expect(credentials?.querySelector('label[for="sf-secret-clientSecret"]')?.textContent?.trim()).toBe('Client secret');
     expect(credentials?.querySelector('label[for="sf-secret-apiKey"]')?.textContent?.trim()).toBe('API key');
-    // the intro offers a mounted file as well as an environment variable
-    expect(credentials?.querySelector('.sf-help')?.textContent).toContain('file:/etc/sentinel/');
+    // the intro offers a mounted file as well as an environment variable, names the ones the server lets in by
+    // default, and says that the server decides
+    const intro = credentials?.querySelector('.sf-help')?.textContent?.replace(/\s+/g, ' ');
+    expect(intro).toContain('env:SENTINEL_SECRET_…');
+    expect(intro).toContain('env:OPENSKY_…');
+    expect(intro).toContain('env:AISSTREAM_…');
+    expect(intro).toContain('file:/etc/sentinel/…');
+    expect(intro).toContain('INGEST_SECRET_ENV_ALLOW');
+    expect(intro).toContain('INGEST_SECRET_FILE_DIRS');
+    expect(intro).not.toContain('env:VARIABLE_NAME');
 
     setInput('input[name="clientSecret"]', 'plain-text-secret');
     expect(component.control('/secretRefs/clientSecret')?.hasError('pattern')).toBe(true);
     expect(last().valid).toBe(false);
+    // the refusal of a value says what to give instead, within what the server lets in, and who decides
+    const refusal = credentials?.querySelector('[data-pointer="/secretRefs/clientSecret"] > .sf-error')?.textContent;
+    expect(refusal).toContain('never the value');
+    expect(refusal).toContain('env:SENTINEL_SECRET_…');
+    expect(refusal).toContain('OPENSKY_…');
+    expect(refusal).toContain('AISSTREAM_…');
+    expect(refusal).toContain('file:/etc/sentinel/…');
+    expect(refusal).toContain('INGEST_SECRET_ENV_ALLOW');
+    expect(refusal).not.toContain('MY_SECRET');
 
     setInput('input[name="clientSecret"]', 'env:OPENSKY_CLIENT_SECRET');
-    setInput('input[name="apiKey"]', 'env:API_KEY');
+    setInput('input[name="apiKey"]', 'env:SENTINEL_SECRET_API_KEY');
     expect(component.control('/secretRefs/clientSecret')?.valid).toBe(true);
-    expect(last().secretRefs).toEqual({ clientSecret: 'env:OPENSKY_CLIENT_SECRET', apiKey: 'env:API_KEY' });
+    expect(last().secretRefs).toEqual({
+      clientSecret: 'env:OPENSKY_CLIENT_SECRET',
+      apiKey: 'env:SENTINEL_SECRET_API_KEY',
+    });
     expect(last().config['apiKey']).toBeUndefined();
     expect(last().config['clientSecret']).toBeUndefined();
   });
@@ -1066,8 +1089,24 @@ describe('SchemaFormComponent', () => {
 
       expect(secret('password')).not.toBeNull();
       expect(labelOf('password')).toBe('Password');
-      expect(secret('password')?.getAttribute('placeholder')).toBe('env:PASSWORD');
+      expect(secret('password')?.getAttribute('placeholder')).toBe('env:SENTINEL_SECRET_PASSWORD');
       expect(last().valid).toBe(true);
+    });
+
+    it('gives a secret that x-secrets describes without an example the generic placeholder, and keeps the example of one that has it', () => {
+      // a driver may describe a secret with a title alone; the placeholder is then the generic one
+      const schema: JsonSchema = {
+        type: 'object',
+        properties: {},
+        'x-secrets': {
+          tlsCert: { title: 'TLS certificate (PEM)' },
+          apiToken: { title: 'API token', examples: ['env:OPENSKY_TOKEN'] },
+        },
+      };
+      render(schema, { secretFields: ['tlsCert', 'apiToken'] });
+
+      expect(secret('tlsCert')?.getAttribute('placeholder')).toBe('env:SENTINEL_SECRET_TLS_CERT');
+      expect(secret('apiToken')?.getAttribute('placeholder')).toBe('env:OPENSKY_TOKEN');
     });
   });
 
