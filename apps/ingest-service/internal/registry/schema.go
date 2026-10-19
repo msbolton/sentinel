@@ -16,6 +16,8 @@ const (
 	feedsSchemaFile = "db/schema/70_feeds.sql"
 	// emplacementsSchemaFile defines the emplacements table.
 	emplacementsSchemaFile = "db/schema/72_emplacements.sql"
+	// tokensSchemaFile defines the ingest_tokens table.
+	tokensSchemaFile = "db/schema/76_ingest_tokens.sql"
 )
 
 // SchemaColumn is a column the service depends on and the db/schema file that
@@ -36,6 +38,7 @@ var RequiredColumns = []SchemaColumn{
 	{"ingest_replicas", "listener_host", feedsSchemaFile},
 	{"ingest_replicas", "listener_shared", feedsSchemaFile},
 	{"emplacements", "defaultSigma", emplacementsSchemaFile},
+	{"ingest_tokens", "revokedAt", tokensSchemaFile},
 }
 
 // SchemaError reports the required columns the database lacks.
