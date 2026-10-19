@@ -275,7 +275,8 @@ export interface ListenPort {
   protocol: 'tcp' | 'udp';
   port: number;
   feedId: string;
-  feedName: string;
+  /** The connection's name; the hints name it by its id when the server sends none. */
+  feedName?: string;
   /** A disabled connection keeps its port, so nobody else may take it. */
   enabled: boolean;
 }
@@ -283,7 +284,9 @@ export interface ListenPort {
 /**
  * `GET /api/v1/feeds/ports`: which ports a listening connection may bind. `min` and `max` bound them, `reserved`
  * are Sentinel's own (INGEST_RESERVED_PORTS), `taken` are held by connections. `suggested` is a free port per
- * protocol for a connection that has none yet; a missing one, or one that is not free, is ignored.
+ * protocol for a connection that has none yet. The form offers it when it is free there too; one inside `min`
+ * and `max` that is not free is where the search for a free port starts instead (from the next port), and a
+ * missing one, or one outside them, is ignored (the search starts at 6001).
  */
 export interface ListenPorts {
   min: number;
