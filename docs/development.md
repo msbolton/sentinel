@@ -252,7 +252,7 @@ A `grpc` connection takes reports over gRPC and wants an ingest token on every c
 
 1. Create a `grpc` connection on a free port in the Connections page (or `POST /api/v1/feeds` with `"driver":"grpc"` and `"config":{"port":6200}`), with the listener running as above.
 2. Open the connection's row, issue a token under Tokens (shown once) and export it: `export SENTINEL_INGEST_TOKEN=si_...`.
-3. Run the `grpcurl` command from the connection's send guide. It calls `sentinel.ingest.v1.IngestService/GetSession` with the `authorization: Bearer` header, from the directory that holds `proto/`. A session answer means the token works; `Unauthenticated` means it is unknown, revoked or expired, `PermissionDenied` that it belongs to another connection, and `Unavailable` that the service is still loading tokens or the connection is moving, so retry.
+3. Run the `grpcurl` command from the connection's send guide. It calls `sentinel.ingest.v1.IngestService/GetSession` with the `authorization: Bearer` header, from the directory that holds `proto/`. A session answer means the token works; `Unauthenticated` means it is unknown, revoked or expired, `PermissionDenied` that it belongs to another connection, and `Unavailable` that the service is still loading its tokens and emplacements or the connection is moving, so retry.
 4. On Docker Desktop the listener is on the VM's host network, so run senders inside the VM (for example in a container started with `--network host`) unless *Enable host networking* is on.
 
 The send guide also shows the `ew-sensor` command line for the same endpoint. What the acks mean, the rejection reasons and the health keys are in `docs/feeds.md` (gRPC connections).
