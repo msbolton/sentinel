@@ -57,7 +57,7 @@
 </div>
 
 <ng-template #editor let-d>
-  <form class="editor" (submit)="$event.preventDefault(); save()">
+  <form class="editor" novalidate (submit)="$event.preventDefault(); save()">
     <label class="field"><span class="field-label">Name</span>
       <input type="text" name="name" [value]="d.name" [disabled]="!canWrite()" (input)="patch({ name: text($event) })" required />
     </label>
@@ -76,10 +76,10 @@
     </div>
     <div class="field-pair">
       <label class="field"><span class="field-label">Latitude</span>
-        <input type="number" name="lat" step="any" [value]="d.position?.lat ?? ''" [disabled]="!canWrite()" (input)="patchPosition('lat', num($event))" />
+        <input type="number" name="lat" step="any" [value]="latText()" [disabled]="!canWrite()" (input)="typeCoordinate('lat', $event)" />
       </label>
       <label class="field"><span class="field-label">Longitude</span>
-        <input type="number" name="lon" step="any" [value]="d.position?.lon ?? ''" [disabled]="!canWrite()" (input)="patchPosition('lon', num($event))" />
+        <input type="number" name="lon" step="any" [value]="lonText()" [disabled]="!canWrite()" (input)="typeCoordinate('lon', $event)" />
       </label>
     </div>
     @if (canWrite()) {
@@ -97,7 +97,7 @@
     </div>
     <div class="field-pair">
       <label class="field"><span class="field-label">Width (°)</span>
-        <input type="number" name="azimuthWidthDeg" min="1" max="360" [value]="d.coverage.azimuthWidthDeg" [disabled]="!canWrite()" (input)="patchCoverage({ azimuthWidthDeg: num($event) ?? 0 })" />
+        <input type="number" name="azimuthWidthDeg" min="0" max="360" step="any" [value]="d.coverage.azimuthWidthDeg" [disabled]="!canWrite()" (input)="patchCoverage({ azimuthWidthDeg: num($event) ?? 0 })" />
       </label>
       <label class="field"><span class="field-label">Range (km)</span>
         <input type="number" name="maxRangeKm" min="0" step="any" [value]="km(d.coverage.maxRangeM)" [disabled]="!canWrite()" (input)="patchCoverage({ maxRangeM: (num($event) ?? 0) * 1000 })" />

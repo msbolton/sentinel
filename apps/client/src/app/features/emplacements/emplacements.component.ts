@@ -1,4 +1,5 @@
-import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, computed, effect, inject, signal, untracked } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
 import { NgTemplateOutlet } from '@angular/common';
 import { EmplacementService, errorMessage } from '../../core/services/emplacement.service';
 import { FeedService } from '../../core/services/feed.service';
@@ -18,6 +19,13 @@ import {
   inputOf,
   newDraft,
 } from '../../shared/models/emplacement.model';
+
+/** A coordinate input's text as a number, or null when it is empty or not a number yet. */
+function parseCoordinate(text: string): number | null {
+  if (text.trim() === '') return null;
+  const n = Number(text);
+  return Number.isFinite(n) ? n : null;
+}
 
 /**
  * The Emplacements panel: every emplacement this user may see, and an editor
@@ -58,6 +66,22 @@ export class EmplacementsComponent implements OnInit, OnDestroy {
   });
   protected readonly saving = signal(false);
   protected readonly error = signal<string | null>(null);
+  /** The coordinate inputs' text, so a half-typed value ("-") is not lost to the draft. */
+  protected readonly latText = signal('');
+  protected readonly lonText = signal('');
+  private readonly draftPosition = computed(() => this.draft()?.position ?? null);
+
+  constructor() {
+    // A position set from outside (the map pick) shows in the inputs.
+    effect(() => {
+      const p = this.draftPosition();
+      if (!p) return;
+      untracked(() => {
+        if (parseCoordinate(this.latText()) !== p.lat) this.latText.set(String(p.lat));
+        if (parseCoordinate(this.lonText()) !== p.lon) this.lonText.set(String(p.lon));
+      });
+    });
+  }
 
   ngOnInit(): void {
     this.service.load().subscribe({ error: () => this.error.set('Could not load emplacements.') });
@@ -72,13 +96,19 @@ export class EmplacementsComponent implements OnInit, OnDestroy {
   protected startNew(): void {
     this.error.set(null);
     this.service.select(null);
-    this.draft.set(newDraft());
+    this.seed(newDraft());
   }
 
   protected edit(e: Emplacement): void {
     this.error.set(null);
     this.service.select(e.id);
-    this.draft.set(draftOf(e));
+    this.seed(draftOf(e));
+  }
+
+  private seed(d: EmplacementDraft): void {
+    this.latText.set(d.position ? String(d.position.lat) : '');
+    this.lonText.set(d.position ? String(d.position.lon) : '');
+    this.draft.set(d);
   }
 
   protected cancel(): void {
@@ -94,13 +124,13 @@ export class EmplacementsComponent implements OnInit, OnDestroy {
     this.draft.update((d) => (d ? { ...d, coverage: { ...d.coverage, ...change } } : d));
   }
 
-  protected patchPosition(axis: 'lat' | 'lon', value: number | null): void {
-    this.draft.update((d) => {
-      if (!d) return d;
-      if (value == null) return { ...d, position: null };
-      const current = d.position ?? { lat: 0, lon: 0 };
-      return { ...d, position: { ...current, [axis]: value } };
-    });
+  /** The draft's position follows the inputs only while both hold a number, or both are empty. */
+  protected typeCoordinate(axis: 'lat' | 'lon', event: Event): void {
+    (axis === 'lat' ? this.latText : this.lonText).set(this.text(event));
+    const lat = parseCoordinate(this.latText());
+    const lon = parseCoordinate(this.lonText());
+    if (lat != null && lon != null) this.patch({ position: { lat, lon } });
+    else if (this.latText().trim() === '' && this.lonText().trim() === '') this.patch({ position: null });
   }
 
   protected text(event: Event): string {
@@ -131,7 +161,13 @@ export class EmplacementsComponent implements OnInit, OnDestroy {
       },
       error: (err) => {
         this.saving.set(false);
-        this.error.set(errorMessage(err));
+        if (err instanceof HttpErrorResponse && err.status === 412) {
+          // Keep the draft; the fresh list gives the next Save the current version.
+          this.service.load().subscribe({ error: () => undefined });
+          this.error.set('Changed by someone else since you opened it. The latest is loaded; review and save again.');
+        } else {
+          this.error.set(errorMessage(err));
+        }
       },
     });
   }
