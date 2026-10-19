@@ -79,6 +79,16 @@ func ToProto(o *obs.Observation) *sentinelv1.Observation {
 	if d := o.Dimensions; d != nil {
 		m.Dimensions = &sentinelv1.Dimensions{Length: d[0], Width: d[1], Height: d[2]}
 	}
+	m.EmplacementId, m.Exercise = o.EmplacementID, o.Exercise
+	if p := o.Polar; p != nil {
+		m.Polar = &sentinelv1.PolarMeasurement{
+			RangeM: p.RangeM, AzimuthDeg: p.AzimuthDeg, ElevationDeg: p.ElevationDeg, RangeRateMps: p.RangeRateMps,
+			AzimuthReference: parse[sentinelv1.AzimuthReference](p.AzimuthRef),
+		}
+		if p.SigmaRangeM != nil || p.SigmaAzimuthDeg != nil || p.SigmaElevationDeg != nil {
+			m.Polar.Sigma = &sentinelv1.PolarSigma{RangeM: p.SigmaRangeM, AzimuthDeg: p.SigmaAzimuthDeg, ElevationDeg: p.SigmaElevationDeg}
+		}
+	}
 	m.Platform = platform(o)
 	if len(o.Raw) > 0 {
 		m.Raw = &sentinelv1.RawPayload{ContentType: o.RawContentType, Data: o.Raw, Truncated: o.RawTruncated}

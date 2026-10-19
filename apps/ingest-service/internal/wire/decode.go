@@ -12,7 +12,8 @@ import (
 // FromProto turns a received sentinel.v1.Observation into an observation,
 // the inverse of ToProto. The fields the ingest service owns
 // (observation_id, feed_id, driver, decoder, received_at, replica_id,
-// fencing_token, raw) are not copied: the decoder and the runner set them.
+// fencing_token, raw, emplacement_id, exercise) are not copied: the decoder
+// and the runner set them.
 // Optional values are copied, never shared with the message, and as sent:
 // NaN and ±Inf pass through, since checking values is the decoder's job.
 func FromProto(m *sentinelv1.Observation) *obs.Observation {
@@ -67,6 +68,16 @@ func FromProto(m *sentinelv1.Observation) *obs.Observation {
 	}
 	if d := m.GetDimensions(); d != nil {
 		o.Dimensions = &[3]float64{d.GetLength(), d.GetWidth(), d.GetHeight()}
+	}
+	if p := m.GetPolar(); p != nil {
+		o.Polar = &obs.Polar{
+			RangeM: p.GetRangeM(), AzimuthDeg: p.GetAzimuthDeg(),
+			ElevationDeg: copyFloat(p.ElevationDeg), RangeRateMps: copyFloat(p.RangeRateMps),
+			AzimuthRef: enumName(p.GetAzimuthReference()),
+		}
+		if s := p.GetSigma(); s != nil {
+			o.Polar.SigmaRangeM, o.Polar.SigmaAzimuthDeg, o.Polar.SigmaElevationDeg = copyFloat(s.RangeM), copyFloat(s.AzimuthDeg), copyFloat(s.ElevationDeg)
+		}
 	}
 	platformFrom(o, m.GetPlatform())
 	return o

@@ -97,3 +97,28 @@ func TestKeyAndHeaders(t *testing.T) {
 		t.Error("no fence header without a lease")
 	}
 }
+
+func TestEmplacementFieldsOnWire(t *testing.T) {
+	o := sample()
+	el, sr := 1.5, 25.0
+	o.EmplacementID, o.Exercise = "e-1", true
+	o.Polar = &obs.Polar{RangeM: 500, AzimuthDeg: 270, ElevationDeg: &el, AzimuthRef: "TRUE_NORTH", SigmaRangeM: &sr}
+	b, err := Marshal(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m sentinelv1.Observation
+	if err := proto.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	p := m.GetPolar()
+	if m.GetEmplacementId() != "e-1" || !m.GetExercise() || p.GetRangeM() != 500 || p.GetAzimuthDeg() != 270 ||
+		p.GetElevationDeg() != 1.5 || p.GetAzimuthReference() != sentinelv1.AzimuthReference_AZIMUTH_REFERENCE_TRUE_NORTH ||
+		p.GetSigma().GetRangeM() != 25 || p.GetSigma().AzimuthDeg != nil {
+		t.Fatalf("on the wire: %v", &m)
+	}
+	o.Polar = nil
+	if b, _ := Marshal(o); proto.Unmarshal(b, &m) != nil || m.Polar != nil {
+		t.Errorf("no polar must leave the field unset")
+	}
+}

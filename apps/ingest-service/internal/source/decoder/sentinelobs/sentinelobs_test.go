@@ -212,6 +212,23 @@ func TestDropNonFiniteCoversEveryFloat(t *testing.T) {
 	}
 }
 
+// A non-finite polar range or azimuth drops the whole measurement; other
+// non-finite polar optionals become absent and finite ones are kept.
+func TestDropNonFinitePolar(t *testing.T) {
+	nan, el := math.NaN(), 2.5
+	o := &obs.Observation{Polar: &obs.Polar{RangeM: nan, AzimuthDeg: 45}}
+	dropNonFinite(o)
+	if o.Polar != nil {
+		t.Errorf("a NaN range must drop the polar measurement, got %+v", o.Polar)
+	}
+	o.Polar = &obs.Polar{RangeM: 100, AzimuthDeg: 45, ElevationDeg: &nan, RangeRateMps: &el, SigmaAzimuthDeg: &nan}
+	dropNonFinite(o)
+	if o.Polar == nil || o.Polar.RangeM != 100 || o.Polar.ElevationDeg != nil || o.Polar.SigmaAzimuthDeg != nil ||
+		o.Polar.RangeRateMps == nil || *o.Polar.RangeRateMps != 2.5 {
+		t.Errorf("polar optionals = %+v", o.Polar)
+	}
+}
+
 // A message with identities but no source_entity_id takes its source id
 // from the first identity (R19), so identity-only senders without a
 // canonical identity get distinct entities and observation ids.

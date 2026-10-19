@@ -16,6 +16,7 @@ func serverless(m *sentinelv1.Observation) *sentinelv1.Observation {
 	c := proto.Clone(m).(*sentinelv1.Observation)
 	c.ObservationId, c.FeedId, c.Driver, c.Decoder = "", "", "", ""
 	c.ReceivedAt, c.ReplicaId, c.FencingToken, c.Raw = nil, "", 0, nil
+	c.EmplacementId, c.Exercise = "", false
 	return c
 }
 
@@ -114,5 +115,30 @@ func TestFromProtoCopiesEveryPlatformField(t *testing.T) {
 			!reflect.DeepEqual(got.Link16, o.Link16) || !reflect.DeepEqual(got.CoT, o.CoT) || !reflect.DeepEqual(got.UAV, o.UAV) {
 			t.Errorf("%s: platform detail differs\nwant %+v\ngot  %+v", name, o, got)
 		}
+	}
+}
+
+func TestFromProtoCopiesPolarAndIgnoresServiceOwnedEmplacementFields(t *testing.T) {
+	el, sr := 2.5, 40.0
+	m := &sentinelv1.Observation{
+		SourceEntityId: "trk-1",
+		EmplacementId:  "11111111-1111-1111-1111-111111111111",
+		Exercise:       true,
+		Polar: &sentinelv1.PolarMeasurement{RangeM: 12000, AzimuthDeg: 45, ElevationDeg: &el,
+			AzimuthReference: sentinelv1.AzimuthReference_AZIMUTH_REFERENCE_PLATFORM,
+			Sigma:            &sentinelv1.PolarSigma{RangeM: &sr}},
+	}
+	o := FromProto(m)
+	if o.EmplacementID != "" || o.Exercise {
+		t.Errorf("a sender's emplacement_id and exercise must be ignored: %q %v", o.EmplacementID, o.Exercise)
+	}
+	p := o.Polar
+	if p == nil || p.RangeM != 12000 || p.AzimuthDeg != 45 || p.ElevationDeg == nil || *p.ElevationDeg != 2.5 ||
+		p.AzimuthRef != "PLATFORM" || p.SigmaRangeM == nil || *p.SigmaRangeM != 40 || p.SigmaAzimuthDeg != nil || p.RangeRateMps != nil {
+		t.Fatalf("polar = %+v", p)
+	}
+	el = 9
+	if *p.ElevationDeg != 2.5 {
+		t.Errorf("the copy must not share the message's value")
 	}
 }

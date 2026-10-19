@@ -10,8 +10,10 @@ import (
 // keeping the rest of the report: entity-service stores what it receives
 // and cannot render a non-finite number as JSON. An optional value or a
 // vector or matrix with any non-finite element becomes absent; a non-finite
-// platform detail value becomes 0. Latitude and longitude are not touched:
-// the position check refuses them first.
+// platform detail value becomes 0. A polar measurement with a non-finite
+// range or azimuth is dropped whole, since a 0 would read as a real bearing;
+// its other non-finite optional values become absent. Latitude and longitude
+// are not touched: the position check refuses them first.
 func dropNonFinite(o *obs.Observation) {
 	for _, p := range []**float64{&o.Altitude, &o.Heading, &o.SpeedKnots, &o.Course, &o.CircularError} {
 		if *p != nil && !finite(**p) {
@@ -48,6 +50,17 @@ func dropNonFinite(o *obs.Observation) {
 	}
 	if u := o.UAV; u != nil {
 		zeroNonFinite(&u.OperatingFrequency, &u.FrequencyRange)
+	}
+	if p := o.Polar; p != nil {
+		if !finite(p.RangeM, p.AzimuthDeg) {
+			o.Polar = nil
+		} else {
+			for _, q := range []**float64{&p.ElevationDeg, &p.RangeRateMps, &p.SigmaRangeM, &p.SigmaAzimuthDeg, &p.SigmaElevationDeg} {
+				if *q != nil && !finite(**q) {
+					*q = nil
+				}
+			}
+		}
 	}
 	// Link16Data carries no floats.
 }
