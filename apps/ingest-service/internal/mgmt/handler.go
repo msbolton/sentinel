@@ -113,6 +113,14 @@ func unassigned(f registry.Feed, reason string) registry.Feed {
 	return f
 }
 
+// render is f as the caller who made r may see it: the decoder error texts in
+// its status are left out unless the caller's clearance reaches the feed's
+// classification. Every route that returns a feed or its status renders through
+// here.
+func (h *Handler) render(r *http.Request, f registry.Feed) feedDTO {
+	return toFeedDTO(f, h.catalog, clearedFor(r, f))
+}
+
 // present overlays the live status when the feed runs on this replica,
 // renders a stale row from a silent replica as unassigned, and explains an
 // enabled feed that has no replica to run on: a listening connection with no
@@ -202,7 +210,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		dto := toFeedDTO(h.present(f, p), h.catalog)
+		dto := h.render(r, h.present(f, p))
 		// direction=in|out lists every feed that moves data that way, so
 		// "both" matches either; direction=both matches only "both".
 		if direction != "" && !matchesDirection(dto.Direction, direction) {
@@ -269,7 +277,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toFeedDTO(h.present(f, h.placement(r.Context())), h.catalog))
+	writeJSON(w, http.StatusOK, h.render(r, h.present(f, h.placement(r.Context()))))
 }
 
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +286,7 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toFeedDTO(h.present(f, h.placement(r.Context())), h.catalog).Status)
+	writeJSON(w, http.StatusOK, h.render(r, h.present(f, h.placement(r.Context()))).Status)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
@@ -310,7 +318,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.logger.Info("feed created", zap.String("feed", f.ID), zap.String("driver", f.Driver), zap.String("by", f.CreatedBy))
-	writeJSON(w, http.StatusCreated, toFeedDTO(f, h.catalog))
+	writeJSON(w, http.StatusCreated, h.render(r, f))
 }
 
 func (h *Handler) replace(w http.ResponseWriter, r *http.Request) {
@@ -410,7 +418,7 @@ func (h *Handler) saveUpdate(w http.ResponseWriter, r *http.Request, f *registry
 		return
 	}
 	h.logger.Info("feed updated", zap.String("feed", f.ID), zap.Int("version", f.Version))
-	writeJSON(w, http.StatusOK, toFeedDTO(*f, h.catalog))
+	writeJSON(w, http.StatusOK, h.render(r, *f))
 }
 
 // portProblems checks the feed's allowlist, which needs no other feed. Its
@@ -458,7 +466,7 @@ func (h *Handler) setEnabled(enabled bool) http.HandlerFunc {
 			h.fail(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, toFeedDTO(f, h.catalog))
+		writeJSON(w, http.StatusOK, h.render(r, f))
 	}
 }
 

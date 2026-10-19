@@ -193,6 +193,8 @@ func newServer(t *testing.T, token string) (*httptest.Server, *memStore, *fakeRu
 
 type reqOpts struct {
 	token, roles, user string
+	// class is the caller's clearance, as the gateway propagates it.
+	class string
 }
 
 func do(t *testing.T, srv *httptest.Server, method, path, body string, o reqOpts) (*http.Response, []byte) {
@@ -207,6 +209,9 @@ func do(t *testing.T, srv *httptest.Server, method, path, body string, o reqOpts
 	}
 	if o.user != "" {
 		req.Header.Set(middleware.HeaderUserID, o.user)
+	}
+	if o.class != "" {
+		req.Header.Set(middleware.HeaderClassification, o.class)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
