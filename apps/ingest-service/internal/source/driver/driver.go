@@ -113,6 +113,9 @@ type EmplacementSource interface {
 	// ByFeed lists the emplacements bound to a feed.
 	ByFeed(feedID string) []emplacement.Emplacement
 	OnChange(fn func(id string)) (cancel func())
+	// Ready is closed after the first load. Until then the view is empty, so
+	// a caller that serves senders answers Unavailable.
+	Ready() <-chan struct{}
 }
 
 // TokenSource authenticates the senders of the drivers that take ingest

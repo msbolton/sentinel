@@ -110,7 +110,19 @@ func (f *fakeTokens) revoke(secret string) {
 }
 
 // fakeEmplacements is an EmplacementSource over a fixed list.
-type fakeEmplacements struct{ rows []emplacement.Emplacement }
+type fakeEmplacements struct {
+	rows []emplacement.Emplacement
+	// notReady, when set, leaves Ready open (the cache has not loaded).
+	notReady bool
+}
+
+func (f *fakeEmplacements) Ready() <-chan struct{} {
+	r := make(chan struct{})
+	if !f.notReady {
+		close(r)
+	}
+	return r
+}
 
 func (f *fakeEmplacements) All() []emplacement.Emplacement { return f.rows }
 func (f *fakeEmplacements) Get(id string) (emplacement.Emplacement, bool) {
@@ -197,6 +209,12 @@ func spec(cfg map[string]any, secrets map[string]string) driver.Spec {
 // leave out port and address.
 func start(t *testing.T, cfg map[string]any, secrets map[string]string, tokens *fakeTokens, emps *fakeEmplacements, sink *memSink) *rig {
 	t.Helper()
+	return startWith(t, cfg, secrets, tokens, emps, sink, nil)
+}
+
+// startWith is start, after tweak changed the driver (unexported knobs).
+func startWith(t *testing.T, cfg map[string]any, secrets map[string]string, tokens *fakeTokens, emps *fakeEmplacements, sink *memSink, tweak func(*Driver)) *rig {
+	t.Helper()
 	if cfg == nil {
 		cfg = map[string]any{}
 	}
@@ -218,12 +236,25 @@ func start(t *testing.T, cfg map[string]any, secrets map[string]string, tokens *
 		t.Fatal(err)
 	}
 	d := dv.(*Driver)
+	if tweak != nil {
+		tweak(d)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- d.Run(ctx, sink) }()
 	r := &rig{d: d, sink: sink, tokens: tokens, port: cfg["port"].(int), cancel: cancel, done: done}
 	t.Cleanup(func() { r.stop(t) })
-	waitFor(t, func() bool { return d.connected.Load() })
+	deadline := time.After(waitTimeout)
+	for !d.connected.Load() {
+		select {
+		case err := <-done:
+			done <- err // stop and later calls see it too
+			t.Fatalf("Run returned before serving: %v", err)
+		case <-deadline:
+			t.Fatal("the driver did not start serving in time")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 	return r
 }
 

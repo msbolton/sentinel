@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc/credentials"
@@ -117,6 +118,9 @@ type Driver struct {
 	emps   driver.EmplacementSource
 	logger *zap.Logger
 
+	// idleTimeout is how long a connection may have no RPCs (tests shorten it).
+	idleTimeout time.Duration
+
 	gl        atomic.Pointer[transport.GuardListener]
 	connected atomic.Bool
 	stopping  atomic.Bool
@@ -193,7 +197,7 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 		senders:         transport.NewSenders(maxSenders),
 		perSender:       transport.NewSenderLimiter(c.MaxMessagesPerSecPerSender, transport.SenderLimiterKeys),
 		tokens:          deps.Tokens, emps: deps.Emplacements, logger: deps.Logger,
-		rejected: map[string]int64{},
+		rejected: map[string]int64{}, idleTimeout: idleTimeout,
 	}
 	d.limit = transport.NewLimiter(d.maxPerSec)
 	if tlsOn {

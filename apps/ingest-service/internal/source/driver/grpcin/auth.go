@@ -54,12 +54,15 @@ func bearer(ctx context.Context) (string, bool) {
 }
 
 // authenticate checks a call's token. Until the cache has loaded nothing
-// can be checked, so the answer is Unavailable (retry), not Unauthenticated.
+// can be checked, and the emplacements a session lists are not known, so
+// the answer is Unavailable (retry), not Unauthenticated.
 func (s *service) authenticate(ctx context.Context) (authed, error) {
-	select {
-	case <-s.d.tokens.Ready():
-	default:
-		return authed{}, status.Error(codes.Unavailable, "the ingest service is still loading its tokens: retry")
+	for _, ready := range []<-chan struct{}{s.d.tokens.Ready(), s.d.emps.Ready()} {
+		select {
+		case <-ready:
+		default:
+			return authed{}, status.Error(codes.Unavailable, "the ingest service is still loading: retry")
+		}
 	}
 	secret, ok := bearer(ctx)
 	if !ok {

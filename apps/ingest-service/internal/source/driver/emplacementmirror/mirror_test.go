@@ -45,6 +45,11 @@ func (m *memSource) ByFeed(feedID string) []emplacement.Emplacement {
 	}
 	return out
 }
+func (m *memSource) Ready() <-chan struct{} {
+	r := make(chan struct{})
+	close(r)
+	return r
+}
 func (m *memSource) OnChange(fn func(string)) func() {
 	m.mu.Lock()
 	m.fns = append(m.fns, fn)

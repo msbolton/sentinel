@@ -40,6 +40,17 @@ func TestNotReadyIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestEmplacementsNotReadyIsUnavailable(t *testing.T) {
+	f := tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1"})
+	r := start(t, nil, nil, f, &fakeEmplacements{notReady: true}, nil)
+	ctx, cancel := withToken(secretA)
+	defer cancel()
+	_, err := r.client(t).GetSession(ctx, &ingestv1.GetSessionRequest{})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("GetSession before the emplacements load = %v, want Unavailable", err)
+	}
+}
+
 func TestAuthentication(t *testing.T) {
 	past := time.Now().Add(-time.Minute)
 	f := newFakeTokens()

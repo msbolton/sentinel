@@ -28,6 +28,9 @@ const (
 	stopGrace        = 3 * time.Second
 	handshakeTimeout = 10 * time.Second
 	sendersWindow    = 10 * time.Minute
+	// idleTimeout closes a connection with no RPCs for that long, so an idle
+	// client cannot hold a place.
+	idleTimeout = 5 * time.Minute
 )
 
 func (d *Driver) serverOptions(svc *service) []grpc.ServerOption {
@@ -36,6 +39,7 @@ func (d *Driver) serverOptions(svc *service) []grpc.ServerOption {
 		grpc.MaxRecvMsgSize(d.maxMessageBytes),
 		grpc.MaxConcurrentStreams(4),
 		grpc.ConnectionTimeout(handshakeTimeout),
+		grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: d.idleTimeout}),
 		grpc.ChainUnaryInterceptor(svc.unary),
 		grpc.ChainStreamInterceptor(svc.stream),
 	}
@@ -83,7 +87,7 @@ func (d *Driver) Run(ctx context.Context, sink driver.Sink) error {
 	case err := <-served:
 		d.stopping.Store(true)
 		gl.CloseAll()
-		srv.Stop()
+		d.stop(srv, gl)
 		return fmt.Errorf("grpc: serving stopped: %w", err)
 	case <-ctx.Done():
 	}

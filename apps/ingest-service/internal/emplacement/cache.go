@@ -33,6 +33,9 @@ type Cache struct {
 	subMu   sync.Mutex
 	subs    map[int]func(id string)
 	nextSub int
+
+	readyOnce sync.Once
+	ready     chan struct{}
 }
 
 // NewCache returns an empty cache. pool is the database Run listens on;
@@ -41,8 +44,14 @@ func NewCache(loader Loader, pool *pgxpool.Pool, logger *zap.Logger) *Cache {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Cache{loader: loader, pool: pool, logger: logger, byID: map[string]Emplacement{}, subs: map[int]func(string){}}
+	return &Cache{loader: loader, pool: pool, logger: logger, byID: map[string]Emplacement{}, subs: map[int]func(string){}, ready: make(chan struct{})}
 }
+
+// Ready returns a channel closed, once, after the first successful Load,
+// whether called directly or by Run. Until then the cache knows no
+// emplacements, so callers that serve senders answer Unavailable while it is
+// open.
+func (c *Cache) Ready() <-chan struct{} { return c.ready }
 
 // Load replaces the contents with what the loader lists now, and tells the
 // subscribers every id that was added, changed (by version) or removed.
@@ -69,6 +78,7 @@ func (c *Cache) Load(ctx context.Context) error {
 	}
 	c.byID = next
 	c.mu.Unlock()
+	c.readyOnce.Do(func() { close(c.ready) })
 	c.notify(changed)
 	return nil
 }

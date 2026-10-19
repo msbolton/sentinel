@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
+	"github.com/sentinel/ingest-service/internal/ingesttoken"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 	"github.com/sentinel/ingest-service/internal/source/transport/transporttest"
 	ingestv1 "github.com/sentinel/proto-gen/sentinel/ingest/v1"
@@ -401,4 +402,17 @@ func TestStopIsBoundedWithAStalledConnection(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A client that connects and then does nothing cannot hold a place forever.
+func TestIdleConnectionsAreClosed(t *testing.T) {
+	f := tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1"})
+	r := startWith(t, map[string]any{}, nil, f, nil, nil, func(d *Driver) { d.idleTimeout = 200 * time.Millisecond })
+	gl := r.d.gl.Load()
+	ctx, cancel := withToken(secretA)
+	defer cancel()
+	if _, err := r.client(t).GetSession(ctx, &ingestv1.GetSessionRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return gl.Live() == 0 })
 }

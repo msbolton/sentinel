@@ -226,3 +226,48 @@ func TestCacheFollowsStoreWrites(t *testing.T) {
 		}
 	}
 }
+
+type failingLoader struct {
+	Loader
+	fail bool
+}
+
+func (f *failingLoader) List(ctx context.Context, fl Filter) ([]Emplacement, error) {
+	if f.fail {
+		return nil, errors.New("database down")
+	}
+	return f.Loader.List(ctx, fl)
+}
+
+func TestCacheReadyClosesAfterTheFirstSuccessfulLoad(t *testing.T) {
+	ctx := context.Background()
+	l := &failingLoader{Loader: &memLoader{rows: map[string]Emplacement{}}, fail: true}
+	c := NewCache(l, nil, nil)
+	isReady := func() bool {
+		select {
+		case <-c.Ready():
+			return true
+		default:
+			return false
+		}
+	}
+	if isReady() {
+		t.Fatal("ready before any load")
+	}
+	if err := c.Load(ctx); err == nil {
+		t.Fatal("load should have failed")
+	}
+	if isReady() {
+		t.Fatal("ready after a failed load")
+	}
+	l.fail = false
+	if err := c.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !isReady() {
+		t.Fatal("not ready after a successful load")
+	}
+	if err := c.Load(ctx); err != nil { // closing twice would panic
+		t.Fatal(err)
+	}
+}

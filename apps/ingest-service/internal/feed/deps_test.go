@@ -25,7 +25,12 @@ func (depsEmplacements) All() []emplacement.Emplacement { return nil }
 func (depsEmplacements) Get(string) (emplacement.Emplacement, bool) {
 	return emplacement.Emplacement{}, false
 }
-func (depsEmplacements) ByFeed(string) []emplacement.Emplacement  { return nil }
+func (depsEmplacements) ByFeed(string) []emplacement.Emplacement { return nil }
+func (depsEmplacements) Ready() <-chan struct{} {
+	r := make(chan struct{})
+	close(r)
+	return r
+}
 func (depsEmplacements) OnChange(func(id string)) (cancel func()) { return func() {} }
 
 // The drivers that authenticate senders (grpc) get the token cache, and the
