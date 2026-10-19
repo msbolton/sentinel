@@ -340,3 +340,88 @@ func waitFor(cond func() bool) bool {
 	}
 	return cond()
 }
+
+// An Emit blocked on a full shard when the publisher closes is let go with
+// ErrClosed. It used to panic with "send on closed channel", which at shutdown
+// would have skipped everything that follows (leases, status rows). The shard
+// is stuck retrying a full producer queue, as with Kafka down, so the Emits
+// really are blocked when CloseWithin runs; run repeatedly under -race.
+func TestEmitBlockedOnAFullShardReturnsErrClosedWhenThePublisherCloses(t *testing.T) {
+	for round := 0; round < 50; round++ {
+		fp := &fakeProducer{}
+		fp.fullLeft.Store(1 << 30)
+		pub := New(fp, nil, nil, Options{Shards: 1, Buffer: 1, QueueFullWait: time.Millisecond})
+		pub.Start()
+		// One observation retrying in the shard's hands and one in the buffer: the shard is full.
+		for i := 0; i < 2; i++ {
+			if err := pub.Emit(context.Background(), observation("f", "AAA111", i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !waitFor(func() bool { return fp.calls.Load() >= 1 }) {
+			t.Fatal("the shard never called the producer")
+		}
+		const emitters = 8
+		errs := make(chan error, emitters)
+		started := make(chan struct{}, emitters)
+		for i := 0; i < emitters; i++ {
+			go func() {
+				started <- struct{}{}
+				errs <- pub.Emit(context.Background(), observation("f", "AAA111", 100+i))
+			}()
+		}
+		for i := 0; i < emitters; i++ {
+			<-started
+		}
+		abandoned, _ := closeWithin(t, pub, 20*time.Millisecond)
+		for i := 0; i < emitters; i++ {
+			select {
+			case err := <-errs:
+				if !errors.Is(err, ErrClosed) {
+					t.Fatalf("round %d: a blocked Emit returned %v, want ErrClosed", round, err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("round %d: an Emit was still blocked after CloseWithin", round)
+			}
+		}
+		if abandoned != 2 {
+			t.Fatalf("round %d: abandoned = %d, want the 2 that were accepted: an Emit that was refused is not one", round, abandoned)
+		}
+	}
+}
+
+// Nothing an Emit accepted is lost to the close: every observation Emit returned
+// nil for is handed to the producer when the producer keeps up, however the
+// Emits and the close interleave.
+func TestEmitsRacingCloseLoseNothingThatWasAccepted(t *testing.T) {
+	for round := 0; round < 50; round++ {
+		fp := &fakeProducer{}
+		pub := New(fp, nil, nil, Options{Shards: 4, Buffer: 4})
+		pub.Start()
+		var accepted atomic.Int64
+		var wg sync.WaitGroup
+		for g := 0; g < 8; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := 0; i < 200; i++ {
+					switch err := pub.Emit(context.Background(), observation("f", fmt.Sprintf("K%d", g), i)); {
+					case err == nil:
+						accepted.Add(1)
+					case errors.Is(err, ErrClosed):
+						return
+					default:
+						t.Errorf("Emit returned %v", err)
+						return
+					}
+				}
+			}()
+		}
+		time.Sleep(time.Duration(round%5) * 100 * time.Microsecond)
+		abandoned, _ := closeWithin(t, pub, 10*time.Second)
+		wg.Wait()
+		if got := int64(len(fp.byTopic("observations.raw"))); abandoned != 0 || got != accepted.Load() {
+			t.Fatalf("round %d: %d accepted, %d produced, %d abandoned", round, accepted.Load(), got, abandoned)
+		}
+	}
+}

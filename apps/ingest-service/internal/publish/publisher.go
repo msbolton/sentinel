@@ -81,6 +81,17 @@ type Publisher struct {
 	// producer yet: the ones queued and the ones in a shard's hands. It is what
 	// CloseWithin gives up on if it runs out of time.
 	pending atomic.Int64
+	// done is closed when the publisher starts closing: Emit refuses from then
+	// on, and an Emit blocked on a full shard is let go. The shard channels are
+	// never closed, so no Emit can send on a closed one.
+	done chan struct{}
+	// gate is read-locked by every Emit while it queues an observation and
+	// locked once by the close, after done, so that when the close gets it no
+	// Emit is queueing and none will: what is in the shards is all there will be.
+	gate sync.RWMutex
+	// drain is closed once that is so, and tells the shards to hand over what is
+	// queued and leave.
+	drain chan struct{}
 	// abandon is closed when CloseWithin gives up, and stops the shards.
 	abandon chan struct{}
 
@@ -101,7 +112,7 @@ func New(p Producer, m *metrics.Metrics, logger *zap.Logger, opts Options) *Publ
 		logger = zap.NewNop()
 	}
 	o := opts.withDefaults()
-	pub := &Publisher{producer: p, metrics: m, logger: logger, opts: o, abandon: make(chan struct{}), limiters: map[string]*rate.Limiter{}}
+	pub := &Publisher{producer: p, metrics: m, logger: logger, opts: o, done: make(chan struct{}), drain: make(chan struct{}), abandon: make(chan struct{}), limiters: map[string]*rate.Limiter{}}
 	pub.shards = make([]chan *obs.Observation, o.Shards)
 	for i := range pub.shards {
 		pub.shards[i] = make(chan *obs.Observation, o.Buffer)
@@ -119,7 +130,9 @@ func (p *Publisher) Start() {
 
 // Emit queues an observation on the shard its key hashes to. It blocks
 // while the shard is full, so pressure reaches the caller, and returns
-// ctx.Err() if the caller gives up first.
+// ctx.Err() if the caller gives up first, or ErrClosed if the publisher closes
+// first (an observation Emit returned nil for is handed to the producer by the
+// close, or counted among those it abandoned).
 func (p *Publisher) Emit(ctx context.Context, o *obs.Observation) error {
 	if o.ReplicaID == "" {
 		o.ReplicaID = p.opts.ReplicaID
@@ -127,17 +140,21 @@ func (p *Publisher) Emit(ctx context.Context, o *obs.Observation) error {
 	if o.FencingToken == 0 {
 		o.FencingToken = p.opts.FencingToken
 	}
-	p.mu.Lock()
-	closed := p.closed
-	p.mu.Unlock()
-	if closed {
+	p.gate.RLock()
+	defer p.gate.RUnlock()
+	select {
+	case <-p.done:
 		return ErrClosed
+	default:
 	}
 	ch := p.shards[shardFor(wire.Key(o), len(p.shards))]
 	p.pending.Add(1)
 	select {
 	case ch <- o:
 		return nil
+	case <-p.done:
+		p.pending.Add(-1)
+		return ErrClosed
 	case <-ctx.Done():
 		p.pending.Add(-1)
 		return ctx.Err()
@@ -222,9 +239,10 @@ func (p *Publisher) shutdown(expired <-chan time.Time) int {
 	}
 	p.closed = true
 	p.mu.Unlock()
-	for _, ch := range p.shards {
-		close(ch)
-	}
+	close(p.done)
+	p.gate.Lock() // waits for the Emits that are queueing; each returns at once now
+	p.gate.Unlock()
+	close(p.drain)
 	drained := make(chan struct{})
 	go func() {
 		p.wg.Wait()
@@ -269,15 +287,35 @@ func (p *Publisher) abandoned() bool {
 func (p *Publisher) run(shard int, ch <-chan *obs.Observation) {
 	defer p.wg.Done()
 	label := strconv.Itoa(shard)
-	for o := range ch {
-		if p.abandoned() {
-			return // the rest of the queue is given up
-		}
+	handle := func(o *obs.Observation) {
 		if p.metrics != nil {
 			p.metrics.PublisherShardDepth.WithLabelValues(label).Set(float64(len(ch)))
 		}
 		p.produce(o)
 		p.pending.Add(-1)
+	}
+	for {
+		select {
+		case o := <-ch:
+			if p.abandoned() {
+				return // the rest of the queue is given up
+			}
+			handle(o)
+		case <-p.drain:
+			// No Emit is queueing any more, so what is in the channel is the
+			// whole of what is left: hand it over, without waiting for more.
+			for {
+				select {
+				case o := <-ch:
+					if p.abandoned() {
+						return
+					}
+					handle(o)
+				default:
+					return
+				}
+			}
+		}
 	}
 }
 
