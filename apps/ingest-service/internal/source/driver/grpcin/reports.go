@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -26,6 +27,11 @@ var statusExpired = status.Error(codes.Unauthenticated, "the ingest token has ex
 
 // StreamReports acks each report in order, once the sink has taken it, so
 // HTTP/2 flow control carries the publisher's backpressure to the sender.
+//
+// Known limit: a stream ended by a revocation or an expiry whose sender has
+// stopped reading acks can stay blocked in Send, because grpc's write quota
+// waits on the transport stream, not on the call context. Such a sender
+// keeps its stream slot until it disconnects or the connection stops.
 func (s *service) StreamReports(stream grpc.BidiStreamingServer[ingestv1.StreamReportsRequest, ingestv1.StreamReportsResponse]) error {
 	ctx := stream.Context()
 	a := caller(ctx)
@@ -75,7 +81,10 @@ func (s *service) StreamReports(stream grpc.BidiStreamingServer[ingestv1.StreamR
 	}
 }
 
-// Publish acks a batch of reports, for senders that do not stream.
+// Publish acks a batch of reports, for senders that do not stream. If the
+// call ends partway through (a revocation, an expiry, the run ending), it
+// returns an error with no acks even though earlier reports were already
+// sunk: the sender's retry relies on the runner's repeat suppression.
 func (s *service) Publish(ctx context.Context, req *ingestv1.PublishRequest) (*ingestv1.PublishResponse, error) {
 	if n := len(req.GetReports()); n > s.d.maxPublishBatch {
 		return nil, status.Errorf(codes.InvalidArgument, "a Publish takes at most %d reports, not %d", s.d.maxPublishBatch, n)
@@ -124,23 +133,34 @@ func (s *service) handle(ctx context.Context, a authed, from string, r *ingestv1
 }
 
 func (s *service) observation(ctx context.Context, a authed, from string, r *ingestv1.Report, m *sentinelv1.Observation, ack *ingestv1.Ack) (*ingestv1.Ack, error) {
+	if m == nil {
+		return s.deadLetter(ack, from, r, "empty_report", errors.New("the report's observation is empty")), nil
+	}
+	// The level the runner will stamp: the feed's, or the report's when it is
+	// higher. A token may not send above its ceiling. This is decided before
+	// Validate, so a report above the token never reaches a dead letter.
+	declared := declaredLevel(m)
+	level := max(classification.Rank(s.d.floor), classification.Rank(declared))
+	if level > classification.Rank(a.tok.Classification) {
+		return s.reject(ack, "above_ceiling"), nil
+	}
 	o, err := sentinelobs.Validate(m, contentType, "")
 	if err != nil {
 		reason := decoder.RejectReason(err)
 		if reason == "" {
 			reason = "bad_message"
 		}
+		// Dead letters and their cause texts (which can carry the position)
+		// are visible at the connection's level only: a report marked above
+		// it is refused, not stored.
+		if classification.Rank(declared) > classification.Rank(s.d.floor) {
+			return s.reject(ack, reason), nil
+		}
 		return s.deadLetter(ack, from, r, reason, err), nil
-	}
-	// The level the runner will stamp: the feed's, or the report's when it is
-	// higher. A token may not send above its ceiling.
-	level := max(classification.Rank(s.d.floor), classification.Rank(o.Classification))
-	if level > classification.Rank(a.tok.Classification) {
-		return s.reject(ack, "above_ceiling"), nil
 	}
 	o.Decoder = Decoder
 	if o.SensorID == "" {
-		o.SensorID = from
+		o.SensorID = transport.SenderIP(from)
 	}
 	o.ReceivedAt = time.Now().UTC()
 	if raw, err := proto.Marshal(m); err == nil {
@@ -153,6 +173,12 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 	s.sink.Succeeded(1)
 	ack.Status = ingestv1.AckStatus_ACK_STATUS_OK
 	return ack, nil
+}
+
+// declaredLevel is the level a report marks itself with, as wire maps it:
+// unspecified or unknown is UNCLASSIFIED.
+func declaredLevel(m *sentinelv1.Observation) string {
+	return classification.Normalize(strings.TrimPrefix(m.GetClassification().String(), "CLASSIFICATION_"))
 }
 
 func (s *service) reject(ack *ingestv1.Ack, reason string) *ingestv1.Ack {

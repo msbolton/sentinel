@@ -3,7 +3,6 @@ package grpcin
 import (
 	"context"
 	"errors"
-	"io"
 	"math"
 	"testing"
 	"time"
@@ -72,7 +71,7 @@ func TestStreamAcksEachReport(t *testing.T) {
 		t.Fatalf("emitted %d observations, want 2", len(emitted))
 	}
 	o := emitted[0]
-	if o.Decoder != Decoder || o.SourceEntityID != "EMITTER-0001" || o.SensorID == "" || len(o.Raw) == 0 || o.RawContentType != "application/x-protobuf" || o.ReceivedAt.IsZero() {
+	if o.Decoder != Decoder || o.SourceEntityID != "EMITTER-0001" || o.SensorID != "127.0.0.1" || len(o.Raw) == 0 || o.RawContentType != "application/x-protobuf" || o.ReceivedAt.IsZero() {
 		t.Errorf("observation = %+v", o)
 	}
 	letters := r.sink.deadLetters()
@@ -113,6 +112,63 @@ func TestAFeedAboveTheTokenRejectsEverything(t *testing.T) {
 	}
 }
 
+// A report marked above the connection's level never reaches a dead letter,
+// whose raw bytes and cause text (the position) an operator at the connection's
+// level could read.
+func TestAboveTheConnectionIsRefusedNotDeadLettered(t *testing.T) {
+	f := tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1", Classification: "SECRET"})
+	r := start(t, nil, nil, f, nil, nil) // an UNCLASSIFIED connection
+	st := openStream(t, r, secretA)
+	noID := &ingestv1.Report{ClientRef: "s1", Body: &ingestv1.Report_Observation{Observation: &sentinelv1.Observation{
+		Classification: sentinelv1.Classification_CLASSIFICATION_SECRET,
+	}}}
+	if ack := send(t, st, noID); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_REJECTED || ack.GetReason() != "missing_identity" {
+		t.Errorf("a SECRET report with no identity: %v", ack)
+	}
+	far := observation("s2", 95, 0)
+	far.GetObservation().Classification = sentinelv1.Classification_CLASSIFICATION_SECRET
+	if ack := send(t, st, far); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_REJECTED || ack.GetReason() != "bad_position" {
+		t.Errorf("a SECRET report with a bad position: %v", ack)
+	}
+	if n := len(r.sink.deadLetters()); n != 0 {
+		t.Errorf("dead letters = %d, want 0", n)
+	}
+	h := r.d.Health().Detail
+	rej := h["reportsRejected"].(map[string]int64)
+	if h["deadLettered"] != int64(0) || rej["missing_identity"] != 1 || rej["bad_position"] != 1 {
+		t.Errorf("health = dead %v rejected %v", h["deadLettered"], rej)
+	}
+}
+
+// The token's ceiling is checked before Validate, so a bad report above it is
+// refused for that.
+func TestAboveTheTokenIsRefusedBeforeValidation(t *testing.T) {
+	f := tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1", Classification: "SECRET"})
+	r := start(t, nil, nil, f, nil, nil)
+	st := openStream(t, r, secretA)
+	bad := &ingestv1.Report{ClientRef: "ts", Body: &ingestv1.Report_Observation{Observation: &sentinelv1.Observation{
+		Classification: sentinelv1.Classification_CLASSIFICATION_TOP_SECRET,
+	}}}
+	if ack := send(t, st, bad); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_REJECTED || ack.GetReason() != "above_ceiling" {
+		t.Errorf("a TOP_SECRET bad report on a SECRET token: %v", ack)
+	}
+	if n := len(r.sink.deadLetters()); n != 0 {
+		t.Errorf("dead letters = %d, want 0", n)
+	}
+}
+
+// A nil observation (only reachable in-process; on the wire an empty message
+// decodes to a non-nil one) is an empty report, not a panic.
+func TestNilObservationIsEmpty(t *testing.T) {
+	r := start(t, nil, nil, tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1"}), nil, nil)
+	s := newService(r.d, r.sink, context.Background())
+	rep := &ingestv1.Report{ClientRef: "n"}
+	ack, err := s.observation(context.Background(), authed{}, "127.0.0.1:9", rep, nil, &ingestv1.Ack{ClientRef: "n"})
+	if err != nil || ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_DEAD_LETTERED || ack.GetReason() != "empty_report" {
+		t.Errorf("ack = %v, err = %v", ack, err)
+	}
+}
+
 func TestRateLimits(t *testing.T) {
 	f := tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1"})
 	r := start(t, map[string]any{"maxMessagesPerSec": 1}, nil, f, nil, nil)
@@ -150,7 +206,7 @@ func TestPublish(t *testing.T) {
 	}
 }
 
-// An ack waits for the sink: a saturated publisher slows the sender.
+// The ack is withheld until the sink has taken the report.
 func TestAckWaitsForTheSink(t *testing.T) {
 	f := tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1"})
 	sink := &memSink{block: make(chan struct{})}
@@ -200,27 +256,48 @@ func TestRevokeEndsOnlyThatTokensStreams(t *testing.T) {
 	}
 }
 
+// expireSoon gives the token an expiry about a second after the rig is up and
+// dialled, so a slow start under -race cannot eat the window.
+func expireSoon(f *fakeTokens, tok ingesttoken.Token) time.Time {
+	soon := time.Now().Add(time.Second)
+	tok.ExpiresAt = &soon
+	f.add(secretA, tok)
+	return soon
+}
+
+// Expiry reaches a handler blocked inside the sink.
 func TestExpiredTokenEndsTheStream(t *testing.T) {
-	soon := time.Now().Add(300 * time.Millisecond)
-	f := tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1", ExpiresAt: &soon})
-	r := start(t, nil, nil, f, nil, nil)
+	tok := ingesttoken.Token{ID: "t1", FeedID: "grpc-1"}
+	f := tokensWith(secretA, tok)
+	sink := &memSink{block: make(chan struct{})} // never released
+	r := start(t, nil, nil, f, nil, sink)
+	soon := expireSoon(f, tok)
 	st := openStream(t, r, secretA)
-	send(t, st, observation("a", 1, 1))
-	time.Sleep(time.Until(soon) + 50*time.Millisecond)
-	if err := st.Send(&ingestv1.StreamReportsRequest{Report: observation("b", 1, 1)}); err != nil && err != io.EOF {
+	if err := st.Send(&ingestv1.StreamReportsRequest{Report: observation("a", 1, 1)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Recv(); status.Code(err) != codes.Unauthenticated {
-		t.Fatalf("after expiry the stream ended with %v, want Unauthenticated", err)
+	got := make(chan error, 1)
+	go func() { _, err := st.Recv(); got <- err }()
+	select {
+	case err := <-got:
+		if status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("expiry inside the sink ended the stream with %v, want Unauthenticated", err)
+		}
+		if time.Now().Before(soon) {
+			t.Errorf("the stream ended before the token expired")
+		}
+	case <-time.After(time.Until(soon) + 2*time.Second):
+		t.Fatal("a handler blocked in the sink outlived its token's expiry")
 	}
 }
 
 // An idle stream ends at the token's expiry: the token cache announces
 // revocations but not expiries, so the call carries the deadline itself.
 func TestExpiryEndsAnIdleStream(t *testing.T) {
-	soon := time.Now().Add(300 * time.Millisecond)
-	f := tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1", ExpiresAt: &soon})
+	tok := ingesttoken.Token{ID: "t1", FeedID: "grpc-1"}
+	f := tokensWith(secretA, tok)
 	r := start(t, nil, nil, f, nil, nil)
+	soon := expireSoon(f, tok)
 	st := openStream(t, r, secretA)
 	got := make(chan error, 1)
 	go func() { _, err := st.Recv(); got <- err }()
@@ -229,7 +306,7 @@ func TestExpiryEndsAnIdleStream(t *testing.T) {
 		if status.Code(err) != codes.Unauthenticated {
 			t.Fatalf("an idle stream at expiry ended with %v, want Unauthenticated", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(time.Until(soon) + 2*time.Second):
 		t.Fatal("an idle stream outlived its token's expiry")
 	}
 }
@@ -284,8 +361,10 @@ func TestStopEndsStreamsWithUnavailable(t *testing.T) {
 	if err := r.stop(t); err != nil {
 		t.Fatalf("Run = %v, want nil", err)
 	}
-	if took := time.Since(began); took > stopGrace+1500*time.Millisecond {
-		t.Errorf("stop took %v", took)
+	// The handler returns on the move at once; only a forced Stop at
+	// stopGrace would take seconds.
+	if took := time.Since(began); took >= time.Second {
+		t.Errorf("stop took %v, want a clean stop well under a second", took)
 	}
 	if _, err := st.Recv(); status.Code(err) != codes.Unavailable {
 		t.Fatalf("an open stream ended with %v, want Unavailable", err)
