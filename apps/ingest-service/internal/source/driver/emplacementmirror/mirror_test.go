@@ -132,7 +132,7 @@ func TestDefinitionTurnsRepeatSuppressionOff(t *testing.T) {
 }
 
 func TestSourceFor(t *testing.T) {
-	for in, want := range map[string]string{"RADAR": "RADAR", "AIS_RECEIVER": "AIS", "ADSB_RECEIVER": "ADS_B", "HUMAN": "HUMINT", "EO_IR": "MASINT", "RF": "MASINT", "ACOUSTIC": "MASINT", "OTHER": "MASINT"} {
+	for in, want := range map[string]string{"RADAR": "RADAR", "AIS_RECEIVER": "AIS", "ADSB_RECEIVER": "ADS_B", "HUMAN": "HUMINT", "EO_IR": "MASINT", "RF": "SIGINT", "ACOUSTIC": "MASINT", "OTHER": "MASINT"} {
 		if got := SourceFor(in); got != want {
 			t.Errorf("SourceFor(%s) = %s, want %s", in, got, want)
 		}

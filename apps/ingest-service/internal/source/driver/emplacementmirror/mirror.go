@@ -203,6 +203,8 @@ func SourceFor(sensorType string) string {
 		return "ADS_B"
 	case "HUMAN":
 		return "HUMINT"
+	case "RF":
+		return "SIGINT"
 	}
 	return "MASINT"
 }

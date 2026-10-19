@@ -88,6 +88,7 @@ The sensor type picks the source label:
 | `AIS_RECEIVER` | `AIS` |
 | `ADSB_RECEIVER` | `ADS_B` |
 | `HUMAN` | `HUMINT` |
+| `RF` | `SIGINT` |
 | anything else | `MASINT` |
 
 **Age-out.** `db/schema/72_emplacements.sql` seeds a stale and age-out row for each of these sources on the `emplacements` feed: an entity goes stale after 3 minutes without a report and ages out after 10, which is three and ten missed heartbeats at the default for a fixed emplacement. The thresholds make no exception for mobility: because a mobile emplacement is reported only at start and on change, its SENSOR entity goes stale after 3 minutes and ages out after 10 unless it is edited, until its own position reports over gRPC arrive (sub-project 2). **Deactivating or deleting** an emplacement stops its reports, so its entity goes stale and then ages out on that schedule; it does not disappear at once. Editing it again, or setting it active, reports it at once.

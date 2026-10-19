@@ -50,13 +50,15 @@ CREATE INDEX IF NOT EXISTS idx_emplacements_feed
 
 -- The built-in emplacements feed reports fixed emplacements every 60 s, so
 -- their entities go stale after three missed heartbeats and age out after
--- ten. One row per source the mirror writes (sensor type -> EntitySource);
--- the age-out service matches feed and source together.
+-- ten. One row per source the mirror writes (sensor type -> EntitySource:
+-- RADAR, AIS, ADS_B, HUMINT, SIGINT and MASINT); the age-out service matches
+-- feed and source together.
 INSERT INTO sentinel.feed_ageout_config ("feedId", "sourceType", "staleThresholdMs", "ageoutThresholdMs")
 VALUES
   ('emplacements', 'RADAR', 180000, 600000),
   ('emplacements', 'AIS', 180000, 600000),
   ('emplacements', 'ADS_B', 180000, 600000),
   ('emplacements', 'HUMINT', 180000, 600000),
+  ('emplacements', 'SIGINT', 180000, 600000),
   ('emplacements', 'MASINT', 180000, 600000)
 ON CONFLICT ("feedId", "sourceType") WHERE "feedId" IS NOT NULL AND "sourceType" IS NOT NULL DO NOTHING;
