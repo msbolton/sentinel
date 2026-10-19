@@ -303,14 +303,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // Emplacements, their coverage and the form's unsaved preview, on the
     // built-in emplacements feed's layer.
     effect(() => {
-      const list = this.emplacements.emplacements();
-      const selectedId = this.emplacements.selectedId();
-      const draft = this.emplacements.draft();
-      const coverage = this.emplacements.showCoverage();
-      const visible = this.layerVisibility.isVisible(EMPLACEMENTS_LAYER);
-      this.ngZone.runOutsideAngular(() =>
-        untracked(() => this.emplacementLayer?.sync(visible ? list : [], selectedId, visible ? draft : null, coverage, (id) => this.emplacementPosition(id))),
-      );
+      // Read the signals here so the effect re-runs on each; the method re-reads them untracked.
+      this.emplacements.emplacements();
+      this.emplacements.selectedId();
+      this.emplacements.draft();
+      this.emplacements.showCoverage();
+      this.layerVisibility.isVisible(EMPLACEMENTS_LAYER);
+      untracked(() => this.resyncEmplacements());
     });
     // Emplacements change rarely; refresh them every 30 s while their layer is shown.
     this.subscriptions.add(
@@ -433,7 +432,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.emplacementLayer = new EmplacementLayer(this.viewer, Cesium);
       this.drawTool = new GeofenceDrawTool(this.viewer, Cesium);
       this.geofenceLayer.sync(this.geofences.zones(), this.geofences.selectedId(), (id) => this.geofenceAnchorPosition(id));
-      this.emplacementLayer.sync(this.emplacements.emplacements(), this.emplacements.selectedId(), this.emplacements.draft(), this.emplacements.showCoverage(), (id) => this.emplacementPosition(id));
+      this.resyncEmplacements();
 
       // Set dark atmosphere
       this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
@@ -1395,6 +1394,18 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       }
     }
     return null;
+  }
+
+  /** Redraw the emplacement layer from the service's state, drawing nothing while its layer is hidden. */
+  private resyncEmplacements(): void {
+    const list = this.emplacements.emplacements();
+    const selectedId = this.emplacements.selectedId();
+    const draft = this.emplacements.draft();
+    const coverage = this.emplacements.showCoverage();
+    const visible = this.layerVisibility.isVisible(EMPLACEMENTS_LAYER);
+    this.ngZone.runOutsideAngular(() =>
+      this.emplacementLayer?.sync(visible ? list : [], selectedId, visible ? draft : null, coverage, (id) => this.emplacementPosition(id)),
+    );
   }
 
   /** Redraw the geofence layer from the service's current state. */
