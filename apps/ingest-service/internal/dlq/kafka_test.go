@@ -311,3 +311,37 @@ func TestKafkaSourceAcceptsItsConfiguration(t *testing.T) {
 		t.Errorf("close: %v", err)
 	}
 }
+
+// librdkafka reports errors as events. Those that retrying cannot cure fail the
+// read when they arrive; the others are kept for the deadline and do not fail a
+// read that is making progress.
+func TestKafkaSourceTellsErrorsThatWillNotPassFromThoseThatWill(t *testing.T) {
+	for _, tc := range []struct {
+		code      kafka.ErrorCode
+		fatal     bool
+		wantFails bool
+	}{
+		{kafka.ErrTopicAuthorizationFailed, false, true},
+		{kafka.ErrGroupAuthorizationFailed, false, true},
+		{kafka.ErrUnknownTopicOrPart, false, true},
+		{kafka.ErrUnknownTopic, false, true},
+		{kafka.ErrUnknownPartition, false, true},
+		{kafka.ErrAllBrokersDown, true, true}, // fatal, whatever the code
+		{kafka.ErrAllBrokersDown, false, false},
+		{kafka.ErrTransport, false, false},
+		{kafka.ErrTimedOut, false, false},
+	} {
+		s := &kafkaSource{}
+		e := kafka.NewError(tc.code, "text", tc.fatal)
+		err := s.noteError(e)
+		if (err != nil) != tc.wantFails {
+			t.Errorf("%v (fatal %v): error %v, want failure %v", tc.code, tc.fatal, err, tc.wantFails)
+		}
+		if !tc.wantFails && (s.LastError() == nil || !errors.Is(s.LastError(), e)) {
+			t.Errorf("%v: LastError() = %v, want the error kept", tc.code, s.LastError())
+		}
+		if tc.wantFails && s.LastError() != nil {
+			t.Errorf("%v: kept as a last error as well as failing", tc.code)
+		}
+	}
+}

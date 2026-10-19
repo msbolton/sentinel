@@ -70,6 +70,10 @@ type source interface {
 	// Next waits up to wait for the next message, or for news that a partition
 	// has been read to its end. ok is false if neither came in that time.
 	Next(wait time.Duration) (ev event, ok bool, err error)
+	// LastError is the last error the consumer reported and recovers from by
+	// itself since the last Assign (a broker went away, say), or nil. Errors
+	// that will not pass fail Next instead.
+	LastError() error
 	// Close releases the consumer.
 	Close() error
 }
@@ -87,7 +91,7 @@ type bounds struct {
 type event struct {
 	partition int32
 	offset    int64
-	at        time.Time // when Kafka recorded the message
+	at        time.Time // when Kafka recorded the message (received-at, if the headers have it, is used instead)
 	key       string
 	value     []byte
 	headers   []header
@@ -101,7 +105,16 @@ type header struct {
 
 // span is what is left to read of one partition: from next, up to but not
 // including end, which is where the partition ended when the scan began.
-type span struct{ next, end int64 }
+type span struct {
+	next, end int64
+	// started is set by the first message of the range. Until then only the
+	// offset asked for is taken (or the first offset the partition still holds,
+	// low, if retention removed the start meanwhile), so that a message left
+	// over from an earlier assignment is not taken for the range's first.
+	started  bool
+	low      int64
+	lowKnown bool
+}
 
 // scan reads the last maxScan messages of every partition of the topic and
 // returns the limit newest of those whose key is feedID. Both the read and the
@@ -148,6 +161,12 @@ func scan(ctx context.Context, src source, maxScan int64, feedID string, limit i
 	for len(reading) > 0 {
 		if err := ctx.Err(); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
+				// Nothing read and an error the consumer was waiting out (the account
+				// may describe the topic but not read it, say) is a failure, not a
+				// topic with nothing in it.
+				if lerr := src.LastError(); scanned == 0 && lerr != nil {
+					return nil, 0, false, fmt.Errorf("reading the dead-letter topic: %w", lerr)
+				}
 				return lettersOf(best), scanned, true, nil
 			}
 			return nil, 0, false, err
@@ -163,11 +182,31 @@ func scan(ctx context.Context, src source, maxScan int64, feedID string, limit i
 		switch {
 		case !wanted: // finished already, or never asked for
 		case ev.eof:
-			delete(reading, ev.partition)
+			// The end of the partition ends the range only once the range is read to
+			// within its last offset, which a marker can take. Earlier it is left
+			// over from an earlier assignment.
+			if sp.next >= sp.end-1 {
+				delete(reading, ev.partition)
+			}
 		case ev.offset < sp.next: // before the range, or delivered twice
 		case ev.offset >= sp.end: // produced after the scan began: the range is done
-			delete(reading, ev.partition)
+			if sp.started {
+				delete(reading, ev.partition)
+			}
 		default:
+			if !sp.started && ev.offset != sp.next {
+				if !sp.lowKnown {
+					low, err := lowOf(ctx, src, ev.partition)
+					if err != nil {
+						return nil, 0, false, fmt.Errorf("reading the partitions of the dead-letter topic: %w", err)
+					}
+					sp.low, sp.lowKnown = low, true
+				}
+				if ev.offset != sp.low {
+					continue // left over from an earlier assignment
+				}
+			}
+			sp.started = true
 			sp.next = ev.offset + 1
 			scanned++
 			if ev.key == feedID {
@@ -181,6 +220,20 @@ func scan(ctx context.Context, src source, maxScan int64, feedID string, limit i
 	return lettersOf(best), scanned, false, nil
 }
 
+// lowOf asks again for the first offset a partition holds.
+func lowOf(ctx context.Context, src source, partition int32) (int64, error) {
+	parts, err := src.Bounds(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, b := range parts {
+		if b.partition == partition {
+			return b.low, nil
+		}
+	}
+	return -1, nil
+}
+
 // pollFor is how long to wait for the next message: a poll interval, or what
 // is left of the time if that is less.
 func pollFor(ctx context.Context) time.Duration {
@@ -191,15 +244,25 @@ func pollFor(ctx context.Context) time.Duration {
 	return max(wait, time.Millisecond)
 }
 
-// stamp is where a message stands in time: when Kafka recorded it, then where
-// it sits in its partition.
+// eventTime is when the dead letter arrived: the received-at header the
+// publisher wrote, else the time Kafka recorded the message. It is the time
+// a Letter shows and the one letters are ordered by.
+func eventTime(ev event) time.Time {
+	if at, err := time.Parse(time.RFC3339Nano, headerText(ev.headers, "received-at")); err == nil {
+		return at.UTC()
+	}
+	return ev.at.UTC()
+}
+
+// stamp is where a message stands in time: when it arrived (eventTime), then
+// where it sits in its partition.
 type stamp struct {
 	at        time.Time
 	partition int32
 	offset    int64
 }
 
-// newer reports whether s is more recent than o: it was recorded later or, at
+// newer reports whether s is more recent than o: it arrived later or, at
 // the same time, sits at a higher partition and then a higher offset. The
 // partition and the offset only make the order the same on every read; within a
 // partition a higher offset is the later message.
@@ -225,7 +288,7 @@ type entry struct {
 // among them is not turned into a letter, so what a read holds is bounded by
 // limit however many messages it covers.
 func keep(best []entry, ev event, limit int) []entry {
-	st := stamp{at: ev.at, partition: ev.partition, offset: ev.offset}
+	st := stamp{at: eventTime(ev), partition: ev.partition, offset: ev.offset}
 	if len(best) == limit && !st.newer(best[limit-1].stamp) {
 		return best
 	}
@@ -252,7 +315,7 @@ func lettersOf(best []entry) []Letter {
 func letterOf(ev event) Letter {
 	payload, truncated := cutPayload(ev.value)
 	l := Letter{
-		At:      ev.at.UTC(),
+		At:      eventTime(ev),
 		Reason:  headerText(ev.headers, "reason"),
 		Error:   headerText(ev.headers, commonkafka.HeaderError),
 		Driver:  headerText(ev.headers, "driver"),
@@ -260,9 +323,6 @@ func letterOf(ev event) Letter {
 		Sender:  headerText(ev.headers, "sender"),
 		Size:    len(ev.value), Payload: payload, PayloadTruncated: truncated,
 		Partition: ev.partition, Offset: ev.offset,
-	}
-	if at, err := time.Parse(time.RFC3339Nano, headerText(ev.headers, "received-at")); err == nil {
-		l.At = at.UTC()
 	}
 	return l
 }

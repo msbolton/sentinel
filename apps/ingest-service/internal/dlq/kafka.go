@@ -97,6 +97,9 @@ func (r *KafkaReader) Close() {
 type kafkaSource struct {
 	c     *kafka.Consumer
 	topic string
+	// lastErr is the last non-fatal error librdkafka reported since the last
+	// Assign. Read only by the goroutine that holds the reader's slot.
+	lastErr error
 }
 
 func newKafkaSource(brokers, topic string) (*kafkaSource, error) {
@@ -148,6 +151,7 @@ func (s *kafkaSource) Bounds(ctx context.Context) ([]bounds, error) {
 }
 
 func (s *kafkaSource) Assign(from map[int32]int64) error {
+	s.lastErr = nil
 	parts := make([]kafka.TopicPartition, 0, len(from))
 	for id, offset := range from {
 		parts = append(parts, kafka.TopicPartition{Topic: &s.topic, Partition: id, Offset: kafka.Offset(offset)})
@@ -157,10 +161,11 @@ func (s *kafkaSource) Assign(from map[int32]int64) error {
 
 func (s *kafkaSource) Unassign() error { return s.c.Unassign() }
 
-// Next polls once. A message that carries an error, and a fatal client error,
-// fail the scan; the other errors librdkafka reports (a broker went away, say)
-// are noise it recovers from by itself, and the deadline covers the case where
-// it does not.
+// Next polls once. A message that carries an error, a fatal client error and a
+// permanent one (see permanent) fail the scan at once. Any other error
+// librdkafka reports (a broker went away, say) is one it recovers from by
+// itself, so it does not fail a read that is making progress; it is kept for
+// LastError, which the scan returns if the deadline comes with nothing read.
 func (s *kafkaSource) Next(wait time.Duration) (event, bool, error) {
 	switch e := s.c.Poll(int(wait / time.Millisecond)).(type) {
 	case *kafka.Message:
@@ -171,11 +176,34 @@ func (s *kafkaSource) Next(wait time.Duration) (event, bool, error) {
 	case kafka.PartitionEOF:
 		return event{partition: e.Partition, eof: true}, true, nil
 	case kafka.Error:
-		if e.IsFatal() {
-			return event{}, false, e
-		}
+		return event{}, false, s.noteError(e)
 	}
 	return event{}, false, nil
+}
+
+// noteError decides what a kafka.Error event means: nil for an error to wait
+// out, which it remembers, and the error itself for one that will not pass.
+func (s *kafkaSource) noteError(e kafka.Error) error {
+	if e.IsFatal() || permanent(e.Code()) {
+		return e
+	}
+	s.lastErr = e
+	return nil
+}
+
+// LastError implements source.
+func (s *kafkaSource) LastError() error { return s.lastErr }
+
+// permanent reports the error codes that retrying cannot cure: the account may
+// not read the topic or use the group, or there is no such topic or partition.
+// Waiting these out only makes every request wait out its deadline.
+func permanent(code kafka.ErrorCode) bool {
+	switch code {
+	case kafka.ErrTopicAuthorizationFailed, kafka.ErrGroupAuthorizationFailed,
+		kafka.ErrUnknownTopicOrPart, kafka.ErrUnknownTopic, kafka.ErrUnknownPartition:
+		return true
+	}
+	return false
 }
 
 func (s *kafkaSource) Close() error { return s.c.Close() }

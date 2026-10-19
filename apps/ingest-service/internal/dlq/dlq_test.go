@@ -65,6 +65,12 @@ type fakeSource struct {
 	lose map[int32]map[int64]bool
 
 	boundsErr, assignErr, nextErr error
+	// lastErr is what LastError reports: an error the consumer waits out.
+	lastErr error
+	// lowNow maps a partition to the first offset it holds after retention
+	// removed the start of what the scan asked for: the second look at the
+	// bounds shows it, and the consumer resets to it.
+	lowNow map[int32]int64
 
 	// what the scan did
 	assigned                               map[int32]int64
@@ -80,7 +86,11 @@ func (s *fakeSource) Bounds(context.Context) ([]bounds, error) {
 	}
 	var out []bounds
 	for id, p := range s.parts {
-		out = append(out, bounds{partition: id, low: p.low, high: p.high()})
+		low := p.low
+		if now, ok := s.lowNow[id]; ok && s.boundsCalls > 1 {
+			low = now
+		}
+		out = append(out, bounds{partition: id, low: low, high: p.high()})
 	}
 	return out, nil
 }
@@ -105,7 +115,7 @@ func (s *fakeSource) Assign(from map[int32]int64) error {
 		if off, ok := s.stall[id]; ok && off < end {
 			end, stalled = off, true
 		}
-		for off := from[id]; off < end; off++ {
+		for off := max(from[id], s.lowNow[id]); off < end; off++ {
 			if s.lose[id][off] {
 				continue
 			}
@@ -162,6 +172,8 @@ func (s *fakeSource) Next(wait time.Duration) (event, bool, error) {
 	s.queue = s.queue[1:]
 	return ev, true, nil
 }
+
+func (s *fakeSource) LastError() error { return s.lastErr }
 
 func (s *fakeSource) Close() error { s.closed++; return nil }
 
@@ -575,4 +587,141 @@ func TestRecentReportsFailuresOfTheTopic(t *testing.T) {
 			t.Errorf("released %d times after a failed read, want once", src.unassigns)
 		}
 	})
+}
+
+// An error the consumer only reports while it fetches, such as the account being
+// allowed to describe the topic but not to read it, shows as nothing arriving.
+// When the deadline comes with nothing read, that error is the answer, not an
+// empty list marked partial.
+func TestRecentReturnsTheErrorTheConsumerWaitedOut(t *testing.T) {
+	denied := errors.New("Broker: Topic authorization failed")
+	src := &fakeSource{
+		parts: map[int32]fakePartition{0: partitionOf(msg("feed-a", at(1), "a"), msg("feed-a", at(2), "b"))},
+		stall: map[int32]int64{0: 0}, lastErr: denied,
+	}
+	letters, scanned, partial, err := within(200*time.Millisecond, src, 2000, "feed-a", 20)
+	if !errors.Is(err, denied) || letters != nil || scanned != 0 || partial {
+		t.Errorf("got %v, %d, %v, %v; want the error", letters, scanned, partial, err)
+	}
+	if src.unassigns != 1 {
+		t.Errorf("released %d times, want once", src.unassigns)
+	}
+}
+
+// A transient error does not fail a read that is making progress: it succeeds
+// when the messages come, and at the deadline with some read it is partial, not
+// an error.
+func TestRecentIgnoresATransientErrorWhileItReads(t *testing.T) {
+	blip := errors.New("Local: Broker transport failure")
+	whole := &fakeSource{
+		parts:   map[int32]fakePartition{0: partitionOf(msg("feed-a", at(1), "a"), msg("feed-a", at(2), "b"))},
+		lastErr: blip, eof: true,
+	}
+	letters, scanned, partial, err := within(5*time.Second, whole, 2000, "feed-a", 20)
+	if err != nil || partial || len(letters) != 2 || scanned != 2 {
+		t.Errorf("a read with a transient error: %v, %d, %v, %v", refs(letters), scanned, partial, err)
+	}
+
+	cut := &fakeSource{
+		parts: map[int32]fakePartition{0: partitionOf(msg("feed-a", at(1), "a"), msg("feed-a", at(2), "b"), msg("feed-a", at(3), "c"))},
+		stall: map[int32]int64{0: 2}, lastErr: blip,
+	}
+	letters, scanned, partial, err = within(250*time.Millisecond, cut, 2000, "feed-a", 20)
+	if err != nil || !partial || len(letters) != 2 || scanned != 2 {
+		t.Errorf("a read cut short with a transient error: %v, %d, %v, %v; want partial, no error", refs(letters), scanned, partial, err)
+	}
+}
+
+// An error that will not pass fails the read when it comes, not at the deadline.
+func TestRecentFailsAtOnceOnAnErrorThatWillNotPass(t *testing.T) {
+	denied := errors.New("Broker: Topic authorization failed")
+	src := &fakeSource{parts: map[int32]fakePartition{0: partitionOf(msg("feed-a", at(1), "a"))}, nextErr: denied}
+	start := time.Now()
+	_, _, partial, err := within(5*time.Second, src, 2000, "feed-a", 20)
+	if !errors.Is(err, denied) || partial {
+		t.Errorf("err = %v, partial %v", err, partial)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("took %v: it waited for the deadline", took)
+	}
+}
+
+// What an earlier assignment left in the consumer can arrive first. Until the
+// range's first message has come, only the offset asked for is taken, and an
+// end of the partition counts only once the range is read to within its last
+// offset.
+func TestRecentIgnoresWhatAnEarlierAssignmentLeft(t *testing.T) {
+	var msgs []fakeMsg
+	for i := 0; i < 6; i++ {
+		msgs = append(msgs, msg("feed-a", at(i), "x"))
+	}
+	want := []string{"p0@5", "p0@4", "p0@3", "p0@2"} // maxScan 4 asks for offsets 2..5
+
+	t.Run("a message inside the range but not its first", func(t *testing.T) {
+		src := &fakeSource{
+			parts:  map[int32]fakePartition{0: partitionOf(msgs...)},
+			eof:    true,
+			strays: []event{toEvent(0, 4, msg("feed-a", at(100), "stale")), toEvent(0, 5, msg("feed-a", at(101), "stale"))},
+		}
+		letters, scanned, partial, err := within(5*time.Second, src, 4, "feed-a", 20)
+		if err != nil || partial || !equal(refs(letters), want) || scanned != 4 {
+			t.Errorf("letters = %v, scanned %d, partial %v, %v; want %v and 4", refs(letters), scanned, partial, err, want)
+		}
+		for _, l := range letters {
+			if string(l.Payload) == "stale" {
+				t.Errorf("a stale message was taken: %+v", l)
+			}
+		}
+	})
+
+	t.Run("an end of the partition before the range is read", func(t *testing.T) {
+		src := &fakeSource{
+			parts:  map[int32]fakePartition{0: partitionOf(msgs...)},
+			eof:    true,
+			strays: []event{{partition: 0, eof: true}},
+		}
+		letters, scanned, partial, err := within(5*time.Second, src, 4, "feed-a", 20)
+		if err != nil || partial || !equal(refs(letters), want) || scanned != 4 {
+			t.Errorf("letters = %v, scanned %d, partial %v, %v; want %v and 4", refs(letters), scanned, partial, err, want)
+		}
+	})
+
+	// Retention removed offsets 2 and 3 after the scan asked: the consumer
+	// resets to what is left, so the first message is the new low, not 2.
+	t.Run("retention moved the start", func(t *testing.T) {
+		src := &fakeSource{
+			parts:  map[int32]fakePartition{0: partitionOf(msgs...)},
+			eof:    true,
+			lowNow: map[int32]int64{0: 4},
+			strays: []event{toEvent(0, 3, msg("feed-a", at(100), "stale"))},
+		}
+		letters, scanned, partial, err := within(5*time.Second, src, 4, "feed-a", 20)
+		if want := []string{"p0@5", "p0@4"}; err != nil || partial || !equal(refs(letters), want) || scanned != 2 {
+			t.Errorf("letters = %v, scanned %d, partial %v, %v; want %v and 2", refs(letters), scanned, partial, err, want)
+		}
+	})
+}
+
+// Letters are ordered by the time they show: when the frame arrived, and when
+// Kafka recorded the message if the header says nothing.
+func TestRecentOrdersByTheTimeItShows(t *testing.T) {
+	first := msg("feed-a", at(5), "a") // arrived at 9, recorded at 5
+	first.headers["received-at"] = at(9).Format(time.RFC3339Nano)
+	second := msg("feed-a", at(6), "b") // arrived at 2, recorded at 6: newest by Kafka's clock only
+	second.headers["received-at"] = at(2).Format(time.RFC3339Nano)
+	third := msg("feed-a", at(7), "c") // no header: recorded at 7
+	delete(third.headers, "received-at")
+	src := &fakeSource{parts: map[int32]fakePartition{0: partitionOf(first, second, third)}, eof: true}
+	letters, _, _, err := within(5*time.Second, src, 2000, "feed-a", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"p0@0", "p0@2"}; !equal(refs(letters), want) {
+		t.Fatalf("letters = %v, want %v: newest by what they show", refs(letters), want)
+	}
+	for i := 1; i < len(letters); i++ {
+		if letters[i].At.After(letters[i-1].At) {
+			t.Errorf("letter %d (%v) is newer than the one before it (%v)", i, letters[i].At, letters[i-1].At)
+		}
+	}
 }
