@@ -175,7 +175,7 @@ ingestService:
     # A mountPath outside /etc/sentinel needs INGEST_SECRET_FILE_DIRS set (ingestService.env) to name it.
     mountPath: /etc/sentinel/secrets
   # A Secret whose keys become environment variables of the ingest and listener
-  # pods, for secretRefs to name as env:KEY (env above takes plain values only).
+  # pods, for secretRefs to name as env:SENTINEL_SECRET_... (env above takes plain values only).
   # Every key of it reaches both pods, through envFrom, and can set any
   # configuration the chart leaves unset (LEASE_ENABLED or
   # FEEDS_BOOTSTRAP_ENABLED, for example). So the keys should be secret

@@ -78,7 +78,9 @@ ON CONFLICT DO NOTHING;
 
 -- Read-only role for GeoServer. The development password is set here;
 -- production changes it with ALTER ROLE and passes GIS_DB_PASSWORD to the
--- provisioning job.
+-- provisioning job. Under Helm, initdb creates the role first, without a
+-- password (the IF NOT EXISTS below then leaves it alone), so it cannot log in
+-- until ALTER ROLE sentinel_gis PASSWORD sets one.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sentinel_gis') THEN

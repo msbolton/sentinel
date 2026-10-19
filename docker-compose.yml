@@ -731,7 +731,8 @@ services:
     restart: unless-stopped
     # Compose kills a container 10 s after the stop signal by default, before the
     # process has stopped its feeds, released their leases and drained the publisher.
-    # Give it SHUTDOWN_TIMEOUT_SEC (25, below) plus the HTTP server's own 5 s.
+    # Give it SHUTDOWN_TIMEOUT_SEC (25, below) plus the HTTP server's own 5 s. That is
+    # usually enough, not a guarantee: a stalled Kafka can still outlast it.
     stop_grace_period: 30s
     # Optional: secrets/ingest.env (gitignored) holds SENTINEL_SECRET_NAME=value lines, written with
     # that prefix, that secretRefs name as env:SENTINEL_SECRET_NAME; without the file nothing is added (Compose 2.24+).
