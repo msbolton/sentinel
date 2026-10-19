@@ -14,6 +14,8 @@ const (
 	schemaName = "sentinel"
 	// feedsSchemaFile is the db/schema file that defines the feed tables.
 	feedsSchemaFile = "db/schema/70_feeds.sql"
+	// emplacementsSchemaFile defines the emplacements table.
+	emplacementsSchemaFile = "db/schema/72_emplacements.sql"
 )
 
 // SchemaColumn is a column the service depends on and the db/schema file that
@@ -33,6 +35,7 @@ var RequiredColumns = []SchemaColumn{
 	{"ingest_replicas", "listener", feedsSchemaFile},
 	{"ingest_replicas", "listener_host", feedsSchemaFile},
 	{"ingest_replicas", "listener_shared", feedsSchemaFile},
+	{"emplacements", "defaultSigma", emplacementsSchemaFile},
 }
 
 // SchemaError reports the required columns the database lacks.
