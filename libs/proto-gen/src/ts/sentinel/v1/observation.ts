@@ -28,6 +28,7 @@ import {
   trackProcessingStateToJSON,
   trackProcessingStateToNumber,
 } from "./common";
+import { PolarMeasurement } from "./emplacement";
 import {
   Affiliation,
   affiliationFromJSON,
@@ -70,9 +71,9 @@ export interface RawPayload {
  * entity service resolves it from identities.
  *
  * Vocabulary (kept stable so consumers can switch on them):
- *   driver:  stream | opensky | intelsky | celestrak | aisstream | httpjson | tak
+ *   driver:  stream | opensky | intelsky | celestrak | aisstream | httpjson | tak | emplacement
  *   decoder: json | nmea-gps | nmea-ais | cot | sbs | beast | link16 |
- *            opensky-states | intelsky | tle-sgp4 | aisstream
+ *            opensky-states | intelsky | tle-sgp4 | aisstream | emplacement
  */
 export interface Observation {
   /**
@@ -148,6 +149,23 @@ export interface Observation {
    * highest level any contributing observation carried.
    */
   classification: Classification;
+  /**
+   * Emplacement the report came from. Set by the ingest service from the
+   * authenticated session; a value a sender puts here is ignored.
+   */
+  emplacementId: string;
+  /**
+   * A measurement relative to the emplacement, kept for audit. When position
+   * is unset the ingest service derives it from this and the emplacement.
+   */
+  polar?:
+    | PolarMeasurement
+    | undefined;
+  /**
+   * The report is synthetic (exercise or simulation). Set by the ingest
+   * service from the connection; a value a sender puts here is ignored.
+   */
+  exercise: boolean;
 }
 
 function createBaseRawPayload(): RawPayload {
@@ -275,6 +293,9 @@ function createBaseObservation(): Observation {
     replicaId: "",
     fencingToken: 0,
     classification: Classification.UNSPECIFIED,
+    emplacementId: "",
+    polar: undefined,
+    exercise: false,
   };
 }
 
@@ -381,6 +402,15 @@ export const Observation = {
     }
     if (message.classification !== Classification.UNSPECIFIED) {
       writer.uint32(272).int32(classificationToNumber(message.classification));
+    }
+    if (message.emplacementId !== "") {
+      writer.uint32(282).string(message.emplacementId);
+    }
+    if (message.polar !== undefined) {
+      PolarMeasurement.encode(message.polar, writer.uint32(290).fork()).ldelim();
+    }
+    if (message.exercise !== false) {
+      writer.uint32(296).bool(message.exercise);
     }
     return writer;
   },
@@ -630,6 +660,27 @@ export const Observation = {
 
           message.classification = classificationFromJSON(reader.int32());
           continue;
+        case 35:
+          if (tag !== 282) {
+            break;
+          }
+
+          message.emplacementId = reader.string();
+          continue;
+        case 36:
+          if (tag !== 290) {
+            break;
+          }
+
+          message.polar = PolarMeasurement.decode(reader, reader.uint32());
+          continue;
+        case 37:
+          if (tag !== 296) {
+            break;
+          }
+
+          message.exercise = reader.bool();
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -691,6 +742,9 @@ export const Observation = {
       classification: isSet(object.classification)
         ? classificationFromJSON(object.classification)
         : Classification.UNSPECIFIED,
+      emplacementId: isSet(object.emplacementId) ? globalThis.String(object.emplacementId) : "",
+      polar: isSet(object.polar) ? PolarMeasurement.fromJSON(object.polar) : undefined,
+      exercise: isSet(object.exercise) ? globalThis.Boolean(object.exercise) : false,
     };
   },
 
@@ -798,6 +852,15 @@ export const Observation = {
     if (message.classification !== Classification.UNSPECIFIED) {
       obj.classification = classificationToJSON(message.classification);
     }
+    if (message.emplacementId !== "") {
+      obj.emplacementId = message.emplacementId;
+    }
+    if (message.polar !== undefined) {
+      obj.polar = PolarMeasurement.toJSON(message.polar);
+    }
+    if (message.exercise !== false) {
+      obj.exercise = message.exercise;
+    }
     return obj;
   },
 
@@ -861,6 +924,11 @@ export const Observation = {
     message.replicaId = object.replicaId ?? "";
     message.fencingToken = object.fencingToken ?? 0;
     message.classification = object.classification ?? Classification.UNSPECIFIED;
+    message.emplacementId = object.emplacementId ?? "";
+    message.polar = (object.polar !== undefined && object.polar !== null)
+      ? PolarMeasurement.fromPartial(object.polar)
+      : undefined;
+    message.exercise = object.exercise ?? false;
     return message;
   },
 };

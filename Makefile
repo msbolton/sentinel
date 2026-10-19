@@ -23,7 +23,7 @@ proto-ts: ## Generate TypeScript protobuf types (libs/proto-gen/src/ts)
 	@echo "Generating TypeScript protobuf types..."
 	@cd proto && PATH="../node_modules/.bin:$$PATH" buf generate --template buf.gen.ts.yaml
 	@echo "Stripping proto enum prefixes from generated TS enum values..."
-	@perl -pi -e 's/^(  )([A-Z][A-Z_0-9]*) = "[A-Z_0-9]+",$$/$$1$$2 = "$$2",/' libs/proto-gen/src/ts/sentinel/v1/*.ts
+	@perl -pi -e 's/^(  )([A-Z][A-Z_0-9]*) = "[A-Z_0-9]+",$$/$$1$$2 = "$$2",/' libs/proto-gen/src/ts/sentinel/v1/*.ts libs/proto-gen/src/ts/sentinel/ingest/v1/*.ts
 
 proto-go: ## Generate Go protobuf types (libs/proto-gen/src/go, module github.com/sentinel/proto-gen)
 	@echo "Generating Go protobuf types..."

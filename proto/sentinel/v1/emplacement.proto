@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package sentinel.v1;
+
+import "google/protobuf/timestamp.proto";
+import "sentinel/v1/common.proto";
+import "sentinel/v1/entity.proto";
+
+option go_package = "github.com/sentinel/proto-gen/sentinel/v1;sentinelv1";
+
+// Mobility says whether an emplacement stays where it was surveyed.
+enum Mobility {
+  MOBILITY_UNSPECIFIED = 0;
+  MOBILITY_FIXED = 1;
+  // A mobile emplacement reports its own position (EmplacementState).
+  MOBILITY_MOBILE = 2;
+}
+
+// SensorType is what an emplacement observes with.
+enum SensorType {
+  SENSOR_TYPE_UNSPECIFIED = 0;
+  SENSOR_TYPE_RADAR = 1;
+  SENSOR_TYPE_EO_IR = 2;
+  SENSOR_TYPE_RF = 3;
+  SENSOR_TYPE_ACOUSTIC = 4;
+  SENSOR_TYPE_AIS_RECEIVER = 5;
+  SENSOR_TYPE_ADSB_RECEIVER = 6;
+  SENSOR_TYPE_HUMAN = 7;
+  SENSOR_TYPE_OTHER = 8;
+}
+
+// AzimuthReference is what an azimuth or boresight is measured from.
+enum AzimuthReference {
+  AZIMUTH_REFERENCE_UNSPECIFIED = 0;
+  AZIMUTH_REFERENCE_TRUE_NORTH = 1;
+  // Relative to the platform's heading (a ship's bow).
+  AZIMUTH_REFERENCE_PLATFORM = 2;
+}
+
+// Coverage is the volume an emplacement can see, around its boresight.
+// azimuth_width_deg 360 means omni. All zero means no coverage is known.
+message Coverage {
+  double min_range_m = 1;
+  double max_range_m = 2;
+  double azimuth_width_deg = 3;
+  optional double elevation_min_deg = 4;
+  optional double elevation_max_deg = 5;
+}
+
+// PolarSigma is one standard deviation of each polar measurement.
+message PolarSigma {
+  optional double range_m = 1;
+  optional double azimuth_deg = 2;
+  optional double elevation_deg = 3;
+}
+
+// PolarMeasurement is a measurement relative to an emplacement. An
+// observation that carries one and no position has its position derived by
+// the ingest service from the emplacement's location. elevation_deg unset
+// means the target is at the observation's altitude, else the emplacement's.
+message PolarMeasurement {
+  double range_m = 1;
+  double azimuth_deg = 2;
+  optional double elevation_deg = 3;
+  optional double range_rate_mps = 4;
+  AzimuthReference azimuth_reference = 5;
+  PolarSigma sigma = 6;
+}
+
+// Emplacement is a place observations come from: a radar site, a mast, a
+// ship's radar, a field observer. Users manage them in Sentinel.
+message Emplacement {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  Mobility mobility = 4;
+  SensorType sensor_type = 5;
+  Coordinate position = 6;
+  double boresight_deg = 7;
+  AzimuthReference azimuth_reference = 8;
+  Coverage coverage = 9;
+  PolarSigma default_sigma = 10;
+  Classification classification = 11;
+  bool exercise = 12;
+  // The connection allowed to report as this emplacement; empty when none.
+  string feed_id = 13;
+  bool active = 14;
+  google.protobuf.Timestamp updated_at = 15;
+}
+
+// EmplacementState is a mobile emplacement's own position report (ownship).
+message EmplacementState {
+  string emplacement_id = 1;
+  google.protobuf.Timestamp time = 2;
+  Coordinate position = 3;
+  optional double heading = 4;
+  GeodeticVelocity velocity = 5;
+  Orientation orientation = 6;
+}

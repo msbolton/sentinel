@@ -403,36 +403,38 @@ func (Classification) EnumDescriptor() ([]byte, []int) {
 
 // IdentityType names the namespace of a natural identifier carried by an
 // observation. Entity fusion joins observations from different feeds only on
-// the canonical types (ICAO24, MMSI, NORAD_ID, COT_UID); the rest are
+// the canonical types (ICAO24, MMSI, NORAD_ID, COT_UID, EMPLACEMENT); the rest are
 // attributes or feed-local keys.
 type IdentityType int32
 
 const (
 	IdentityType_IDENTITY_TYPE_UNSPECIFIED  IdentityType = 0
-	IdentityType_IDENTITY_TYPE_ICAO24       IdentityType = 1 // Mode S address, upper-case hex, 6 chars
-	IdentityType_IDENTITY_TYPE_MMSI         IdentityType = 2 // Maritime Mobile Service Identity, digits
-	IdentityType_IDENTITY_TYPE_IMO          IdentityType = 3 // IMO ship number, digits
-	IdentityType_IDENTITY_TYPE_NORAD_ID     IdentityType = 4 // Satellite catalog number, digits
-	IdentityType_IDENTITY_TYPE_COT_UID      IdentityType = 5 // Cursor on Target uid
-	IdentityType_IDENTITY_TYPE_LINK16_TN    IdentityType = 6 // Link 16 track number, unique per network only
-	IdentityType_IDENTITY_TYPE_FEED_LOCAL   IdentityType = 7 // "<feed_id>:<source_entity_id>"
-	IdentityType_IDENTITY_TYPE_CALLSIGN     IdentityType = 8 // Flight or radio callsign, attribute only
-	IdentityType_IDENTITY_TYPE_REGISTRATION IdentityType = 9 // Aircraft tail number, attribute only
+	IdentityType_IDENTITY_TYPE_ICAO24       IdentityType = 1  // Mode S address, upper-case hex, 6 chars
+	IdentityType_IDENTITY_TYPE_MMSI         IdentityType = 2  // Maritime Mobile Service Identity, digits
+	IdentityType_IDENTITY_TYPE_IMO          IdentityType = 3  // IMO ship number, digits
+	IdentityType_IDENTITY_TYPE_NORAD_ID     IdentityType = 4  // Satellite catalog number, digits
+	IdentityType_IDENTITY_TYPE_COT_UID      IdentityType = 5  // Cursor on Target uid
+	IdentityType_IDENTITY_TYPE_LINK16_TN    IdentityType = 6  // Link 16 track number, unique per network only
+	IdentityType_IDENTITY_TYPE_FEED_LOCAL   IdentityType = 7  // "<feed_id>:<source_entity_id>"
+	IdentityType_IDENTITY_TYPE_CALLSIGN     IdentityType = 8  // Flight or radio callsign, attribute only
+	IdentityType_IDENTITY_TYPE_REGISTRATION IdentityType = 9  // Aircraft tail number, attribute only
+	IdentityType_IDENTITY_TYPE_EMPLACEMENT  IdentityType = 10 // Sentinel emplacement uuid; canonical
 )
 
 // Enum value maps for IdentityType.
 var (
 	IdentityType_name = map[int32]string{
-		0: "IDENTITY_TYPE_UNSPECIFIED",
-		1: "IDENTITY_TYPE_ICAO24",
-		2: "IDENTITY_TYPE_MMSI",
-		3: "IDENTITY_TYPE_IMO",
-		4: "IDENTITY_TYPE_NORAD_ID",
-		5: "IDENTITY_TYPE_COT_UID",
-		6: "IDENTITY_TYPE_LINK16_TN",
-		7: "IDENTITY_TYPE_FEED_LOCAL",
-		8: "IDENTITY_TYPE_CALLSIGN",
-		9: "IDENTITY_TYPE_REGISTRATION",
+		0:  "IDENTITY_TYPE_UNSPECIFIED",
+		1:  "IDENTITY_TYPE_ICAO24",
+		2:  "IDENTITY_TYPE_MMSI",
+		3:  "IDENTITY_TYPE_IMO",
+		4:  "IDENTITY_TYPE_NORAD_ID",
+		5:  "IDENTITY_TYPE_COT_UID",
+		6:  "IDENTITY_TYPE_LINK16_TN",
+		7:  "IDENTITY_TYPE_FEED_LOCAL",
+		8:  "IDENTITY_TYPE_CALLSIGN",
+		9:  "IDENTITY_TYPE_REGISTRATION",
+		10: "IDENTITY_TYPE_EMPLACEMENT",
 	}
 	IdentityType_value = map[string]int32{
 		"IDENTITY_TYPE_UNSPECIFIED":  0,
@@ -445,6 +447,7 @@ var (
 		"IDENTITY_TYPE_FEED_LOCAL":   7,
 		"IDENTITY_TYPE_CALLSIGN":     8,
 		"IDENTITY_TYPE_REGISTRATION": 9,
+		"IDENTITY_TYPE_EMPLACEMENT":  10,
 	}
 )
 
@@ -964,7 +967,7 @@ const file_sentinel_v1_common_proto_rawDesc = "" +
 	"\x1bCLASSIFICATION_UNCLASSIFIED\x10\x01\x12\x1f\n" +
 	"\x1bCLASSIFICATION_CONFIDENTIAL\x10\x02\x12\x19\n" +
 	"\x15CLASSIFICATION_SECRET\x10\x03\x12\x1d\n" +
-	"\x19CLASSIFICATION_TOP_SECRET\x10\x04*\xa4\x02\n" +
+	"\x19CLASSIFICATION_TOP_SECRET\x10\x04*\xc3\x02\n" +
 	"\fIdentityType\x12\x1d\n" +
 	"\x19IDENTITY_TYPE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14IDENTITY_TYPE_ICAO24\x10\x01\x12\x16\n" +
@@ -975,7 +978,9 @@ const file_sentinel_v1_common_proto_rawDesc = "" +
 	"\x17IDENTITY_TYPE_LINK16_TN\x10\x06\x12\x1c\n" +
 	"\x18IDENTITY_TYPE_FEED_LOCAL\x10\a\x12\x1a\n" +
 	"\x16IDENTITY_TYPE_CALLSIGN\x10\b\x12\x1e\n" +
-	"\x1aIDENTITY_TYPE_REGISTRATION\x10\t*u\n" +
+	"\x1aIDENTITY_TYPE_REGISTRATION\x10\t\x12\x1d\n" +
+	"\x19IDENTITY_TYPE_EMPLACEMENT\x10\n" +
+	"*u\n" +
 	"\vAgeoutState\x12\x1c\n" +
 	"\x18AGEOUT_STATE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11AGEOUT_STATE_LIVE\x10\x01\x12\x16\n" +

@@ -2,6 +2,7 @@ import datetime
 
 from google.protobuf import timestamp_pb2 as _timestamp_pb2
 from sentinel.v1 import common_pb2 as _common_pb2
+from sentinel.v1 import emplacement_pb2 as _emplacement_pb2
 from sentinel.v1 import entity_pb2 as _entity_pb2
 from sentinel.v1 import platform_pb2 as _platform_pb2
 from google.protobuf.internal import containers as _containers
@@ -23,7 +24,7 @@ class RawPayload(_message.Message):
     def __init__(self, content_type: _Optional[str] = ..., data: _Optional[bytes] = ..., truncated: _Optional[bool] = ...) -> None: ...
 
 class Observation(_message.Message):
-    __slots__ = ("observation_id", "feed_id", "driver", "decoder", "source_entity_id", "source", "sensor_id", "source_timestamp", "received_at", "entity_type", "track_environment", "display_name", "identities", "position", "heading", "speed_knots", "course", "velocity", "acceleration", "orientation", "uncertainty", "position_covariance", "position_velocity_covariance", "velocity_covariance", "processing_state", "country_of_origin", "affiliation", "operational_status", "dimensions", "platform", "raw", "replica_id", "fencing_token", "classification")
+    __slots__ = ("observation_id", "feed_id", "driver", "decoder", "source_entity_id", "source", "sensor_id", "source_timestamp", "received_at", "entity_type", "track_environment", "display_name", "identities", "position", "heading", "speed_knots", "course", "velocity", "acceleration", "orientation", "uncertainty", "position_covariance", "position_velocity_covariance", "velocity_covariance", "processing_state", "country_of_origin", "affiliation", "operational_status", "dimensions", "platform", "raw", "replica_id", "fencing_token", "classification", "emplacement_id", "polar", "exercise")
     OBSERVATION_ID_FIELD_NUMBER: _ClassVar[int]
     FEED_ID_FIELD_NUMBER: _ClassVar[int]
     DRIVER_FIELD_NUMBER: _ClassVar[int]
@@ -58,6 +59,9 @@ class Observation(_message.Message):
     REPLICA_ID_FIELD_NUMBER: _ClassVar[int]
     FENCING_TOKEN_FIELD_NUMBER: _ClassVar[int]
     CLASSIFICATION_FIELD_NUMBER: _ClassVar[int]
+    EMPLACEMENT_ID_FIELD_NUMBER: _ClassVar[int]
+    POLAR_FIELD_NUMBER: _ClassVar[int]
+    EXERCISE_FIELD_NUMBER: _ClassVar[int]
     observation_id: str
     feed_id: str
     driver: str
@@ -92,4 +96,7 @@ class Observation(_message.Message):
     replica_id: str
     fencing_token: int
     classification: _common_pb2.Classification
-    def __init__(self, observation_id: _Optional[str] = ..., feed_id: _Optional[str] = ..., driver: _Optional[str] = ..., decoder: _Optional[str] = ..., source_entity_id: _Optional[str] = ..., source: _Optional[_Union[_entity_pb2.EntitySource, str]] = ..., sensor_id: _Optional[str] = ..., source_timestamp: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., received_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., entity_type: _Optional[_Union[_entity_pb2.EntityType, str]] = ..., track_environment: _Optional[_Union[_common_pb2.TrackEnvironment, str]] = ..., display_name: _Optional[str] = ..., identities: _Optional[_Iterable[_Union[_common_pb2.Identity, _Mapping]]] = ..., position: _Optional[_Union[_common_pb2.Coordinate, _Mapping]] = ..., heading: _Optional[float] = ..., speed_knots: _Optional[float] = ..., course: _Optional[float] = ..., velocity: _Optional[_Union[_entity_pb2.GeodeticVelocity, _Mapping]] = ..., acceleration: _Optional[_Union[_entity_pb2.GeodeticAcceleration, _Mapping]] = ..., orientation: _Optional[_Union[_entity_pb2.Orientation, _Mapping]] = ..., uncertainty: _Optional[_Union[_entity_pb2.MeasurementUncertainty, _Mapping]] = ..., position_covariance: _Optional[_Union[_entity_pb2.PositionCovariance, _Mapping]] = ..., position_velocity_covariance: _Optional[_Union[_entity_pb2.PositionVelocityCovariance, _Mapping]] = ..., velocity_covariance: _Optional[_Union[_entity_pb2.VelocityCovariance, _Mapping]] = ..., processing_state: _Optional[_Union[_common_pb2.TrackProcessingState, str]] = ..., country_of_origin: _Optional[str] = ..., affiliation: _Optional[_Union[_entity_pb2.Affiliation, str]] = ..., operational_status: _Optional[_Union[_common_pb2.OperationalStatus, str]] = ..., dimensions: _Optional[_Union[_entity_pb2.Dimensions, _Mapping]] = ..., platform: _Optional[_Union[_platform_pb2.PlatformDetail, _Mapping]] = ..., raw: _Optional[_Union[RawPayload, _Mapping]] = ..., replica_id: _Optional[str] = ..., fencing_token: _Optional[int] = ..., classification: _Optional[_Union[_common_pb2.Classification, str]] = ...) -> None: ...
+    emplacement_id: str
+    polar: _emplacement_pb2.PolarMeasurement
+    exercise: bool
+    def __init__(self, observation_id: _Optional[str] = ..., feed_id: _Optional[str] = ..., driver: _Optional[str] = ..., decoder: _Optional[str] = ..., source_entity_id: _Optional[str] = ..., source: _Optional[_Union[_entity_pb2.EntitySource, str]] = ..., sensor_id: _Optional[str] = ..., source_timestamp: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., received_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., entity_type: _Optional[_Union[_entity_pb2.EntityType, str]] = ..., track_environment: _Optional[_Union[_common_pb2.TrackEnvironment, str]] = ..., display_name: _Optional[str] = ..., identities: _Optional[_Iterable[_Union[_common_pb2.Identity, _Mapping]]] = ..., position: _Optional[_Union[_common_pb2.Coordinate, _Mapping]] = ..., heading: _Optional[float] = ..., speed_knots: _Optional[float] = ..., course: _Optional[float] = ..., velocity: _Optional[_Union[_entity_pb2.GeodeticVelocity, _Mapping]] = ..., acceleration: _Optional[_Union[_entity_pb2.GeodeticAcceleration, _Mapping]] = ..., orientation: _Optional[_Union[_entity_pb2.Orientation, _Mapping]] = ..., uncertainty: _Optional[_Union[_entity_pb2.MeasurementUncertainty, _Mapping]] = ..., position_covariance: _Optional[_Union[_entity_pb2.PositionCovariance, _Mapping]] = ..., position_velocity_covariance: _Optional[_Union[_entity_pb2.PositionVelocityCovariance, _Mapping]] = ..., velocity_covariance: _Optional[_Union[_entity_pb2.VelocityCovariance, _Mapping]] = ..., processing_state: _Optional[_Union[_common_pb2.TrackProcessingState, str]] = ..., country_of_origin: _Optional[str] = ..., affiliation: _Optional[_Union[_entity_pb2.Affiliation, str]] = ..., operational_status: _Optional[_Union[_common_pb2.OperationalStatus, str]] = ..., dimensions: _Optional[_Union[_entity_pb2.Dimensions, _Mapping]] = ..., platform: _Optional[_Union[_platform_pb2.PlatformDetail, _Mapping]] = ..., raw: _Optional[_Union[RawPayload, _Mapping]] = ..., replica_id: _Optional[str] = ..., fencing_token: _Optional[int] = ..., classification: _Optional[_Union[_common_pb2.Classification, str]] = ..., emplacement_id: _Optional[str] = ..., polar: _Optional[_Union[_emplacement_pb2.PolarMeasurement, _Mapping]] = ..., exercise: _Optional[bool] = ...) -> None: ...

@@ -516,7 +516,7 @@ export function classificationToNumber(object: Classification): number {
 /**
  * IdentityType names the namespace of a natural identifier carried by an
  * observation. Entity fusion joins observations from different feeds only on
- * the canonical types (ICAO24, MMSI, NORAD_ID, COT_UID); the rest are
+ * the canonical types (ICAO24, MMSI, NORAD_ID, COT_UID, EMPLACEMENT); the rest are
  * attributes or feed-local keys.
  */
 export enum IdentityType {
@@ -539,6 +539,8 @@ export enum IdentityType {
   CALLSIGN = "CALLSIGN",
   /** REGISTRATION - Aircraft tail number, attribute only */
   REGISTRATION = "REGISTRATION",
+  /** EMPLACEMENT - Sentinel emplacement uuid; canonical */
+  EMPLACEMENT = "EMPLACEMENT",
 }
 
 export function identityTypeFromJSON(object: any): IdentityType {
@@ -573,6 +575,9 @@ export function identityTypeFromJSON(object: any): IdentityType {
     case 9:
     case "IDENTITY_TYPE_REGISTRATION":
       return IdentityType.REGISTRATION;
+    case 10:
+    case "IDENTITY_TYPE_EMPLACEMENT":
+      return IdentityType.EMPLACEMENT;
     default:
       throw new globalThis.Error("Unrecognized enum value " + object + " for enum IdentityType");
   }
@@ -600,6 +605,8 @@ export function identityTypeToJSON(object: IdentityType): string {
       return "IDENTITY_TYPE_CALLSIGN";
     case IdentityType.REGISTRATION:
       return "IDENTITY_TYPE_REGISTRATION";
+    case IdentityType.EMPLACEMENT:
+      return "IDENTITY_TYPE_EMPLACEMENT";
     default:
       throw new globalThis.Error("Unrecognized enum value " + object + " for enum IdentityType");
   }
@@ -627,6 +634,8 @@ export function identityTypeToNumber(object: IdentityType): number {
       return 8;
     case IdentityType.REGISTRATION:
       return 9;
+    case IdentityType.EMPLACEMENT:
+      return 10;
     default:
       throw new globalThis.Error("Unrecognized enum value " + object + " for enum IdentityType");
   }

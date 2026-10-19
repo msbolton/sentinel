@@ -132,7 +132,7 @@ enum Classification {
 
 // IdentityType names the namespace of a natural identifier carried by an
 // observation. Entity fusion joins observations from different feeds only on
-// the canonical types (ICAO24, MMSI, NORAD_ID, COT_UID); the rest are
+// the canonical types (ICAO24, MMSI, NORAD_ID, COT_UID, EMPLACEMENT); the rest are
 // attributes or feed-local keys.
 enum IdentityType {
   IDENTITY_TYPE_UNSPECIFIED = 0;
@@ -145,6 +145,7 @@ enum IdentityType {
   IDENTITY_TYPE_FEED_LOCAL = 7;    // "<feed_id>:<source_entity_id>"
   IDENTITY_TYPE_CALLSIGN = 8;      // Flight or radio callsign, attribute only
   IDENTITY_TYPE_REGISTRATION = 9;  // Aircraft tail number, attribute only
+  IDENTITY_TYPE_EMPLACEMENT = 10;  // Sentinel emplacement uuid; canonical
 }
 
 // Identity is one natural identifier of an observed object. The value is
