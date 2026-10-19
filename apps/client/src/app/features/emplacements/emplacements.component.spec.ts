@@ -169,4 +169,43 @@ describe('EmplacementsComponent', () => {
     fixture.detectChanges();
     expect(el.querySelector('[role="alert"]')?.textContent).toContain('Deleted by someone else.');
   });
+
+  it('filters by sensor type and by active as well as by mobility', () => {
+    const rows: Emplacement[] = [
+      { ...row(1, 'Radar on'), id: 'a' },
+      { ...row(1, 'Radar off'), id: 'b', active: false },
+      { ...row(1, 'AIS on'), id: 'c', sensorType: 'AIS_RECEIVER' },
+      { ...row(1, 'Ship radar'), id: 'd', mobility: 'MOBILE' },
+    ];
+    const { fixture, el } = create(rows);
+    const names = () => Array.from(el.querySelectorAll('.row-name')).map((n) => n.textContent?.trim());
+    const click = (group: string, label: string) => {
+      const buttons = Array.from(el.querySelectorAll(`[aria-label="${group}"] button`)) as HTMLButtonElement[];
+      buttons.find((b) => b.textContent?.trim() === label)!.click();
+      fixture.detectChanges();
+    };
+    expect(names()).toEqual(['AIS on', 'Radar off', 'Radar on', 'Ship radar']);
+
+    const sensor = el.querySelector('select[aria-label="Filter by sensor type"]') as HTMLSelectElement;
+    expect(sensor.options[0].textContent?.trim()).toBe('All');
+    sensor.value = 'RADAR';
+    sensor.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    expect(names()).toEqual(['Radar off', 'Radar on', 'Ship radar']);
+
+    click('Filter by state', 'Inactive');
+    expect(names()).toEqual(['Radar off']);
+
+    click('Filter by state', 'Active');
+    expect(names()).toEqual(['Radar on', 'Ship radar']);
+
+    click('Filter by mobility', 'fixed');
+    expect(names()).toEqual(['Radar on']);
+
+    sensor.value = 'ALL';
+    sensor.dispatchEvent(new Event('change'));
+    click('Filter by state', 'All');
+    click('Filter by mobility', 'All');
+    expect(names()).toEqual(['AIS on', 'Radar off', 'Radar on', 'Ship radar']);
+  });
 });

@@ -14,6 +14,7 @@ import {
   Mobility,
   SENSOR_TYPES,
   SENSOR_TYPE_LABELS,
+  SensorType,
   coverageSummary,
   draftOf,
   inputOf,
@@ -63,9 +64,18 @@ export class EmplacementsComponent implements OnInit, OnDestroy {
     this.feedService.feeds().filter((f) => directionOf(f) !== 'out' && f.driver !== 'emplacement'),
   );
   protected readonly filter = signal<'ALL' | Mobility>('ALL');
+  protected readonly sensorFilter = signal<'ALL' | SensorType>('ALL');
+  protected readonly activeFilter = signal<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
   protected readonly shown = computed(() => {
-    const f = this.filter();
-    return f === 'ALL' ? this.list() : this.list().filter((e) => e.mobility === f);
+    const mobility = this.filter();
+    const sensor = this.sensorFilter();
+    const active = this.activeFilter();
+    return this.list().filter(
+      (e) =>
+        (mobility === 'ALL' || e.mobility === mobility) &&
+        (sensor === 'ALL' || e.sensorType === sensor) &&
+        (active === 'ALL' || e.active === (active === 'ACTIVE')),
+    );
   });
   /**
    * The editor sits above the list for a new emplacement, and for one whose

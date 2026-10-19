@@ -18,6 +18,15 @@
           <button type="button" [class.active]="filter() === f" (click)="filter.set($any(f))">{{ f === 'ALL' ? 'All' : f.toLowerCase() }}</button>
         }
       </div>
+      <select class="sensor-filter" aria-label="Filter by sensor type" (change)="sensorFilter.set($any(text($event)))">
+        <option value="ALL" [selected]="sensorFilter() === 'ALL'">All</option>
+        @for (s of sensorTypes; track s) { <option [value]="s" [selected]="sensorFilter() === s">{{ sensorLabels[s] }}</option> }
+      </select>
+      <div class="segmented" role="group" aria-label="Filter by state">
+        @for (f of ['ALL', 'ACTIVE', 'INACTIVE']; track f) {
+          <button type="button" [class.active]="activeFilter() === f" (click)="activeFilter.set($any(f))">{{ f === 'ALL' ? 'All' : f === 'ACTIVE' ? 'Active' : 'Inactive' }}</button>
+        }
+      </div>
       <label class="coverage-toggle">
         <input type="checkbox" [checked]="showCoverage()" (change)="service.setShowCoverage(checked($event))" /> Coverage
       </label>
