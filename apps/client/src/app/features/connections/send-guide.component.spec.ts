@@ -101,11 +101,11 @@ describe('SendGuideComponent', () => {
       const links = Array.from(el.querySelectorAll<HTMLAnchorElement>('.protos a')).map((a) => a.getAttribute('href'));
       expect(links).toEqual([
         'assets/proto/sentinel/ingest/v1/ingest_service.proto',
-        'assets/proto/sentinel/v1/emplacement.proto',
         'assets/proto/sentinel/v1/observation.proto',
         'assets/proto/sentinel/v1/common.proto',
         'assets/proto/sentinel/v1/entity.proto',
         'assets/proto/sentinel/v1/platform.proto',
+        'assets/proto/sentinel/v1/emplacement.proto',
       ]);
     });
 
@@ -308,6 +308,7 @@ describe('SendGuideComponent', () => {
       'assets/proto/sentinel/v1/common.proto',
       'assets/proto/sentinel/v1/entity.proto',
       'assets/proto/sentinel/v1/platform.proto',
+      'assets/proto/sentinel/v1/emplacement.proto',
     ]);
     expect(rowsOf()[0][0].textContent).toContain('10.0.0.5');
   });

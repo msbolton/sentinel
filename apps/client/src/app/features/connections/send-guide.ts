@@ -18,10 +18,10 @@ export interface SendTarget {
 }
 
 /** The proto files a sender needs, served from assets/proto/sentinel/v1/. */
-export const PROTO_FILES = ['observation.proto', 'common.proto', 'entity.proto', 'platform.proto'];
+export const PROTO_FILES = ['observation.proto', 'common.proto', 'entity.proto', 'platform.proto', 'emplacement.proto'];
 
 /** The ingest contract's files, served from assets/proto/ next to PROTO_FILES. */
-export const INGEST_PROTO_FILES = ['sentinel/ingest/v1/ingest_service.proto', 'sentinel/v1/emplacement.proto'];
+export const INGEST_PROTO_FILES = ['sentinel/ingest/v1/ingest_service.proto'];
 
 /** What the examples say until the listener's host is known. */
 const LISTENER_HOST = 'LISTENER_HOST';

@@ -186,7 +186,7 @@ describe('send guide', () => {
     expect(goSnippet(target())).toContain('protodelim.MarshalTo');
     expect(goSnippet(target({ protocol: 'udp', framing: 'message' }))).toContain('net.Dial("udp"');
     expect(pythonSnippet(target())).toContain('varint(len(data)) + data');
-    expect(PROTO_FILES).toEqual(['observation.proto', 'common.proto', 'entity.proto', 'platform.proto']);
+    expect(PROTO_FILES).toEqual(['observation.proto', 'common.proto', 'entity.proto', 'platform.proto', 'emplacement.proto']);
   });
 
   it('puts an IPv6 host in brackets where an address is written', () => {
@@ -242,7 +242,7 @@ describe('send guide', () => {
     });
 
     it('serves the ingest contract next to the observation protos', () => {
-      expect(INGEST_PROTO_FILES).toEqual(['sentinel/ingest/v1/ingest_service.proto', 'sentinel/v1/emplacement.proto']);
+      expect(INGEST_PROTO_FILES).toEqual(['sentinel/ingest/v1/ingest_service.proto']);
       expect(PROTO_FILES).not.toEqual(expect.arrayContaining(INGEST_PROTO_FILES));
     });
   });
