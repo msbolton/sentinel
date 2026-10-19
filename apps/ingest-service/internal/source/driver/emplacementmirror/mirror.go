@@ -172,7 +172,12 @@ func Observation(e emplacement.Emplacement, at time.Time) *obs.Observation {
 		Classification:   e.Classification,
 		EmplacementID:    e.ID,
 		Exercise:         e.Exercise,
-		Heading:          obs.Float(e.BoresightDeg),
+	}
+	// A boresight from true north is the sensor's heading. One from the
+	// platform is relative to the platform's own heading, which a mobile
+	// emplacement's reports carry, so it is no heading of its own.
+	if e.AzimuthReference == emplacement.AzimuthTrueNorth {
+		o.Heading = obs.Float(e.BoresightDeg)
 	}
 	if e.Mobility == emplacement.MobilityMobile {
 		o.TrackEnvironment = obs.EnvUnknown

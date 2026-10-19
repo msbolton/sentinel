@@ -12,6 +12,10 @@ describe('placementOf', () => {
     expect(placementOf(ship, (id) => (id === 's' ? { lon: 3, lat: 4, heading: 300 } : null))).toEqual({ lon: 3, lat: 4, boresightDeg: 30 });
   });
 
+  it('keeps the turned boresight within 0-360 when the live heading is negative', () => {
+    expect(placementOf(ship, () => ({ lon: 3, lat: 4, heading: -100 }))).toEqual({ lon: 3, lat: 4, boresightDeg: 350 });
+  });
+
   it('falls back to the stored position while the mobile one has no live fix', () => {
     expect(placementOf(ship, () => null)).toEqual({ lon: 1, lat: 1, boresightDeg: 90 });
   });

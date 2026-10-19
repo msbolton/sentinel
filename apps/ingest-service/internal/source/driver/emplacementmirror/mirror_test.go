@@ -76,7 +76,7 @@ func (s *memSink) ids() []string {
 }
 
 func place(id, mobility string, active bool, withFix bool) emplacement.Emplacement {
-	e := emplacement.Emplacement{ID: id, Name: "E " + id, Mobility: mobility, SensorType: "RADAR", Active: active, Classification: "CONFIDENTIAL", BoresightDeg: 90, Exercise: true}
+	e := emplacement.Emplacement{ID: id, Name: "E " + id, Mobility: mobility, SensorType: "RADAR", Active: active, Classification: "CONFIDENTIAL", BoresightDeg: 90, AzimuthReference: emplacement.AzimuthTrueNorth, Exercise: true}
 	if withFix {
 		e.Position = &emplacement.Point{Lat: 50, Lon: -4}
 	}
@@ -101,6 +101,23 @@ func TestObservationOfAnEmplacement(t *testing.T) {
 	alt = 99
 	if *o.Altitude != 30 {
 		t.Error("the observation must not share the emplacement's altitude")
+	}
+}
+
+// The boresight is a heading only when it is measured from true north. One
+// measured from the platform is relative to the platform's own heading, which
+// the platform's reports carry; reporting it as a heading would have the map
+// add it to itself.
+func TestObservationHeadingFollowsTheAzimuthReference(t *testing.T) {
+	at := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	north := place("e-1", emplacement.MobilityMobile, true, true)
+	if o := Observation(north, at); o.Heading == nil || *o.Heading != 90 {
+		t.Errorf("TRUE_NORTH heading = %v, want 90", o.Heading)
+	}
+	platform := place("e-2", emplacement.MobilityMobile, true, true)
+	platform.AzimuthReference = emplacement.AzimuthPlatform
+	if o := Observation(platform, at); o.Heading != nil {
+		t.Errorf("PLATFORM heading = %v, want none", *o.Heading)
 	}
 }
 

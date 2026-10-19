@@ -25,7 +25,8 @@ export function placementOf(e: Placeable, live: LivePosition): { lon: number; la
   const lon = now?.lon ?? e.position?.lon;
   const lat = now?.lat ?? e.position?.lat;
   if (lon == null || lat == null) return null;
-  const boresightDeg = e.azimuthReference === 'PLATFORM' && now?.heading != null ? (now.heading + e.boresightDeg) % 360 : e.boresightDeg;
+  const boresightDeg =
+    e.azimuthReference === 'PLATFORM' && now?.heading != null ? (((now.heading + e.boresightDeg) % 360) + 360) % 360 : e.boresightDeg;
   return { lon, lat, boresightDeg };
 }
 
