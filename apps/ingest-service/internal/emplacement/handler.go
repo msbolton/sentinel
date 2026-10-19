@@ -132,9 +132,17 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	out, err := h.store.Update(r.Context(), id, ifVersion, func(e *Emplacement) error {
+	// The version is compared here, after the visibility check, not by the
+	// store: a store that compares first would answer 412 for an emplacement
+	// above the caller's clearance, revealing that it exists and, by trying
+	// versions, which one it is. fn runs under the store's row lock, so the
+	// check and the write stay atomic.
+	out, err := h.store.Update(r.Context(), id, 0, func(e *Emplacement) error {
 		if !visible(r, *e) {
 			return ErrNotFound
+		}
+		if ifVersion > 0 && e.Version != ifVersion {
+			return ErrVersionConflict
 		}
 		in.Apply(e)
 		return h.check(r, e)

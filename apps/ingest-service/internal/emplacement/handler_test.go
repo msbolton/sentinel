@@ -188,6 +188,16 @@ func TestHandlerPatch(t *testing.T) {
 	if store.rows[idS].Description != "" {
 		t.Fatal("the invisible emplacement was changed")
 	}
+	// A wrong If-Match must not turn the 404 into a 412, and the right one must
+	// not tell the caller they guessed the version.
+	for _, v := range []string{`"9"`, `"1"`} {
+		if w := serve(t, store, http.MethodPatch, "/emplacements/"+idS, "CONFIDENTIAL", `{"description":"x"}`, "If-Match", v); w.Code != 404 {
+			t.Fatalf("patching an invisible emplacement with If-Match %s: %d", v, w.Code)
+		}
+	}
+	if got := store.rows[idS]; got.Description != "" || got.Version != 1 {
+		t.Fatal("the invisible emplacement was changed")
+	}
 }
 
 func TestHandlerDelete(t *testing.T) {
