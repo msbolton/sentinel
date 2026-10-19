@@ -1,6 +1,9 @@
 package geo
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestPolarCovarianceDueNorth(t *testing.T) {
 	r, sr, saz := 10_000.0, 50.0, 0.5 // σ az 0.5° → 87.27 m across track at 10 km
@@ -73,4 +76,48 @@ func TestEllipseCovarianceRoundTrip(t *testing.T) {
 func TestCEP(t *testing.T) {
 	near(t, "circular", CEP(100*100, 0, 100*100), 117.74, 0.01)
 	near(t, "same via ellipse", CEP(Cov2FromEllipse(Ellipse95*100, Ellipse95*100, 0)), 117.74, 0.01)
+}
+
+// The axis-aligned cases above zero every cross term. At an oblique geometry
+// the covariance must equal J·diag(σ²)·Jᵀ, with J taken numerically from
+// AERToENU, so a mirrored azimuth or a wrong elevation column cannot pass.
+func TestPolarCovarianceObliqueMatchesNumericJacobian(t *testing.T) {
+	az, el, r := 30.0, 20.0, 25_000.0
+	sr, saz, sel := 40.0, 0.3, 0.4
+	cov, ok := PolarCovarianceNEU(az, el, r, Sigma{RangeM: &sr, AzimuthDeg: &saz, ElevationDeg: &sel})
+	if !ok {
+		t.Fatal("sigmas given")
+	}
+
+	// Central differences; the angle steps are in degrees, so the derivative
+	// is converted to per radian.
+	const hR, hDeg = 1.0, 1e-3
+	col := func(plus, minus ENU, h float64) [3]float64 { // [e, n, u]
+		return [3]float64{(plus.E - minus.E) / h, (plus.N - minus.N) / h, (plus.U - minus.U) / h}
+	}
+	jr := col(AERToENU(az, el, r+hR), AERToENU(az, el, r-hR), 2*hR)
+	ja := col(AERToENU(az+hDeg, el, r), AERToENU(az-hDeg, el, r), rad(2*hDeg))
+	je := col(AERToENU(az, el+hDeg, r), AERToENU(az, el-hDeg, r), rad(2*hDeg))
+	varR, varAz, varEl := sr*sr, rad(saz)*rad(saz), rad(sel)*rad(sel)
+	c := func(i, j int) float64 { return jr[i]*jr[j]*varR + ja[i]*ja[j]*varAz + je[i]*je[j]*varEl }
+	const e, n, u = 0, 1, 2
+	want := [6]float64{c(n, n), c(n, e), c(n, u), c(e, e), c(e, u), c(u, u)}
+
+	largest := 0.0
+	for _, w := range want {
+		largest = math.Max(largest, math.Abs(w))
+	}
+	for i, name := range []string{"nn", "ne", "nu", "ee", "eu", "uu"} {
+		near(t, name, cov[i], want[i], 1e-6*largest)
+	}
+}
+
+// Azimuth runs clockwise from north: a range error at 45° is positively
+// correlated between north and east.
+func TestPolarCovarianceSignAnchor(t *testing.T) {
+	sr := 100.0
+	cov, _ := PolarCovarianceNEU(45, 0, 5_000, Sigma{RangeM: &sr})
+	near(t, "nn", cov[0], sr*sr/2, 1e-6)
+	near(t, "ne", cov[1], sr*sr/2, 1e-6)
+	near(t, "ee", cov[3], sr*sr/2, 1e-6)
 }
