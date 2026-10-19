@@ -16,10 +16,8 @@ import (
 
 	"github.com/sentinel/ingest-service/internal/drivers"
 	"github.com/sentinel/ingest-service/internal/ingesttoken"
+	"github.com/sentinel/ingest-service/internal/source/driver/grpcin"
 )
-
-// grpcDriver is the driver whose connections take ingest tokens.
-const grpcDriver = "grpc"
 
 // TokenStore is what the token routes need of the ingest token store.
 type TokenStore interface {
@@ -62,7 +60,7 @@ func (h *Handler) tokenFeed(w http.ResponseWriter, r *http.Request) (feedID, lev
 		writeError(w, http.StatusForbidden, "your clearance does not reach this connection's classification")
 		return "", "", false
 	}
-	if f.Driver != grpcDriver && r.Method == http.MethodPost {
+	if f.Driver != grpcin.ID && r.Method == http.MethodPost {
 		writeProblems(w, []drivers.Problem{{Path: "/driver", Message: "ingest tokens are for grpc connections"}})
 		return "", "", false
 	}
