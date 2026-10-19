@@ -105,3 +105,15 @@ func TestIntelSkyRanksWithTheAggregators(t *testing.T) {
 		t.Errorf("INTELSKY priority = %d", got)
 	}
 }
+
+func TestPrepareEmplacementKeyIsCanonical(t *testing.T) {
+	o := &sentinelv1.Observation{FeedId: "grpc-1", SourceEntityId: "radar-7",
+		Identities: []*sentinelv1.Identity{
+			{Type: sentinelv1.IdentityType_IDENTITY_TYPE_CALLSIGN, Value: "RADAR 7"},
+			{Type: sentinelv1.IdentityType_IDENTITY_TYPE_EMPLACEMENT, Value: "e-1"},
+		},
+		Position: &sentinelv1.Coordinate{Latitude: 1, Longitude: 2}}
+	if got := Prepare(o, nil).Key; got != (Key{Type: "EMPLACEMENT", Value: "e-1"}) {
+		t.Fatalf("key = %v", got)
+	}
+}
