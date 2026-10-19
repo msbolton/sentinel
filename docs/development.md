@@ -252,23 +252,14 @@ Rules and safeguards, in short (details and the counters are in `docs/feeds.md`)
   ```bash
   curl -s -X POST http://localhost:3000/api/v1/feeds -H 'content-type: application/json' -d '{
     "id":"site-tcp","name":"Site gateway","driver":"tcp","enabled":true,
-    "config":{"mode":"listen","port":6002,"allow":["10.20.0.0/16"],"tls":{"enabled":true,"requireClientCert":true}},
+    "config":{"mode":"listen","port":6002,"encoding":"json","allow":["10.20.0.0/16","127.0.0.1"],"tls":{"enabled":true,"requireClientCert":true}},
     "secretRefs":{"tlsCert":"file:/etc/sentinel/secrets/server.pem","tlsKey":"file:/etc/sentinel/secrets/server.key","clientCa":"file:/etc/sentinel/secrets/clients-ca.pem"}}'
   ```
 
-  The certificate files go in `./secrets/ingest` (gitignored), which Compose mounts read-only at `/etc/sentinel/secrets` in both ingest containers (`ingest-service` and `ingest-listener`); the TAK ones stay in `./secrets/tak`. Create both folders before the first `docker compose up`: on Linux Docker creates a missing one owned by root. The containers run as user and group 10001 and read the files with the group's rights, so on a Linux host the folders must be traversable and the files readable by gid 10001 (these commands are for Linux hosts):
+  The example allows `10.20.0.0/16` for the real senders and `127.0.0.1` for the test below; set `allow` to the addresses your senders (and your test) come from. The certificate files go in `./secrets/ingest` (gitignored), which Compose mounts read-only at `/etc/sentinel/secrets` in both ingest containers (`ingest-service` and `ingest-listener`); the TAK ones stay in `./secrets/tak`. Create both folders before the first `docker compose up`: on Linux Docker creates a missing one owned by root. A throwaway CA and certificates for the connection above (use your own PKI outside development; one CA signs the server and the sender, and `clients-ca.pem` is the file the connection trusts):
 
   ```bash
   mkdir -p secrets/ingest secrets/tak
-  sudo chgrp -R 10001 secrets/ingest secrets/tak
-  sudo chmod -R u=rwX,g=rX,o= secrets/ingest secrets/tak   # files 0640, folders 0750; you stay the owner
-  ```
-
-  To hand the folders over completely instead, `sudo chown -R 10001:10001 secrets/ingest secrets/tak` and `sudo chmod -R u=rX,g=rX,o= secrets/ingest secrets/tak` (files 0440). Rootless Docker and Podman remap ids, where `chgrp 10001` does not apply. A file the container cannot read fails the connection at start with `permission denied` as its last error.
-
-  A throwaway CA and certificates for the connection above (use your own PKI outside development). One CA signs the server and the sender, and `clients-ca.pem` is the file the connection trusts:
-
-  ```bash
   SECRETS=$PWD/secrets/ingest; mkdir -p /tmp/sentinel-pki && cd /tmp/sentinel-pki
   openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj '/CN=Sentinel test CA' -keyout ca.key -out clients-ca.pem
   openssl req -newkey rsa:2048 -nodes -subj '/CN=localhost' -keyout server.key -out server.csr
@@ -277,6 +268,18 @@ Rules and safeguards, in short (details and the counters are in `docs/feeds.md`)
   openssl req -newkey rsa:2048 -nodes -subj '/CN=sender-1' -keyout client.key -out client.csr
   openssl x509 -req -in client.csr -CA clients-ca.pem -CAkey ca.key -CAcreateserial -days 90 -out client.pem
   cp server.pem server.key clients-ca.pem "$SECRETS"/    # the CA key and the sender's files stay out of the mount
+  ```
+
+  The containers run as user and group 10001 and read the files with the group's rights, and `openssl` writes keys readable by their owner only, so on a Linux host give gid 10001 access once the files are in place (run these in the repository root; they are for Linux hosts):
+
+  ```bash
+  sudo chgrp -R 10001 secrets/ingest secrets/tak
+  sudo chmod -R u=rwX,g=rX,o= secrets/ingest secrets/tak   # files 0640, folders 0750; you stay the owner
+  ```
+
+  To hand the folders over completely instead, `sudo chown -R 10001:10001 secrets/ingest secrets/tak` and `sudo chmod -R u=rX,g=rX,o= secrets/ingest secrets/tak` (files 0440). Rootless Docker and Podman remap ids, where `chgrp 10001` does not apply. A file the container cannot read fails the connection at start with `permission denied` as its last error. With the connection created and running, send one observation as the certificate holder (from `/tmp/sentinel-pki`, where the sender's files are):
+
+  ```bash
   echo '{"sourceEntityId":"mtls-1","entityType":"ENTITY_TYPE_VEHICLE","position":{"latitude":51.5,"longitude":-0.12}}' |
     openssl s_client -quiet -no_ign_eof -verify_return_error -connect localhost:6002 -servername localhost \
       -CAfile clients-ca.pem -cert client.pem -key client.key
