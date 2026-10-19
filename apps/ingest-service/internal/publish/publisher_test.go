@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/protobuf/proto"
 
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
@@ -20,11 +23,13 @@ import (
 type fakeProducer struct {
 	mu       sync.Mutex
 	msgs     []*kafka.Message
+	calls    atomic.Int32 // how many times Produce was called, whatever it answered
 	fullLeft atomic.Int32 // how many times to answer "queue full"
 	fail     error
 }
 
 func (f *fakeProducer) Produce(msg *kafka.Message) error {
+	f.calls.Add(1)
 	if f.fullLeft.Load() > 0 {
 		f.fullLeft.Add(-1)
 		return kafka.NewError(kafka.ErrQueueFull, "queue full", false)
@@ -198,4 +203,140 @@ func TestDeadLetterReceivedAt(t *testing.T) {
 	if stamped.Before(before) || stamped.After(after) {
 		t.Errorf("received-at = %v, want the time of dead-lettering, between %v and %v", stamped, before, after)
 	}
+}
+
+// stuckProducer is a producer that takes a call and never gives it back, until
+// it is released: the worst a Kafka that cannot be reached can do to a shard.
+type stuckProducer struct {
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func newStuckProducer(t *testing.T) *stuckProducer {
+	s := &stuckProducer{release: make(chan struct{})}
+	t.Cleanup(func() { close(s.release) }) // lets the stuck shard go when the test is over
+	return s
+}
+
+func (s *stuckProducer) Produce(*kafka.Message) error {
+	s.calls.Add(1)
+	<-s.release
+	return nil
+}
+
+// closeWithin runs CloseWithin and fails the test, rather than hanging it, if it
+// does not return in time.
+func closeWithin(t *testing.T, pub *Publisher, d time.Duration) (abandoned int, took time.Duration) {
+	t.Helper()
+	type result struct{ abandoned int }
+	done := make(chan result, 1)
+	start := time.Now()
+	go func() { done <- result{pub.CloseWithin(d)} }()
+	select {
+	case r := <-done:
+		return r.abandoned, time.Since(start)
+	case <-time.After(5 * time.Second):
+		t.Fatalf("CloseWithin(%v) had not returned after 5 s", d)
+		return 0, 0
+	}
+}
+
+// Shutdown with Kafka unreachable: the producer takes a call and never answers,
+// so the shard never gets to the next observation and Close would wait for it
+// forever. CloseWithin returns when its time is up, and says how many
+// observations it gave up on: the one the producer holds and the ones queued.
+func TestCloseWithinReturnsWhenTheProducerBlocksForever(t *testing.T) {
+	sp := newStuckProducer(t)
+	core, logs := observer.New(zapcore.WarnLevel)
+	pub := New(sp, nil, zap.New(core), Options{Shards: 1, Buffer: 2})
+	pub.Start()
+	for i := 0; i < 3; i++ { // one in the producer's hands, two in the shard's queue
+		if err := pub.Emit(context.Background(), observation("f", "AAA111", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !waitFor(func() bool { return sp.calls.Load() == 1 }) {
+		t.Fatal("the shard never called the producer")
+	}
+
+	abandoned, took := closeWithin(t, pub, 100*time.Millisecond)
+	if took < 100*time.Millisecond {
+		t.Errorf("CloseWithin(100ms) returned after %v: before its time was up", took)
+	}
+	if took > 2*time.Second {
+		t.Errorf("CloseWithin(100ms) took %v, want it to return soon after its 100ms", took)
+	}
+	if abandoned != 3 {
+		t.Errorf("abandoned = %d, want 3: the observation in the producer and the two queued", abandoned)
+	}
+	entries := logs.FilterMessage("publisher gave up on observations that were not handed to the producer").All()
+	if len(entries) != 1 || entries[0].ContextMap()["abandoned"] != int64(3) {
+		t.Errorf("log = %v, want one warning that says 3 were abandoned", logs.All())
+	}
+	if err := pub.Emit(context.Background(), observation("f", "AAA111", 9)); !errors.Is(err, ErrClosed) {
+		t.Errorf("emit after CloseWithin = %v, want ErrClosed", err)
+	}
+	pub.Close() // a second close has nothing left to wait for
+}
+
+// A producer that answers "queue full" for ever, as one whose Kafka is down does
+// once its queue has filled, keeps a shard retrying. CloseWithin stops the
+// retrying, so that nothing calls the producer after it returns and the caller
+// can close the producer.
+func TestCloseWithinStopsTheShardsRetrying(t *testing.T) {
+	fp := &fakeProducer{}
+	fp.fullLeft.Store(1 << 30)
+	// Room for all six on one shard, so that no Emit waits on a shard that is
+	// stuck retrying, wherever the keys hash.
+	pub := New(fp, nil, nil, Options{Shards: 2, Buffer: 8, QueueFullWait: time.Millisecond})
+	pub.Start()
+	for i := 0; i < 6; i++ {
+		if err := pub.Emit(context.Background(), observation("f", fmt.Sprintf("K%d", i), i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !waitFor(func() bool { return fp.calls.Load() >= 10 }) {
+		t.Fatal("the shards were not retrying")
+	}
+
+	abandoned, _ := closeWithin(t, pub, 50*time.Millisecond)
+	if abandoned != 6 {
+		t.Errorf("abandoned = %d, want all 6", abandoned)
+	}
+	after := fp.calls.Load()
+	time.Sleep(100 * time.Millisecond) // many retries' worth
+	if now := fp.calls.Load(); now != after {
+		t.Errorf("the producer was called %d more times after CloseWithin returned", now-after)
+	}
+}
+
+// When Kafka takes everything in time, CloseWithin is Close: it waits for the
+// drain, loses nothing and reports that nothing was abandoned.
+func TestCloseWithinDrainsWhenTheProducerKeepsUp(t *testing.T) {
+	fp := &fakeProducer{}
+	pub := New(fp, nil, nil, Options{Shards: 4, Buffer: 16})
+	pub.Start()
+	const n = 200
+	for i := 0; i < n; i++ {
+		if err := pub.Emit(context.Background(), observation("f", fmt.Sprintf("K%d", i%7), i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	abandoned, _ := closeWithin(t, pub, 10*time.Second)
+	if abandoned != 0 {
+		t.Errorf("abandoned = %d, want 0", abandoned)
+	}
+	if got := len(fp.byTopic("observations.raw")); got != n {
+		t.Errorf("produced %d of %d", got, n)
+	}
+}
+
+// waitFor polls cond for a few seconds.
+func waitFor(cond func() bool) bool {
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if cond() {
+			return true
+		}
+	}
+	return cond()
 }

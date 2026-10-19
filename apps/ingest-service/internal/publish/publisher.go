@@ -9,6 +9,7 @@ import (
 	"hash/fnv"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -76,10 +77,23 @@ type Publisher struct {
 	shards []chan *obs.Observation
 	wg     sync.WaitGroup
 
+	// pending is the observations Emit has taken that no shard has handed to the
+	// producer yet: the ones queued and the ones in a shard's hands. It is what
+	// CloseWithin gives up on if it runs out of time.
+	pending atomic.Int64
+	// abandon is closed when CloseWithin gives up, and stops the shards.
+	abandon chan struct{}
+
 	mu       sync.Mutex
 	closed   bool
 	limiters map[string]*rate.Limiter
 }
+
+// abandonGrace is how long CloseWithin, having given up, waits for the shards to
+// notice and stop calling the producer, so that the caller can close it. A shard
+// notices at once unless it is inside a call to the producer that does not
+// return, which nothing can interrupt.
+const abandonGrace = 100 * time.Millisecond
 
 // New creates a publisher; call Start before Emit.
 func New(p Producer, m *metrics.Metrics, logger *zap.Logger, opts Options) *Publisher {
@@ -87,7 +101,7 @@ func New(p Producer, m *metrics.Metrics, logger *zap.Logger, opts Options) *Publ
 		logger = zap.NewNop()
 	}
 	o := opts.withDefaults()
-	pub := &Publisher{producer: p, metrics: m, logger: logger, opts: o, limiters: map[string]*rate.Limiter{}}
+	pub := &Publisher{producer: p, metrics: m, logger: logger, opts: o, abandon: make(chan struct{}), limiters: map[string]*rate.Limiter{}}
 	pub.shards = make([]chan *obs.Observation, o.Shards)
 	for i := range pub.shards {
 		pub.shards[i] = make(chan *obs.Observation, o.Buffer)
@@ -120,10 +134,12 @@ func (p *Publisher) Emit(ctx context.Context, o *obs.Observation) error {
 		return ErrClosed
 	}
 	ch := p.shards[shardFor(wire.Key(o), len(p.shards))]
+	p.pending.Add(1)
 	select {
 	case ch <- o:
 		return nil
 	case <-ctx.Done():
+		p.pending.Add(-1)
 		return ctx.Err()
 	}
 }
@@ -175,29 +191,93 @@ func (p *Publisher) DeadLetter(dl obs.DeadLetter) {
 	}
 }
 
-// Close stops accepting observations, drains every shard and returns.
-func (p *Publisher) Close() {
+// Close stops accepting observations, drains every shard and returns. It waits
+// as long as the drain takes, which is for ever when the producer never takes
+// what it is given (Kafka unreachable, its queue full): a caller with a deadline
+// calls CloseWithin.
+func (p *Publisher) Close() { p.shutdown(nil) }
+
+// CloseWithin stops accepting observations and waits up to d for the shards to
+// hand what they hold to the producer. If that takes longer it gives up: the
+// shards stop, whatever they had not handed over is dropped, and the number of
+// observations dropped is logged and returned. It returns 0 when the shards
+// drained in time, as Close does. Only the first call to Close or CloseWithin
+// does anything; the others return at once.
+//
+// What the producer holds is the caller's to flush, and to close once CloseWithin
+// has returned: no shard calls the producer after that, unless one is stuck
+// inside a call that never returns (and then the process is about to end).
+func (p *Publisher) CloseWithin(d time.Duration) (abandoned int) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	return p.shutdown(timer.C)
+}
+
+// shutdown is Close, giving up when expired fires; a nil expired never does.
+func (p *Publisher) shutdown(expired <-chan time.Time) int {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
-		return
+		return 0
 	}
 	p.closed = true
 	p.mu.Unlock()
 	for _, ch := range p.shards {
 		close(ch)
 	}
-	p.wg.Wait()
+	drained := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+		return 0
+	case <-expired:
+	}
+	select {
+	case <-drained: // done as the time ran out
+		return 0
+	default:
+	}
+
+	// Counted before the shards are told to stop: each one that stops drops its
+	// pending count as it leaves, and what it was holding was abandoned all the same.
+	abandoned := int(p.pending.Load())
+	close(p.abandon)
+	select {
+	case <-drained:
+	case <-time.After(abandonGrace):
+		p.logger.Warn("a publisher shard is stuck inside the producer and was left behind")
+	}
+	if abandoned > 0 {
+		p.logger.Warn("publisher gave up on observations that were not handed to the producer", zap.Int("abandoned", abandoned))
+	}
+	return abandoned
+}
+
+// abandoned reports whether CloseWithin has given up.
+func (p *Publisher) abandoned() bool {
+	select {
+	case <-p.abandon:
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *Publisher) run(shard int, ch <-chan *obs.Observation) {
 	defer p.wg.Done()
 	label := strconv.Itoa(shard)
 	for o := range ch {
+		if p.abandoned() {
+			return // the rest of the queue is given up
+		}
 		if p.metrics != nil {
 			p.metrics.PublisherShardDepth.WithLabelValues(label).Set(float64(len(ch)))
 		}
 		p.produce(o)
+		p.pending.Add(-1)
 	}
 }
 
@@ -220,6 +300,9 @@ func (p *Publisher) produce(o *obs.Observation) {
 
 	wait := p.opts.QueueFullWait
 	for {
+		if p.abandoned() {
+			return
+		}
 		err := p.producer.Produce(msg)
 		if err == nil {
 			if p.metrics != nil {
@@ -239,10 +322,25 @@ func (p *Publisher) produce(o *obs.Observation) {
 		if p.metrics != nil {
 			p.metrics.PublisherBlockedSeconds.Add(wait.Seconds())
 		}
-		time.Sleep(wait)
+		if !p.sleep(wait) {
+			return
+		}
 		if wait < 500*time.Millisecond {
 			wait *= 2
 		}
+	}
+}
+
+// sleep waits d, or until CloseWithin gives up, and reports whether it waited
+// the whole of d.
+func (p *Publisher) sleep(d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-p.abandon:
+		return false
 	}
 }
 

@@ -201,12 +201,16 @@ func main() {
 	case <-time.After(time.Until(deadline)):
 		logger.Warn("feed supervisor did not stop in time")
 	}
-	publisher.Close()
-	flushMs := int(time.Until(deadline) / time.Millisecond)
-	if flushMs < 1000 {
-		flushMs = 1000
-	}
-	if remaining := producer.Flush(flushMs); remaining > 0 {
+	// With Kafka unreachable nothing drains: the shards cannot hand their
+	// observations over and a flush delivers none. So each step below waits only
+	// until the deadline, the publisher gives up on what it still holds (and logs
+	// how much), and the producer closes within the time that is left rather
+	// than a flush of its own. A step that finds the deadline passed still gets
+	// a second to try, so the process ends inside the grace period the
+	// orchestrator allows.
+	publisher.CloseWithin(time.Until(deadline))
+	flushFor := func() time.Duration { return max(time.Until(deadline), time.Second) }
+	if remaining := producer.Flush(int(flushFor() / time.Millisecond)); remaining > 0 {
 		logger.Warn("kafka producer still has unflushed messages", zap.Int("remaining", remaining))
 	}
 
@@ -215,6 +219,10 @@ func main() {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http server shutdown error", zap.Error(err))
 	}
+
+	// The producer's deferred Close flushes for 10 s whatever the deadline; closing
+	// it here makes that one a no-op.
+	producer.CloseWithin(flushFor())
 
 	logger.Info("sentinel ingest service shut down gracefully")
 }
