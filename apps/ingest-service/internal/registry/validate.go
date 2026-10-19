@@ -25,6 +25,11 @@ func (e *ValidationError) Error() string {
 	return "invalid feed: " + strings.Join(msgs, "; ")
 }
 
+// reservedIDs are the feed ids that name a route of their own under /feeds.
+// The router prefers GET /feeds/ports to GET /feeds/{id}, so a feed with that
+// id could never be read.
+var reservedIDs = map[string]bool{"ports": true}
+
 // Validator checks feed definitions against the driver catalog.
 type Validator struct {
 	Catalog *drivers.Catalog
@@ -33,8 +38,11 @@ type Validator struct {
 // Validate returns a *ValidationError listing every problem, or nil.
 func (v *Validator) Validate(f *Feed) error {
 	var problems []Problem
-	if !ValidSlug(f.ID) {
+	switch {
+	case !ValidSlug(f.ID):
 		problems = append(problems, Problem{Path: "/id", Message: "must be 1-63 lower-case letters, digits or dashes, starting with a letter or digit"})
+	case reservedIDs[f.ID]:
+		problems = append(problems, Problem{Path: "/id", Message: "is reserved"})
 	}
 	if strings.TrimSpace(f.Name) == "" {
 		problems = append(problems, Problem{Path: "/name", Message: "is required"})

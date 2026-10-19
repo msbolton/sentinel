@@ -159,6 +159,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, guard func(http.Handler) ht
 	}
 	route := func(pattern string, fn http.HandlerFunc) { mux.Handle(pattern, guard(fn)) }
 	route("GET /feeds", h.list)
+	route("GET /feeds/ports", h.ports) // a literal path beats GET /feeds/{id}; the id ports is reserved
 	route("POST /feeds", h.create)
 	route("GET /feeds/{id}", h.get)
 	route("PUT /feeds/{id}", h.replace)
@@ -210,6 +211,45 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		out = append(out, dto)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// portsResponse is the body of GET /feeds/ports, which the Connections form
+// reads to help an operator choose a port for a listening connection.
+type portsResponse struct {
+	// Min and Max bound the ports a listening connection may bind.
+	Min int `json:"min"`
+	Max int `json:"max"`
+	// Reserved are the ports Sentinel itself uses, as ranges.
+	Reserved []registry.PortRange `json:"reserved"`
+	// Taken are the ports listening connections hold, disabled ones included.
+	Taken []registry.PortUse `json:"taken"`
+	// Suggested maps a protocol, tcp or udp, to a port that is free for it. A
+	// protocol with no free port is left out.
+	Suggested map[string]int `json:"suggested"`
+}
+
+// ports reports which listening ports are taken and which are reserved, and
+// suggests a free one for each protocol. It applies the rules of the port check
+// that guards a save to the same feeds, so the two agree. The answer is advice:
+// a save checks again under its lock, and a port that another process holds on
+// the listener host is invisible here and fails when the connection starts.
+func (h *Handler) ports(w http.ResponseWriter, r *http.Request) {
+	feeds, err := h.store.List(r.Context())
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	taken := registry.PortsInUse(feeds)
+	resp := portsResponse{
+		Min: registry.MinPort, Max: registry.MaxPort,
+		Reserved: h.Reserved.Ranges(), Taken: taken, Suggested: map[string]int{},
+	}
+	for _, protocol := range []string{"tcp", "udp"} {
+		if port := registry.SuggestPort(protocol, registry.SuggestFrom, taken, h.Reserved); port != 0 {
+			resp.Suggested[protocol] = port
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func matchesDirection(have, want string) bool {

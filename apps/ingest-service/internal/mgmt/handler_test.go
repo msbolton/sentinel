@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,7 @@ type memStore struct {
 	areas       map[string]registry.Area
 	replicas    []registry.Replica
 	replicasErr error
+	listErr     error
 	// guards records, for each create and update, whether it came with a port guard.
 	guards []bool
 }
@@ -45,6 +47,9 @@ func newMemStore() *memStore {
 func (s *memStore) List(context.Context) ([]registry.Feed, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	out := []registry.Feed{}
 	for _, f := range s.feeds {
 		out = append(out, f)
@@ -898,5 +903,178 @@ func TestOrdinaryFeedWithOnlyListenersIsExplained(t *testing.T) {
 		if st.LastError == registry.NoOrdinaryReplicaError || st.State != registry.StateRunning || st.MessagesTotal != 7 {
 			t.Errorf("%s of a feed running here = %+v", view, st)
 		}
+	}
+}
+
+// portsServer is a server whose reserved ports are the given set.
+func portsServer(t *testing.T, reserved registry.PortSet) (*httptest.Server, *memStore) {
+	t.Helper()
+	store := newMemStore()
+	h := NewHandler(store, drivers.Default(), &fakeRuntime{}, nil)
+	h.Reserved = reserved
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux, Auth(AuthOptions{}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, store
+}
+
+// readPorts fetches GET /feeds/ports and returns the body as it was sent,
+// without its trailing newline, and the suggestions in it.
+func readPorts(t *testing.T, srv *httptest.Server) (string, map[string]int) {
+	t.Helper()
+	resp, body := do(t, srv, "GET", "/feeds/ports", "", reqOpts{})
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "application/json" {
+		t.Fatalf("GET /feeds/ports: %d %s: %s", resp.StatusCode, resp.Header.Get("Content-Type"), body)
+	}
+	var out struct {
+		Suggested map[string]int `json:"suggested"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("%s: %v", body, err)
+	}
+	return strings.TrimSpace(string(body)), out.Suggested
+}
+
+func mustCreate(t *testing.T, srv *httptest.Server, body string) {
+	t.Helper()
+	if resp, out := do(t, srv, "POST", "/feeds", body, operator); resp.StatusCode != 201 {
+		t.Fatalf("create %s: %d %s", body, resp.StatusCode, out)
+	}
+}
+
+// GET /feeds/ports lists the ports connections hold and the ports Sentinel
+// keeps, and a free port for each protocol. The shape is the contract the
+// Connections form reads, so it is compared as text.
+func TestPortsEndpoint(t *testing.T) {
+	reserved, err := registry.ParsePortSet("6000-6001,7000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, _ := portsServer(t, reserved)
+
+	// Created out of port order; the response lists them by port, then protocol.
+	mustCreate(t, srv, `{"name":"Pier AIS","driver":"stream","enabled":true,"config":{"transport":{"kind":"udp","address":":10110"},"decoder":{"name":"nmea-ais"}}}`)
+	mustCreate(t, srv, `{"name":"Gate","driver":"stream","enabled":true,"config":{"transport":{"kind":"tcpserver","address":":6003"},"framing":"line","decoder":{"name":"nmea-ais"}}}`)
+	mustCreate(t, srv, `{"name":"Dock","driver":"udp","config":{"port":6002}}`)
+	mustCreate(t, srv, `{"name":"Site TCP","driver":"tcp","config":{"mode":"listen","port":6002}}`)
+	// Connections that do not listen hold no port.
+	mustCreate(t, srv, `{"name":"Relay","driver":"tcp","enabled":true,"config":{"mode":"connect","host":"relay.example","port":6004}}`)
+	mustCreate(t, srv, `{"name":"AIS client","driver":"stream","enabled":true,"config":{"transport":{"kind":"tcpclient","address":"ais.example:4001"},"decoder":{"name":"nmea-ais"}}}`)
+
+	// A disabled connection keeps its port, so it is listed (enabled false)
+	// and its port is not suggested. 6002 is free for neither protocol
+	// (taken by Site TCP and Dock), 6003 is taken for tcp only.
+	const want = `{"min":1024,"max":65535,` +
+		`"reserved":[{"from":6000,"to":6001},{"from":7000,"to":7000}],` +
+		`"taken":[` +
+		`{"protocol":"tcp","port":6002,"feedId":"site-tcp","feedName":"Site TCP","enabled":false},` +
+		`{"protocol":"udp","port":6002,"feedId":"dock","feedName":"Dock","enabled":false},` +
+		`{"protocol":"tcp","port":6003,"feedId":"gate","feedName":"Gate","enabled":true},` +
+		`{"protocol":"udp","port":10110,"feedId":"pier-ais","feedName":"Pier AIS","enabled":true}],` +
+		`"suggested":{"tcp":6004,"udp":6003}}`
+	for i := 0; i < 5; i++ { // the store lists feeds in map order
+		if body, _ := readPorts(t, srv); body != want {
+			t.Fatalf("GET /feeds/ports:\n got %s\nwant %s", body, want)
+		}
+	}
+
+	// What it suggests is what a save accepts, and what it lists is refused.
+	_, suggested := readPorts(t, srv)
+	if resp, out := do(t, srv, "POST", "/feeds", `{"name":"Suggested","driver":"udp","config":{"port":`+strconv.Itoa(suggested["udp"])+`}}`, operator); resp.StatusCode != 201 {
+		t.Fatalf("the suggested udp port %d: %d %s", suggested["udp"], resp.StatusCode, out)
+	}
+	if resp, out := do(t, srv, "POST", "/feeds", `{"name":"Again","driver":"tcp","config":{"mode":"listen","port":6003}}`, operator); resp.StatusCode != 422 || !strings.Contains(string(out), "used by connection gate") {
+		t.Fatalf("a tcp port that is listed as taken: %d %s", resp.StatusCode, out)
+	}
+	if resp, out := do(t, srv, "POST", "/feeds", `{"name":"Reserved","driver":"udp","config":{"port":7000}}`, operator); resp.StatusCode != 422 || !strings.Contains(string(out), "Sentinel") {
+		t.Fatalf("a reserved port: %d %s", resp.StatusCode, out)
+	}
+	_, suggested = readPorts(t, srv)
+	if suggested["udp"] != 6004 || suggested["tcp"] != 6004 {
+		t.Errorf("suggestions after taking udp 6003 = %v, want both 6004", suggested)
+	}
+}
+
+func TestPortsEndpointWithNothingConfigured(t *testing.T) {
+	srv, _ := portsServer(t, nil)
+	body, _ := readPorts(t, srv)
+	// The built-in feeds are all pollers. Lists are [], never null.
+	if want := `{"min":1024,"max":65535,"reserved":[],"taken":[],"suggested":{"tcp":6000,"udp":6000}}`; body != want {
+		t.Errorf("GET /feeds/ports:\n got %s\nwant %s", body, want)
+	}
+}
+
+// A protocol with no free port is left out of the suggestions.
+func TestPortsEndpointOmitsAProtocolWithNoFreePort(t *testing.T) {
+	everythingBut40000 := registry.PortSet{}
+	for p := 1024; p <= 65535; p++ {
+		if p != 40000 {
+			everythingBut40000[p] = true
+		}
+	}
+	srv, _ := portsServer(t, everythingBut40000)
+	mustCreate(t, srv, `{"name":"Last tcp","driver":"tcp","config":{"mode":"listen","port":40000}}`)
+	const reserved = `"reserved":[{"from":1024,"to":39999},{"from":40001,"to":65535}]`
+	const lastTCP = `{"protocol":"tcp","port":40000,"feedId":"last-tcp","feedName":"Last tcp","enabled":false}`
+	body, _ := readPorts(t, srv)
+	if want := `{"min":1024,"max":65535,` + reserved + `,"taken":[` + lastTCP + `],"suggested":{"udp":40000}}`; body != want {
+		t.Errorf("tcp full:\n got %s\nwant %s", body, want)
+	}
+	mustCreate(t, srv, `{"name":"Last udp","driver":"udp","config":{"port":40000}}`)
+	body, _ = readPorts(t, srv)
+	if want := `{"min":1024,"max":65535,` + reserved + `,"taken":[` + lastTCP + `,{"protocol":"udp","port":40000,"feedId":"last-udp","feedName":"Last udp","enabled":false}],"suggested":{}}`; body != want {
+		t.Errorf("both full:\n got %s\nwant %s", body, want)
+	}
+}
+
+// The literal route wins over GET /feeds/{id}, and no feed can take its name.
+func TestPortsRouteAndTheReservedID(t *testing.T) {
+	srv, store, _ := newServer(t, "secret")
+	token := reqOpts{token: "secret"}
+	admin := reqOpts{token: "secret", roles: "sentinel-admin", user: "u1"}
+
+	resp, out := do(t, srv, "GET", "/feeds/ports", "", token)
+	if resp.StatusCode != 200 || !strings.HasPrefix(string(out), `{"min":`) {
+		t.Fatalf("GET /feeds/ports: %d %s", resp.StatusCode, out)
+	}
+	// It sits behind the same guard as the rest.
+	if resp, _ := do(t, srv, "GET", "/feeds/ports", "", reqOpts{}); resp.StatusCode != 401 {
+		t.Errorf("without the service token: %d", resp.StatusCode)
+	}
+
+	// The name "Ports" makes the id ports, and an explicit id is refused the same way.
+	for _, body := range []string{
+		`{"name":"Ports","driver":"opensky"}`,
+		`{"id":"ports","name":"Anything","driver":"opensky"}`,
+	} {
+		resp, out := do(t, srv, "POST", "/feeds", body, admin)
+		var e errorResponse
+		_ = json.Unmarshal(out, &e)
+		if resp.StatusCode != 422 || len(e.Details) != 1 || e.Details[0].Path != "/id" || e.Details[0].Message != "is reserved" {
+			t.Errorf("create %s: %d %s", body, resp.StatusCode, out)
+		}
+	}
+	if _, ok := store.feeds["ports"]; ok {
+		t.Error("a feed named ports was stored")
+	}
+	// Only GET has the literal route; there is no such feed for the others.
+	for _, method := range []string{"PUT", "PATCH", "DELETE"} {
+		if resp, _ := do(t, srv, method, "/feeds/ports", `{"name":"x","config":{},"enabled":false}`, admin); resp.StatusCode != 404 {
+			t.Errorf("%s /feeds/ports: %d", method, resp.StatusCode)
+		}
+	}
+	// Ids that only contain the word are fine.
+	if resp, out := do(t, srv, "POST", "/feeds", `{"name":"Ports 2","driver":"opensky"}`, admin); resp.StatusCode != 201 {
+		t.Errorf("create ports-2: %d %s", resp.StatusCode, out)
+	}
+}
+
+func TestPortsEndpointStoreFailure(t *testing.T) {
+	srv, store, _ := newServer(t, "")
+	store.listErr = errors.New("database down")
+	resp, out := do(t, srv, "GET", "/feeds/ports", "", reqOpts{})
+	if resp.StatusCode != 500 || strings.Contains(string(out), "database down") {
+		t.Errorf("a failed listing: %d %s", resp.StatusCode, out)
 	}
 }

@@ -151,3 +151,31 @@ func TestValidateDirectionAndPolicy(t *testing.T) {
 		t.Errorf("default = %s", got)
 	}
 }
+
+// GET /feeds/ports is a literal route that the router prefers to
+// GET /feeds/{id}, so a feed with that id could never be read.
+func TestReservedFeedID(t *testing.T) {
+	v := newValidator()
+	feed := func(id string) *Feed {
+		return &Feed{ID: id, Name: "Ports", Driver: "opensky", Config: json.RawMessage(`{"intervalSec": 10}`)}
+	}
+	err := v.Validate(feed("ports"))
+	var ve *ValidationError
+	if !errors.As(err, &ve) || len(ve.Problems) != 1 || ve.Problems[0] != (Problem{Path: "/id", Message: "is reserved"}) {
+		t.Fatalf("id ports: %v", err)
+	}
+	// Only that id is taken; the id a name makes of itself ("Ports") is the same one.
+	if Slugify("Ports") != "ports" {
+		t.Fatalf("Slugify(Ports) = %q", Slugify("Ports"))
+	}
+	for _, id := range []string{"port", "ports-2", "my-ports", "portsa", "p0rts"} {
+		if err := v.Validate(feed(id)); err != nil {
+			t.Errorf("id %s: %v", id, err)
+		}
+	}
+	// A malformed id is reported as it was, once.
+	err = v.Validate(feed("Ports"))
+	if !errors.As(err, &ve) || len(ve.Problems) != 1 || ve.Problems[0].Path != "/id" || ve.Problems[0].Message == "is reserved" {
+		t.Errorf("id Ports: %v", err)
+	}
+}
