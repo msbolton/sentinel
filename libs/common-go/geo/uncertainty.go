@@ -44,7 +44,7 @@ func PolarCovarianceNEU(azDeg, elDeg, rangeM float64, s Sigma) (cov [6]float64, 
 func EllipseFromCov2(cNN, cNE, cEE float64) (semiMajorM, semiMinorM, orientationDeg float64) {
 	mean := (cNN + cEE) / 2
 	d := math.Hypot((cNN-cEE)/2, cNE)
-	l1, l2 := mean+d, math.Max(mean-d, 0)
+	l1, l2 := math.Max(mean+d, 0), math.Max(mean-d, 0)
 	o := deg(0.5 * math.Atan2(2*cNE, cNN-cEE))
 	return Ellipse95 * math.Sqrt(l1), Ellipse95 * math.Sqrt(l2), math.Mod(o+180, 180)
 }

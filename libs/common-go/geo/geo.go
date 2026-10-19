@@ -117,9 +117,15 @@ func LLAToAER(origin, target LLA) (azDeg, elDeg, rangeM float64) {
 // AERToLLAAtAltitude is the point at slant range rangeM along azimuth azDeg
 // from origin whose altitude is alt, for a measurement with no elevation. It
 // solves the elevation by iteration, so the Earth's curvature is accounted
-// for. ok is false when no elevation reaches that altitude at that range.
+// for. ok is false when no elevation reaches that altitude at that range, or
+// the range is negative. ok means the altitude is geometrically reachable at
+// that slant range, not that the point is in line of sight (it may be over
+// the horizon).
 func AERToLLAAtAltitude(origin LLA, azDeg, rangeM, alt float64) (p LLA, elDeg float64, ok bool) {
-	if rangeM <= 0 {
+	if rangeM < 0 {
+		return LLA{}, 0, false
+	}
+	if rangeM == 0 {
 		return origin, 0, alt == origin.Alt
 	}
 	sinEl := (alt - origin.Alt) / rangeM

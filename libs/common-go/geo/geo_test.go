@@ -98,6 +98,9 @@ func TestAERToLLAAtAltitude(t *testing.T) {
 	if _, _, ok := AERToLLAAtAltitude(origin, 0, 1000, -5000); ok {
 		t.Error("a target 5 km below the sensor cannot be 1 km away")
 	}
+	if _, _, ok := AERToLLAAtAltitude(origin, 0, -1000, origin.Alt); ok {
+		t.Error("a negative range is never reachable")
+	}
 	if p, _, ok := AERToLLAAtAltitude(origin, 0, 0, origin.Alt); !ok || p != origin {
 		t.Errorf("zero range is the origin, got %+v %v", p, ok)
 	}

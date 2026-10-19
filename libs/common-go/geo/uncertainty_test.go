@@ -59,6 +59,12 @@ func TestEllipseFromCov2(t *testing.T) {
 
 	maj, min, _ = EllipseFromCov2(100, 0, 100)
 	near(t, "circle", maj, min, 1e-9)
+
+	// A covariance that is not positive semi-definite gives zero axes, not NaN.
+	maj, min, o = EllipseFromCov2(-4, 0, -1)
+	if math.IsNaN(maj) || math.IsNaN(min) || math.IsNaN(o) || maj != 0 || min != 0 {
+		t.Fatalf("non-PSD covariance = %v, %v, %v", maj, min, o)
+	}
 }
 
 func TestEllipseCovarianceRoundTrip(t *testing.T) {
