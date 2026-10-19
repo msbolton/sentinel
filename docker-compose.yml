@@ -733,6 +733,11 @@ services:
     # process has stopped its feeds, released their leases and drained the publisher.
     # Give it SHUTDOWN_TIMEOUT_SEC (25, below) plus the HTTP server's own 5 s.
     stop_grace_period: 30s
+    # Optional: secrets/ingest.env (gitignored) holds NAME=value lines that secretRefs name as
+    # env:SENTINEL_SECRET_NAME; without the file nothing is added (Compose 2.24+).
+    env_file:
+      - path: ./secrets/ingest.env
+        required: false
     environment:
       APP_ENV: development
       KAFKA_BROKERS: kafka:9093
@@ -805,6 +810,10 @@ services:
     restart: unless-stopped
     # As for ingest-service: longer than SHUTDOWN_TIMEOUT_SEC, or Compose kills it mid-shutdown.
     stop_grace_period: 30s
+    # As for ingest-service: optional secrets/ingest.env, for env:SENTINEL_SECRET_NAME secretRefs.
+    env_file:
+      - path: ./secrets/ingest.env
+        required: false
     environment:
       APP_ENV: development
       # 4000 is the other ingest replicas' port; on the host's network this one needs its own.

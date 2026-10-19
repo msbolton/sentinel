@@ -63,6 +63,8 @@ spec:
           # attempt (an invalid DATABASE_URL), which waiting cannot fix, so the
           # script stops there and retries every other status. The first psql
           # error fails the Job, and Helm then fails the install or upgrade.
+          # psql -X skips any psqlrc, so nothing in the image can change how a
+          # schema file is run.
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -75,7 +77,7 @@ spec:
               done
               for f in /schema/*.sql; do
                 echo "== $f"
-                psql -v ON_ERROR_STOP=1 -q -f "$f" "$DATABASE_URL" || exit 1
+                psql -X -v ON_ERROR_STOP=1 -q -f "$f" "$DATABASE_URL" || exit 1
               done
           env:
             # The role the services connect as, so it owns what this creates:

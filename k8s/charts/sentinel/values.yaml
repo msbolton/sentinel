@@ -163,6 +163,7 @@ ingestService:
     clientCert: ""
     clientKey: ""
     ca: ""
+    # A mountPath outside /etc/sentinel needs INGEST_SECRET_FILE_DIRS set (ingestService.env) to name it.
     mountPath: /etc/sentinel/tak
   # Files for feed secretRefs to name as file:/etc/sentinel/secrets/<key>, such
   # as the PEMs of a TCP connection with mutual TLS. Name an existing Secret:
@@ -171,6 +172,7 @@ ingestService:
   # minute of a change to the Secret. Leave existingSecret empty to mount none.
   secretFiles:
     existingSecret: ""
+    # A mountPath outside /etc/sentinel needs INGEST_SECRET_FILE_DIRS set (ingestService.env) to name it.
     mountPath: /etc/sentinel/secrets
   # A Secret whose keys become environment variables of the ingest and listener
   # pods, for secretRefs to name as env:KEY (env above takes plain values only).
