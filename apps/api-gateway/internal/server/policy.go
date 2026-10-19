@@ -67,6 +67,11 @@ var DefaultPolicies = []Policy{
 	{Method: http.MethodPut, Prefix: "/api/v1/feeds", Roles: operatorOrAdmin},
 	{Method: http.MethodPatch, Prefix: "/api/v1/feeds", Roles: operatorOrAdmin},
 	{Method: http.MethodDelete, Prefix: "/api/v1/feeds", Roles: operatorOrAdmin},
+	// Emplacements (owned by ingest): operators, analysts and admins edit
+	// them; deleting one is for admins.
+	{Method: http.MethodPost, Prefix: "/api/v1/emplacements", Roles: operatorAnalystOrAdmin},
+	{Method: http.MethodPatch, Prefix: "/api/v1/emplacements", Roles: operatorAnalystOrAdmin},
+	{Method: http.MethodDelete, Prefix: "/api/v1/emplacements", Roles: adminOnly},
 	// Locations
 	{Method: http.MethodPost, Prefix: "/api/v1/locations", Roles: analystOrAdmin},
 	{Method: http.MethodPatch, Prefix: "/api/v1/locations", Roles: analystOrAdmin},

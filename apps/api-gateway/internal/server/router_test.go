@@ -129,6 +129,10 @@ func TestRouter_ProxiesWithIdentity(t *testing.T) {
 	if e.Path != "/feeds/f1" {
 		t.Errorf("feeds path = %q, want /feeds/f1", e.Path)
 	}
+	_, e = req(g, http.MethodGet, "/api/v1/emplacements/e1", "viewer")
+	if e.Path != "/emplacements/e1" {
+		t.Errorf("emplacements path = %q, want /emplacements/e1", e.Path)
+	}
 }
 
 func TestRouter_RolePolicies(t *testing.T) {
@@ -161,6 +165,12 @@ func TestRouter_RolePolicies(t *testing.T) {
 		{http.MethodPut, "/api/v1/feeds/x", "analyst", 403},
 		{http.MethodPut, "/api/v1/feeds/x", "admin", 200},
 		{http.MethodGet, "/api/v1/feeds", "viewer", 200},
+		{http.MethodGet, "/api/v1/emplacements", "viewer", 200},
+		{http.MethodPost, "/api/v1/emplacements", "viewer", 403},
+		{http.MethodPost, "/api/v1/emplacements", "analyst", 200},
+		{http.MethodPatch, "/api/v1/emplacements/x", "analyst", 200},
+		{http.MethodDelete, "/api/v1/emplacements/x", "analyst", 403},
+		{http.MethodDelete, "/api/v1/emplacements/x", "lowadmin", 200},
 	}
 	for _, c := range cases {
 		rr, _ := req(g, c.method, c.path, c.token)
