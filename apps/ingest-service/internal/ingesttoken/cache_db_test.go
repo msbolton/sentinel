@@ -1,28 +1,17 @@
-package ingesttoken
+package ingesttoken_test
 
 import (
 	"context"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	. "github.com/sentinel/ingest-service/internal/ingesttoken"
+	"github.com/sentinel/ingest-service/internal/registry"
 )
-
-// within polls cond for up to five seconds.
-func within(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
 
 // Run, on a real pool, follows token notices and feed notices.
 func TestRunFollowsRevocationAndFeedDeletion(t *testing.T) {
-	pool, ctx := testPool(t)
+	pool, ctx := TestPool(t)
 	store := NewPGStore(pool)
 	cache := NewCache(store, pool, nil)
 	revoked := make(chan Token, 8)
@@ -49,46 +38,29 @@ func TestRunFollowsRevocationAndFeedDeletion(t *testing.T) {
 	}
 
 	// A created token becomes usable, a revoked one stops, and its subscribers hear once.
-	tok, secret, hash := newToken("test-tok-a", "sensor one")
+	tok, secret, hash := NewToken("test-tok-a", "sensor one")
 	created, err := store.Create(ctx, tok, hash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	within(t, "the created token to authenticate", authenticates(secret))
+	Within(t, "the created token to authenticate", authenticates(secret))
 	if err := store.Revoke(ctx, "test-tok-a", created.ID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	within(t, "the revoked token to stop authenticating", func() bool { return !authenticates(secret)() })
+	Within(t, "the revoked token to stop authenticating", func() bool { return !authenticates(secret)() })
 	expectRevoked(created.ID)
 
 	// Deleting a feed cascades its tokens away with only a feed notice.
-	tok, secret, hash = newToken("test-tok-b", "sensor two")
+	tok, secret, hash = NewToken("test-tok-b", "sensor two")
 	created, err = store.Create(ctx, tok, hash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	within(t, "the second token to authenticate", authenticates(secret))
-	// What the registry's delete does: remove the feed and send the feed
-	// notice in one transaction. (The registry package cannot be imported
-	// here: it imports driver, which imports this package.)
-	if err := deleteFeed(ctx, pool, "test-tok-b"); err != nil {
+	Within(t, "the second token to authenticate", authenticates(secret))
+	// The real registry delete, which sends the feed notice itself.
+	if err := registry.NewWithPool(pool, nil).Delete(ctx, "test-tok-b"); err != nil {
 		t.Fatal(err)
 	}
-	within(t, "the deleted feed's token to stop authenticating", func() bool { return !authenticates(secret)() })
+	Within(t, "the deleted feed's token to stop authenticating", func() bool { return !authenticates(secret)() })
 	expectRevoked(created.ID)
-}
-
-func deleteFeed(ctx context.Context, pool *pgxpool.Pool, id string) error {
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `DELETE FROM sentinel.feeds WHERE id = $1`, id); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, "SELECT pg_notify($1, $2)", feedsChannel, id); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
 }

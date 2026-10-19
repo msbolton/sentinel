@@ -55,7 +55,7 @@ func TestDriversGetTheTokenCacheAndEmplacements(t *testing.T) {
 	if got.Tokens != tokens {
 		t.Errorf("deps.Tokens = %v, want the supervisor's token cache", got.Tokens)
 	}
-	if got.Emplacements == nil {
-		t.Error("deps.Emplacements is nil")
+	if got.Emplacements != (depsEmplacements{}) {
+		t.Errorf("deps.Emplacements = %v, want the supervisor's emplacement view", got.Emplacements)
 	}
 }
