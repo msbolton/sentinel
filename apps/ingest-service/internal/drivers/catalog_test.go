@@ -138,6 +138,7 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		{"tak", `{"address": "h:1", "outbound": {"queueMax": 1}}`, "/config/outbound/queueMax"},
 		{"grpc", `{}`, "/config/port"},
 		{"grpc", `{"port": 80}`, "/config/port"},
+		{"grpc", `{"port":6200,"tls":{"enabled":true,"requireClientCrt":true}}`, "/config/tls"},
 		{"grpc", `{"port": 6200, "backpressure": "drop"}`, "/config/backpressure"},
 		{"tcp", `{"mode": "listen"}`, "/config/port"},
 		{"tcp", `{"mode": "listen", "port": 80}`, "/config/port"},

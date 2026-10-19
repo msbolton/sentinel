@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
@@ -71,23 +72,29 @@ func (d *Driver) Run(ctx context.Context, sink driver.Sink) error {
 
 	select {
 	case err := <-served:
+		d.stopping.Store(true)
+		gl.CloseAll()
+		srv.Stop()
 		return fmt.Errorf("grpc: serving stopped: %w", err)
 	case <-ctx.Done():
 	}
 	d.stopping.Store(true)
-	d.stop(srv)
+	d.stop(srv, gl)
 	<-served
 	return nil
 }
 
 // stop lets open calls end (they are told the connection is moving) for up
-// to stopGrace, then cuts what is left.
-func (d *Driver) stop(srv *grpc.Server) {
+// to stopGrace, then cuts what is left. grpc's Stop does not close a
+// connection still in its TLS handshake or HTTP/2 preface, and waits for it
+// until the connection timeout, so the guard listener closes them all first.
+func (d *Driver) stop(srv *grpc.Server, gl *transport.GuardListener) {
 	done := make(chan struct{})
 	go func() { srv.GracefulStop(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(stopGrace):
+		gl.CloseAll()
 		srv.Stop()
 		<-done
 	}
@@ -128,7 +135,7 @@ func (d *Driver) prepareTLS(spec driver.Spec, deps driver.Deps, mutual bool) err
 	base := credentials.NewTLS(&tls.Config{
 		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { return src.Current(), nil },
 	})
-	d.creds = &countingCreds{TransportCredentials: base, failed: &d.counts.TLSFailed, stopping: &d.stopping}
+	d.creds = &countingCreds{TransportCredentials: base, failed: &d.counts.TLSFailed, stopping: &d.stopping, log: deps.Logger}
 	return nil
 }
 
@@ -137,16 +144,22 @@ type countingCreds struct {
 	credentials.TransportCredentials
 	failed   *atomic.Int64
 	stopping *atomic.Bool
+	log      *zap.Logger
 }
 
 func (c *countingCreds) ServerHandshake(raw net.Conn) (net.Conn, credentials.AuthInfo, error) {
 	conn, info, err := c.TransportCredentials.ServerHandshake(raw)
 	if err != nil && !c.stopping.Load() {
+		// The log comes first, so that whoever sees the counter move can
+		// find the sender in it.
+		if c.log != nil {
+			c.log.Debug("grpc TLS handshake failed", zap.String("remote", raw.RemoteAddr().String()), zap.Error(err))
+		}
 		c.failed.Add(1)
 	}
 	return conn, info, err
 }
 
 func (c *countingCreds) Clone() credentials.TransportCredentials {
-	return &countingCreds{TransportCredentials: c.TransportCredentials.Clone(), failed: c.failed, stopping: c.stopping}
+	return &countingCreds{TransportCredentials: c.TransportCredentials.Clone(), failed: c.failed, stopping: c.stopping, log: c.log}
 }

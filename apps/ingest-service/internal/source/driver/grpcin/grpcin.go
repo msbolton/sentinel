@@ -30,6 +30,7 @@ const (
 
 const (
 	defaultMaxMessageBytes = 64 << 10
+	minMaxMessageBytes     = 1024
 	maxMaxMessageBytes     = 16 << 20
 	defaultMessagesPerSec  = 1000
 	defaultPublishBatch    = 100
@@ -149,8 +150,17 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if size == 0 {
 		size = defaultMaxMessageBytes
 	}
-	if size > maxMaxMessageBytes {
-		return nil, fmt.Errorf("feed %s: maxMessageBytes is at most %d", spec.FeedID, maxMaxMessageBytes)
+	if size < minMaxMessageBytes || size > maxMaxMessageBytes {
+		return nil, fmt.Errorf("feed %s: maxMessageBytes must be %d to %d", spec.FeedID, minMaxMessageBytes, maxMaxMessageBytes)
+	}
+	if intOr(c.MaxConnections, 0) < 0 {
+		return nil, fmt.Errorf("feed %s: maxConnections must not be negative", spec.FeedID)
+	}
+	if intOr(c.MaxMessagesPerSec, 0) < 0 {
+		return nil, fmt.Errorf("feed %s: maxMessagesPerSec must not be negative", spec.FeedID)
+	}
+	if c.MaxMessagesPerSecPerSender < 0 {
+		return nil, fmt.Errorf("feed %s: maxMessagesPerSecPerSender must not be negative", spec.FeedID)
 	}
 	batch := c.MaxPublishBatch
 	if batch == 0 {

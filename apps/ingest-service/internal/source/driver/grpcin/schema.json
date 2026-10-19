@@ -18,9 +18,11 @@
     "tls": {
       "type": "object",
       "title": "TLS",
+      "additionalProperties": false,
+      "description": "Certificates and keys come from the tlsCert, tlsKey and clientCa secrets, never from file paths.",
       "properties": {
         "enabled": { "type": "boolean", "default": false, "title": "Use TLS" },
-        "requireClientCert": { "type": "boolean", "default": false, "title": "Require client certificates" }
+        "requireClientCert": { "type": "boolean", "default": false, "title": "Require client certificates", "description": "Mutual TLS, verified against the clientCa secret.", "x-showWhen": { "enabled": true } }
       }
     }
   },

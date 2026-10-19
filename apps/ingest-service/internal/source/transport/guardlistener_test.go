@@ -109,3 +109,46 @@ func TestGuardListenerCapsConnections(t *testing.T) {
 		t.Fatalf("a place freed up, but Accept failed: %v", a.err)
 	}
 }
+
+// CloseAll ends every admitted connection and gives its place back; the
+// peers see the close.
+func TestGuardListenerCloseAll(t *testing.T) {
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var counts ListenCounters
+	senders := NewSenders(50)
+	gl := NewGuardListener(inner, Allowlist{}, 0, &counts, senders)
+	defer gl.Close()
+	got := acceptLoop(gl)
+	peers := []net.Conn{dialTCP(t, inner.Addr().String()), dialTCP(t, inner.Addr().String())}
+	for range peers {
+		if a := <-got; a.err != nil {
+			t.Fatal(a.err)
+		}
+	}
+	if gl.Live() != 2 {
+		t.Fatalf("Live = %d, want 2", gl.Live())
+	}
+	gl.CloseAll()
+	if gl.Live() != 0 {
+		t.Fatalf("Live after CloseAll = %d, want 0", gl.Live())
+	}
+	for i, p := range peers {
+		p.SetReadDeadline(time.Now().Add(3 * time.Second))
+		if _, err := p.Read(make([]byte, 1)); err == nil || isTimeout(err) {
+			t.Errorf("peer %d: read = %v, want the connection closed", i, err)
+		}
+	}
+	gl.CloseAll() // nothing left, and no panic
+	dialTCP(t, inner.Addr().String())
+	if a := <-got; a.err != nil {
+		t.Fatalf("Accept after CloseAll: %v", a.err)
+	}
+}
+
+func isTimeout(err error) bool {
+	ne, ok := err.(net.Error)
+	return ok && ne.Timeout()
+}

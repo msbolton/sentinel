@@ -18,12 +18,15 @@ type GuardListener struct {
 	counts  *ListenCounters
 	senders *Senders
 	live    atomic.Int64
+
+	mu    sync.Mutex
+	conns map[*guardConn]struct{}
 }
 
 // NewGuardListener wraps inner. maxConnections 0 means no cap; senders may
 // be nil.
 func NewGuardListener(inner net.Listener, allow Allowlist, maxConnections int, counts *ListenCounters, senders *Senders) *GuardListener {
-	return &GuardListener{Listener: inner, allow: allow, max: maxConnections, counts: counts, senders: senders}
+	return &GuardListener{Listener: inner, allow: allow, max: maxConnections, counts: counts, senders: senders, conns: map[*guardConn]struct{}{}}
 }
 
 // Accept returns the next admitted connection, or the inner listener's
@@ -52,12 +55,35 @@ func (l *GuardListener) Accept() (net.Conn, error) {
 		if l.senders != nil {
 			l.senders.Connect(remote, time.Now().UTC())
 		}
-		return &guardConn{Conn: c, release: func() {
+		gc := &guardConn{Conn: c}
+		gc.release = func() {
+			l.mu.Lock()
+			delete(l.conns, gc)
+			l.mu.Unlock()
 			l.live.Add(-1)
 			if l.senders != nil {
 				l.senders.Disconnect(remote)
 			}
-		}}, nil
+		}
+		l.mu.Lock()
+		l.conns[gc] = struct{}{}
+		l.mu.Unlock()
+		return gc, nil
+	}
+}
+
+// CloseAll closes every admitted connection that is still open. A server
+// that is stopping uses it to end connections it no longer tracks, such as
+// one still in its handshake.
+func (l *GuardListener) CloseAll() {
+	l.mu.Lock()
+	open := make([]*guardConn, 0, len(l.conns))
+	for c := range l.conns {
+		open = append(open, c)
+	}
+	l.mu.Unlock()
+	for _, c := range open {
+		c.Close()
 	}
 }
 

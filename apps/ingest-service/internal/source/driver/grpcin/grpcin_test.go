@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	"github.com/sentinel/ingest-service/internal/source/driver"
@@ -57,6 +58,11 @@ func TestNewRefusals(t *testing.T) {
 		{"bad allowlist", map[string]any{"port": 6100, "allow": []string{"not an ip"}}, nil, "", "allow"},
 		{"client CA without requiring certs", map[string]any{"port": 6100, "tls": map[string]any{"enabled": true}}, map[string]string{"clientCa": "x"}, "", "requireClientCert"},
 		{"client certs without TLS", map[string]any{"port": 6100, "tls": map[string]any{"requireClientCert": true}}, nil, "", "tls.enabled"},
+		{"tiny messages", map[string]any{"port": 6100, "maxMessageBytes": 100}, nil, "", "maxMessageBytes"},
+		{"negative messages", map[string]any{"port": 6100, "maxMessageBytes": -1}, nil, "", "maxMessageBytes"},
+		{"negative connections", map[string]any{"port": 6100, "maxConnections": -1}, nil, "", "maxConnections"},
+		{"negative rate", map[string]any{"port": 6100, "maxMessagesPerSec": -1}, nil, "", "maxMessagesPerSec"},
+		{"negative sender rate", map[string]any{"port": 6100, "maxMessagesPerSecPerSender": -1}, nil, "", "maxMessagesPerSecPerSender"},
 		{"drop backpressure", map[string]any{"port": 6100}, nil, "drop", "backpressure"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -126,9 +132,38 @@ func TestRunNeedsTokensAndEmplacements(t *testing.T) {
 	}
 }
 
+// answered fails the test unless a good client gets a gRPC answer.
+func answered(t *testing.T, r *rig, what string) {
+	t.Helper()
+	// The client's connection is closed at once: with a cap of one it would
+	// hold the only place.
+	cc, err := grpc.NewClient("passthrough:///"+r.addr(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cc.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	_, err = ingestv1.NewIngestServiceClient(cc).ListEmplacements(ctx, &ingestv1.ListEmplacementsRequest{})
+	if c := status.Code(err); c == codes.Unavailable || c == codes.DeadlineExceeded {
+		t.Fatalf("the server did not answer %s: %v", what, err)
+	}
+}
+
+func stillRunning(t *testing.T, r *rig) {
+	t.Helper()
+	select {
+	case err := <-r.done:
+		t.Fatalf("Run returned while serving: %v", err)
+	default:
+	}
+}
+
 // Refused senders, failed handshakes and garbage never stop the server.
 func TestBadConnectionsKeepTheServerUp(t *testing.T) {
 	r := start(t, map[string]any{"maxConnections": 1}, nil, nil, nil, nil)
+	gl := r.d.gl.Load()
+
 	// Garbage: not an HTTP/2 preface.
 	c, err := net.Dial("tcp", r.addr())
 	if err != nil {
@@ -136,18 +171,28 @@ func TestBadConnectionsKeepTheServerUp(t *testing.T) {
 	}
 	c.Write([]byte("hello there\n"))
 	c.Close()
-	// A good client still gets an answer.
-	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
-	defer cancel()
-	_, err = r.client(t).ListEmplacements(ctx, &ingestv1.ListEmplacementsRequest{})
-	if c := status.Code(err); c == codes.Unavailable || c == codes.DeadlineExceeded {
-		t.Fatalf("the server stopped answering after garbage: %v", err)
+	waitFor(t, func() bool { return gl.Live() == 0 })
+	answered(t, r, "after garbage")
+
+	// The cap: one admitted connection is held, so the next is refused.
+	waitFor(t, func() bool { return gl.Live() == 0 })
+	held, err := net.Dial("tcp", r.addr())
+	if err != nil {
+		t.Fatal(err)
 	}
-	select {
-	case err := <-r.done:
-		t.Fatalf("Run returned while serving: %v", err)
-	default:
+	defer held.Close()
+	waitFor(t, func() bool { return gl.Live() == 1 })
+	over, err := net.Dial("tcp", r.addr())
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer over.Close()
+	waitFor(t, func() bool { return r.d.counts.Refused.Load() == 1 })
+	stillRunning(t, r)
+	held.Close()
+	waitFor(t, func() bool { return gl.Live() == 0 })
+	answered(t, r, "after the cap was reached")
+	stillRunning(t, r)
 }
 
 func TestAllowlistRefusalIsCounted(t *testing.T) {
@@ -188,6 +233,12 @@ func TestTLSFromSecrets(t *testing.T) {
 	defer cancel2()
 	_, _ = r.client(t).ListEmplacements(ctx2, &ingestv1.ListEmplacementsRequest{})
 	waitFor(t, func() bool { return r.d.counts.TLSFailed.Load() >= 1 })
+	ctx3, cancel3 := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel3()
+	if _, err := ingestv1.NewIngestServiceClient(cc).ListEmplacements(ctx3, &ingestv1.ListEmplacementsRequest{}); status.Code(err) == codes.Unavailable || status.Code(err) == codes.DeadlineExceeded {
+		t.Fatalf("a TLS client got no answer after a failed handshake: %v", err)
+	}
+	stillRunning(t, r)
 	if h := r.d.Health(); h.Detail["tlsCertNotAfter"] == nil || h.Detail["tls"] != true {
 		t.Errorf("TLS health detail missing: %v", h.Detail)
 	}
@@ -210,5 +261,144 @@ func TestHealthDetail(t *testing.T) {
 	}
 	if d["allowlist"] != "open" {
 		t.Errorf("allowlist = %v, want open", d["allowlist"])
+	}
+}
+
+func tlsClient(t *testing.T, addr string, cfg *tls.Config) ingestv1.IngestServiceClient {
+	t.Helper()
+	cc, err := grpc.NewClient("passthrough:///"+addr, grpc.WithTransportCredentials(credentials.NewTLS(cfg)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cc.Close() })
+	return ingestv1.NewIngestServiceClient(cc)
+}
+
+// With client certificates required, a certificate from the right CA is
+// answered; none, or one from another CA, is refused and counted.
+func TestMutualTLS(t *testing.T) {
+	ca := transporttest.NewCA(t)
+	server := ca.Issue(t, "localhost")
+	good := ca.Issue(t, "sender")
+	other := transporttest.NewCA(t).Issue(t, "intruder")
+	r := start(t, map[string]any{"tls": map[string]any{"enabled": true, "requireClientCert": true}},
+		map[string]string{"tlsCert": string(server.CertPEM), "tlsKey": string(server.KeyPEM), "clientCa": string(ca.CertPEM)}, nil, nil, nil)
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(ca.CertPEM)
+	call := func(pair *transporttest.Pair) error {
+		cfg := &tls.Config{RootCAs: roots, ServerName: "localhost"}
+		if pair != nil {
+			cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.Certificates = []tls.Certificate{cert}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, err := tlsClient(t, r.addr(), cfg).ListEmplacements(ctx, &ingestv1.ListEmplacementsRequest{})
+		return err
+	}
+	if err := call(&good); status.Code(err) == codes.Unavailable || status.Code(err) == codes.DeadlineExceeded {
+		t.Fatalf("a client with a certificate from the right CA got no answer: %v", err)
+	}
+	if r.d.counts.TLSFailed.Load() != 0 {
+		t.Fatalf("tlsFailed = %d after a good client", r.d.counts.TLSFailed.Load())
+	}
+	if err := call(nil); err == nil {
+		t.Fatal("a client without a certificate was answered")
+	}
+	waitFor(t, func() bool { return r.d.counts.TLSFailed.Load() >= 1 })
+	before := r.d.counts.TLSFailed.Load()
+	if err := call(&other); err == nil {
+		t.Fatal("a client with a certificate from another CA was answered")
+	}
+	waitFor(t, func() bool { return r.d.counts.TLSFailed.Load() > before })
+	if err := call(&good); status.Code(err) == codes.Unavailable || status.Code(err) == codes.DeadlineExceeded {
+		t.Fatalf("the good client got no answer after refusals: %v", err)
+	}
+	stillRunning(t, r)
+}
+
+// Before Run, Health already reports every listener counter, as numbers.
+func TestHealthBeforeRun(t *testing.T) {
+	dv, err := New(spec(map[string]any{"port": 6100}, nil), driver.Deps{Logger: zap.NewNop()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := dv.Health()
+	if h.Connected {
+		t.Error("connected before Run")
+	}
+	for _, k := range []string{"accepted", "rejected", "refused", "rateLimited", "senderRateLimited", "oversize", "tlsFailed", "connections", "distinctSenders", "reportsOk", "deadLettered"} {
+		switch h.Detail[k].(type) {
+		case int, int64, uint64, int32, float64:
+		default:
+			t.Errorf("health detail %q = %T(%v), want a number", k, h.Detail[k], h.Detail[k])
+		}
+	}
+}
+
+// A driver whose Run returned serves again when the supervisor runs it again.
+func TestRunTwice(t *testing.T) {
+	r := start(t, nil, nil, nil, nil, nil)
+	answered(t, r, "the first time")
+	if err := r.stop(t); err != nil {
+		t.Fatalf("first Run = %v, want nil", err)
+	}
+	if r.d.connected.Load() {
+		t.Fatal("still connected after Run returned")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.d.Run(ctx, &memSink{}) }()
+	waitFor(t, func() bool { return r.d.connected.Load() })
+	answered(t, r, "the second time")
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("second Run = %v, want nil", err)
+		}
+	case <-time.After(stopGrace + 2*time.Second):
+		t.Fatal("second Run did not return")
+	}
+}
+
+// One connection that sends nothing, in the TLS handshake or the HTTP/2
+// preface, must not hold Run past its bound: grpc waits for such a
+// connection until its connection timeout (10 s) unless it is closed.
+func TestStopIsBoundedWithAStalledConnection(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tls  bool
+	}{{"plain", false}, {"tls", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := map[string]any{}
+			var secrets map[string]string
+			if tc.tls {
+				pair := transporttest.NewCA(t).Issue(t, "localhost")
+				cfg["tls"] = map[string]any{"enabled": true}
+				secrets = map[string]string{"tlsCert": string(pair.CertPEM), "tlsKey": string(pair.KeyPEM)}
+			}
+			r := start(t, cfg, secrets, nil, nil, nil)
+			c, err := net.Dial("tcp", r.addr())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			waitFor(t, func() bool { return r.d.gl.Load().Live() == 1 })
+			began := time.Now()
+			r.cancel()
+			select {
+			case err := <-r.done:
+				r.done <- err
+				if err != nil {
+					t.Fatalf("Run = %v, want nil", err)
+				}
+			case <-time.After(stopGrace + 500*time.Millisecond):
+				t.Fatalf("Run still running %v after cancel", time.Since(began))
+			}
+		})
 	}
 }
