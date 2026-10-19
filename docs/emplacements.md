@@ -43,16 +43,16 @@ Served by the ingest service on `HTTP_ADDR` (`/emplacements`) and proxied by the
 | GET | `/emplacements?feedId=&mobility=&active=` | The emplacements the caller may see (array). `feedId` filters on the bound connection, `mobility` is `FIXED` or `MOBILE`, `active` is `true` or `false`. |
 | POST | `/emplacements` | Create. The body takes the fields above, without the read-only ones. Answers 201 with the emplacement and an `ETag`. |
 | GET | `/emplacements/{id}` | One emplacement, with `ETag: "<version>"`. |
-| PATCH | `/emplacements/{id}` | Merge patch: a field that is absent is left alone. Needs `If-Match: "<version>"`. Answers 200 with the new `ETag`. |
+| PATCH | `/emplacements/{id}` | Merge patch: a field that is absent is left alone. Takes `If-Match: "<version>"` (the client always sends it); without the header the write is unconditional. Answers 200 with the new `ETag`. |
 | DELETE | `/emplacements/{id}` | Soft delete. Answers 204. |
 
-**Optimistic writes.** Every response carries `ETag: "<version>"`. A PATCH sends it back in `If-Match`; a stale value answers 412 and changes nothing, so two editors cannot overwrite each other. The Emplacements panel handles this by telling the second editor that the emplacement was changed by someone else.
+**Optimistic writes.** Every response carries `ETag: "<version>"`. A PATCH sends it back in `If-Match` (`"3"`, `3` and `W/"3"` are all read as version 3); a stale value answers 412 and changes nothing, so two editors cannot overwrite each other. `GET` only returns the `ETag`; it does not read `If-Match`. The Emplacements panel handles this by telling the second editor that the emplacement was changed by someone else.
 
 **Statuses.**
 
 | Status | Meaning |
 |--------|---------|
-| 400 | A bad body, a bad id, or a missing or malformed `If-Match`. |
+| 400 | A bad body, a bad id, or an `If-Match` that is not a version (not a number, or below 1). |
 | 404 | No such emplacement, it was deleted, or it is above the caller's clearance. A PATCH on an emplacement above the caller's clearance answers 404 whatever its `If-Match`, so a stale or absent header cannot tell whether it exists. |
 | 409 | The name is taken among live emplacements (case-insensitive). |
 | 412 | `If-Match` is stale. |
