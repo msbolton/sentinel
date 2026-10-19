@@ -62,7 +62,7 @@ import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine, type GeoPoint } from '
 import { formatAltitude } from '../../shared/geo-format';
 import { GeofenceService } from '../../core/services/geofence.service';
 import { DRAFT_ID, GeofenceLayer } from './geofence-layer';
-import { EMPLACEMENTS_LAYER, EMPLACEMENT_DRAFT_ID, EmplacementLayer } from './emplacement-layer';
+import { EMPLACEMENTS_LAYER, EMPLACEMENT_DRAFT_ID, EmplacementLayer, emplacementDrawingOf } from './emplacement-layer';
 import { EmplacementService } from '../../core/services/emplacement.service';
 import { emplacementIdOf } from '../../shared/models/emplacement.model';
 import { GeofenceDrawTool } from './geofence-draw';
@@ -209,8 +209,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   /** Saved geofences drawn on the globe; see geofence-layer.ts. */
   private geofenceLayer: GeofenceLayer | null = null;
   private emplacementLayer: EmplacementLayer | null = null;
-  /** The SENSOR entities that stand for emplacements, by entity id; the emplacement layer draws them. */
+  /** The SENSOR entities that stand for loaded emplacements, by entity id; the emplacement layer draws them. */
   private readonly emplacementEntities = new Map<string, Entity>();
+  /** The ids of the emplacements loaded now; only their entities are left to the emplacement layer. */
+  private loadedEmplacementIds: ReadonlySet<string> = new Set();
   /** The geofence being drawn, or null; see geofence-draw-state.ts and geofence-draw.ts. */
   readonly drawSession = signal<DrawSession | null>(null);
   private drawTool: GeofenceDrawTool | null = null;
@@ -309,7 +311,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.emplacements.draft();
       this.emplacements.showCoverage();
       this.layerVisibility.isVisible(EMPLACEMENTS_LAYER);
-      untracked(() => this.resyncEmplacements());
+      untracked(() => {
+        this.syncLoadedEmplacements();
+        this.resyncEmplacements();
+      });
     });
     // Emplacements change rarely; refresh them every 30 s while their layer is shown.
     this.subscriptions.add(
@@ -778,8 +783,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   private addOrUpdateCesiumEntity(entity: Entity): void {
     if (!this.viewer || !this.Cesium) return;
-    // An emplacement's own SENSOR entity is drawn by the emplacement layer.
-    if (emplacementIdOf(entity)) {
+    // A loaded emplacement's own SENSOR entity is drawn by the emplacement layer.
+    if (emplacementDrawingOf(entity, this.loadedEmplacementIds)) {
       this.emplacementEntities.set(entity.id, entity);
       return;
     }
@@ -1394,6 +1399,32 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       }
     }
     return null;
+  }
+
+  /**
+   * Keep the loaded emplacement ids in step with the list. When they change,
+   * an entity drawn as an ordinary one that now stands for a loaded emplacement
+   * goes to the emplacement layer, and one left to the layer whose emplacement
+   * is no longer loaded is drawn as an ordinary entity again.
+   */
+  private syncLoadedEmplacements(): void {
+    const ids = new Set(this.emplacements.emplacements().map((e) => e.id));
+    if (ids.size === this.loadedEmplacementIds.size && [...ids].every((id) => this.loadedEmplacementIds.has(id))) return;
+    this.loadedEmplacementIds = ids;
+    for (const [id, cesiumEntity] of [...this.entityMap]) {
+      const entity = cesiumEntity._sentinelEntity as Entity | undefined;
+      if (entity && emplacementDrawingOf(entity, ids)) {
+        this.removeCesiumEntity(id);
+        this.emplacementEntities.set(id, entity);
+      }
+    }
+    for (const [id, entity] of [...this.emplacementEntities]) {
+      if (!emplacementDrawingOf(entity, ids)) {
+        this.emplacementEntities.delete(id);
+        this.addOrUpdateCesiumEntity(entity);
+      }
+    }
+    this.scheduleRender();
   }
 
   /** Redraw the emplacement layer from the service's state, drawing nothing while its layer is hidden. */

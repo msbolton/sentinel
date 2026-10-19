@@ -1,4 +1,4 @@
-import { placementOf } from './emplacement-layer';
+import { emplacementDrawingOf, placementOf } from './emplacement-layer';
 
 const fixed = { id: 'f', mobility: 'FIXED' as const, position: { lat: 50, lon: -4 }, boresightDeg: 270, azimuthReference: 'TRUE_NORTH' as const };
 const ship = { id: 's', mobility: 'MOBILE' as const, position: { lat: 1, lon: 1 }, boresightDeg: 90, azimuthReference: 'PLATFORM' as const };
@@ -22,5 +22,22 @@ describe('placementOf', () => {
 
   it('has nowhere to draw an emplacement with no position at all', () => {
     expect(placementOf({ ...ship, position: null }, () => null)).toBeNull();
+  });
+});
+
+describe('emplacementDrawingOf', () => {
+  const loaded = new Set(['e-1']);
+  const sensor = (value?: string) => ({ identities: value ? [{ type: 'EMPLACEMENT', value }] : [{ type: 'MMSI', value: '1' }] });
+
+  it('hands an entity to the emplacement layer when it stands for a loaded emplacement', () => {
+    expect(emplacementDrawingOf(sensor('e-1'), loaded)).toBe('e-1');
+  });
+
+  it('draws an entity claiming an emplacement nobody loaded as an ordinary entity', () => {
+    expect(emplacementDrawingOf(sensor('forged'), loaded)).toBeNull();
+  });
+
+  it('draws an entity with no emplacement identity as an ordinary entity', () => {
+    expect(emplacementDrawingOf(sensor(), loaded)).toBeNull();
   });
 });

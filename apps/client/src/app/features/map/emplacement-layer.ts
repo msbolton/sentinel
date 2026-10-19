@@ -1,5 +1,5 @@
 import { LngLat } from '../../shared/models/geofence.model';
-import { Emplacement, EmplacementDraft } from '../../shared/models/emplacement.model';
+import { Emplacement, EmplacementDraft, emplacementIdOf } from '../../shared/models/emplacement.model';
 import { EntityType } from '../../shared/models/entity.model';
 import { ENTITY_TYPE_PIN_COLORS, LABEL_SCALE_BY_DISTANCE, LABEL_TRANSLUCENCY_BY_DISTANCE } from './cesium-config';
 import { coverageRings, hasCoverage } from './emplacement-geometry';
@@ -14,6 +14,19 @@ export type LivePosition = (emplacementId: string) => { lon: number; lat: number
 
 type Placeable = Pick<Emplacement, 'id' | 'mobility' | 'position' | 'boresightDeg' | 'azimuthReference'>;
 type Drawable = Placeable & Pick<Emplacement, 'name' | 'coverage'>;
+
+/**
+ * The emplacement whose layer draws this entity, or null to draw it as an
+ * ordinary entity. Only an emplacement the client has loaded counts, so an
+ * entity claiming any other EMPLACEMENT identity is never hidden.
+ */
+export function emplacementDrawingOf(
+  entity: { identities?: { type: string; value: string }[] | null },
+  loaded: ReadonlySet<string>,
+): string | null {
+  const id = emplacementIdOf(entity);
+  return id != null && loaded.has(id) ? id : null;
+}
 
 /**
  * Where an emplacement is drawn and which way it points. A fixed one is at
