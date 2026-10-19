@@ -270,11 +270,13 @@ sentinel/
 │   ├── common-go/             shared Go module
 │   │   ├── classification/    level order, Rank, Min, Intersect
 │   │   ├── config/            environment helpers
+│   │   ├── geo/               WGS84 frames, polar to position, position uncertainty
 │   │   ├── health/            liveness and readiness handlers
 │   │   ├── httputil/          JSON responses, pagination
 │   │   ├── ids/               deterministic ids
 │   │   ├── kafka/             batch consumer, producer, headers, keys, topic constants
-│   │   └── middleware/        identity-header auth, CORS
+│   │   ├── middleware/        identity-header auth, CORS
+│   │   └── secrettoken/       API key and ingest token secrets: generate, hash, compare
 │   └── proto-gen/             generated code: src/go, src/ts, src/python, golden fixtures in testdata/
 ├── proto/sentinel/v1/         the contract: observation, entity, events, alert, track, link, platform, common
 ├── db/
