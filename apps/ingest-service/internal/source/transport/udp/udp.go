@@ -149,19 +149,21 @@ func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 			// The sender's own bucket is asked before the listener's, so a
 			// flooder spends none of the shared budget. The datagram's
 			// messages are all asked at the one instant, so once one is
-			// refused the rest are too, and are counted together.
+			// refused the rest are too, and are counted together. The
+			// sender's row is updated before the listener's counter, so that
+			// whoever waits for the counter to move finds the row already moved.
 			if !l.perSender.Allow(sender, received) {
 				dropped := int64(len(parts) - i)
-				l.counts.SenderRateLimited.Add(dropped)
 				l.senders.RateLimited(sender, dropped)
+				l.counts.SenderRateLimited.Add(dropped)
 				break
 			}
 			if !l.limit.Allow() {
 				l.counts.RateLimited.Add(1)
 				continue
 			}
-			l.counts.Accepted.Add(1)
 			l.senders.Seen(sender, now)
+			l.counts.Accepted.Add(1)
 			payload := make([]byte, len(part))
 			copy(payload, part)
 			if err := emit(ctx, transport.Frame{Payload: payload, ReceivedAt: now, Remote: remote}); err != nil && !errors.Is(err, transport.ErrBackpressure) {

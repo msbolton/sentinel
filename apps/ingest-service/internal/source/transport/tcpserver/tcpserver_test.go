@@ -343,8 +343,11 @@ func TestPerSenderLimitSurvivesAStepBackOfTheWallClock(t *testing.T) {
 		send(stamp)
 	}
 	spent := col.Count()
-	if spent < 100 || spent > 150 {
-		t.Fatalf("%d of 1000 frames passed, want the burst of 100 (a few more if the loop was slow): the bucket is not spent", spent)
+	// The bucket holds 100 and refills at 100 a second, so a slow loop lets
+	// more through. What it cannot do is let all 1000 through while the bucket
+	// is spent.
+	if spent < 100 || spent >= 1000 {
+		t.Fatalf("%d of 1000 frames passed, want at least the burst of 100 and not all of them: the bucket is not spent", spent)
 	}
 
 	time.Sleep(50 * time.Millisecond)

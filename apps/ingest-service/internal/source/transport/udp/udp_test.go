@@ -342,7 +342,7 @@ func TestPerSenderLimitCountsTheRestOfADatagram(t *testing.T) {
 }
 
 // A datagram dropped by its sender's bucket adds no row to the senders list,
-// whose full list would evict another sender, by a scan, for it. Here the
+// whose full list would evict a sender that is being heard for it. Here the
 // sender's bucket is spent by hand for the next hour, standing in for a sender
 // the list has forgotten while the limiter still remembers it: the drop is
 // counted by the listener and by no row.

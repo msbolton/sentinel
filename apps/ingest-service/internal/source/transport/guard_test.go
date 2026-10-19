@@ -3,8 +3,12 @@ package transport
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/netip"
+	"slices"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
@@ -378,6 +382,264 @@ func TestSenders(t *testing.T) {
 	}
 }
 
+// rowsOf lists the senders a table holds, sorted, without disturbing it.
+func rowsOf(s *Senders) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keys := make([]string, 0, len(s.m))
+	for k := range s.m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// The sender that makes room in a full table is the idle one that sent least
+// recently, by the stamps it was given: which is not the order the calls came
+// in when a stamp is older than one before it (two goroutines that stamped in
+// one order and recorded in another, a clock that stepped back). A connected
+// sender is never the one, however long ago it sent; and a table whose senders
+// are all connected grows past its cap rather than drop one.
+func TestSendersEvictTheIdleSenderThatSentLeastRecently(t *testing.T) {
+	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	at := func(sec int) time.Time { return t0.Add(time.Duration(sec) * time.Second) }
+	check := func(t *testing.T, s *Senders, want ...string) {
+		t.Helper()
+		if got := rowsOf(s); !slices.Equal(got, want) {
+			t.Errorf("table holds %v, want %v", got, want)
+		}
+	}
+
+	t.Run("by stamp, not by the order of the calls", func(t *testing.T) {
+		s := NewSenders(3)
+		s.Seen("a", at(5))
+		s.Seen("b", at(1)) // recorded after a, but sent before it
+		s.Seen("c", at(3))
+		s.Seen("d", at(9))
+		check(t, s, "a", "c", "d")
+	})
+
+	t.Run("a message makes a sender recent again", func(t *testing.T) {
+		s := NewSenders(2)
+		s.Seen("a", at(0))
+		s.Seen("b", at(1))
+		s.Seen("a", at(2))
+		s.Seen("c", at(3))
+		check(t, s, "a", "c")
+	})
+
+	t.Run("a connected sender stays, and an idle one goes before it", func(t *testing.T) {
+		s := NewSenders(2)
+		s.Connect("a", at(0)) // connected and silent: the oldest of all
+		s.Seen("b", at(1))
+		s.Seen("c", at(2))
+		check(t, s, "a", "c")
+		// Once it hangs up, a is idle and never sent anything: older than c.
+		s.Disconnect("a")
+		s.Seen("d", at(3))
+		check(t, s, "c", "d")
+	})
+
+	t.Run("a sender that hangs up is placed by when it last sent", func(t *testing.T) {
+		s := NewSenders(3)
+		s.Connect("a", at(0))
+		s.Seen("a", at(5))
+		s.Seen("b", at(1))
+		s.Seen("c", at(9))
+		s.Disconnect("a") // idle now, newer than b and older than c
+		s.Seen("d", at(10))
+		check(t, s, "a", "c", "d")
+		s.Seen("e", at(11))
+		check(t, s, "c", "d", "e")
+	})
+
+	t.Run("an undecodable message counts as a stamp for a sender with none", func(t *testing.T) {
+		s := NewSenders(2)
+		s.Malformed("a", "parse_error", "bad", at(4))
+		s.Seen("b", at(1))
+		s.Seen("c", at(5))
+		check(t, s, "a", "c")
+		// It does not make a sender that has a stamp look newer.
+		s.Malformed("a", "parse_error", "bad", at(8))
+		s.Seen("d", at(6))
+		check(t, s, "c", "d")
+	})
+
+	t.Run("a table of connected senders grows past its cap", func(t *testing.T) {
+		s := NewSenders(2)
+		for i, k := range []string{"a", "b", "c", "d"} {
+			s.Connect(k, at(i))
+		}
+		check(t, s, "a", "b", "c", "d")
+		s.Disconnect("b")
+		s.Connect("e", at(5)) // b is the only idle sender, and the cap is long passed
+		check(t, s, "a", "c", "d", "e")
+	})
+
+	t.Run("a sender the snapshot forgot is gone from the order too", func(t *testing.T) {
+		s := NewSenders(3)
+		s.Seen("a", at(0))
+		s.Seen("b", at(700))
+		s.Seen("c", at(710))
+		if list, _ := s.Snapshot(at(720), 10*time.Minute); len(list) != 2 {
+			t.Fatalf("snapshot = %+v, want b and c: a is past the window", list)
+		}
+		s.Seen("d", at(730))
+		s.Seen("e", at(740)) // the table is full again, so b goes
+		check(t, s, "c", "d", "e")
+	})
+}
+
+// referenceSenders is what the senders table did before it kept its idle
+// senders in order: a map, and a scan of all of it to find the one to evict.
+type referenceSenders struct {
+	max  int
+	rows map[string]*SenderStat
+}
+
+func (r *referenceSenders) entry(key string, now time.Time, evicted func(candidates []string)) *SenderStat {
+	e, ok := r.rows[key]
+	if ok {
+		return e
+	}
+	if len(r.rows) >= r.max {
+		var oldest []string
+		var at time.Time
+		for k, row := range r.rows {
+			if row.Connected {
+				continue
+			}
+			switch {
+			case len(oldest) == 0 || row.LastAt.Before(at):
+				oldest, at = []string{k}, row.LastAt
+			case row.LastAt.Equal(at):
+				oldest = append(oldest, k)
+			}
+		}
+		evicted(oldest)
+	}
+	e = &SenderStat{Remote: key, Since: now}
+	r.rows[key] = e
+	return e
+}
+
+// The table must evict as the scan did. A random run of operations goes to
+// both, with stamps that arrive out of order and a few senders that tie, and
+// after every step they must hold the same senders: whichever of several tied
+// senders the table gives up, the scan could have given up too, and the
+// reference then gives up the same one.
+func TestSendersEvictionMatchesAScanOfTheTable(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2))
+	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	const (
+		tableCap = 8
+		keys     = 30
+		steps    = 20000
+	)
+	table := NewSenders(tableCap)
+	ref := &referenceSenders{max: tableCap, rows: map[string]*SenderStat{}}
+	stamp := func() time.Time {
+		// Mostly forward in time, sometimes well behind, sometimes the same
+		// instant as the step before.
+		return t0.Add(time.Duration(rng.IntN(60)) * time.Second)
+	}
+	for step := range steps {
+		key := fmt.Sprintf("10.0.0.%d", rng.IntN(keys))
+		now := stamp()
+		before := rowsOf(table)
+		var candidates []string
+		evicted := func(c []string) { candidates = c }
+		op := rng.IntN(7)
+		var name string
+		switch op {
+		case 0:
+			name = "Connect"
+			table.Connect(key, now)
+			e := ref.entry(key, now, evicted)
+			e.Connected, e.Since = true, now
+		case 1, 2:
+			name = "Disconnect"
+			table.Disconnect(key)
+			if e, ok := ref.rows[key]; ok {
+				e.Connected = false
+			}
+		case 3, 4:
+			name = "Seen"
+			table.Seen(key, now)
+			e := ref.entry(key, now, evicted)
+			e.Messages++
+			e.LastAt = now
+		case 5:
+			name = "Malformed"
+			table.Malformed(key, "parse_error", "bad", now)
+			e := ref.entry(key, now, evicted)
+			if e.LastAt.IsZero() {
+				e.LastAt = now
+			}
+		case 6:
+			name = "Snapshot"
+			table.Snapshot(now.Add(5*time.Minute), 5*time.Minute+30*time.Second)
+			for k, e := range ref.rows {
+				if !e.Connected && now.Add(5*time.Minute).Sub(e.LastAt) > 5*time.Minute+30*time.Second {
+					delete(ref.rows, k)
+				}
+			}
+		}
+		if candidates != nil {
+			// The reference had to give one up, and could have given up any of
+			// the candidates; the table must have given up one of them.
+			after := rowsOf(table)
+			var gone []string
+			for _, k := range before {
+				if !slices.Contains(after, k) {
+					gone = append(gone, k)
+				}
+			}
+			if len(gone) != 1 || !slices.Contains(candidates, gone[0]) {
+				t.Fatalf("step %d, %s %s: the table gave up %v, the scan could have given up only %v", step, name, key, gone, candidates)
+			}
+			delete(ref.rows, gone[0])
+		}
+		refKeys := make([]string, 0, len(ref.rows))
+		for k := range ref.rows {
+			refKeys = append(refKeys, k)
+		}
+		sort.Strings(refKeys)
+		if got := rowsOf(table); !slices.Equal(got, refKeys) {
+			t.Fatalf("step %d, %s %s: table holds %v, the scan holds %v", step, name, key, got, refKeys)
+		}
+		checkSendersOrder(t, table)
+	}
+}
+
+// checkSendersOrder checks the table's idle list against its rows: it holds
+// exactly the rows that are not connected, each once, newest stamp first.
+func checkSendersOrder(t *testing.T, s *Senders) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idle := 0
+	for _, row := range s.m {
+		if !row.Connected {
+			idle++
+		}
+	}
+	if s.idle.Len() != idle {
+		t.Fatalf("the order holds %d senders, and %d are idle", s.idle.Len(), idle)
+	}
+	var prev time.Time
+	for el := s.idle.Front(); el != nil; el = el.Next() {
+		row := el.Value.(*senderRow)
+		if row.Connected || s.m[row.Remote] != row || row.at != el {
+			t.Fatalf("the order lists %s, which is connected (%v), unknown or points elsewhere", row.Remote, row.Connected)
+		}
+		if el != s.idle.Front() && row.LastAt.After(prev) {
+			t.Fatalf("the order puts %s (%v) behind an older stamp (%v)", row.Remote, row.LastAt, prev)
+		}
+		prev = row.LastAt
+	}
+}
+
 func TestSendersMalformed(t *testing.T) {
 	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 	snapshot := func(s *Senders, now time.Time) map[string]SenderStat {
@@ -470,9 +732,9 @@ func TestSendersMalformed(t *testing.T) {
 // A message dropped by a sender's own limit is counted against that sender's
 // row. It was not accepted, so it is not one of the sender's messages and does
 // not make the sender look newer. A drop never adds a row: with the list full,
-// a new row evicts another by a scan of the whole list, which sources rotating
-// through more addresses than the list holds would make the listener pay for
-// every dropped message. The listener's own counter counts every drop anyway.
+// a new row evicts another, and sources rotating through more addresses than
+// the list holds would push out the senders that are being heard with nothing
+// but dropped messages. The listener's own counter counts every drop anyway.
 func TestSendersRateLimited(t *testing.T) {
 	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 	snapshot := func(s *Senders, now time.Time) map[string]SenderStat {
@@ -574,5 +836,27 @@ func TestBindErrorWithoutPort(t *testing.T) {
 		if err := BindError("tcp", address, inUse); err == nil || err.Error() != want {
 			t.Errorf("BindError(tcp, %q) = %v, want %q", address, err, want)
 		}
+	}
+}
+
+// BenchmarkSendersNewSenderAtTheCap is what a flood of spoofed addresses costs
+// a datagram listener per datagram once its senders list is full: a row in, a
+// row out.
+func BenchmarkSendersNewSenderAtTheCap(b *testing.B) {
+	const tableCap = 1000
+	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	table := NewSenders(tableCap)
+	keys := make([]string, 4*tableCap)
+	for i := range keys {
+		keys[i] = netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}).String()
+	}
+	for i := range tableCap {
+		table.Seen(keys[i], t0.Add(time.Duration(i)*time.Millisecond))
+	}
+	b.ResetTimer()
+	for i := range b.N {
+		// Keys cycle through four times the cap, so each one has been evicted by
+		// the time it comes round again and is new to the table.
+		table.Seen(keys[tableCap+i%(3*tableCap)], t0.Add(time.Duration(tableCap+i)*time.Millisecond))
 	}
 }

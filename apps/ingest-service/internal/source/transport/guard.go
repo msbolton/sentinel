@@ -212,37 +212,79 @@ type MalformedNoter interface {
 const maxErrorBytes = 200
 
 // Senders tracks who is sending, capped at max entries (connected senders
-// are kept over idle ones).
+// are kept over idle ones). When the table is full, a new sender takes the
+// place of the idle one that sent least recently, by the stamps it was given.
+// The idle senders are also kept in a list in that order, so the one to give up
+// is the last of it and a full table costs no scan.
 type Senders struct {
-	mu  sync.Mutex
-	max int
-	m   map[string]*SenderStat
+	mu   sync.Mutex
+	max  int
+	m    map[string]*senderRow
+	idle *list.List // the senderRows that are not connected, newest LastAt first
+}
+
+// senderRow is a sender's stat and its place in Senders.idle, which it has
+// only while it is not connected.
+type senderRow struct {
+	SenderStat
+	at *list.Element
 }
 
 // NewSenders tracks up to max senders.
-func NewSenders(max int) *Senders { return &Senders{max: max, m: map[string]*SenderStat{}} }
+func NewSenders(max int) *Senders {
+	return &Senders{max: max, m: map[string]*senderRow{}, idle: list.New()}
+}
 
-func (s *Senders) entry(remote string, now time.Time) *SenderStat {
+// entry finds the row for remote, making it (and room for it) if there is none.
+// A new row is idle, and sorts last until it is given a stamp or connects.
+func (s *Senders) entry(remote string, now time.Time) *senderRow {
 	e, ok := s.m[remote]
 	if !ok {
 		if len(s.m) >= s.max {
 			s.evict()
 		}
-		e = &SenderStat{Remote: remote, Since: now}
+		e = &senderRow{SenderStat: SenderStat{Remote: remote, Since: now}}
 		s.m[remote] = e
+		s.place(e)
 	}
 	return e
 }
 
+// evict forgets the idle sender that sent least recently. With none idle every
+// sender is connected, and a connected sender is kept over any other.
 func (s *Senders) evict() {
-	var victim *SenderStat
-	for _, e := range s.m {
-		if !e.Connected && (victim == nil || e.LastAt.Before(victim.LastAt)) {
-			victim = e
-		}
+	if oldest := s.idle.Back(); oldest != nil {
+		delete(s.m, s.idle.Remove(oldest).(*senderRow).Remote)
 	}
-	if victim != nil {
-		delete(s.m, victim.Remote)
+}
+
+// place puts an idle row in the idle list where its LastAt belongs, newest
+// first. A stamp is usually the newest yet, which goes in front at once; one
+// older than another row's (two goroutines that stamped in one order and
+// recorded in another, a clock that stepped back, a sender with no stamp yet)
+// goes behind the rows it is older than.
+func (s *Senders) place(e *senderRow) {
+	s.unplace(e)
+	front, back := s.idle.Front(), s.idle.Back()
+	switch {
+	case front == nil || !e.LastAt.Before(front.Value.(*senderRow).LastAt):
+		e.at = s.idle.PushFront(e)
+	case !e.LastAt.After(back.Value.(*senderRow).LastAt):
+		e.at = s.idle.PushBack(e)
+	default:
+		el := front.Next()
+		for e.LastAt.Before(el.Value.(*senderRow).LastAt) {
+			el = el.Next()
+		}
+		e.at = s.idle.InsertBefore(e, el)
+	}
+}
+
+// unplace takes a row out of the idle list: it has connected, or is forgotten.
+func (s *Senders) unplace(e *senderRow) {
+	if e.at != nil {
+		s.idle.Remove(e.at)
+		e.at = nil
 	}
 }
 
@@ -252,6 +294,7 @@ func (s *Senders) Connect(remote string, now time.Time) {
 	defer s.mu.Unlock()
 	e := s.entry(remote, now)
 	e.Connected, e.Since = true, now
+	s.unplace(e)
 }
 
 // Disconnect records a TCP connection closing.
@@ -260,6 +303,7 @@ func (s *Senders) Disconnect(remote string) {
 	defer s.mu.Unlock()
 	if e, ok := s.m[remote]; ok {
 		e.Connected = false
+		s.place(e)
 	}
 }
 
@@ -270,16 +314,18 @@ func (s *Senders) Seen(remote string, now time.Time) {
 	e := s.entry(remote, now)
 	e.Messages++
 	e.LastAt = now
+	if !e.Connected {
+		s.place(e)
+	}
 }
 
 // RateLimited records that n messages from remote were dropped for going over
 // the sender's own rate limit. They were not taken in, so Seen has not counted
 // them and they do not make the sender look newer. Only a sender the list
-// holds is counted: a drop is no reason to track one, and a new row in a full
-// list evicts another by a scan of the whole list, which sources rotating
-// through more addresses than the list holds would make the listener pay for
-// every dropped message. The listener's own counter counts every drop, listed
-// sender or not.
+// holds is counted: a drop is no reason to track one, and sources rotating
+// through more addresses than the list holds would otherwise push out, with
+// their dropped messages, the senders that are being heard. The listener's own
+// counter counts every drop, listed sender or not.
 func (s *Senders) RateLimited(remote string, n int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -305,6 +351,9 @@ func (s *Senders) Malformed(remote, reason, errText string, now time.Time) {
 	e.LastMalformedAt = &at
 	if e.LastAt.IsZero() {
 		e.LastAt = now
+		if !e.Connected {
+			s.place(e)
+		}
 	}
 }
 
@@ -316,10 +365,11 @@ func (s *Senders) Snapshot(now time.Time, window time.Duration) ([]SenderStat, i
 	out := make([]SenderStat, 0, len(s.m))
 	for k, e := range s.m {
 		if !e.Connected && now.Sub(e.LastAt) > window {
+			s.unplace(e)
 			delete(s.m, k)
 			continue
 		}
-		out = append(out, *e)
+		out = append(out, e.SenderStat)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].LastAt.After(out[j].LastAt) })
 	return out, len(out)

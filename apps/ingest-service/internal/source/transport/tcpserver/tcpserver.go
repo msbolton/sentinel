@@ -245,20 +245,23 @@ func (s *Server) readEnded(err error) {
 // a sender could multiply its budget by connecting again. The sender's own
 // bucket is asked before the listener's, so a flooder spends none of the
 // shared budget; it is asked on time.Now(), not on the frame's UTC stamp (see
-// SenderLimiter.Allow). The senders list names the connection, ip:port.
+// SenderLimiter.Allow), and the clock is read only when there is a bucket to
+// ask. The senders list names the connection, ip:port. A sender's row is
+// updated before the listener's counter, so that whoever waits for the counter
+// to move finds the row already moved.
 func (s *Server) guard(host string, emit transport.Emit) transport.Emit {
 	return func(ctx context.Context, f transport.Frame) error {
-		if !s.perSender.Allow(host, time.Now()) {
-			s.counts.SenderRateLimited.Add(1)
+		if s.perSender != nil && !s.perSender.Allow(host, time.Now()) {
 			s.senders.RateLimited(f.Remote, 1)
+			s.counts.SenderRateLimited.Add(1)
 			return nil
 		}
 		if !s.limit.Allow() {
 			s.counts.RateLimited.Add(1)
 			return nil
 		}
-		s.counts.Accepted.Add(1)
 		s.senders.Seen(f.Remote, f.ReceivedAt)
+		s.counts.Accepted.Add(1)
 		return emit(ctx, f)
 	}
 }
