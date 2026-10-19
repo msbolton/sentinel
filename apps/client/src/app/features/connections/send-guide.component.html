@@ -1,3 +1,36 @@
+@if (grpc(); as g) {
+  <section class="send-guide" [attr.aria-labelledby]="idBase() + '-h'">
+    <h4 [id]="idBase() + '-h'">Send to <code>{{ grpcEndpoint() }}</code></h4>
+    <p class="muted format">
+      gRPC, protobuf over HTTP/2.
+      @if (g.tls) {
+        TLS required{{ g.requireClientCert ? ', with a client certificate signed by the configured CA' : '' }}.
+      } @else {
+        Plain text: no TLS.
+      }
+    </p>
+    <p class="muted note">
+      Every call carries the connection's ingest token: <code>authorization: Bearer si_…</code>. Issue one under Tokens below.
+    </p>
+    @if (grpcurl(); as cmd) {
+      <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: cmd }" />
+    }
+    <p class="label">Protocol definitions</p>
+    <p class="protos">
+      @for (f of ingestProtoFiles; track f) {
+        <a [href]="'assets/proto/' + f" [attr.download]="f.split('/').pop()">{{ f }}</a> ·
+      }
+      @for (f of protoFiles; track f) {
+        <a [href]="'assets/proto/sentinel/v1/' + f" [attr.download]="f">{{ f }}</a>{{ $last ? '' : ' · ' }}
+      }
+    </p>
+    @if (ewSensor(); as cmd) {
+      <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: cmd }" />
+    }
+    <span class="sr-only" aria-live="polite">{{ copied() ? 'Copied to the clipboard' : '' }}</span>
+  </section>
+}
+
 @if (target(); as t) {
   <section class="send-guide" [attr.aria-labelledby]="idBase() + '-h'">
     @if (t.mode === 'listen') {

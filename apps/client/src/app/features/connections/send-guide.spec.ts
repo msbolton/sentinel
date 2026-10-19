@@ -2,10 +2,14 @@ import { Feed } from '../../shared/models/feed.model';
 import {
   COUNTERS,
   FRAMING_NOTES,
+  INGEST_PROTO_FILES,
   PROTO_FILES,
   SendTarget,
   endpointLabel,
+  ewSensorCommand,
   goSnippet,
+  grpcTarget,
+  grpcurlCommand,
   impliedFraming,
   jsonBatchExample,
   jsonExample,
@@ -191,6 +195,44 @@ describe('send guide', () => {
     expect(goSnippet(target({ host: '2001:db8::1' }))).toContain('net.Dial("tcp", "[2001:db8::1]:6000")');
     // The brackets are a shell pattern (zsh refuses an unquoted one), so the address is quoted.
     expect(tlsTestCommand(jsonTarget({ tls: true, host: '2001:db8::1' }))).toContain("-connect '[2001:db8::1]:6000' -servername 2001:db8::1 -verify_ip 2001:db8::1");
+  });
+
+  describe('gRPC', () => {
+    it('reads the endpoint from the health detail, then the config', () => {
+      const t = grpcTarget(feed('grpc', { port: 6200, allow: ['10.0.0.0/8'] }, { listen: { host: 'listener.example', port: 6200 } }));
+      expect(t).toEqual({ host: 'listener.example', port: 6200, tls: false, requireClientCert: false, allow: ['10.0.0.0/8'] });
+      expect(grpcTarget(feed('grpc', { port: 6201 }, {}))?.port).toBe(6201);
+      expect(grpcTarget(feed('tcp', { mode: 'listen', port: 6000 }, {}))).toBeNull();
+    });
+
+    it('builds a grpcurl call to GetSession with the token header', () => {
+      const plain = grpcurlCommand({ host: 'listener.example', port: 6200, tls: false, requireClientCert: false, allow: [] });
+      expect(plain).toContain('-plaintext');
+      expect(plain).toContain('-H "authorization: Bearer $SENTINEL_INGEST_TOKEN"');
+      expect(plain).toContain('listener.example:6200');
+      expect(plain).toContain('sentinel.ingest.v1.IngestService/GetSession');
+      expect(plain).toContain('-proto sentinel/ingest/v1/ingest_service.proto');
+      const mtls = grpcurlCommand({ host: 'listener.example', port: 6200, tls: true, requireClientCert: true, allow: [] });
+      expect(mtls).not.toContain('-plaintext');
+      expect(mtls).toContain('-cacert ca.pem');
+      expect(mtls).toContain('-cert client.pem -key client-key.pem');
+    });
+
+    it('builds the ew-sensor command line', () => {
+      expect(ewSensorCommand({ host: 'listener.example', port: 6200, tls: false, requireClientCert: false, allow: [] }))
+        .toBe('ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure');
+      expect(ewSensorCommand({ host: '', port: 6200, tls: true, requireClientCert: false, allow: [] }))
+        .toBe('ew-sensor --addr listener:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem');
+    });
+
+    it('brackets an IPv6 listener host', () => {
+      expect(grpcurlCommand({ host: '::1', port: 6200, tls: false, requireClientCert: false, allow: [] })).toContain('[::1]:6200');
+    });
+
+    it('serves the ingest contract next to the observation protos', () => {
+      expect(INGEST_PROTO_FILES).toEqual(['sentinel/ingest/v1/ingest_service.proto', 'sentinel/v1/emplacement.proto']);
+      expect(PROTO_FILES).not.toEqual(expect.arrayContaining(INGEST_PROTO_FILES));
+    });
   });
 
   describe('Go', () => {

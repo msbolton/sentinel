@@ -83,6 +83,55 @@ describe('SendGuideComponent', () => {
     Object.defineProperty(navigator, 'clipboard', { value, configurable: true });
   }
 
+  describe('gRPC', () => {
+    const grpcFeed = (config: Record<string, unknown> = { port: 6200 }) =>
+      makeFeed({ driver: 'grpc', config, detail: { listen: { protocol: 'grpc', host: 'listener.example', port: 6200 } } });
+
+    it('shows the endpoint, the token header, the grpcurl and ew-sensor commands and the protos', () => {
+      render(grpcFeed());
+      const section = el.querySelector('section.send-guide')!;
+      expect(text(section.querySelector('h4'))).toContain('listener.example:6200');
+      expect(text(section)).toContain('authorization: Bearer si_…');
+      expect(text(section)).toContain('Issue one under Tokens below.');
+      expect(blocks()).toEqual([
+        'grpcurl -plaintext -import-path proto -proto sentinel/ingest/v1/ingest_service.proto -H "authorization: Bearer $SENTINEL_INGEST_TOKEN" listener.example:6200 sentinel.ingest.v1.IngestService/GetSession',
+        'ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure',
+      ]);
+      expect(copyButtons()).toHaveLength(2);
+      const links = Array.from(el.querySelectorAll<HTMLAnchorElement>('.protos a')).map((a) => a.getAttribute('href'));
+      expect(links).toEqual([
+        'assets/proto/sentinel/ingest/v1/ingest_service.proto',
+        'assets/proto/sentinel/v1/emplacement.proto',
+        'assets/proto/sentinel/v1/observation.proto',
+        'assets/proto/sentinel/v1/common.proto',
+        'assets/proto/sentinel/v1/entity.proto',
+        'assets/proto/sentinel/v1/platform.proto',
+      ]);
+    });
+
+    it('says when TLS and client certificates are on', () => {
+      render(grpcFeed({ port: 6200 }));
+      expect(text(el.querySelector('.format'))).not.toContain('TLS required');
+      render(grpcFeed({ port: 6200, tls: { enabled: true, requireClientCert: true } }));
+      expect(text(el.querySelector('.format'))).toContain('TLS required, with a client certificate');
+      expect(blocks()[0]).toContain('-cert client.pem -key client-key.pem');
+    });
+
+    it('does not render the tcp or udp sections', () => {
+      render(grpcFeed());
+      expect(el.querySelectorAll('section.send-guide')).toHaveLength(1);
+      expect(el.querySelector('details.examples')).toBeNull();
+      expect(el.textContent).not.toContain('nc -w1');
+      expect(el.textContent).not.toContain('framing');
+    });
+
+    it('is not rendered for a tcp listen connection', () => {
+      render(makeFeed({ driver: 'tcp', config: { mode: 'listen', port: 6000 }, detail: listening('tcp', 6000) }));
+      expect(el.textContent).not.toContain('authorization: Bearer');
+      expect(blocks().some((b) => b.includes('grpcurl') || b.includes('ew-sensor'))).toBe(false);
+    });
+  });
+
   it('connect mode: shows the target, the last error, messages and reconnects but no listener counters', () => {
     render(
       makeFeed({
