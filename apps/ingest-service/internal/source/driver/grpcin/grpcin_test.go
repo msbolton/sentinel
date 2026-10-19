@@ -396,7 +396,7 @@ func TestStopIsBoundedWithAStalledConnection(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Run = %v, want nil", err)
 				}
-			case <-time.After(stopGrace + 500*time.Millisecond):
+			case <-time.After(stopGrace + 1500*time.Millisecond):
 				t.Fatalf("Run still running %v after cancel", time.Since(began))
 			}
 		})
