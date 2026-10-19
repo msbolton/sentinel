@@ -1,0 +1,225 @@
+package emplacement
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// These tests need a database with db/schema applied (72_emplacements.sql
+// included). Set TEST_DATABASE_URL to run them; they create emplacements
+// named test-* and a feed test-emp-feed and delete them before and after.
+func testPool(t *testing.T) (*pgxpool.Pool, context.Context) {
+	t.Helper()
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	clean := func(ctx context.Context) {
+		_, _ = pool.Exec(ctx, `DELETE FROM sentinel.emplacements WHERE name ILIKE 'test-%'`)
+		_, _ = pool.Exec(ctx, `DELETE FROM sentinel.feeds WHERE id = 'test-emp-feed'`)
+	}
+	clean(ctx)
+	t.Cleanup(func() { clean(context.Background()) })
+	return pool, ctx
+}
+
+func fixed(name string) Emplacement {
+	e := New()
+	e.Name, e.Mobility, e.SensorType = name, MobilityFixed, "RADAR"
+	e.Position = &Point{Lat: 50.1, Lon: -4.2}
+	e.Coverage = Coverage{MaxRangeM: 60000, AzimuthWidthDeg: 120}
+	e.CreatedBy = "u1"
+	return e
+}
+
+// listen returns the payloads of the sentinel_emplacements notifications.
+func listen(t *testing.T, ctx context.Context, pool *pgxpool.Pool) <-chan string {
+	t.Helper()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := conn.Hijack()
+	lctx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	// Stop the listener and wait for it to leave the connection before closing it.
+	t.Cleanup(func() {
+		stop()
+		<-done
+		_ = raw.Close(context.Background())
+	})
+	if _, err := raw.Exec(ctx, "LISTEN "+Channel); err != nil {
+		t.Fatal(err)
+	}
+	out := make(chan string, 16)
+	go func() {
+		defer close(done)
+		for {
+			n, err := raw.WaitForNotification(lctx)
+			if err != nil {
+				return
+			}
+			out <- n.Payload
+		}
+	}()
+	return out
+}
+
+func expectNotice(t *testing.T, ch <-chan string, id, op string) {
+	t.Helper()
+	select {
+	case p := <-ch:
+		var msg struct{ ID, Op string }
+		if err := json.Unmarshal([]byte(p), &msg); err != nil || msg.ID != id || msg.Op != op {
+			t.Fatalf("notice %q, want id %s op %s", p, id, op)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("no %s notice for %s", op, id)
+	}
+}
+
+func expectNoNotice(t *testing.T, ch <-chan string) {
+	t.Helper()
+	select {
+	case p := <-ch:
+		t.Fatalf("unexpected notice %q", p)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestStoreCRUDAndNotify(t *testing.T) {
+	pool, ctx := testPool(t)
+	s := NewPGStore(pool)
+	notices := listen(t, ctx, pool)
+
+	created, err := s.Create(ctx, fixed("test-coastal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" || created.Version != 1 || created.Position == nil || created.Position.Lat != 50.1 || created.Coverage.MaxRangeM != 60000 || created.CreatedBy != "u1" {
+		t.Fatalf("created = %+v", created)
+	}
+	expectNotice(t, notices, created.ID, "upsert")
+
+	got, err := s.Get(ctx, created.ID)
+	if err != nil || got.Name != "test-coastal" {
+		t.Fatalf("get = %+v %v", got, err)
+	}
+	list, err := s.List(ctx, Filter{Mobility: MobilityFixed})
+	if err != nil || !containsID(list, created.ID) {
+		t.Fatalf("list = %v %v", list, err)
+	}
+
+	updated, err := s.Update(ctx, created.ID, 1, func(e *Emplacement) error { e.BoresightDeg = 270; return nil })
+	if err != nil || updated.Version != 2 || updated.BoresightDeg != 270 || updated.UpdatedAt.Before(created.UpdatedAt) {
+		t.Fatalf("update = %+v %v", updated, err)
+	}
+	expectNotice(t, notices, created.ID, "upsert")
+
+	// Negative control: a refused update writes nothing and announces nothing.
+	refuse := errors.New("refused")
+	if _, err := s.Update(ctx, created.ID, 0, func(e *Emplacement) error { return refuse }); !errors.Is(err, refuse) {
+		t.Fatalf("fn error = %v", err)
+	}
+	expectNoNotice(t, notices)
+
+	if err := s.Delete(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	expectNotice(t, notices, created.ID, "delete")
+	if _, err := s.Get(ctx, created.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("get after delete = %v", err)
+	}
+	if err := s.Delete(ctx, created.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second delete = %v", err)
+	}
+	if _, err := s.Get(ctx, "not-a-uuid"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("malformed id = %v", err)
+	}
+}
+
+func TestStoreVersionConflict(t *testing.T) {
+	pool, ctx := testPool(t)
+	s := NewPGStore(pool)
+	e, err := s.Create(ctx, fixed("test-conflict"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(ctx, e.ID, 1, func(x *Emplacement) error { x.Description = "first"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(ctx, e.ID, 1, func(x *Emplacement) error { x.Description = "second"; return nil }); !errors.Is(err, ErrVersionConflict) {
+		t.Fatalf("stale version = %v", err)
+	}
+}
+
+func TestStoreNamesAreUniqueAmongLiveOnes(t *testing.T) {
+	pool, ctx := testPool(t)
+	s := NewPGStore(pool)
+	a, err := s.Create(ctx, fixed("test-dup"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(ctx, fixed("TEST-DUP")); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("case-insensitive duplicate = %v", err)
+	}
+	if err := s.Delete(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(ctx, fixed("test-dup")); err != nil {
+		t.Fatalf("a deleted emplacement's name is free again: %v", err)
+	}
+}
+
+func TestStoreFeedBinding(t *testing.T) {
+	pool, ctx := testPool(t)
+	s := NewPGStore(pool)
+	unknown := "test-no-such-feed"
+	e := fixed("test-bound")
+	e.FeedID = &unknown
+	var ve *ValidationError
+	if _, err := s.Create(ctx, e); !errors.As(err, &ve) || ve.Problems[0].Path != "/feedId" {
+		t.Fatalf("unknown feed = %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO sentinel.feeds (id, name, description, driver, config, secret_refs, enabled)
+		VALUES ('test-emp-feed', 'test', '', 'tcp', '{"mode":"listen","port":6999}', '{}', false)`); err != nil {
+		t.Fatal(err)
+	}
+	feed := "test-emp-feed"
+	e.FeedID = &feed
+	bound, err := s.Create(ctx, e)
+	if err != nil || bound.FeedID == nil || *bound.FeedID != feed {
+		t.Fatalf("bound = %+v %v", bound, err)
+	}
+	if list, _ := s.List(ctx, Filter{FeedID: feed}); len(list) != 1 {
+		t.Fatalf("by feed = %v", list)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM sentinel.feeds WHERE id = 'test-emp-feed'`); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(ctx, bound.ID); got.FeedID != nil {
+		t.Fatalf("deleting the feed must unbind, got %v", *got.FeedID)
+	}
+}
+
+func containsID(list []Emplacement, id string) bool {
+	for _, e := range list {
+		if e.ID == id {
+			return true
+		}
+	}
+	return false
+}
