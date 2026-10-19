@@ -108,3 +108,54 @@ func TestDLQPeekMaxScan(t *testing.T) {
 		t.Errorf("DLQ_PEEK_MAX_SCAN=-1: Validate() = %v, want an error that names the variable", err)
 	}
 }
+
+// Config fills the secret policy, so a deployment that sets nothing is not
+// unrestricted (a zero registry.SecretPolicy would be).
+func TestSecretPolicyDefaultsAreNotEmpty(t *testing.T) {
+	c := Load()
+	if got, want := strings.Join(c.SecretEnvAllow, ","), "OPENSKY_*,AISSTREAM_*,SENTINEL_SECRET_*"; got != want {
+		t.Errorf("INGEST_SECRET_ENV_ALLOW default = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(c.SecretFileDirs, ","), "/etc/sentinel"; got != want {
+		t.Errorf("INGEST_SECRET_FILE_DIRS default = %q, want %q", got, want)
+	}
+	p := c.SecretPolicy()
+	if len(p.EnvAllow) == 0 || len(p.FileDirs) == 0 {
+		t.Fatalf("policy %+v", p)
+	}
+	if p.Check("env:DATABASE_URL") == nil || p.Check("env:OPENSKY_CLIENT_ID") != nil || p.Check("file:/etc/sentinel/tak/c.pem") != nil || p.Check("file:/etc/passwd") == nil {
+		t.Error("the default policy does not do what the defaults promise")
+	}
+}
+
+func TestSecretPolicyFromEnv(t *testing.T) {
+	t.Setenv("INGEST_SECRET_ENV_ALLOW", " MY_*, DB_PASSWORD ,")
+	t.Setenv("INGEST_SECRET_FILE_DIRS", "/etc/sentinel,/run/secrets")
+	c := Load()
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	p := c.SecretPolicy()
+	if p.Check("env:MY_KEY") != nil || p.Check("env:DB_PASSWORD") != nil || p.Check("env:OPENSKY_CLIENT_ID") == nil || p.Check("file:/run/secrets/k") != nil {
+		t.Errorf("policy %+v", p)
+	}
+	t.Setenv("INGEST_SECRET_ENV_ALLOW", "*")
+	if p := Load().SecretPolicy(); p.Check("env:ANYTHING") != nil {
+		t.Error("a lone * allows any name")
+	}
+}
+
+func TestSecretPolicyMustBeValid(t *testing.T) {
+	for name, env := range map[string][2]string{
+		"relative folder": {"INGEST_SECRET_FILE_DIRS", "etc/sentinel"},
+		"bad name":        {"INGEST_SECRET_ENV_ALLOW", "my-var"},
+		"mid-name star":   {"INGEST_SECRET_ENV_ALLOW", "A*B"},
+	} {
+		t.Setenv(env[0], env[1])
+		err := Load().Validate()
+		if err == nil || !strings.Contains(err.Error(), env[0]) {
+			t.Errorf("%s: %v", name, err)
+		}
+		t.Setenv(env[0], "")
+	}
+}

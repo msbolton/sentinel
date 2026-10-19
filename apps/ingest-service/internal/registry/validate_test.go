@@ -69,43 +69,7 @@ func TestValidateUnknownDriver(t *testing.T) {
 	}
 }
 
-func TestResolveSecrets(t *testing.T) {
-	lookup := func(name string) (string, bool) {
-		if name == "OPENSKY_CLIENT_ID" {
-			return "id-1", true
-		}
-		return "", false
-	}
-	got, err := ResolveSecrets(map[string]string{"clientId": "env:OPENSKY_CLIENT_ID"}, lookup)
-	if err != nil || got["clientId"] != "id-1" {
-		t.Fatalf("got %v err %v", got, err)
-	}
-	if _, err := ResolveSecrets(map[string]string{"clientSecret": "env:MISSING"}, lookup); err == nil {
-		t.Error("missing variable must fail")
-	}
-	if _, err := ResolveSecrets(map[string]string{"clientSecret": "plain"}, lookup); err == nil {
-		t.Error("plain value must fail")
-	}
-}
-
-func TestResolveFileSecrets(t *testing.T) {
-	files := map[string]string{"/etc/sentinel/tak/client.pem": "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n", "/etc/sentinel/empty": "  \n"}
-	read := func(path string) ([]byte, error) {
-		if v, ok := files[path]; ok {
-			return []byte(v), nil
-		}
-		return nil, errors.New("no such file")
-	}
-	got, err := ResolveSecretsWith(map[string]string{"clientCert": "file:/etc/sentinel/tak/client.pem"}, nil, read)
-	if err != nil || !strings.HasPrefix(got["clientCert"], "-----BEGIN CERTIFICATE-----") || strings.HasSuffix(got["clientCert"], "\n") {
-		t.Fatalf("got %q err %v", got["clientCert"], err)
-	}
-	if _, err := ResolveSecretsWith(map[string]string{"k": "file:/etc/sentinel/empty"}, nil, read); err == nil {
-		t.Error("empty file must fail")
-	}
-	if _, err := ResolveSecretsWith(map[string]string{"k": "file:/etc/sentinel/missing"}, nil, read); err == nil {
-		t.Error("missing file must fail")
-	}
+func TestValidSecretRef(t *testing.T) {
 	for ref, ok := range map[string]bool{"env:X": true, "file:/a/b": true, "file:relative": false, "file:/with space": false, "vault:x": false, "": false} {
 		if ValidSecretRef(ref) != ok {
 			t.Errorf("ValidSecretRef(%q) = %v", ref, !ok)

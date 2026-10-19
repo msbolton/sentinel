@@ -649,3 +649,7 @@ func mergeConfig(base, patch json.RawMessage) (json.RawMessage, error) {
 	}
 	return json.Marshal(b)
 }
+
+// UseSecretPolicy limits what the secret references and stream TLS files of a
+// connection may name when it is saved. Call it before serving.
+func (h *Handler) UseSecretPolicy(p registry.SecretPolicy) { h.validator.Secrets = p }

@@ -40,6 +40,13 @@ type Config struct {
 	// ordinary feeds (INGEST_LISTENER_SHARED=true). Without it the listener
 	// runs listening connections and the feeds pinned to it, and nothing else.
 	ListenerShared bool
+	// SecretEnvAllow and SecretFileDirs limit what a secret reference may name
+	// (INGEST_SECRET_ENV_ALLOW, default OPENSKY_*,AISSTREAM_*,SENTINEL_SECRET_*,
+	// where a lone * allows any name; INGEST_SECRET_FILE_DIRS, default
+	// /etc/sentinel, absolute folders). The defaults cover the built-in feeds,
+	// the TAK key material and the listener secrets.
+	SecretEnvAllow []string
+	SecretFileDirs []string
 
 	PublisherShards    int // PUBLISHER_SHARDS (default: 8)
 	ObservationBuffer  int // OBS_BUFFER (default: 1000) observations queued per publisher shard
@@ -83,6 +90,8 @@ func Load() *Config {
 		Listener:              envOr("INGEST_LISTENER", "false") == "true",
 		ListenerHost:          envOr("INGEST_LISTENER_HOST", ""),
 		ListenerShared:        envOr("INGEST_LISTENER_SHARED", "false") == "true",
+		SecretEnvAllow:        splitList(envOr("INGEST_SECRET_ENV_ALLOW", registry.DefaultSecretEnvAllow)),
+		SecretFileDirs:        splitList(envOr("INGEST_SECRET_FILE_DIRS", registry.DefaultSecretFileDirs)),
 
 		PublisherShards:    envOrInt("PUBLISHER_SHARDS", 8),
 		ObservationBuffer:  envOrInt("OBS_BUFFER", 1000),
@@ -144,6 +153,12 @@ func (c *Config) Validate() error {
 	if c.LeaseTick*2 > c.LeaseTTL {
 		return errors.New("LEASE_TICK_SEC must be at most half of LEASE_TTL_SEC")
 	}
+	if len(c.SecretEnvAllow) == 0 || len(c.SecretFileDirs) == 0 {
+		return errors.New("INGEST_SECRET_ENV_ALLOW and INGEST_SECRET_FILE_DIRS must each list at least one entry (a lone * allows any variable name)")
+	}
+	if err := c.SecretPolicy().Validate(); err != nil {
+		return err
+	}
 	if c.ListenerShared && !c.Listener {
 		return errors.New("INGEST_LISTENER_SHARED needs INGEST_LISTENER=true: only a listener replica can share")
 	}
@@ -181,4 +196,9 @@ func envOrInt(key string, def int) int {
 
 func envOrSeconds(key string, def int) time.Duration {
 	return time.Duration(envOrInt(key, def)) * time.Second
+}
+
+// SecretPolicy is the policy the secret settings describe.
+func (c *Config) SecretPolicy() registry.SecretPolicy {
+	return registry.SecretPolicy{EnvAllow: c.SecretEnvAllow, FileDirs: c.SecretFileDirs}
 }

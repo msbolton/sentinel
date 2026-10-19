@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -418,5 +419,52 @@ func TestStatusOfAFailedFeedIsNotADecodeError(t *testing.T) {
 	}
 	if _, has := detailOf(t, st)["lastDecodeError"]; has {
 		t.Errorf("detail = %s: a feed that is not running reports a decode error", st.Detail)
+	}
+}
+
+// A secret reference outside the policy stops the feed from starting, with an
+// error that names the variable, and the driver is never built; one inside it
+// starts as before.
+func TestStartRefusesASecretOutsideThePolicy(t *testing.T) {
+	built := make(chan driver.Spec, 4)
+	reg := newFakeRegistry()
+	sup := New(reg, &memPublisher{}, zap.NewNop(), metrics.New(nil), Options{
+		ReplicaID: "r1", RetryMin: 10 * time.Millisecond, RetryMax: 20 * time.Millisecond,
+		SecretPolicy: registry.SecretPolicy{EnvAllow: []string{"OPENSKY_*"}, FileDirs: []string{"/etc/sentinel"}},
+		Secrets:      func(name string) (string, bool) { return "v-" + name, true },
+		Factory: func(spec driver.Spec, _ driver.Deps) (driver.Driver, error) {
+			built <- spec
+			return newMockDriver(), nil
+		},
+	})
+	t.Cleanup(sup.shutdown)
+
+	bad := feedSpec("bad", 1, true)
+	bad.SecretRefs = map[string]string{"apiKey": "env:DATABASE_URL"}
+	good := feedSpec("good", 1, true)
+	good.SecretRefs = map[string]string{"apiKey": "env:OPENSKY_CLIENT_ID"}
+	reg.set(bad, good)
+	sup.Reconcile(context.Background())
+
+	if !waitFor(func() bool { st, _ := sup.Snapshot("bad"); return st.State == registry.StateError }, 2*time.Second) {
+		st, _ := sup.Snapshot("bad")
+		t.Fatalf("bad feed state %q, want error", st.State)
+	}
+	st, _ := sup.Snapshot("bad")
+	if !strings.Contains(st.LastError, "DATABASE_URL") || !strings.Contains(st.LastError, "INGEST_SECRET_ENV_ALLOW") {
+		t.Errorf("last error %q", st.LastError)
+	}
+	if !waitFor(func() bool { st, _ := sup.Snapshot("good"); return st.State == registry.StateRunning }, 2*time.Second) {
+		st, _ := sup.Snapshot("good")
+		t.Fatalf("good feed state %q (%s)", st.State, st.LastError)
+	}
+	close(built)
+	for spec := range built {
+		if spec.FeedID == "bad" {
+			t.Error("the driver of a refused feed was built")
+		}
+		if spec.FeedID == "good" && spec.Secrets["apiKey"] != "v-OPENSKY_CLIENT_ID" {
+			t.Errorf("good secrets %v", spec.Secrets)
+		}
 	}
 }

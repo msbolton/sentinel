@@ -36,6 +36,11 @@ var schema []byte
 // decoder; set from configuration before feeds start.
 var FrameBuffer = 1024
 
+// FileDirs are the folders the TLS files of a transport (certFile, keyFile,
+// caFile, clientCaFile) may be read from, as the secret references' files
+// are; set from configuration before feeds start. Empty restricts nothing.
+var FileDirs []string
+
 const mqttBlockFor = 2 * time.Second
 
 // DefaultMaxConnections is how many connections a tcpserver transport accepts
@@ -93,6 +98,9 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := checkTLSFiles(tcfg.TLS); err != nil {
+		return nil, err
+	}
 	// A tcpserver is capped unless the config says otherwise. This is decided
 	// here, not in NewFromParts, because only the raw config can tell an
 	// absent maxConnections from an explicit 0 (unlimited).
@@ -116,6 +124,26 @@ func setsMaxConnections(raw json.RawMessage) bool {
 		MaxConnections *int `json:"maxConnections"`
 	}
 	return json.Unmarshal(raw, &probe) == nil && probe.MaxConnections != nil
+}
+
+// checkTLSFiles refuses a TLS file outside FileDirs, after following links, so
+// that a link inside an allowed folder cannot lead out of it.
+func checkTLSFiles(t *transport.TLS) error {
+	if t == nil || len(FileDirs) == 0 {
+		return nil
+	}
+	for _, f := range []struct{ field, path string }{{"certFile", t.CertFile}, {"keyFile", t.KeyFile}, {"caFile", t.CAFile}, {"clientCaFile", t.ClientCAFile}} {
+		if f.path == "" {
+			continue
+		}
+		if _, err := transport.ResolveUnder(f.path, FileDirs); err != nil {
+			if errors.Is(err, transport.ErrOutsideDirs) {
+				return fmt.Errorf("tls.%s: file %s is not under an allowed folder (INGEST_SECRET_FILE_DIRS decides)", f.field, f.path)
+			}
+			return fmt.Errorf("tls.%s: %w", f.field, err)
+		}
+	}
+	return nil
 }
 
 // NewFromParts builds a stream driver from an already parsed transport

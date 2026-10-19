@@ -1083,3 +1083,46 @@ func TestPortsEndpointStoreFailure(t *testing.T) {
 		t.Errorf("a failed listing: %d %s", resp.StatusCode, out)
 	}
 }
+
+// UseSecretPolicy holds the secret references of a connection to the policy on
+// create and on update: a variable or file it does not allow is a 422 at the
+// reference, naming it and the settings that decide.
+func TestSecretPolicyIsEnforcedOnSave(t *testing.T) {
+	store := newMemStore()
+	h := NewHandler(store, drivers.Default(), &fakeRuntime{}, nil)
+	h.UseSecretPolicy(registry.SecretPolicy{EnvAllow: []string{"OPENSKY_*", "SENTINEL_SECRET_*"}, FileDirs: []string{"/etc/sentinel"}})
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux, Auth(AuthOptions{}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	create := func(name, refs string) (*http.Response, []byte) {
+		return do(t, srv, "POST", "/feeds", `{"name":"`+name+`","driver":"opensky","config":{"intervalSec":10},"secretRefs":`+refs+`}`, operator)
+	}
+	if resp, out := create("Allowed", `{"clientId":"env:OPENSKY_CLIENT_ID","clientSecret":"file:/etc/sentinel/secrets/os.key"}`); resp.StatusCode != 201 {
+		t.Fatalf("allowed refs: %d %s", resp.StatusCode, out)
+	}
+	resp, out := create("Denied", `{"clientId":"env:DATABASE_URL","clientSecret":"file:/etc/sentinel/../shadow"}`)
+	if resp.StatusCode != 422 {
+		t.Fatalf("denied refs: %d %s", resp.StatusCode, out)
+	}
+	for _, want := range []string{"/secretRefs/clientId", "DATABASE_URL", "/secretRefs/clientSecret", "INGEST_SECRET_ENV_ALLOW", "INGEST_SECRET_FILE_DIRS", "SENTINEL_SECRET_"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("422 body lacks %q: %s", want, out)
+		}
+	}
+	// An update is held to it as well.
+	patch := `{"secretRefs":{"clientId":"env:INGEST_SERVICE_TOKEN"}}`
+	if resp, out := do(t, srv, "PATCH", "/feeds/allowed", patch, operator); resp.StatusCode != 422 || !strings.Contains(string(out), "/secretRefs/clientId") {
+		t.Errorf("patch to a denied ref: %d %s", resp.StatusCode, out)
+	}
+	if resp, out := do(t, srv, "PATCH", "/feeds/allowed", `{"secretRefs":{"clientId":"env:SENTINEL_SECRET_MINE"}}`, operator); resp.StatusCode != 200 {
+		t.Errorf("patch to an allowed ref: %d %s", resp.StatusCode, out)
+	}
+	// A stream's TLS files are held to the folders.
+	tls := `{"name":"TLS","driver":"stream","config":{"transport":{"kind":"tcpserver","address":":47100","tls":{"enabled":true,"certFile":"/etc/passwd","keyFile":"/etc/sentinel/tak/k.pem"}},"framing":"line","decoder":{"name":"cot"}}}`
+	resp, out = do(t, srv, "POST", "/feeds", tls, operator)
+	if resp.StatusCode != 422 || !strings.Contains(string(out), "/config/transport/tls/certFile") || strings.Contains(string(out), "tls/keyFile") {
+		t.Errorf("tls files: %d %s", resp.StatusCode, out)
+	}
+}

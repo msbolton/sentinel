@@ -7,6 +7,7 @@ import (
 
 	"github.com/sentinel/ingest-service/internal/drivers"
 	"github.com/sentinel/ingest-service/internal/source/driver"
+	"github.com/sentinel/ingest-service/internal/source/transport"
 )
 
 // Problem is one validation failure, addressed by a JSON-pointer-like path.
@@ -33,6 +34,9 @@ var reservedIDs = map[string]bool{"ports": true}
 // Validator checks feed definitions against the driver catalog.
 type Validator struct {
 	Catalog *drivers.Catalog
+	// Secrets limits what secret references and stream TLS files may name;
+	// the zero value restricts nothing.
+	Secrets SecretPolicy
 }
 
 // Validate returns a *ValidationError listing every problem, or nil.
@@ -53,7 +57,8 @@ func (v *Validator) Validate(f *Feed) error {
 	} else {
 		problems = append(problems, v.Catalog.Validate(f.Driver, f.Config)...)
 		problems = append(problems, CheckKeyCase(f.Config)...)
-		problems = append(problems, checkSecrets(info, f)...)
+		problems = append(problems, v.checkSecrets(info, f)...)
+		problems = append(problems, v.checkTLSFiles(f)...)
 		problems = append(problems, checkDirection(info, f)...)
 	}
 	if len(problems) > 0 {
@@ -99,7 +104,7 @@ func checkDirection(info drivers.Info, f *Feed) []Problem {
 // checkSecrets enforces that secrets travel only as references: every
 // secretRefs key must be one the driver declares, every value a supported
 // reference, and none of the declared secret fields may appear in config.
-func checkSecrets(info drivers.Info, f *Feed) []Problem {
+func (v *Validator) checkSecrets(info drivers.Info, f *Feed) []Problem {
 	var problems []Problem
 	declared := map[string]bool{}
 	for _, k := range info.SecretFields {
@@ -110,7 +115,9 @@ func checkSecrets(info drivers.Info, f *Feed) []Problem {
 			problems = append(problems, Problem{Path: "/secretRefs/" + key, Message: fmt.Sprintf("driver %s does not take this secret", info.ID)})
 		}
 		if !ValidSecretRef(ref) {
-			problems = append(problems, Problem{Path: "/secretRefs/" + key, Message: "must be a reference like env:VARIABLE_NAME or file:/absolute/path, never a plain value"})
+			problems = append(problems, Problem{Path: "/secretRefs/" + key, Message: "must be a reference like env:SENTINEL_SECRET_NAME or file:/etc/sentinel/name, never a plain value; " + SecretPolicyHint})
+		} else if err := v.Secrets.Check(ref); err != nil {
+			problems = append(problems, Problem{Path: "/secretRefs/" + key, Message: err.Error()})
 		}
 	}
 	var cfg map[string]json.RawMessage
@@ -119,6 +126,31 @@ func checkSecrets(info drivers.Info, f *Feed) []Problem {
 			if _, present := cfg[k]; present {
 				problems = append(problems, Problem{Path: "/config/" + k, Message: "secrets go in secretRefs as env references, not in config"})
 			}
+		}
+	}
+	return problems
+}
+
+// tlsFileFields are the TLS files a stream transport reads from disk when it
+// starts, by the names its config gives them.
+var tlsFileFields = []string{"certFile", "keyFile", "caFile", "clientCaFile"}
+
+// checkTLSFiles holds the TLS file paths of a stream transport to the folders
+// secret files may come from. The keys are read the way the driver decodes
+// them, ignoring case (see rawAt).
+func (v *Validator) checkTLSFiles(f *Feed) []Problem {
+	if f.Driver != "stream" || v.Secrets.unrestricted() {
+		return nil
+	}
+	var problems []Problem
+	for _, field := range tlsFileFields {
+		raw := rawAt(f.Config, "transport", "tls", field)
+		var path string
+		if raw == nil || json.Unmarshal(raw, &path) != nil || path == "" {
+			continue
+		}
+		if !transport.PathUnder(path, v.Secrets.FileDirs) {
+			problems = append(problems, Problem{Path: "/config/transport/tls/" + field, Message: FileOutsideMessage(path)})
 		}
 	}
 	return problems

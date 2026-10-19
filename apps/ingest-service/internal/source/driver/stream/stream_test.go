@@ -6,6 +6,8 @@ import (
 	"errors"
 	"maps"
 	"net"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -812,5 +814,53 @@ func TestSchemaTitlesTheTLSSecrets(t *testing.T) {
 				t.Errorf("x-secrets.%s %s = %v (present: %v), want %v (present: %v)", name, condition, got, has, want, want != nil)
 			}
 		}
+	}
+}
+
+// The TLS files a stream transport reads from disk are held to the folders in
+// FileDirs, as the secret references are; a link inside a folder that leads
+// out of it is refused too. With no FileDirs set nothing is held back.
+func TestNewHoldsTLSFilesToFileDirs(t *testing.T) {
+	root := t.TempDir()
+	allowed := filepath.Join(root, "allowed")
+	if err := os.MkdirAll(allowed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside.pem")
+	for _, f := range []string{filepath.Join(allowed, "cert.pem"), outside} {
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	escape := filepath.Join(allowed, "escape.pem")
+	if err := os.Symlink(outside, escape); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	saved := FileDirs
+	defer func() { FileDirs = saved }()
+
+	build := func(field, path string) error {
+		tls, _ := json.Marshal(map[string]any{"enabled": true, field: path})
+		cfg := `{"transport":{"kind":"tcpserver","address":"127.0.0.1:0","tls":` + string(tls) + `},"framing":"line","decoder":{"name":"sbs"}}`
+		_, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+		return err
+	}
+	FileDirs = []string{allowed}
+	for _, field := range []string{"certFile", "keyFile", "caFile", "clientCaFile"} {
+		// The file inside is fine as far as the policy goes (a lone certFile
+		// fails later, in the TLS setup, which New does not run).
+		if err := build(field, filepath.Join(allowed, "cert.pem")); err != nil && strings.Contains(err.Error(), "INGEST_SECRET_FILE_DIRS") {
+			t.Errorf("%s inside: %v", field, err)
+		}
+		for name, path := range map[string]string{"outside": outside, "dotdot": filepath.Join(allowed, "..", "outside.pem"), "link out": escape} {
+			err := build(field, path)
+			if err == nil || !strings.Contains(err.Error(), "tls."+field) || !strings.Contains(err.Error(), "INGEST_SECRET_FILE_DIRS") {
+				t.Errorf("%s %s: %v", field, name, err)
+			}
+		}
+	}
+	FileDirs = nil
+	if err := build("certFile", outside); err != nil && strings.Contains(err.Error(), "INGEST_SECRET_FILE_DIRS") {
+		t.Errorf("no FileDirs: %v", err)
 	}
 }

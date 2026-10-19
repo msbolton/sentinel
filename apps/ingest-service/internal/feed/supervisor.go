@@ -65,8 +65,11 @@ type Options struct {
 	StaleWarn      time.Duration // default health thresholds
 	StaleCritical  time.Duration
 	Secrets        registry.Lookup
-	Factory        Factory
-	RawMax         int
+	// SecretPolicy limits what the secret references of a feed may name when
+	// it starts; the zero value restricts nothing.
+	SecretPolicy registry.SecretPolicy
+	Factory      Factory
+	RawMax       int
 	// Listener means this replica takes listening connections (the ones that
 	// bind a port); ListenerHost is the address senders use to reach it.
 	// ListenerShared lets such a replica take its share of the ordinary feeds
@@ -688,7 +691,7 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 		s.logger.Error("feed failed to start", zap.String("feed", spec.ID), zap.String("driver", spec.Driver), zap.Error(err), zap.Duration("retry_in", delay))
 	}
 
-	secrets, err := registry.ResolveSecrets(spec.SecretRefs, s.opts.Secrets)
+	secrets, err := s.opts.SecretPolicy.Resolve(spec.SecretRefs, s.opts.Secrets, nil)
 	if err != nil {
 		fail(err)
 		return

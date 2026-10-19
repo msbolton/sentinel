@@ -64,8 +64,12 @@ func main() {
 		zap.Bool("listener_shared", cfg.ListenerShared),
 		zap.Int("publisher_shards", cfg.PublisherShards),
 		zap.Int("frame_buffer", cfg.FrameBuffer),
+		zap.Strings("secret_env_allow", cfg.SecretEnvAllow),
+		zap.Strings("secret_file_dirs", cfg.SecretFileDirs),
 	)
 	stream.FrameBuffer = cfg.FrameBuffer
+	secretPolicy := cfg.SecretPolicy()
+	stream.FileDirs = secretPolicy.FileDirs
 
 	promReg := prometheus.NewRegistry()
 	promReg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
@@ -125,6 +129,7 @@ func main() {
 		ListenerShared: cfg.ListenerShared,
 		LeaseTick:      cfg.LeaseTick,
 		RebalanceAfter: cfg.LeaseRebalance,
+		SecretPolicy:   secretPolicy,
 		Shapes:         outbound.NewShapeStore(reg.Pool()),
 		Density:        density.New(producer, commonkafka.TopicDensityEvents).For,
 		ConsumerFactory: func(groupID, clientID string) (outbound.Consumer, error) {
@@ -164,6 +169,7 @@ func main() {
 		logger.Fatal("INGEST_RESERVED_PORTS", zap.Error(err))
 	}
 	mgmtHandler.Reserved = reserved
+	mgmtHandler.UseSecretPolicy(secretPolicy)
 	mgmtHandler.RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
 
 	httpServer := &http.Server{
