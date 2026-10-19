@@ -84,6 +84,8 @@ export class DeadLettersComponent {
   private readonly summary = viewChild<ElementRef<HTMLElement>>('summaryRef');
   private readonly reloadButton = viewChild<ElementRef<HTMLElement>>('reloadRef');
   private readonly payloadButton = viewChild<ElementRef<HTMLElement>>('payloadRef');
+  // the table's scrolling region, which holds the payload blocks too
+  private readonly tableRegion = viewChild<ElementRef<HTMLElement>>('scrollRef');
 
   private asked = false;
   private request: Subscription | null = null;
@@ -135,11 +137,11 @@ export class DeadLettersComponent {
     return `${this.idBase()}-${letter.partition}-${letter.offset}`;
   }
 
-  /** What names a reject's payload block: the reject it belongs to, as its row shows it ("at Oct 18 12:00:00 (parse_error)"). */
+  /** What names a reject's payload block: the reject it belongs to, as its row shows it ("at Oct 18 12:00:00 (parse_error)"), with where it sits in the topic, as two rejects of one second and reason share the rest. */
   payloadNameOf(letter: DeadLetter): string {
     const at = this.time(letter.at);
     const when = at === null ? '' : ` at ${formatDate(at, TIME_FORMAT, this.locale)}`;
-    return `Payload of the reject${when} (${letter.reason})`;
+    return `Payload of the reject${when} (${letter.reason}), partition ${letter.partition}, offset ${letter.offset}`;
   }
 
   private load(): void {
@@ -171,7 +173,8 @@ export class DeadLettersComponent {
 
   /**
    * An answer can take away the button the focus is on: the list it acts on is gone, or has nothing in it. The page
-   * would get the focus, so it moves to a button that stays (Retry, Refresh), or the summary when none does.
+   * would get the focus, so it moves to a button that stays (Retry, Refresh), or the summary when none does. The
+   * table goes too, with the region or payload block the focus may be in, and then the focus goes to the summary.
    */
   private keepFocus(): void {
     const active = this.doc.activeElement;
@@ -179,6 +182,11 @@ export class DeadLettersComponent {
     const onReload = active !== null && active === this.reloadButton()?.nativeElement;
     if ((onPayload && !this.payloadToggle()) || (onReload && !this.actionable())) {
       (this.actionable() ? this.reloadButton() : this.summary())?.nativeElement.focus();
+      return;
+    }
+    const inTable = active !== null && this.tableRegion()?.nativeElement.contains(active) === true;
+    if (inTable && (this.page()?.letters.length ?? 0) === 0) {
+      this.summary()?.nativeElement.focus();
     }
   }
 }

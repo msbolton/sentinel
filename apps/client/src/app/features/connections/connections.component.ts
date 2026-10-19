@@ -38,7 +38,7 @@ interface FeedRow {
   listening: boolean;
   sink: SinkDetail;
   highlights: string[];
-  detailEntries: Array<{ key: string; value: string }>;
+  detailEntries: Array<{ key: string; value: string; withheld: boolean }>;
 }
 
 /** Which connections the list shows. */
@@ -121,7 +121,7 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
         highlights: highlightsOf(feed.status?.detail, sink, feed),
         detailEntries: Object.entries(feed.status?.detail ?? {})
           .filter(([key]) => key !== 'leaseToken')
-          .map(([key, value]) => ({ key, value: formatDetail(value) })),
+          .map(([key, value]) => ({ key, value: formatDetail(value), withheld: isWithheld(value) })),
       };
     });
   });
@@ -338,8 +338,23 @@ function highlightsOf(detail: Record<string, unknown> | undefined, sink: SinkDet
   return out;
 }
 
+/**
+ * Whether a detail value is blank because the server withheld it (it blanks the texts of a connection above the caller's
+ * clearance) or never had it: an empty text, or a map in which every value is one.
+ */
+function isWithheld(value: unknown): boolean {
+  if (value === '') {
+    return true;
+  }
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const values = Object.values(value);
+    return values.length > 0 && values.every((v) => v === '');
+  }
+  return false;
+}
+
 function formatDetail(value: unknown): string {
-  if (value === null || value === undefined) {
+  if (value === null || value === undefined || isWithheld(value)) {
     return '—';
   }
   if (typeof value === 'object') {

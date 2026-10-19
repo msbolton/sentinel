@@ -219,7 +219,7 @@
                           <dl>
                             @for (entry of row.detailEntries; track entry.key) {
                               <dt>{{ entry.key }}</dt>
-                              <dd class="mono">{{ entry.value }}</dd>
+                              <dd class="mono" [attr.title]="entry.withheld ? 'Withheld or not recorded' : null">{{ entry.value }}</dd>
                             }
                           </dl>
                         }

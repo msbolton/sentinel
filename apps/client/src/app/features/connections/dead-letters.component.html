@@ -17,7 +17,12 @@
         } @else {
           @if (page(); as p) {
             @if (p.letters.length === 0) {
-              <p>No rejects in the last {{ p.scanned | number }} scanned</p>
+              @if (p.scanned === 0) {
+                <!-- An empty topic: there was nothing to scan. -->
+                <p>No rejects yet</p>
+              } @else {
+                <p>No rejects in the last {{ p.scanned | number }} scanned</p>
+              }
             } @else if (p.letters.length >= limit) {
               <!-- As many as it asked for: these are the newest, and the server may have older ones. -->
               <p>The newest {{ limit | number }} rejects in the last {{ p.scanned | number }} scanned; there may be more</p>
@@ -44,7 +49,7 @@
       @if (p.letters.length > 0) {
         <!-- Busy while it is asked again; the status above is not, so that what it says is announced.
              A table wider than the panel scrolls here, which the keyboard reaches only if this can take the focus. -->
-        <div class="scroll" tabindex="0" role="region" [attr.aria-label]="'Recent rejects table of ' + feedId()" [attr.aria-busy]="loading()">
+        <div #scrollRef class="scroll" tabindex="0" role="region" [attr.aria-label]="'Recent rejects table of ' + feedId()" [attr.aria-busy]="loading()">
           <table class="rejects">
             <caption>Recent rejects, newest first</caption>
             <thead>

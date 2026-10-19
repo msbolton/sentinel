@@ -230,6 +230,35 @@ describe('ConnectionsComponent', () => {
     expect(detail?.textContent).toContain('3900');
   });
 
+  it('shows a dash for driver detail the server withheld or left empty, not an empty pair of quotes', () => {
+    // The server blanks the texts of a connection above the caller's clearance.
+    flushInitial([
+      makeFeed({
+        id: 'secret',
+        status: {
+          ...makeFeed({ id: 'x' }).status,
+          detail: { lastNote: '', lastCounts: { a: '', b: '' }, kept: 'visible', fewer: { a: '', b: 'x' }, none: {}, level: 0 },
+        },
+      }),
+    ]);
+    rowOf('secret').querySelector<HTMLButtonElement>('.expand-btn')?.click();
+    fixture.detectChanges();
+
+    const block = Array.from(el.querySelectorAll('tr.detail-row .detail-block')).find((b) => b.querySelector('h4')?.textContent === 'Driver detail')!;
+    const entry = (key: string) => {
+      const dd = Array.from(block.querySelectorAll('dt')).find((dt) => dt.textContent?.trim() === key)!.nextElementSibling!;
+      return [dd.textContent?.trim(), dd.getAttribute('title')];
+    };
+    // an empty text, and a map of them
+    expect(entry('lastNote')).toEqual(['—', 'Withheld or not recorded']);
+    expect(entry('lastCounts')).toEqual(['—', 'Withheld or not recorded']);
+    // anything with something in it is shown as it is
+    expect(entry('kept')).toEqual(['visible', null]);
+    expect(entry('fewer')).toEqual(['{"a":"","b":"x"}', null]);
+    expect(entry('none')).toEqual(['{}', null]);
+    expect(entry('level')).toEqual(['0', null]);
+  });
+
   it('shows where a TCP/UDP connection listens, under its name and in a send guide', () => {
     flushInitial([
       makeFeed({

@@ -356,9 +356,9 @@ describe('DeadLettersComponent', () => {
     const blocks = pre();
     // the name says which reject, as its row does; a reject with no time is named by what is left
     expect(blocks.map((p) => p.getAttribute('aria-label'))).toEqual([
-      `Payload of the reject at ${timeOf('2026-10-18T12:00:00Z')} (parse_error)`,
-      `Payload of the reject at ${timeOf('2026-10-18T11:58:30Z')} (oversize)`,
-      'Payload of the reject (parse_error)',
+      `Payload of the reject at ${timeOf('2026-10-18T12:00:00Z')} (parse_error), partition 0, offset 42`,
+      `Payload of the reject at ${timeOf('2026-10-18T11:58:30Z')} (oversize), partition 0, offset 41`,
+      'Payload of the reject (parse_error), partition 0, offset 40',
     ]);
     // and the caption, which says how the text is encoded or cut, is read after it
     const described = blocks.map((p) => document.getElementById(p.getAttribute('aria-describedby') ?? '')?.textContent?.trim());
@@ -367,6 +367,17 @@ describe('DeadLettersComponent', () => {
     expect(new Set(blocks.map((p) => p.getAttribute('aria-describedby'))).size).toBe(3);
     expect(blocks.every((p) => p.getAttribute('role') === 'group' && p.getAttribute('tabindex') === '0')).toBe(true);
     expect(blocks.some((p) => p.hasAttribute('aria-labelledby'))).toBe(false);
+  });
+
+  it('gives two rejects of the same second and reason different payload names', async () => {
+    await openWith(page([letter({ offset: 42 })]));
+    press('Show payload');
+    http.expectOne(WITH_PAYLOAD).flush(page([withPayload({ offset: 42 }), withPayload({ offset: 41 }), withPayload({ partition: 3, offset: 41 })]));
+    fixture.detectChanges();
+
+    const names = pre().map((p) => p.getAttribute('aria-label'));
+    expect(new Set(names).size).toBe(3);
+    expect(names.map((n) => n!.replace(/^.*\), /, ''))).toEqual(['partition 0, offset 42', 'partition 0, offset 41', 'partition 3, offset 41']);
   });
 
   it('says so when a reject has no payload, or an empty one', async () => {
@@ -577,6 +588,49 @@ describe('DeadLettersComponent', () => {
     expect(document.activeElement).toBe(button('Refresh'));
   });
 
+  // The table goes, and the region or payload block the focus was in goes with it; the page would get the focus.
+  it('moves the focus to the summary when the table it was in goes away', async () => {
+    // an empty list, a failure, a refusal
+    const outcomes: Array<(url: string) => void> = [
+      (url) => http.expectOne(url).flush(page([])),
+      (url) => http.expectOne(url).flush('down', { status: 502, statusText: 'Bad Gateway' }),
+      (url) => http.expectOne(url).flush({ error: 'no' }, { status: 403, statusText: 'No' }),
+    ];
+    for (const answer of outcomes) {
+      for (const inside of ['region', 'payload'] as const) {
+        render();
+        await openWith(page([letter()]));
+        if (inside === 'payload') {
+          press('Show payload');
+          http.expectOne(WITH_PAYLOAD).flush(page([withPayload()]));
+          fixture.detectChanges();
+        }
+        const target = inside === 'region' ? el.querySelector<HTMLElement>('.scroll')! : pre()[0];
+        target.focus();
+        expect(document.activeElement).toBe(target);
+        // the request is made from a button, which a keyboard user presses and then moves back from
+        button('Refresh')!.click();
+        target.focus();
+        answer(inside === 'payload' ? WITH_PAYLOAD : LIST);
+        fixture.detectChanges();
+
+        expect(el.querySelector('table')).toBeNull();
+        expect(document.activeElement).toBe(el.querySelector('summary'));
+      }
+    }
+  });
+
+  it('leaves the focus in the table while the table stays', async () => {
+    await openWith(page([letter()]));
+    const region = el.querySelector<HTMLElement>('.scroll')!;
+    button('Refresh')!.click();
+    region.focus();
+    http.expectOne(LIST).flush(page([letter(), letter({ offset: 43 })]));
+    fixture.detectChanges();
+
+    expect(document.activeElement).toBe(el.querySelector('.scroll'));
+  });
+
   it('says that there may be more when the list is as long as the one it asked for', async () => {
     const newest = (n: number) => Array.from({ length: n }, (_, i) => letter({ offset: 100 - i }));
     const lines = () => Array.from(el.querySelectorAll('[role=status] p')).map(text);
@@ -613,6 +667,13 @@ describe('DeadLettersComponent', () => {
     expect(el.querySelector('table')).toBeNull();
     // nothing to show the payload of, but something to refresh
     expect(button('Show payload')).toBeNull();
+    expect(button('Refresh')).not.toBeNull();
+  });
+
+  it('does not claim to have looked at nothing when the topic is empty', async () => {
+    await openWith(page([], { scanned: 0 }));
+
+    expect(status()).toBe('No rejects yet');
     expect(button('Refresh')).not.toBeNull();
   });
 
