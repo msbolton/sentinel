@@ -18,6 +18,7 @@ import (
 var (
 	errRevoked = errors.New("the ingest token was revoked")
 	errMoving  = errors.New("connection moving")
+	errExpired = errors.New("the ingest token has expired")
 )
 
 type authKey struct{}
@@ -83,10 +84,18 @@ func (s *service) begin(ctx context.Context) (context.Context, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	cctx, cancel := context.WithCancelCause(context.WithValue(ctx, authKey{}, a))
+	base, cancel := context.WithCancelCause(context.WithValue(ctx, authKey{}, a))
+	cctx, release := base, func() {}
+	// The token cache announces a revocation but not an expiry, so an expiry
+	// ends the call at its time, an idle stream included.
+	if a.tok.ExpiresAt != nil {
+		var stop context.CancelFunc
+		cctx, stop = context.WithDeadlineCause(base, *a.tok.ExpiresAt, errExpired)
+		release = stop
+	}
 	remove := s.calls.add(a.tok.ID, cancel)
 	stopMoving := context.AfterFunc(s.run, func() { cancel(errMoving) })
-	end := func() { stopMoving(); remove(); cancel(nil) }
+	end := func() { stopMoving(); remove(); release(); cancel(nil) }
 	if _, ok := s.d.tokens.Authenticate(a.secret); !ok {
 		end()
 		return nil, nil, status.Error(codes.Unauthenticated, "the ingest token was revoked")
@@ -94,15 +103,18 @@ func (s *service) begin(ctx context.Context) (context.Context, func(), error) {
 	return cctx, end, nil
 }
 
-// ended turns a call cut short by a revocation or the run's end into the
-// status the sender should see.
+// ended turns a call cut short by a revocation, an expiry or the run's end
+// into the status the sender should see. A successful result is never
+// rewritten: reports already sunk must not be reported failed.
 func ended(ctx context.Context, err error) error {
-	if ctx.Err() == nil {
+	if err == nil || ctx.Err() == nil {
 		return err
 	}
 	switch cause := context.Cause(ctx); {
 	case errors.Is(cause, errRevoked):
 		return status.Error(codes.Unauthenticated, "the ingest token was revoked")
+	case errors.Is(cause, errExpired):
+		return status.Error(codes.Unauthenticated, "the ingest token has expired")
 	case errors.Is(cause, errMoving):
 		return status.Error(codes.Unavailable, "connection moving: reconnect")
 	}
