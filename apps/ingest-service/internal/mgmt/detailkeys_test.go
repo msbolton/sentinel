@@ -61,6 +61,8 @@ var errorKeys = []errorKey{
 		`{"errors":7}`, `{"errors":7}`},
 	{"feed/supervisor.go", "deliveryErrors", "an outbound counter",
 		`{"deliveryErrors":3}`, `{"deliveryErrors":3}`},
+	{"source/transport/guard.go", "senderRateLimited", "a listener's count of messages dropped by per-sender limits (its name only contains \"err\" by accident): a number, which the gate keeps",
+		`{"senderRateLimited":4}`, `{"senderRateLimited":4}`},
 }
 
 // errorKeysWritten finds the keys with "err" in their name that the Go files
