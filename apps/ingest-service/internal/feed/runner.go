@@ -189,6 +189,7 @@ func (r *Runner) Emit(ctx context.Context, o *obs.Observation) error {
 	if o.Classification == "" {
 		o.Classification = obs.ClassUnclassified
 	}
+	dropForeignEmplacements(o)
 	o.EnsureIdentity()
 	r.boundRaw(o)
 	if !r.filter.Allow(o, time.Now()) {
@@ -213,6 +214,22 @@ func (r *Runner) Emit(ctx context.Context, o *obs.Observation) error {
 		r.metrics.ObservationsTotal.WithLabelValues(r.feedID, r.driverID).Inc()
 	}
 	return nil
+}
+
+// dropForeignEmplacements removes every EMPLACEMENT identity that does not
+// name the emplacement the service says the report came from. Only service
+// code sets EmplacementID, so a sender's own claim to an emplacement is
+// dropped: it could otherwise fuse into that emplacement's entity, or hide
+// its track behind one.
+func dropForeignEmplacements(o *obs.Observation) {
+	kept := o.Identities[:0]
+	for _, id := range o.Identities {
+		if id.Type == obs.IdentityEmplacement && id.Value != o.EmplacementID {
+			continue
+		}
+		kept = append(kept, id)
+	}
+	o.Identities = kept
 }
 
 func (r *Runner) boundRaw(o *obs.Observation) {

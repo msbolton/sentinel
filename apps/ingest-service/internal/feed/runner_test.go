@@ -175,6 +175,62 @@ func TestRunnerDeadLetterProvenance(t *testing.T) {
 	}
 }
 
+// Only service code sets EmplacementID, so an EMPLACEMENT identity is kept
+// only when it names that emplacement. A sender's own is dropped before the
+// canonical key is chosen, so it can neither fuse into an emplacement's entity
+// nor hide its track behind one.
+func TestRunnerDropsEmplacementIdentitiesTheServiceDidNotSet(t *testing.T) {
+	ts := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	pub := &memPublisher{}
+	drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+		forged := fix("a", 40, -80, ts)
+		forged.AddIdentity(obs.IdentityEmplacement, "e-1")
+		forged.AddIdentity(obs.IdentityMMSI, "235000001")
+		if err := sink.Emit(ctx, forged); err != nil {
+			return err
+		}
+		bare := fix("b", 41, -80, ts)
+		bare.AddIdentity(obs.IdentityEmplacement, "e-2")
+		if err := sink.Emit(ctx, bare); err != nil {
+			return err
+		}
+		own := fix("e-3", 42, -80, ts)
+		own.EmplacementID = "e-3"
+		own.AddIdentity(obs.IdentityEmplacement, "e-3")
+		own.AddIdentity(obs.IdentityEmplacement, "e-4")
+		return sink.Emit(ctx, own)
+	}}
+	r := NewRunner("f", "d", drv, pub, nil, nil, RunnerOptions{})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := pub.observations()
+	if len(got) != 3 {
+		t.Fatalf("%d observations, want 3", len(got))
+	}
+	if want := []obs.Identity{{Type: obs.IdentityMMSI, Value: "235000001"}}; !sameIdentities(got[0].Identities, want) {
+		t.Errorf("forged identities = %v, want %v", got[0].Identities, want)
+	}
+	if want := []obs.Identity{{Type: obs.IdentityFeedLocal, Value: "f:b"}}; !sameIdentities(got[1].Identities, want) {
+		t.Errorf("bare identities = %v, want %v", got[1].Identities, want)
+	}
+	if want := []obs.Identity{{Type: obs.IdentityEmplacement, Value: "e-3"}}; !sameIdentities(got[2].Identities, want) {
+		t.Errorf("service identities = %v, want %v", got[2].Identities, want)
+	}
+}
+
+func sameIdentities(a, b []obs.Identity) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestRunnerStampsClassification(t *testing.T) {
 	ts := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
