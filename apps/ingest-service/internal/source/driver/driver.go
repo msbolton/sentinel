@@ -241,6 +241,14 @@ type Definition struct {
 	// SecretFields are secret_refs keys the driver expects; they must never
 	// appear in config.
 	SecretFields []string
+	// OpaqueConfig lists the config members (JSON pointers below the config,
+	// like "/body") whose content is data the driver passes on, not settings it
+	// decodes into fields: the key-case rule does not look inside them.
+	OpaqueConfig []string
+	// HeaderMaps lists the config members that are maps of HTTP header names
+	// to values (like "/headers"). Header names are case-insensitive, so two
+	// that differ only in case are refused with a message of their own.
+	HeaderMaps []string
 	// AreaTTL is how long a pushed area stays valid without a refresh.
 	AreaTTL time.Duration
 	// ConfigSchema is the JSON Schema the feed config must satisfy.

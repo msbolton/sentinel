@@ -52,6 +52,10 @@ func init() {
 		Description:  "Any JSON HTTP API polled on an interval or for the clients' viewport, mapped to observations through a field map.",
 		Capabilities: []string{driver.CapabilityPoll, driver.CapabilityArea},
 		SecretFields: []string{"password", "token", "clientSecret"},
+		// The POST body is sent to the remote API as it is, so its keys are the
+		// API's data; the headers are a map with Header.Set semantics.
+		OpaqueConfig: []string{"/body"},
+		HeaderMaps:   []string{"/headers"},
 		AreaTTL:      defaultAreaTTL,
 		ConfigSchema: schema,
 		New:          New,
