@@ -45,6 +45,7 @@ check GET "/api/v1/search?q=test" 200
 check GET /api/v1/search/facets 200
 check GET "/api/v1/tracks/timeline?buckets=4" 200
 check GET /api/v1/feeds 200
+check GET /api/v1/feeds/ports 200
 check GET /api/v1/feeds/opensky 200
 check GET /api/v1/feeds/opensky/status 200
 check GET /api/v1/feeds/opensky/area 200
