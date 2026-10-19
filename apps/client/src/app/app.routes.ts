@@ -38,6 +38,12 @@ export const routes: Routes = [
       import('./features/geofences/geofences.component').then((m) => m.GeofencesComponent),
   },
   {
+    path: 'emplacements',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./features/emplacements/emplacements.component').then((m) => m.EmplacementsComponent),
+  },
+  {
     path: 'link-graph',
     canActivate: [roleGuard('sentinel-analyst', 'sentinel-admin')],
     loadComponent: () =>

@@ -7,7 +7,7 @@ export const ICON_NAMES = [
   'skip-back', 'play', 'pause', 'skip-forward', 'square',
   'zoom-in', 'zoom-out', 'fit', 'zap', 'share',
   'alert-octagon', 'alert-triangle', 'alert-circle', 'info', 'user', 'box', 'arrow-up',
-  'hexagon', 'rectangle', 'circle-dot', 'ring', 'plus',
+  'hexagon', 'rectangle', 'circle-dot', 'ring', 'plus', 'radar',
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -72,6 +72,9 @@ export type IconName = (typeof ICON_NAMES)[number];
         }
         @case ('layers') {
           <svg:polygon points="12 2 2 7 12 12 22 7 12 2"/><svg:polyline points="2 17 12 22 22 17"/><svg:polyline points="2 12 12 17 22 12"/>
+        }
+        @case ('radar') {
+          <svg:path d="M19.07 4.93A10 10 0 1 0 22 12"/><svg:path d="M16.24 7.76A6 6 0 1 0 18 12"/><svg:path d="M12 12l7-7"/><svg:circle cx="12" cy="12" r="2"/>
         }
         @case ('crosshair') {
           <svg:circle cx="12" cy="12" r="4"/><svg:path d="M12 2v4"/><svg:path d="M12 18v4"/><svg:path d="M2 12h4"/><svg:path d="M18 12h4"/>

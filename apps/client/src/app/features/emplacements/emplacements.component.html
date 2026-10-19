@@ -1,0 +1,144 @@
+<div class="panel emplacements-panel">
+  <div class="panel-header">
+    <div class="header-left">
+      <h2>Emplacements</h2>
+      <span class="count mono">{{ list().length }}</span>
+    </div>
+    @if (canWrite()) {
+      <button type="button" class="btn btn-primary btn-sm" aria-label="New emplacement" (click)="startNew()">
+        <app-icon name="plus" [size]="14" [strokeWidth]="2.5" /> New
+      </button>
+    }
+  </div>
+
+  <div class="panel-content">
+    <div class="toolbar">
+      <div class="segmented" role="group" aria-label="Filter by mobility">
+        @for (f of ['ALL', 'FIXED', 'MOBILE']; track f) {
+          <button type="button" [class.active]="filter() === f" (click)="filter.set($any(f))">{{ f === 'ALL' ? 'All' : f.toLowerCase() }}</button>
+        }
+      </div>
+      <label class="coverage-toggle">
+        <input type="checkbox" [checked]="showCoverage()" (change)="service.setShowCoverage(checked($event))" /> Coverage
+      </label>
+    </div>
+
+    @if (error(); as message) {
+      <p class="form-error" role="alert">{{ message }}</p>
+    }
+
+    @if (draft(); as d) {
+      @if (d.id === null) {
+        <ng-container *ngTemplateOutlet="editor; context: { $implicit: d }" />
+      }
+    }
+
+    <ul class="row-list">
+      @for (e of shown(); track e.id) {
+        <li class="row" [class.selected]="e.id === selectedId()" [class.inactive]="!e.active" (click)="edit(e)">
+          <span class="chip" aria-hidden="true"><app-icon name="radar" [size]="12" [strokeWidth]="2.5" /></span>
+          <span class="row-text">
+            <span class="row-name">{{ e.name }}</span>
+            <span class="row-summary mono">{{ summary(e) }}</span>
+          </span>
+          @if (e.exercise) {
+            <span class="badge">EX</span>
+          }
+          <span class="badge level">{{ e.classification.charAt(0) }}</span>
+        </li>
+        @if (draft()?.id === e.id) {
+          <li class="editor-row"><ng-container *ngTemplateOutlet="editor; context: { $implicit: draft()! }" /></li>
+        }
+      } @empty {
+        <li class="empty">No emplacements yet.</li>
+      }
+    </ul>
+  </div>
+</div>
+
+<ng-template #editor let-d>
+  <form class="editor" (submit)="$event.preventDefault(); save()">
+    <label class="field"><span class="field-label">Name</span>
+      <input type="text" name="name" [value]="d.name" [disabled]="!canWrite()" (input)="patch({ name: text($event) })" required />
+    </label>
+    <div class="field-pair">
+      <label class="field"><span class="field-label">Sensor</span>
+        <select name="sensorType" [disabled]="!canWrite()" (change)="patch({ sensorType: $any(text($event)) })">
+          @for (s of sensorTypes; track s) { <option [value]="s" [selected]="s === d.sensorType">{{ sensorLabels[s] }}</option> }
+        </select>
+      </label>
+      <label class="field"><span class="field-label">Mobility</span>
+        <select name="mobility" [disabled]="!canWrite()" (change)="patch({ mobility: $any(text($event)) })">
+          <option value="FIXED" [selected]="d.mobility === 'FIXED'">Fixed</option>
+          <option value="MOBILE" [selected]="d.mobility === 'MOBILE'">Mobile</option>
+        </select>
+      </label>
+    </div>
+    <div class="field-pair">
+      <label class="field"><span class="field-label">Latitude</span>
+        <input type="number" name="lat" step="any" [value]="d.position?.lat ?? ''" [disabled]="!canWrite()" (input)="patchPosition('lat', num($event))" />
+      </label>
+      <label class="field"><span class="field-label">Longitude</span>
+        <input type="number" name="lon" step="any" [value]="d.position?.lon ?? ''" [disabled]="!canWrite()" (input)="patchPosition('lon', num($event))" />
+      </label>
+    </div>
+    @if (canWrite()) {
+      <button type="button" class="btn btn-sm" [class.active]="picking()" (click)="picking.set(!picking())">
+        <app-icon name="crosshair" [size]="14" /> {{ picking() ? 'Click the map…' : 'Pick on map' }}
+      </button>
+    }
+    <div class="field-pair">
+      <label class="field"><span class="field-label">Altitude (m)</span>
+        <input type="number" name="altitude" step="any" [value]="d.altitude ?? ''" [disabled]="!canWrite()" (input)="patch({ altitude: num($event) })" />
+      </label>
+      <label class="field"><span class="field-label">Boresight (°)</span>
+        <input type="number" name="boresightDeg" step="any" [value]="d.boresightDeg" [disabled]="!canWrite()" (input)="patch({ boresightDeg: num($event) ?? 0 })" />
+      </label>
+    </div>
+    <div class="field-pair">
+      <label class="field"><span class="field-label">Width (°)</span>
+        <input type="number" name="azimuthWidthDeg" min="1" max="360" [value]="d.coverage.azimuthWidthDeg" [disabled]="!canWrite()" (input)="patchCoverage({ azimuthWidthDeg: num($event) ?? 0 })" />
+      </label>
+      <label class="field"><span class="field-label">Range (km)</span>
+        <input type="number" name="maxRangeKm" min="0" step="any" [value]="km(d.coverage.maxRangeM)" [disabled]="!canWrite()" (input)="patchCoverage({ maxRangeM: (num($event) ?? 0) * 1000 })" />
+      </label>
+      <label class="field"><span class="field-label">Min (km)</span>
+        <input type="number" name="minRangeKm" min="0" step="any" [value]="km(d.coverage.minRangeM)" [disabled]="!canWrite()" (input)="patchCoverage({ minRangeM: (num($event) ?? 0) * 1000 })" />
+      </label>
+    </div>
+    <label class="field"><span class="field-label">Azimuth from</span>
+      <select name="azimuthReference" [disabled]="!canWrite()" (change)="patch({ azimuthReference: $any(text($event)) })">
+        <option value="TRUE_NORTH" [selected]="d.azimuthReference === 'TRUE_NORTH'">True north</option>
+        <option value="PLATFORM" [selected]="d.azimuthReference === 'PLATFORM'">Platform heading</option>
+      </select>
+    </label>
+    <div class="field-pair">
+      <label class="field"><span class="field-label">Connection</span>
+        <select name="feedId" [disabled]="!canWrite()" (change)="patch({ feedId: text($event) || null })">
+          <option value="" [selected]="!d.feedId">None</option>
+          @for (c of connections(); track c.id) { <option [value]="c.id" [selected]="c.id === d.feedId">{{ c.name }}</option> }
+        </select>
+      </label>
+      <label class="field"><span class="field-label">Classification</span>
+        <select name="classification" [disabled]="!canWrite()" (change)="patch({ classification: text($event) })">
+          @for (l of levels(); track l) { <option [value]="l" [selected]="l === d.classification">{{ l }}</option> }
+        </select>
+      </label>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" [checked]="d.active" [disabled]="!canWrite()" (change)="patch({ active: checked($event) })" /> Active</label>
+      <label><input type="checkbox" [checked]="d.exercise" [disabled]="!canWrite()" (change)="patch({ exercise: checked($event) })" /> Exercise</label>
+    </div>
+    <div class="actions">
+      @if (canWrite()) {
+        <button type="submit" class="btn btn-primary btn-sm" [disabled]="saving()">{{ saving() ? 'Saving…' : 'Save' }}</button>
+      }
+      <button type="button" class="btn btn-sm" (click)="cancel()">Cancel</button>
+      @if (d.id && canDelete()) {
+        <button type="button" class="btn btn-danger btn-sm" (click)="remove(selectedEmplacement(d.id)!)">
+          <app-icon name="trash" [size]="14" /> Delete
+        </button>
+      }
+    </div>
+  </form>
+</ng-template>
