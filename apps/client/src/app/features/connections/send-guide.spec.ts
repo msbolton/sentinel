@@ -440,6 +440,7 @@ describe('send guide', () => {
         oversize: 'Too large',
         kernelDropped: 'Dropped by the OS',
         tlsFailed: 'TLS failed',
+        tlsReloads: 'TLS reloads',
         tlsReloadFailed: 'TLS reload failed',
         malformed: 'Undecodable',
         messages: 'Messages',
@@ -454,7 +455,7 @@ describe('send guide', () => {
     it('applies each counter to the connections that can raise it', () => {
       // TCP listener: everything except what only UDP, TLS or a dialling connection has.
       expect(keysFor(target())).toEqual(['accepted', 'rejected', 'refused', 'rateLimited', 'senderRateLimited', 'oversize', 'tlsFailed', 'malformed']);
-      expect(keysFor(target({ tls: true }))).toEqual(['accepted', 'rejected', 'refused', 'rateLimited', 'senderRateLimited', 'oversize', 'tlsFailed', 'tlsReloadFailed', 'malformed']);
+      expect(keysFor(target({ tls: true }))).toEqual(['accepted', 'rejected', 'refused', 'rateLimited', 'senderRateLimited', 'oversize', 'tlsFailed', 'tlsReloads', 'tlsReloadFailed', 'malformed']);
       // UDP never refuses a connection or speaks TLS; the OS may drop its datagrams.
       expect(keysFor(target({ protocol: 'udp', framing: 'message' }))).toEqual(['accepted', 'rejected', 'rateLimited', 'senderRateLimited', 'oversize', 'kernelDropped', 'malformed']);
       // A connection Sentinel dials out has no listener counters.

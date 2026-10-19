@@ -411,6 +411,12 @@ export const COUNTERS: CounterDef[] = [
     applies: listensOnTcp,
   },
   {
+    key: 'tlsReloads',
+    label: 'TLS reloads',
+    help: 'TLS material reloads that succeeded.',
+    applies: (t) => listensOnTcp(t) && t.tls,
+  },
+  {
     key: 'tlsReloadFailed',
     label: 'TLS reload failed',
     help: 'Times a changed certificate or key could not be loaded. The previous certificate stays in use.',

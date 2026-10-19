@@ -42,6 +42,25 @@ interface Snippet {
 /** How long a button says "Copied". */
 const COPIED_MS = 2000;
 
+const DAY_MS = 86_400_000;
+/** How long before it expires a certificate is worth a warning. */
+const CERT_WARN_DAYS = 14;
+
+/**
+ * The warning for a listener's certificate, from its `tlsCertNotAfter` (RFC 3339): empty while at
+ * least CERT_WARN_DAYS remain, and for a value that is missing or not a date. Dates are UTC.
+ */
+function certExpiryNotice(notAfter: unknown, now: number): string {
+  if (typeof notAfter !== 'string') return '';
+  const end = Date.parse(notAfter);
+  if (Number.isNaN(end)) return '';
+  const date = new Date(end).toISOString().slice(0, 10);
+  if (end <= now) return `TLS certificate expired on ${date}`;
+  if (end - now >= CERT_WARN_DAYS * DAY_MS) return '';
+  const days = Math.ceil((end - now) / DAY_MS);
+  return `TLS certificate expires on ${date} (in ${days} ${days === 1 ? 'day' : 'days'})`;
+}
+
 /** The detail comes from the server as unchecked JSON; a row the table cannot name is left out. */
 function isSender(v: unknown): v is Sender {
   return typeof v === 'object' && v !== null && typeof (v as Sender).remote === 'string';
@@ -125,6 +144,11 @@ export class SendGuideComponent {
   readonly allowOpen = computed(() => {
     const t = this.target();
     return t !== null && t.mode === 'listen' && t.allow.length === 0;
+  });
+  /** Set while the certificate the listener serves is close to expiring or has expired. */
+  readonly certNotice = computed(() => {
+    const t = this.target();
+    return t !== null && t.mode === 'listen' ? certExpiryNotice(this.detail()['tlsCertNotAfter'], Date.now()) : '';
   });
   /** When the connection Sentinel dialled came up; the server leaves it out while the connection is down. */
   readonly connectedSince = computed(() => {

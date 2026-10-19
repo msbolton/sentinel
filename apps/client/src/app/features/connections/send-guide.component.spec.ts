@@ -291,6 +291,73 @@ describe('SendGuideComponent', () => {
     expect(text(region)).toBe('Last error: boom');
   });
 
+  describe('certificate expiry', () => {
+    const NOW = '2026-10-18T12:00:00Z';
+    const tlsGuide = (detail: Record<string, unknown>) =>
+      render(makeFeed({ driver: 'tcp', config: { mode: 'listen', port: 6000, allow: ['10.0.0.0/8'], tls: { enabled: true } }, detail: listening('tcp', 6000, detail) }));
+    const daysFromNow = (days: number) => new Date(Date.parse(NOW) + days * 86_400_000).toISOString().replace('.000Z', 'Z');
+
+    beforeEach(() => {
+      jest.useFakeTimers().setSystemTime(new Date(NOW));
+    });
+
+    it('warns when the certificate expires within 14 days', () => {
+      tlsGuide({ tlsCertNotAfter: '2026-10-25T00:00:00Z' });
+      expect(status()).toBe('TLS certificate expires on 2026-10-25 (in 7 days)');
+      expect(el.querySelector('[role=status] .warn')).not.toBeNull();
+
+      // Part of a day left counts as a day; the last day is singular.
+      tlsGuide({ tlsCertNotAfter: daysFromNow(0.25) });
+      expect(status()).toBe('TLS certificate expires on 2026-10-18 (in 1 day)');
+      tlsGuide({ tlsCertNotAfter: daysFromNow(13) });
+      expect(status()).toContain('(in 13 days)');
+      tlsGuide({ tlsCertNotAfter: daysFromNow(13.5) });
+      expect(status()).toContain('(in 14 days)');
+
+      // The warning arrives in the region that was already on the page.
+      tlsGuide({});
+      const region = el.querySelector('[role=status]');
+      fixture.componentRef.setInput('feed', makeFeed({ driver: 'tcp', config: { mode: 'listen', port: 6000, allow: ['10.0.0.0/8'], tls: { enabled: true } }, detail: listening('tcp', 6000, { tlsCertNotAfter: daysFromNow(3) }) }));
+      fixture.detectChanges();
+      expect(el.querySelector('[role=status]')).toBe(region);
+      expect(text(region)).toContain('TLS certificate expires on');
+    });
+
+    it('says when it has expired', () => {
+      tlsGuide({ tlsCertNotAfter: '2026-10-10T00:00:00Z' });
+      expect(status()).toBe('TLS certificate expired on 2026-10-10');
+      expect(el.querySelector('[role=status] .warn')).not.toBeNull();
+
+      // Expiring this very instant is expired.
+      tlsGuide({ tlsCertNotAfter: NOW });
+      expect(status()).toBe('TLS certificate expired on 2026-10-18');
+    });
+
+    it('stays quiet with 30 days left or no certificate', () => {
+      tlsGuide({ tlsCertNotAfter: daysFromNow(30) });
+      expect(status()).toBe('');
+      tlsGuide({ tlsCertNotAfter: daysFromNow(14) });
+      expect(status()).toBe('');
+      tlsGuide({});
+      expect(status()).toBe('');
+      // Anything the guide cannot read is no warning, not a broken page.
+      for (const bad of ['', 'soon', '2026-13-45T99:00:00Z', 20261101, null, { at: 1 }]) {
+        tlsGuide({ tlsCertNotAfter: bad });
+        expect(status()).toBe('');
+      }
+      // A dialling connection has no certificate of its own to warn about.
+      render(makeFeed({ driver: 'tcp', config: { mode: 'connect', host: 'feeds.example', port: 7000 }, detail: { connect: { host: 'feeds.example', port: 7000 }, tlsCertNotAfter: daysFromNow(1) } }));
+      expect(status()).toBe('');
+    });
+
+    it('explains the reload counters', () => {
+      tlsGuide({ tlsReloads: 2, tlsReloadFailed: 1 });
+      expect(counterLabels()).toEqual(['TLS reloads', 'TLS reload failed']);
+      expect(Array.from(el.querySelectorAll('.counters dd')).map(text)).toEqual(['2', '1']);
+      expect(COUNTERS.find((c) => c.key === 'tlsReloads')!.help).toBe('TLS material reloads that succeeded.');
+    });
+  });
+
   it('hides counters that do not apply to UDP and explains the rest', () => {
     render(
       makeFeed({

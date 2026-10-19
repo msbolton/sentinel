@@ -25,6 +25,9 @@
       @if (allowOpen()) {
         <p class="warn">No allowlist: anyone who can reach this port can send.</p>
       }
+      @if (certNotice(); as notice) {
+        <p class="warn">{{ notice }}</p>
+      }
     </div>
     @if (t.mode === 'listen') {
       @if (testCommand(); as test) {
