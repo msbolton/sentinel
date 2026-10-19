@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -87,7 +88,7 @@ func TestServeDeadLetters(t *testing.T) {
 		cfg.DLQPeekMaxScan = 0
 		h := mgmt.NewHandler(oneFeed{}, nil, nil, nil)
 		stop := serveDeadLetters(h, cfg, zap.NewNop())
-		defer stop()
+		defer stop(time.Second)
 		// A nil reader, not a nil *KafkaReader in a Reader: that one is not nil
 		// to the handler, which would call it.
 		if h.DeadLetters != nil {
@@ -108,8 +109,8 @@ func TestServeDeadLetters(t *testing.T) {
 		}
 		// Nothing was read, so no consumer exists to close; closing is still safe,
 		// and a read after it is refused instead of reaching for Kafka.
-		stop()
-		stop()
+		stop(time.Second)
+		stop(time.Second) // as the deferred stop after the shutdown's does
 		if _, _, _, err := h.DeadLetters.Recent(context.Background(), "pier", 5); !errors.Is(err, dlq.ErrClosed) {
 			t.Errorf("a read after stop: %v, want dlq.ErrClosed", err)
 		}

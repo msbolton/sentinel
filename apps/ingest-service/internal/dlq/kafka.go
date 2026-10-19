@@ -76,11 +76,25 @@ func (r *KafkaReader) Recent(ctx context.Context, feedID string, limit int) ([]L
 	return scan(ctx, r.src, r.maxScan, feedID, limit)
 }
 
-// Close releases the consumer once a read in progress has finished. Reads made
-// afterwards return ErrClosed. It is safe to call more than once.
-func (r *KafkaReader) Close() {
-	r.slot <- struct{}{}
-	defer func() { <-r.slot }()
+// Close releases the consumer once a read in progress has finished, for up to
+// Deadline, which is how long a read takes at most. Reads made afterwards return
+// ErrClosed. It is safe to call more than once.
+func (r *KafkaReader) Close() { r.CloseWithin(Deadline) }
+
+// CloseWithin is Close that gives up after d, leaving the consumer to the next
+// close, if a read still holds it by then (a consumer stuck inside librdkafka
+// cannot be interrupted, and shutdown must not wait on it for ever). It is safe
+// to call more than once: once the consumer is closed a call does nothing.
+func (r *KafkaReader) CloseWithin(d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case r.slot <- struct{}{}:
+		defer func() { <-r.slot }()
+	case <-timer.C:
+		r.logger.Warn("a dead-letter read is still running; leaving its consumer open", zap.Duration("waited", d))
+		return
+	}
 	if r.closed {
 		return
 	}

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -178,5 +180,60 @@ func TestTLSReloadSec(t *testing.T) {
 	t.Setenv("INGEST_TLS_RELOAD_SEC", "-5")
 	if err := Load().Validate(); err == nil || !strings.Contains(err.Error(), "INGEST_TLS_RELOAD_SEC") {
 		t.Errorf("INGEST_TLS_RELOAD_SEC=-5: Validate() = %v, want an error that names the variable", err)
+	}
+}
+
+// An integer setting that is not an integer is refused, naming the variable. It
+// used to fall back to the default without a word, so DLQ_PEEK_MAX_SCAN=off kept
+// viewing dead letters on. The variables are found in the source, so a setting
+// added later is held to this too.
+func TestIntegerSettingsRefuseText(t *testing.T) {
+	src, err := os.ReadFile("config.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := regexp.MustCompile(`\.(?:int|seconds)\("([A-Z0-9_]+)"`).FindAllStringSubmatch(string(src), -1)
+	if len(found) < 15 {
+		t.Fatalf("found %d integer settings in config.go, want the 15 or more it has: the pattern is out of date", len(found))
+	}
+	for _, m := range found {
+		name := m[1]
+		t.Run(name, func(t *testing.T) {
+			for _, bad := range []string{"off", "1.5", "12s", "0x10"} {
+				t.Setenv(name, bad)
+				err := Load().Validate()
+				if err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "integer") {
+					t.Errorf("%s=%q: Validate() = %v, want an error that names the variable and says integer", name, bad, err)
+				}
+			}
+			t.Setenv(name, "")
+			if err := Load().Validate(); err != nil {
+				t.Errorf("%s unset: %v", name, err)
+			}
+		})
+	}
+	t.Setenv("DLQ_PEEK_MAX_SCAN", "0")
+	if c := Load(); c.Validate() != nil || c.DLQPeekMaxScan != 0 {
+		t.Errorf("DLQ_PEEK_MAX_SCAN=0 must stay valid and read as 0: %d, %v", c.DLQPeekMaxScan, c.Validate())
+	}
+}
+
+// INGEST_RESERVED_PORTS is checked with the rest of the configuration, before
+// anything starts, and the parsed set is what the management API gets.
+func TestReservedPortsAreValidated(t *testing.T) {
+	t.Setenv("INGEST_RESERVED_PORTS", "7000-7002, 9000")
+	c := Load()
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	set, err := c.ReservedPortSet()
+	if err != nil || !set[7001] || !set[9000] || set[7003] {
+		t.Errorf("ReservedPortSet() = %v, %v", set.Ranges(), err)
+	}
+	for _, bad := range []string{"70000", "abc", "9000-8000", "5000-"} {
+		t.Setenv("INGEST_RESERVED_PORTS", bad)
+		if err := Load().Validate(); err == nil || !strings.Contains(err.Error(), "INGEST_RESERVED_PORTS") {
+			t.Errorf("INGEST_RESERVED_PORTS=%q: Validate() = %v, want an error that names the variable", bad, err)
+		}
 	}
 }

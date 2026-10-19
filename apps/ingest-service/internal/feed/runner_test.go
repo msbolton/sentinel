@@ -3,6 +3,7 @@ package feed
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/obs"
+	"github.com/sentinel/ingest-service/internal/publish"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 )
 
@@ -272,5 +274,35 @@ func TestRunnerKeepsTheLastDecodeErrorApart(t *testing.T) {
 	r.DeadLetterFrom([]byte("y"), "missing_identity", errors.New("missing_identity: no identity"), driver.Provenance{Decoder: "sentinel"})
 	if st := r.Stats(); st.LastError != "missing_identity: no identity" || st.LastDecodeError != "missing_identity: no identity" {
 		t.Errorf("after another: last error %q, last decode error %q", st.LastError, st.LastDecodeError)
+	}
+}
+
+// An observation refused because the publisher is closing is the shutdown, not
+// a fault: it is no more worth a warning than the context ending is. Any other
+// publish error still is.
+func TestRunnerDoesNotWarnWhenThePublisherIsClosing(t *testing.T) {
+	ts := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		err  error
+		warn bool
+	}{
+		"publisher closed": {publish.ErrClosed, false},
+		"wrapped":          {fmt.Errorf("emit: %w", publish.ErrClosed), false},
+		"canceled":         {context.Canceled, false},
+		"a real failure":   {errors.New("kafka down"), true},
+	} {
+		core, logs := observer.New(zapcore.DebugLevel)
+		pub := &memPublisher{fail: tc.err}
+		drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+			_ = sink.Emit(ctx, fix("a", 40, -80, ts))
+			return nil
+		}}
+		r := NewRunner("feed-x", "stream", drv, pub, metrics.New(nil), zap.New(core), RunnerOptions{})
+		if err := r.Run(context.Background()); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := logs.FilterMessage("observation not published").Len() > 0; got != tc.warn {
+			t.Errorf("%s: warned = %v, want %v", name, got, tc.warn)
+		}
 	}
 }

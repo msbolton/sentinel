@@ -52,6 +52,9 @@ type Config struct {
 	// restart (INGEST_TLS_RELOAD_SEC, default 60); 0 turns reloading off.
 	TLSReloadSec int
 
+	// loadErrs are the integer settings Load could not read.
+	loadErrs []error
+
 	PublisherShards    int // PUBLISHER_SHARDS (default: 8)
 	ObservationBuffer  int // OBS_BUFFER (default: 1000) observations queued per publisher shard
 	FrameBuffer        int // FRAME_BUFFER (default: 1024) frames queued between a transport and its decoder
@@ -79,7 +82,8 @@ func Load() *Config {
 	if hostname == "" {
 		hostname = "local"
 	}
-	return &Config{
+	ld := &loader{}
+	cfg := &Config{
 		KafkaBrokers:          envOr("KAFKA_BROKERS", "localhost:9092"),
 		KafkaObservationTopic: envOr("KAFKA_OBSERVATION_TOPIC", "observations.raw"),
 		KafkaDeadLetterTopic:  envOr("KAFKA_DEADLETTER_TOPIC", "observations.dlq"),
@@ -96,30 +100,35 @@ func Load() *Config {
 		ListenerShared:        envOr("INGEST_LISTENER_SHARED", "false") == "true",
 		SecretEnvAllow:        splitList(envOr("INGEST_SECRET_ENV_ALLOW", registry.DefaultSecretEnvAllow)),
 		SecretFileDirs:        splitList(envOr("INGEST_SECRET_FILE_DIRS", registry.DefaultSecretFileDirs)),
-		TLSReloadSec:          envOrInt("INGEST_TLS_RELOAD_SEC", 60),
+		TLSReloadSec:          ld.int("INGEST_TLS_RELOAD_SEC", 60),
 
-		PublisherShards:    envOrInt("PUBLISHER_SHARDS", 8),
-		ObservationBuffer:  envOrInt("OBS_BUFFER", 1000),
-		FrameBuffer:        envOrInt("FRAME_BUFFER", 1024),
-		RawPayloadMaxBytes: envOrInt("RAW_PAYLOAD_MAX_BYTES", 4096),
-		DLQRatePerSec:      envOrInt("DLQ_RATE_PER_SEC", 10),
-		DLQPeekMaxScan:     envOrInt("DLQ_PEEK_MAX_SCAN", 2000),
+		PublisherShards:    ld.int("PUBLISHER_SHARDS", 8),
+		ObservationBuffer:  ld.int("OBS_BUFFER", 1000),
+		FrameBuffer:        ld.int("FRAME_BUFFER", 1024),
+		RawPayloadMaxBytes: ld.int("RAW_PAYLOAD_MAX_BYTES", 4096),
+		DLQRatePerSec:      ld.int("DLQ_RATE_PER_SEC", 10),
+		DLQPeekMaxScan:     ld.int("DLQ_PEEK_MAX_SCAN", 2000),
 
-		FeedStaleWarn:     envOrSeconds("FEED_STALE_WARN_SEC", 120),
-		FeedStaleCritical: envOrSeconds("FEED_STALE_CRITICAL_SEC", 300),
-		FeedRetryMin:      envOrSeconds("FEED_RETRY_MIN_SEC", 5),
-		FeedRetryMax:      envOrSeconds("FEED_RETRY_MAX_SEC", 60),
-		ShutdownTimeout:   envOrSeconds("SHUTDOWN_TIMEOUT_SEC", 25),
+		FeedStaleWarn:     ld.seconds("FEED_STALE_WARN_SEC", 120),
+		FeedStaleCritical: ld.seconds("FEED_STALE_CRITICAL_SEC", 300),
+		FeedRetryMin:      ld.seconds("FEED_RETRY_MIN_SEC", 5),
+		FeedRetryMax:      ld.seconds("FEED_RETRY_MAX_SEC", 60),
+		ShutdownTimeout:   ld.seconds("SHUTDOWN_TIMEOUT_SEC", 25),
 
 		LeaseEnabled:   envOr("LEASE_ENABLED", "true") != "false",
-		LeaseTTL:       envOrSeconds("LEASE_TTL_SEC", 15),
-		LeaseTick:      envOrSeconds("LEASE_TICK_SEC", 2),
-		LeaseRebalance: envOrSeconds("LEASE_REBALANCE_SEC", 30),
+		LeaseTTL:       ld.seconds("LEASE_TTL_SEC", 15),
+		LeaseTick:      ld.seconds("LEASE_TICK_SEC", 2),
+		LeaseRebalance: ld.seconds("LEASE_REBALANCE_SEC", 30),
 	}
+	cfg.loadErrs = ld.errs
+	return cfg
 }
 
 // Validate rejects configurations that must not start.
 func (c *Config) Validate() error {
+	if len(c.loadErrs) > 0 {
+		return errors.Join(c.loadErrs...)
+	}
 	if c.AppEnv == "production" && c.ServiceToken == "" {
 		return errors.New("INGEST_SERVICE_TOKEN is required in production")
 	}
@@ -167,6 +176,9 @@ func (c *Config) Validate() error {
 	if c.TLSReloadSec < 0 {
 		return errors.New("INGEST_TLS_RELOAD_SEC must not be negative (0 turns TLS reloading off)")
 	}
+	if _, err := c.ReservedPortSet(); err != nil {
+		return err
+	}
 	if c.ListenerShared && !c.Listener {
 		return errors.New("INGEST_LISTENER_SHARED needs INGEST_LISTENER=true: only a listener replica can share")
 	}
@@ -190,20 +202,39 @@ func envOr(key, def string) string {
 	return def
 }
 
-func envOrInt(key string, def int) int {
+// loader reads the integer settings and remembers the ones that are not
+// integers, for Validate to refuse. A setting that falls back to its default
+// when it cannot be read does the opposite of what was asked for (a typo for
+// "off" leaves the feature on), so none does.
+type loader struct{ errs []error }
+
+// int reads key as an integer, def when it is unset or empty. Text that is not
+// an integer reads as def here and is refused by Validate.
+func (l *loader) int(key string, def int) int {
 	v := os.Getenv(key)
 	if v == "" {
 		return def
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
+		l.errs = append(l.errs, fmt.Errorf("%s must be an integer, not %q", key, v))
 		return def
 	}
 	return n
 }
 
-func envOrSeconds(key string, def int) time.Duration {
-	return time.Duration(envOrInt(key, def)) * time.Second
+func (l *loader) seconds(key string, def int) time.Duration {
+	return time.Duration(l.int(key, def)) * time.Second
+}
+
+// ReservedPortSet is the set of ports INGEST_RESERVED_PORTS names. Validate has
+// parsed it, so the service can fail on a bad value before it starts anything.
+func (c *Config) ReservedPortSet() (registry.PortSet, error) {
+	set, err := registry.ParsePortSet(c.ReservedPorts)
+	if err != nil {
+		return nil, fmt.Errorf("INGEST_RESERVED_PORTS: %w", err)
+	}
+	return set, nil
 }
 
 // SecretPolicy is the policy the secret settings describe.

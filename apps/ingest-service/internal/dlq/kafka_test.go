@@ -345,3 +345,58 @@ func TestKafkaSourceTellsErrorsThatWillNotPassFromThoseThatWill(t *testing.T) {
 		}
 	}
 }
+
+// Shutdown waits for a read in progress for as long as it is told to, and no
+// longer: a consumer stuck inside librdkafka must not hold the process past its
+// deadline. The consumer is closed by whoever gets the slot next, once.
+func TestKafkaReaderCloseWithinIsBounded(t *testing.T) {
+	src := newSlowSource()
+	r := readerOver(func() (source, error) { return src, nil })
+	reading := make(chan struct{})
+	go func() {
+		defer close(reading)
+		_, _, _, _ = r.Recent(context.Background(), "feed-a", 5)
+	}()
+	await(t, src.entered, "the read to start")
+
+	returned := make(chan struct{})
+	start := time.Now()
+	go func() { r.CloseWithin(50 * time.Millisecond); close(returned) }()
+	await(t, returned, "CloseWithin to give up on the read")
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("CloseWithin(50ms) took %v", took)
+	}
+	if src.fakeSource.closed != 0 {
+		t.Fatal("the consumer was closed under the read")
+	}
+
+	// The read ends; the next close finishes the job, and later ones do nothing.
+	close(src.release)
+	await(t, reading, "the read to finish")
+	r.CloseWithin(time.Second)
+	r.Close()
+	r.CloseWithin(time.Second)
+	if src.fakeSource.closed != 1 {
+		t.Errorf("consumer closed %d times, want once", src.fakeSource.closed)
+	}
+	if _, _, _, err := r.Recent(context.Background(), "feed-a", 5); !errors.Is(err, ErrClosed) {
+		t.Errorf("read after close: %v, want ErrClosed", err)
+	}
+}
+
+// With nothing in the way CloseWithin closes at once, and the deferred Close
+// that follows at the end of main finds nothing to do.
+func TestKafkaReaderCloseWithinThenCloseIsIdempotent(t *testing.T) {
+	src := oneLetterTopic()
+	r := readerOver(func() (source, error) { return src, nil })
+	if _, _, _, err := r.Recent(context.Background(), "feed-a", 5); err != nil {
+		t.Fatal(err)
+	}
+	r.CloseWithin(time.Second)
+	done := make(chan struct{})
+	go func() { r.Close(); close(done) }()
+	await(t, done, "the second close to return")
+	if src.closed != 1 {
+		t.Errorf("consumer closed %d times, want once", src.closed)
+	}
+}

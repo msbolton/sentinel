@@ -614,8 +614,9 @@ func TestSendersEvictionMatchesAScanOfTheTable(t *testing.T) {
 
 // A message from a sender the table already holds is the common case on a busy
 // datagram listener, so it allocates nothing: whether the sender is the newest
-// (front), older than some (the middle) or older than all (the back), and whether
-// it is idle or has just hung up.
+// (front), older than some (the middle) or older than all (the back) of the
+// senders that are not connected, which are all the table holds here. A
+// connected sender's row is not moved at all.
 func TestSendersSeenOfAHeldSenderDoesNotAllocate(t *testing.T) {
 	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 	s := NewSenders(100)

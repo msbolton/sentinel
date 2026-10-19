@@ -17,6 +17,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/obs"
 	"github.com/sentinel/ingest-service/internal/outbound"
+	"github.com/sentinel/ingest-service/internal/publish"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 )
 
@@ -198,7 +199,9 @@ func (r *Runner) Emit(ctx context.Context, o *obs.Observation) error {
 	}
 	o.ID = o.ComputeID()
 	if err := r.pub.Emit(ctx, o); err != nil {
-		if !errors.Is(err, context.Canceled) {
+		// The context ending and the publisher closing are the shutdown, not
+		// faults of this observation.
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, publish.ErrClosed) {
 			r.logger.Warn("observation not published", zap.String("feed", r.feedID), zap.Error(err))
 		}
 		return err

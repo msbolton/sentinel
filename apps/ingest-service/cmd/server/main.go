@@ -52,6 +52,12 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		logger.Fatal("invalid configuration", zap.Error(err))
 	}
+	// Parsed with the rest of the configuration, before anything starts: a bad
+	// value must not stop the service once feeds have taken their leases.
+	reserved, err := cfg.ReservedPortSet()
+	if err != nil {
+		logger.Fatal("invalid configuration", zap.Error(err))
+	}
 	if cfg.ServiceToken == "" {
 		logger.Warn("INGEST_SERVICE_TOKEN is not set; the management API accepts unauthenticated callers (development only)")
 	}
@@ -162,15 +168,11 @@ func main() {
 	healthHandler := health.NewHandler(producer, promReg, logger)
 	healthHandler.RegisterRoutes(mux)
 	mgmtHandler := mgmt.NewHandler(reg, catalog, sup, logger)
-	stopDeadLetters := serveDeadLetters(mgmtHandler, cfg, logger)
-	defer stopDeadLetters()
+	closeDeadLetters := serveDeadLetters(mgmtHandler, cfg, logger)
+	defer closeDeadLetters(dlq.Deadline) // a no-op once shutdown has closed it
 	mgmtHandler.StaleAfter = 3 * cfg.LeaseTick * 2
 	if cfg.LeaseEnabled {
 		mgmtHandler.StaleAfter = cfg.LeaseTTL
-	}
-	reserved, err := registry.ParsePortSet(cfg.ReservedPorts)
-	if err != nil {
-		logger.Fatal("INGEST_RESERVED_PORTS", zap.Error(err))
 	}
 	mgmtHandler.Reserved = reserved
 	mgmtHandler.UseSecretPolicy(secretPolicy)
@@ -203,8 +205,8 @@ func main() {
 	}
 
 	// Graceful shutdown, bounded by SHUTDOWN_TIMEOUT_SEC: readiness 503 →
-	// supervisor stops drivers → publisher drains → producer flushes →
-	// HTTP shutdown → close.
+	// supervisor stops drivers → publisher drains → HTTP shutdown → producer
+	// flushes → dead-letter reader closes.
 	logger.Info("initiating graceful shutdown", zap.Duration("timeout", cfg.ShutdownTimeout))
 	deadline := time.Now().Add(cfg.ShutdownTimeout)
 	healthHandler.SetDraining(true)
@@ -233,6 +235,11 @@ func main() {
 	// it here makes that one a no-op.
 	producer.CloseWithin(max(time.Until(deadline), time.Second))
 
+	// The dead-letter reader's consumer is closed last, with the time that is
+	// left but at least a second: a read stuck in librdkafka must not hold the
+	// process past its deadline. The deferred stop is then a no-op.
+	closeDeadLetters(max(time.Until(deadline), time.Second))
+
 	logger.Info("sentinel ingest service shut down gracefully")
 }
 
@@ -253,14 +260,14 @@ func schemaCheckMessage(err error) string {
 // its own Kafka consumer when the first request comes, so a Kafka that is down
 // at startup does not stop the service. With DLQ_PEEK_MAX_SCAN=0 it gives the
 // API none: the endpoint then answers 501, and nothing is created.
-func serveDeadLetters(h *mgmt.Handler, cfg *config.Config, logger *zap.Logger) (stop func()) {
+func serveDeadLetters(h *mgmt.Handler, cfg *config.Config, logger *zap.Logger) (closeWithin func(time.Duration)) {
 	if cfg.DLQPeekMaxScan <= 0 {
 		logger.Info("dead-letter viewing is off", zap.Int("dlq_peek_max_scan", cfg.DLQPeekMaxScan))
-		return func() {}
+		return func(time.Duration) {}
 	}
 	reader := dlq.NewKafkaReader(cfg.KafkaBrokers, cfg.KafkaDeadLetterTopic, cfg.DLQPeekMaxScan, logger)
 	h.DeadLetters = reader
-	return reader.Close
+	return reader.CloseWithin
 }
 
 func driverIDs(c *drivers.Catalog) []string {
