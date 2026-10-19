@@ -640,6 +640,38 @@ func checkSendersOrder(t *testing.T, s *Senders) {
 	}
 }
 
+// The cut never splits a rune and never gives up more than the three bytes a
+// rune can have before the cut, whatever the bytes are: text of one-, two-,
+// three- and four-byte runes, and bytes that are no text.
+func TestTruncateUTF8(t *testing.T) {
+	texts := map[string]string{
+		"ascii":           strings.Repeat("abcdefghij", 8),
+		"two-byte runes":  strings.Repeat("é", 60),
+		"three-byte":      strings.Repeat("€", 40),
+		"four-byte":       strings.Repeat("\U0001D11E", 30),
+		"mixed":           strings.Repeat("a€é\U0001D11Eb", 12),
+		"continuations":   strings.Repeat("\x80", 120),
+		"text, then them": "abc" + strings.Repeat("\x80", 120),
+	}
+	for name, s := range texts {
+		for n := 0; n <= len(s)+2; n++ {
+			got := truncateUTF8(s, n)
+			switch {
+			case n >= len(s):
+				if got != s {
+					t.Fatalf("%s, n=%d: cut a string that fits: %d bytes", name, n, len(got))
+				}
+			case !strings.HasPrefix(s, got) || len(got) > n:
+				t.Fatalf("%s, n=%d: got %d bytes %q, want a prefix of at most %d", name, n, len(got), got, n)
+			case len(got) < n-(utf8.UTFMax-1):
+				t.Fatalf("%s, n=%d: kept %d bytes, gave up more than %d to find a rune boundary", name, n, len(got), utf8.UTFMax-1)
+			case utf8.ValidString(s) && !utf8.ValidString(got):
+				t.Fatalf("%s, n=%d: split a rune: %q", name, n, got)
+			}
+		}
+	}
+}
+
 func TestSendersMalformed(t *testing.T) {
 	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 	snapshot := func(s *Senders, now time.Time) map[string]SenderStat {
@@ -699,6 +731,11 @@ func TestSendersMalformed(t *testing.T) {
 			"a cut inside a rune": {strings.Repeat("€", 100), strings.Repeat("€", 66)}, // 66 runes are 198 bytes; the 67th spans 198-200
 			"a cut between runes": {strings.Repeat("é", 150), strings.Repeat("é", 100)},
 			"invalid bytes":       {strings.Repeat("\xff", 300), strings.Repeat("\xff", 200)},
+			// A rune is at most four bytes, so a cut walks back at most three
+			// to find where one starts. Bytes that start none are not a rune
+			// to keep whole, and are not worth losing the text before them.
+			"a run of 0x80 bytes":            {strings.Repeat("\x80", 300), strings.Repeat("\x80", 197)},
+			"a run of 0x80 bytes after text": {"ab" + strings.Repeat("\x80", 300), "ab" + strings.Repeat("\x80", 195)},
 		} {
 			s := NewSenders(10)
 			s.Malformed("a:1", "parse_error", tc.in, t0)

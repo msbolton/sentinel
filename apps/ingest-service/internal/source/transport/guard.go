@@ -376,13 +376,16 @@ func (s *Senders) Snapshot(now time.Time, window time.Duration) ([]SenderStat, i
 }
 
 // truncateUTF8 cuts s to at most n bytes without splitting a rune. The cut is
-// a copy, so a sender's row does not keep the whole error text alive.
+// a copy, so a sender's row does not keep the whole error text alive. A rune
+// is at most utf8.UTFMax bytes, so the cut walks back at most one fewer to find
+// where the one it fell in starts; past that the bytes are no rune (a run of
+// continuation bytes), and walking on would throw away the text before them.
 func truncateUTF8(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
 	cut := n
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
+	for back := 0; back < utf8.UTFMax-1 && cut > 0 && !utf8.RuneStart(s[cut]); back++ {
 		cut--
 	}
 	return strings.Clone(s[:cut])
