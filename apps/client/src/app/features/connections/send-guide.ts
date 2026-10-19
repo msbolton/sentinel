@@ -108,15 +108,15 @@ export function grpcurlCommand(t: GrpcTarget): string {
     security,
     '-import-path proto -proto sentinel/ingest/v1/ingest_service.proto',
     '-H "authorization: Bearer $SENTINEL_INGEST_TOKEN"',
-    grpcEndpoint(t),
+    shellQuote(grpcEndpoint(t)),
     'sentinel.ingest.v1.IngestService/GetSession',
   ].join(' ');
 }
 
 /** The EW sensor simulator's command line for this connection. */
 export function ewSensorCommand(t: GrpcTarget): string {
-  const security = t.tls ? '--tls --ca ca.pem' : '--insecure';
-  return `ew-sensor --addr ${grpcEndpoint(t)} --token "$SENTINEL_INGEST_TOKEN" ${security}`;
+  const security = !t.tls ? '--insecure' : t.requireClientCert ? '--tls --ca ca.pem --cert client.pem --key client-key.pem' : '--tls --ca ca.pem';
+  return `ew-sensor --addr ${shellQuote(grpcEndpoint(t))} --token "$SENTINEL_INGEST_TOKEN" ${security}`;
 }
 
 /**

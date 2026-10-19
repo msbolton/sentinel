@@ -24,6 +24,7 @@
         <a [href]="'assets/proto/sentinel/v1/' + f" [attr.download]="f">{{ f }}</a>{{ $last ? '' : ' · ' }}
       }
     </p>
+    <p class="muted note">Save them as <code>proto/sentinel/ingest/v1/ingest_service.proto</code> and under <code>proto/sentinel/v1/</code>: grpcurl reads them from <code>proto/</code>.</p>
     @if (ewSensor(); as cmd) {
       <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: cmd }" />
     }

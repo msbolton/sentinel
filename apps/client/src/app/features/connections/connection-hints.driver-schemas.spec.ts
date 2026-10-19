@@ -48,10 +48,11 @@ describe('connectionHints with the driver schemas', () => {
     fixture.componentInstance.changed.subscribe((c) => changes.push(c));
   });
 
-  it('tcp, udp and stream: the port and allowlist hints land on fields the schema shows', () => {
+  it('tcp, udp, grpc and stream: the port and allowlist hints land on fields the schema shows', () => {
     const listeners = [
       { driver: 'tcp', protocol: 'tcp', taken: 6001, config: (port?: number) => ({ mode: 'listen', port }) },
       { driver: 'udp', protocol: 'udp', taken: 10110, config: (port?: number) => ({ port }) },
+      { driver: 'grpc', protocol: 'tcp', taken: 6001, config: (port?: number) => ({ port }) },
       {
         driver: 'stream',
         protocol: 'tcp',
@@ -87,7 +88,7 @@ describe('connectionHints with the driver schemas', () => {
     }
   });
 
-  it('tcp and stream: the TLS settings the schema offers make mutual TLS, and an open allowlist information', () => {
+  it('tcp, grpc and stream: the TLS settings the schema offers make mutual TLS, and an open allowlist information', () => {
     const form = () => fixture.componentInstance;
     const hintsFor = (driver: string, config: Record<string, unknown>) => {
       fixture.componentRef.setInput('hints', connectionHints({ driverId: driver, config, ports }));
@@ -96,6 +97,7 @@ describe('connectionHints with the driver schemas', () => {
 
     for (const [driver, config, tls] of [
       ['tcp', { mode: 'listen', port: 6100 }, '/config/tls'],
+      ['grpc', { port: 6100 }, '/config/tls'],
       ['stream', { transport: { kind: 'tcpserver', address: ':6100' } }, '/config/transport/tls'],
     ] as const) {
       const { allowPath } = listenOf(driver, config)!;

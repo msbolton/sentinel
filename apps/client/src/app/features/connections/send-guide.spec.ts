@@ -216,6 +216,11 @@ describe('send guide', () => {
       expect(mtls).not.toContain('-plaintext');
       expect(mtls).toContain('-cacert ca.pem');
       expect(mtls).toContain('-cert client.pem -key client-key.pem');
+      // TLS without client certificates trusts the CA and presents nothing
+      const tlsOnly = grpcurlCommand({ host: 'listener.example', port: 6200, tls: true, requireClientCert: false, allow: [] });
+      expect(tlsOnly).toContain('-cacert ca.pem');
+      expect(tlsOnly).not.toContain('-cert ');
+      expect(tlsOnly).not.toContain('-plaintext');
     });
 
     it('builds the ew-sensor command line', () => {
@@ -223,10 +228,17 @@ describe('send guide', () => {
         .toBe('ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure');
       expect(ewSensorCommand({ host: '', port: 6200, tls: true, requireClientCert: false, allow: [] }))
         .toBe('ew-sensor --addr listener:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem');
+      expect(ewSensorCommand({ host: 'listener.example', port: 6200, tls: true, requireClientCert: true, allow: [] }))
+        .toBe('ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem --cert client.pem --key client-key.pem');
     });
 
-    it('brackets an IPv6 listener host', () => {
-      expect(grpcurlCommand({ host: '::1', port: 6200, tls: false, requireClientCert: false, allow: [] })).toContain('[::1]:6200');
+    it('brackets an IPv6 listener host and quotes it for the shell', () => {
+      const v6 = { host: '::1', port: 6200, tls: false, requireClientCert: false, allow: [] };
+      expect(grpcurlCommand(v6)).toContain(` ${shellQuote('[::1]:6200')} `);
+      expect(grpcurlCommand(v6)).toContain(`'[::1]:6200'`);
+      expect(ewSensorCommand(v6)).toContain(`--addr '[::1]:6200' `);
+      // a host that is not a plain name cannot start a second command
+      expect(grpcurlCommand({ ...v6, host: 'x; id' })).toContain(`'x; id:6200'`);
     });
 
     it('serves the ingest contract next to the observation protos', () => {
