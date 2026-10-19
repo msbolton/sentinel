@@ -238,13 +238,15 @@ curl -s 'http://localhost:3000/api/v1/search?q=test-1' | jq '.hits[0].name'
 curl -s -X DELETE http://localhost:3000/api/v1/feeds/test-udp
 ```
 
-The calls go through the gateway like the rest of this page: with `AUTH_DEV_BYPASS=true` (the Compose and `nx serve` default) they need nothing more, otherwise add `-H "Authorization: Bearer $TOKEN"` from an operator or admin login. The listener's address is `INGEST_LISTENER_HOST` (default `localhost`, set it to the machine's name or IP when senders are elsewhere); `listen` shows the host and port senders use once the connection runs. The same connection is on the Connections page, whose send guide shows the endpoint, the netcat line, Go and Python senders, the `.proto` downloads and a table of who is sending.
+The calls go through the gateway like the rest of this page: with `AUTH_DEV_BYPASS=true` (the Compose and `nx serve` default) they need nothing more, otherwise add `-H "Authorization: Bearer $TOKEN"` from an operator or admin login. The listener's address is `INGEST_LISTENER_HOST` (default `localhost`, set it to the machine's name or IP when senders are elsewhere); `listen` shows the host and port senders use once the connection runs. The same connection is on the Connections page, whose send guide shows the endpoint, a test command (netcat, or OpenSSL when the connection uses TLS), a JSON sample, Go and Python senders written for the connection's TLS setting, a Copy button on each snippet, the `.proto` downloads, a table of who is sending and the counters; operators and admins also get a Recent rejects panel with the connection's latest dead letters. It warns when the TLS certificate expires in under 14 days.
 
 Binary protobuf over TCP is a stream of length-delimited messages (a varint length, then the message), which `nc` cannot produce: use the Go snippet in the connection's send guide (`protodelim.MarshalTo`), or the Python one. UDP binary needs no framing, one message per datagram.
 
+With `encoding: json` a TCP stream or a UDP datagram carries one JSON object per line, or a line that is a JSON array of up to 100 observations (`[{...},{...}]`, all on one line). An array is accepted or refused whole; a bad element is reported by its number counted from 0, and a 101st is refused as `batch_too_large`. A batch counts once against `maxMessagesPerSec`, so a listener can take that limit times 100 observations a second.
+
 Rules and safeguards, in short (details and the counters are in `docs/feeds.md`):
 
-- **Ports** must be 1024-65535, unique per protocol, and not Sentinel's own (`INGEST_RESERVED_PORTS`, blank means the default list of the stack's published ports); the API answers 422 otherwise. Check the port is free on the host, since the listener shares its network.
+- **Ports** must be 1024-65535, unique per protocol, and not Sentinel's own (`INGEST_RESERVED_PORTS`, blank means the default list of the stack's published ports); the API answers 422 otherwise. `GET /api/v1/feeds/ports` lists the reserved ranges, the ports other connections hold and a free port for each protocol, which is what the form's port hint offers (`ports` is therefore not a usable feed id). Check the port is free on the host, since the listener shares its network.
 - **Allowlist.** `allow` takes IPs and CIDRs. An empty list is open to anyone who can reach the port. UDP source addresses can be spoofed, so on an untrusted network use TCP with mutual TLS:
 
   ```bash
@@ -254,8 +256,36 @@ Rules and safeguards, in short (details and the counters are in `docs/feeds.md`)
     "secretRefs":{"tlsCert":"file:/etc/sentinel/secrets/server.pem","tlsKey":"file:/etc/sentinel/secrets/server.key","clientCa":"file:/etc/sentinel/secrets/clients-ca.pem"}}'
   ```
 
-  The certificate files go in `./secrets/ingest` (gitignored), which Compose mounts read-only at `/etc/sentinel/secrets` in the ingest containers, including the listener; the TAK ones stay in `./secrets/tak`. Create the folder yourself before the first `docker compose up`: on Linux Docker creates a missing one owned by root.
-- **Limits** per connection: `maxConnections` (50), `maxMessagesPerSec` (1000), `maxMessageBytes` (64 KiB for TCP, 65507 for UDP). What they refuse is counted in the connection's status.
+  The certificate files go in `./secrets/ingest` (gitignored), which Compose mounts read-only at `/etc/sentinel/secrets` in both ingest containers (`ingest-service` and `ingest-listener`); the TAK ones stay in `./secrets/tak`. Create both folders before the first `docker compose up`: on Linux Docker creates a missing one owned by root. The containers run as user and group 10001 and read the files with the group's rights, so on a Linux host the folders must be traversable and the files readable by gid 10001 (these commands are for Linux hosts):
+
+  ```bash
+  mkdir -p secrets/ingest secrets/tak
+  sudo chgrp -R 10001 secrets/ingest secrets/tak
+  sudo chmod -R u=rwX,g=rX,o= secrets/ingest secrets/tak   # files 0640, folders 0750; you stay the owner
+  ```
+
+  To hand the folders over completely instead, `sudo chown -R 10001:10001 secrets/ingest secrets/tak` and `sudo chmod -R u=rX,g=rX,o= secrets/ingest secrets/tak` (files 0440). Rootless Docker and Podman remap ids, where `chgrp 10001` does not apply. A file the container cannot read fails the connection at start with `permission denied` as its last error.
+
+  A throwaway CA and certificates for the connection above (use your own PKI outside development). One CA signs the server and the sender, and `clients-ca.pem` is the file the connection trusts:
+
+  ```bash
+  SECRETS=$PWD/secrets/ingest; mkdir -p /tmp/sentinel-pki && cd /tmp/sentinel-pki
+  openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj '/CN=Sentinel test CA' -keyout ca.key -out clients-ca.pem
+  openssl req -newkey rsa:2048 -nodes -subj '/CN=localhost' -keyout server.key -out server.csr
+  openssl x509 -req -in server.csr -CA clients-ca.pem -CAkey ca.key -CAcreateserial -days 90 -out server.pem \
+    -extfile <(printf 'subjectAltName=DNS:localhost,IP:127.0.0.1')
+  openssl req -newkey rsa:2048 -nodes -subj '/CN=sender-1' -keyout client.key -out client.csr
+  openssl x509 -req -in client.csr -CA clients-ca.pem -CAkey ca.key -CAcreateserial -days 90 -out client.pem
+  cp server.pem server.key clients-ca.pem "$SECRETS"/    # the CA key and the sender's files stay out of the mount
+  echo '{"sourceEntityId":"mtls-1","entityType":"ENTITY_TYPE_VEHICLE","position":{"latitude":51.5,"longitude":-0.12}}' |
+    openssl s_client -quiet -no_ign_eof -verify_return_error -connect localhost:6002 -servername localhost \
+      -CAfile clients-ca.pem -cert client.pem -key client.key
+  ```
+
+  That last command is the one the connection's send guide shows. Change the server certificate files in `./secrets/ingest` and the listener serves the new certificate within `INGEST_TLS_RELOAD_SEC` (60 s) without dropping connections; `detail.tlsReloads` counts it, `detail.tlsCertNotAfter` shows the expiry, and a failed reload (`tlsReloadFailed`) keeps the old one.
+- **Secrets in variables.** A `secretRefs` entry of the form `env:NAME` may name only `SENTINEL_SECRET_*`, `OPENSKY_*` and `AISSTREAM_*` variables, and a `file:` entry only files under `/etc/sentinel`; anything else is a 422 (`INGEST_SECRET_ENV_ALLOW`, `INGEST_SECRET_FILE_DIRS`, and `INGEST_SECRET_ENV_ALLOW=*` for the old behaviour, in `docs/feeds.md`). Compose reads your own variables from `./secrets/ingest.env` (`NAME=value` lines; gitignored; optional) into both ingest containers: put `SENTINEL_SECRET_SITE_TOKEN=...` there and reference it as `env:SENTINEL_SECRET_SITE_TOKEN`, then `docker compose up -d` to recreate the containers (a changed file is not re-read by a running one). It needs Compose 2.24 or later, and the file must not hold anything but secrets, since every variable in it reaches the service.
+- **Limits** per connection: `maxConnections` (50), `maxMessagesPerSec` (1000, shared by all senders), `maxMessagesPerSecPerSender` (0, none: a limit for each sender IP inside the shared one), `maxMessageBytes` (64 KiB for TCP, 65507 for UDP) and, for UDP, `receiveBufferBytes` (4 MiB, the socket buffer; the kernel grants at most `net.core.rmem_max` of the listener host, so raise that with `sysctl` for more, and `kernelDropped` counts what it still loses). What they refuse is counted in the connection's status and in the `sentinel_ingest_listener_*` metrics (`docs/feeds.md`).
+- **Rejected messages.** A message the decoder refuses goes to `observations.dlq`; `GET /api/v1/feeds/test-udp/deadletters?limit=5&payload=true` lists the newest with the reason, error, sender (`ip:port`) and the first 1 KiB of the payload. It needs an operator or admin role and a clearance at or above the connection's classification (`AUTH_DEV_BYPASS` has both), and answers 501 when the ingest service runs with `DLQ_PEEK_MAX_SCAN=0`. The same list is the Recent rejects panel on the Connections page.
 - **The listener's own port.** The listener's management API binds loopback only (`127.0.0.1:4010`): its healthcheck uses it and nothing else needs to, since the gateway talks to `ingest-service` on `:4000`. It is guarded by `INGEST_SERVICE_TOKEN` too (default `dev-ingest-token`, change it anywhere but a laptop).
 - With no listener running, an enabled listening connection shows `unassigned` with the error `no listener replica`; start the profile above.
 
@@ -277,7 +307,7 @@ curl -s -X POST http://localhost:3000/api/v1/feeds -H 'content-type: application
 }'
 ```
 
-With OpenSky enabled and the map open over that box, `GET /api/v1/feeds/tak-dev` shows `detail.outbound.delivered` rising and `detail.remotePeer`. Point ATAK, WinTAK or iTAK at the same server to see the aircraft as air tracks with callsigns; drop a marker on the device and it appears on the Sentinel map under the connection's layer. For a TLS port set `tls.enabled` and give the enrolment certificate as `file:` secret refs mounted under `./secrets/tak` (gitignored, mounted read-only at `/etc/sentinel/tak` in the ingest container):
+With OpenSky enabled and the map open over that box, `GET /api/v1/feeds/tak-dev` shows `detail.outbound.delivered` rising and `detail.remotePeer`. Point ATAK, WinTAK or iTAK at the same server to see the aircraft as air tracks with callsigns; drop a marker on the device and it appears on the Sentinel map under the connection's layer. For a TLS port set `tls.enabled` and give the enrolment certificate as `file:` secret refs mounted under `./secrets/tak` (gitignored, mounted read-only at `/etc/sentinel/tak` in both ingest containers; on Linux give gid 10001 read access as above):
 
 ```bash
 openssl pkcs12 -in client.p12 -nodes -nocerts -out secrets/tak/client.key
@@ -306,7 +336,7 @@ The finding appears in the Findings panel and in the entity's Behaviour section;
 
 ### Several ingest replicas
 
-Every enabled feed runs on exactly one replica: replicas heartbeat `sentinel.ingest_replicas`, a feed's preferred owner is chosen by rendezvous hashing over the live ordinary replicas (or `config.pinnedReplica`; connections that open a port go to the listener replicas, which run nothing else), and the owner holds a `sentinel.feed_leases` row it renews every `LEASE_TICK_SEC` (2 s) with a `LEASE_TTL_SEC` (15 s) expiry. `docker compose up -d --scale ingest-service=3` starts three; `GET /api/v1/feeds` shows each feed's `status.owner`, a replica that stops reporting renders its feeds as `unassigned` until another one takes them (within one TTL), and every observation carries the lease's fencing token in the `x-fence` header. Connections that bind a port (`tcp` in listen mode, `udp`, `stream` with a `tcpserver` or `udp` transport) run on a listener replica (`INGEST_LISTENER=true`, the `ingest-listener` service described above) and need no `pinnedReplica`; with none live they render as `unassigned`. The listener takes nothing else unless a feed is pinned to it or `INGEST_LISTENER_SHARED=true` is set: with only the listener live, every other feed that is not pinned renders as `unassigned` (`no ingest replica for this feed: ...`) and `sentinel_ingest_feeds_unplaced` counts it (`docs/feeds.md`, Listeners). `LEASE_ENABLED=false` runs every feed on one replica (local development with a single process).
+Every enabled feed runs on exactly one replica: replicas heartbeat `sentinel.ingest_replicas`, a feed's preferred owner is chosen by rendezvous hashing over the live ordinary replicas (or `config.pinnedReplica`; connections that open a port go to the listener replicas, which run nothing else), and the owner holds a `sentinel.feed_leases` row it renews every `LEASE_TICK_SEC` (2 s) with a `LEASE_TTL_SEC` (15 s) expiry. `docker compose up -d --scale ingest-service=3` starts three; `GET /api/v1/feeds` shows each feed's `status.owner`, a replica that stops reporting renders its feeds as `unassigned` until another one takes them (within one TTL), and every observation carries the lease's fencing token in the `x-fence` header. Connections that bind a port (`tcp` in listen mode, `udp`, `stream` with a `tcpserver` or `udp` transport) run on a listener replica (`INGEST_LISTENER=true`, the `ingest-listener` service described above) and need no `pinnedReplica`; with none live they render as `unassigned`. The listener takes nothing else unless a feed is pinned to it or `INGEST_LISTENER_SHARED=true` is set: with only the listener live, every other feed that is not pinned renders as `unassigned` (`no ingest replica for this feed: ...`) and `sentinel_ingest_feeds_unplaced` counts it (`docs/feeds.md`, Listeners). `LEASE_ENABLED=false` runs every feed on one replica (local development with a single process). After pulling a change, build the image once (`docker compose build ingest-service`; both services use `sentinel/ingest-service:dev`) and restart `ingest-service` before `ingest-listener`, or both with one `docker compose --profile inbound up -d`: a new dedicated listener beside an old `ingest-service` leaves ordinary feeds flapping (about 30 s on, 15 s off). Build one image at a time on a small Docker VM. Keep `INGEST_LISTENER_SHARED` out of `.env`: `nx serve` loads that file into the host-run ingest service, which refuses it without `INGEST_LISTENER=true`; pass it on the command line (`INGEST_LISTENER_SHARED=true docker compose --profile inbound up -d ingest-listener`).
 
 See `docs/architecture.md` (OpenSky viewport-driven polling) for the contract, the credit budget, and the environment variables.
 
@@ -356,7 +386,10 @@ At start, right after it opens the feed registry, the ingest service checks that
 
 - **Compose:** `docker compose up db-schema`. Application services wait for that job, so you meet the error only with `up --no-deps`, or after pulling a change onto an older database volume. The ingest container, which Docker keeps restarting, comes up on its next try.
 - **Local stack:** `make db-schema` (it applies the files to the `sentinel-postgres` container).
-- **Any other database, Kubernetes included:** `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <file>` for each file in `db/schema`, in name order; for a Helm release do it before `helm upgrade` (`docs/infrastructure.md`).
+- **Helm:** `helm upgrade` runs the `dbSchema` Job, which applies the files before the new pods start (`dbSchema.enabled`, on by default; `docs/infrastructure.md`). You meet the error only when the Job is off or failed.
+- **Any other database:** `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <file>` for each file in `db/schema`, in name order.
+
+The line is one JSON record, for example `database schema is older than this ingest-service: missing sentinel.ingest_replicas.listener (db/schema/70_feeds.sql). Apply db/schema in name order, every file is idempotent: ...`. If the fatal message is `checking the database schema failed` instead, the check itself could not run (the database is unreachable, or the connection was refused or timed out): applying the schema will not help, so look at `DATABASE_URL`, the credentials and the database first.
 
 ### Resetting everything
 
