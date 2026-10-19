@@ -281,7 +281,7 @@ Rules and safeguards, in short (details and the counters are in `docs/feeds.md`)
 
   ```bash
   echo '{"sourceEntityId":"mtls-1","entityType":"ENTITY_TYPE_VEHICLE","position":{"latitude":51.5,"longitude":-0.12}}' |
-    openssl s_client -quiet -no_ign_eof -verify_return_error -connect localhost:6002 -servername localhost \
+    openssl s_client -quiet -no_ign_eof -verify_return_error -connect 127.0.0.1:6002 -servername localhost \
       -CAfile clients-ca.pem -cert client.pem -key client.key
   ```
 
