@@ -14,8 +14,9 @@ import (
 
 // memStore is a Store in memory with the real store's version rule.
 type memStore struct {
-	rows map[string]Emplacement
-	next int
+	rows    map[string]Emplacement
+	next    int
+	deleted []string // ids Delete was called with
 }
 
 func newMemStore(rows ...Emplacement) *memStore {
@@ -65,6 +66,7 @@ func (m *memStore) Update(_ context.Context, id string, ifVersion int, fn func(*
 	return e, nil
 }
 func (m *memStore) Delete(_ context.Context, id string) error {
+	m.deleted = append(m.deleted, id)
 	if _, ok := m.rows[id]; !ok {
 		return ErrNotFound
 	}
@@ -210,5 +212,22 @@ func TestHandlerDelete(t *testing.T) {
 	}
 	if _, err := store.Get(context.Background(), idU); !errors.Is(err, ErrNotFound) {
 		t.Fatal("not deleted")
+	}
+}
+
+// A uuid in upper case names the same emplacement. The store, and through its
+// notification every replica's cache, sees the lower-case id the rows are
+// keyed by; otherwise the cache would keep the emplacement and its mirror keep
+// reporting it.
+func TestHandlerDeleteTakesAnUpperCaseID(t *testing.T) {
+	const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	e := fixed("Headland")
+	e.ID, e.Version = id, 1
+	store := newMemStore(e)
+	if w := serve(t, store, http.MethodDelete, "/emplacements/"+strings.ToUpper(id), "CONFIDENTIAL", ""); w.Code != 204 {
+		t.Fatalf("delete by the upper-case id: %d %s", w.Code, w.Body)
+	}
+	if len(store.deleted) != 1 || store.deleted[0] != id {
+		t.Fatalf("store deleted %v, want [%s]", store.deleted, id)
 	}
 }

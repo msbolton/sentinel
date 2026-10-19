@@ -204,7 +204,9 @@ func (h *Handler) check(r *http.Request, e *Emplacement) error {
 }
 
 func pathID(w http.ResponseWriter, r *http.Request) (string, bool) {
-	id := r.PathValue("id")
+	// Lower case is the form the rows, the store's notifications and every
+	// replica's cache key on; an upper-case uuid names the same row.
+	id := strings.ToLower(r.PathValue("id"))
 	if !uuidRe.MatchString(id) {
 		writeError(w, http.StatusBadRequest, "the id must be a uuid")
 		return "", false
