@@ -10,7 +10,7 @@
     "host": { "type": "string", "minLength": 1, "title": "Host", "description": "The system to connect to", "x-showWhen": { "mode": "connect" } },
     "port": { "type": "integer", "minimum": 1, "maximum": 65535, "title": "Port", "description": "listen: the port Sentinel opens (1024-65535). connect: the remote port." },
     "format": { "type": "string", "enum": ["sentinel", "cot", "nmea-ais", "nmea-gps", "sbs", "beast", "link16", "json"], "default": "sentinel", "title": "Format" },
-    "encoding": { "type": "string", "enum": ["protobuf", "json"], "default": "protobuf", "title": "Encoding", "description": "For the sentinel format: binary protobuf (length-delimited) or JSON (one message per line)", "x-showWhen": { "format": "sentinel" } },
+    "encoding": { "type": "string", "enum": ["protobuf", "json"], "default": "protobuf", "title": "Encoding", "description": "For the sentinel format: binary protobuf (length-delimited) or JSON, where each line is one observation or an array of up to 100", "x-showWhen": { "format": "sentinel" } },
     "framing": { "type": "string", "enum": ["line", "delimited", "lengthprefix", "xmlevent", "beast"], "title": "Framing", "description": "Override the framing the format implies" },
     "decoderOptions": {
       "type": "object", "title": "Decoder options",
@@ -46,7 +46,7 @@
     { "if": { "properties": { "mode": { "const": "connect" } }, "required": ["mode"] }, "then": { "required": ["host", "port"] } },
     {
       "if": { "properties": { "format": { "const": "nmea-gps" } }, "required": ["format"] },
-      "then": { "required": ["decoderOptions"], "properties": { "decoderOptions": { "required": ["sourceEntityId"], "properties": { "sourceEntityId": { "type": "string", "minLength": 1 } } } } }
+      "then": { "required": ["decoderOptions"], "properties": { "decoderOptions": { "required": ["sourceEntityId"], "properties": { "sourceEntityId": { "type": "string", "pattern": "\\S" } } } } }
     }
   ],
   "x-secrets": {

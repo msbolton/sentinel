@@ -2,6 +2,7 @@ package drivers
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -301,6 +302,9 @@ func TestValidateNMEAGPSNeedsASourceEntityID(t *testing.T) {
 		{"empty options", `"format": "nmea-gps", "decoderOptions": {}`, []string{idPath}},
 		{"options without an id", `"format": "nmea-gps", "decoderOptions": {"name": "Truck 1"}`, []string{idPath}},
 		{"an empty id", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": ""}`, []string{idPath}},
+		{"a blank id", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": "   "}`, []string{idPath}},
+		{"an id of tabs and a newline", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": "\t\n"}`, []string{idPath}},
+		{"an id with spaces around it", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": " truck-1 "}`, nil},
 		{"a number for the id", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": 7}`, []string{idPath}},
 		{"options that are not an object", `"format": "nmea-gps", "decoderOptions": "truck-1"`, []string{optionsPath}},
 		// No other format is asked for an id, with options or without.
@@ -352,6 +356,9 @@ func TestValidateStreamNMEAGPSNeedsASourceEntityID(t *testing.T) {
 		{"empty options", `{"name": "nmea-gps", "options": {}}`, []string{idPath}},
 		{"options without an id", `{"name": "nmea-gps", "options": {"name": "Truck 1"}}`, []string{idPath}},
 		{"an empty id", `{"name": "nmea-gps", "options": {"sourceEntityId": ""}}`, []string{idPath}},
+		{"a blank id", `{"name": "nmea-gps", "options": {"sourceEntityId": "   "}}`, []string{idPath}},
+		{"an id of tabs and a newline", `{"name": "nmea-gps", "options": {"sourceEntityId": "\t\n"}}`, []string{idPath}},
+		{"an id with spaces around it", `{"name": "nmea-gps", "options": {"sourceEntityId": " truck-1 "}}`, nil},
 		{"a number for the id", `{"name": "nmea-gps", "options": {"sourceEntityId": 7}}`, []string{idPath}},
 		{"options that are not an object", `{"name": "nmea-gps", "options": "truck-1"}`, []string{optionsPath}},
 		// No other decoder is asked for an id, with options or without.
@@ -480,5 +487,138 @@ func TestSecretMetadataNamesDeclaredSecrets(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// schemaProp finds the property at path (property names, from the schema's
+// root) in a driver's config schema.
+func schemaProp(t *testing.T, c *Catalog, driverID string, path ...string) map[string]any {
+	t.Helper()
+	info, ok := c.Get(driverID)
+	if !ok {
+		t.Fatalf("no %s driver", driverID)
+	}
+	var node map[string]any
+	if err := json.Unmarshal(info.ConfigSchema, &node); err != nil {
+		t.Fatalf("%s schema: %v", driverID, err)
+	}
+	for _, name := range path {
+		props, _ := node["properties"].(map[string]any)
+		next, ok := props[name].(map[string]any)
+		if !ok {
+			t.Fatalf("%s schema has no property %s", driverID, strings.Join(path, "."))
+		}
+		node = next
+	}
+	return node
+}
+
+// text is a schema node's string field, "" when it has none.
+func text(node map[string]any, key string) string {
+	s, _ := node[key].(string)
+	return s
+}
+
+// A frame limit has a ceiling, so a stored config cannot ask the listener for a
+// buffer the size of the address space. The tcp driver's maxMessageBytes has
+// had one; the stream and tak limits are held to the same number.
+func TestFrameLimitsHaveTheSameCeiling(t *testing.T) {
+	c := Default()
+	const ceiling = 16 << 20
+	cases := []struct {
+		name, driver, field, cfg string // cfg holds %d for the limit
+		path                     string
+	}{
+		{"tcp", "tcp", "maxMessageBytes", `{"mode": "connect", "host": "h", "port": 7000, "maxMessageBytes": %d}`, "/config/maxMessageBytes"},
+		{"stream", "stream", "maxFrameBytes", `{"transport": {"kind": "tcpclient", "address": "h:1", "maxFrameBytes": %d}, "decoder": {"name": "json"}}`, "/config/transport/maxFrameBytes"},
+		{"tak", "tak", "maxFrameBytes", `{"address": "h:8087", "maxFrameBytes": %d}`, "/config/maxFrameBytes"},
+	}
+	for _, tc := range cases {
+		at := func(limit int) []string {
+			return problemPaths(c.Validate(tc.driver, json.RawMessage(fmt.Sprintf(tc.cfg, limit))))
+		}
+		if got := at(ceiling); len(got) != 0 {
+			t.Errorf("%s: %s of %d (the ceiling) was refused: %v", tc.name, tc.field, ceiling, got)
+		}
+		if got := at(ceiling + 1); !slices.Equal(got, []string{tc.path}) {
+			t.Errorf("%s: %s of %d: problem paths = %v, want [%s]", tc.name, tc.field, ceiling+1, got, tc.path)
+		}
+	}
+}
+
+// The TAK form takes its TLS material from the secrets, which mean nothing
+// while TLS is off, so it shows them only once TLS is on, as the tcp form does.
+func TestTAKSecretsAreShownOnlyWithTLS(t *testing.T) {
+	info, ok := Default().Get("tak")
+	if !ok {
+		t.Fatal("no tak driver")
+	}
+	var schema struct {
+		Secrets map[string]secretMeta `json:"x-secrets"`
+	}
+	if err := json.Unmarshal(info.ConfigSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range info.SecretFields {
+		meta, ok := schema.Secrets[name]
+		if !ok {
+			t.Errorf("x-secrets has no entry for %s", name)
+			continue
+		}
+		if len(meta.ShowWhen) != 1 || meta.ShowWhen["tls/enabled"] != true {
+			t.Errorf("x-secrets.%s.showWhen = %v, want only tls/enabled: true", name, meta.ShowWhen)
+		}
+	}
+	if len(schema.Secrets) == 0 {
+		t.Error("tak describes no secrets")
+	}
+}
+
+// A stream connection can name its client CA as a file, which the transport
+// accepts, so the form offers the field and the requireClientCert hint says
+// there are two places the CA can come from.
+func TestStreamTLSSchemaDescribesTheClientCA(t *testing.T) {
+	c := Default()
+	file := schemaProp(t, c, "stream", "transport", "tls", "clientCaFile")
+	if text(file, "type") != "string" || text(file, "title") == "" || text(file, "description") == "" {
+		t.Errorf("clientCaFile = %v, want a titled, described string", file)
+	}
+	require := schemaProp(t, c, "stream", "transport", "tls", "requireClientCert")
+	for _, want := range []string{"clientCa secret", "tls.clientCaFile"} {
+		if !strings.Contains(text(require, "description"), want) {
+			t.Errorf("requireClientCert description = %q, want it to name %q", text(require, "description"), want)
+		}
+	}
+	if showWhen, _ := require["x-showWhen"].(map[string]any); len(showWhen) != 1 || showWhen["enabled"] != true {
+		t.Errorf("requireClientCert x-showWhen = %v, want only enabled: true, as before", require["x-showWhen"])
+	}
+}
+
+// What the descriptions tell an operator has to be what the code does. These
+// pin the facts a description states, not its wording.
+func TestSchemaDescriptionsStateWhatTheCodeDoes(t *testing.T) {
+	c := Default()
+	mentions := func(node map[string]any, key string, wants ...string) {
+		t.Helper()
+		for _, want := range wants {
+			if !strings.Contains(text(node, key), want) {
+				t.Errorf("%s = %q, want it to mention %q", key, text(node, key), want)
+			}
+		}
+	}
+
+	// The sentinel JSON format takes an array of up to 100 observations on a line.
+	mentions(schemaProp(t, c, "tcp", "encoding"), "description", "array of up to 100")
+	mentions(schemaProp(t, c, "udp", "encoding"), "description", "array of up to 100")
+
+	// Linux reports twice the size it granted, and the kernel's drop count is
+	// everything it drops on the socket, not only a full buffer.
+	for name, node := range map[string]map[string]any{
+		"udp":    schemaProp(t, c, "udp", "receiveBufferBytes"),
+		"stream": schemaProp(t, c, "stream", "transport", "receiveBufferBytes"),
+	} {
+		t.Run(name+" receiveBufferBytes", func(t *testing.T) {
+			mentions(node, "description", "twice", "425984", "receiveBufferEffectiveBytes", "kernelDropped", "memory limits", "checksum", "filter")
+		})
 	}
 }
