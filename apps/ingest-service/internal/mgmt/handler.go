@@ -21,6 +21,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/aoi"
 	"github.com/sentinel/ingest-service/internal/dlq"
 	"github.com/sentinel/ingest-service/internal/drivers"
+	"github.com/sentinel/ingest-service/internal/ingesttoken"
 	"github.com/sentinel/ingest-service/internal/registry"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 )
@@ -64,6 +65,9 @@ type Handler struct {
 	// DeadLetters reads a connection's recent dead letters for GET
 	// /feeds/{id}/deadletters. Nil leaves the route answering 501.
 	DeadLetters dlq.Reader
+	// Tokens stores ingest tokens for GET/POST /feeds/{id}/tokens and DELETE
+	// /feeds/{id}/tokens/{tokenId}; nil answers 501.
+	Tokens TokenStore
 }
 
 // NewHandler wires the handler. runtime may be nil (status-only replicas).
@@ -181,6 +185,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, guard func(http.Handler) ht
 	route("POST /feeds/{id}/disable", h.setEnabled(false))
 	route("GET /feeds/{id}/status", h.status)
 	route("GET /feeds/{id}/deadletters", h.deadLetters)
+	route("GET /feeds/{id}/tokens", h.listTokens)
+	route("POST /feeds/{id}/tokens", h.createToken)
+	route("DELETE /feeds/{id}/tokens/{tokenId}", h.revokeToken)
 	route("GET /feeds/{id}/area", h.getArea)
 	route("PUT /feeds/{id}/area", h.putArea)
 	route("GET /drivers", h.listDrivers)
@@ -587,6 +594,8 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 		writeProblems(w, ve.Problems)
 	case errors.Is(err, registry.ErrNotFound):
 		writeError(w, http.StatusNotFound, "feed not found")
+	case errors.Is(err, ingesttoken.ErrNotFound):
+		writeError(w, http.StatusNotFound, "token not found")
 	case errors.Is(err, registry.ErrConflict):
 		writeError(w, http.StatusConflict, "a feed with this id already exists")
 	default:

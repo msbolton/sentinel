@@ -25,6 +25,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/emplacement"
 	"github.com/sentinel/ingest-service/internal/feed"
 	"github.com/sentinel/ingest-service/internal/health"
+	"github.com/sentinel/ingest-service/internal/ingesttoken"
 	kafkaproducer "github.com/sentinel/ingest-service/internal/kafka"
 	"github.com/sentinel/ingest-service/internal/lease"
 	"github.com/sentinel/ingest-service/internal/metrics"
@@ -136,6 +137,12 @@ func main() {
 	empCache := emplacement.NewCache(empStore, reg.Pool(), logger)
 	go empCache.Run(ctx)
 
+	// Ingest tokens: the store behind the token routes, and the cache the
+	// grpc driver authenticates senders with.
+	tokStore := ingesttoken.NewPGStore(reg.Pool())
+	tokCache := ingesttoken.NewCache(tokStore, reg.Pool(), logger)
+	go tokCache.Run(ctx)
+
 	// Supervisor: runs the feeds this replica owns and reports status.
 	supOpts := feed.Options{
 		ReplicaID:         cfg.ReplicaID,
@@ -187,6 +194,7 @@ func main() {
 		mgmtHandler.StaleAfter = cfg.LeaseTTL
 	}
 	mgmtHandler.Reserved = reserved
+	mgmtHandler.Tokens = tokStore
 	mgmtHandler.UseSecretPolicy(secretPolicy)
 	mgmtHandler.RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
 	emplacement.NewHandler(empStore, feedCheck(reg, catalog), logger).

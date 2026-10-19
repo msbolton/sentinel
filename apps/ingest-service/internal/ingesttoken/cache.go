@@ -143,7 +143,8 @@ func (c *Cache) Authenticate(secret string) (Token, bool) {
 
 // OnRevoke registers fn, called once for each token that stops being usable
 // by revocation or deletion (not by expiry, which callers check with
-// Usable). fn runs on the refreshing goroutine and must not block. A call
+// Usable). fn runs on the refreshing goroutine and must not block. fn must
+// not call Load or RefreshFeed, because it runs under the refresh lock. A call
 // already under way may still reach fn once after cancel returns.
 func (c *Cache) OnRevoke(fn func(Token)) (cancel func()) {
 	c.subMu.Lock()
