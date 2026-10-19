@@ -612,6 +612,12 @@ func TestTCPServerDefaultsMaxConnections(t *testing.T) {
 		{"tcpserver, null", `{"kind":"tcpserver","address":"127.0.0.1:0","maxConnections":null}`, 50},
 		{"tcpserver, explicit 0 is unlimited", `{"kind":"tcpserver","address":"127.0.0.1:0","maxConnections":0}`, 0},
 		{"tcpserver, explicit 5", `{"kind":"tcpserver","address":"127.0.0.1:0","maxConnections":5}`, 5},
+		// encoding/json matches the key ignoring case, so these set it too; the
+		// last spelling wins when there are two.
+		{"tcpserver, MaxConnections 5", `{"kind":"tcpserver","address":"127.0.0.1:0","MaxConnections":5}`, 5},
+		{"tcpserver, MAXCONNECTIONS 0", `{"kind":"tcpserver","address":"127.0.0.1:0","MAXCONNECTIONS":0}`, 0},
+		{"tcpserver, two spellings, the last wins", `{"kind":"tcpserver","address":"127.0.0.1:0","maxConnections":7,"MaxConnections":5}`, 5},
+		{"tcpserver, MaxConnections null", `{"kind":"tcpserver","address":"127.0.0.1:0","MaxConnections":null}`, 50},
 		{"udp, absent", `{"kind":"udp","address":"127.0.0.1:0"}`, 0},
 	}
 	for _, tc := range cases {

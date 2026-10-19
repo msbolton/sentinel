@@ -96,7 +96,7 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	// A tcpserver is capped unless the config says otherwise. This is decided
 	// here, not in NewFromParts, because only the raw config can tell an
 	// absent maxConnections from an explicit 0 (unlimited).
-	if tcfg.Kind == "tcpserver" && !hasKey(cfg.Transport, "maxConnections") {
+	if tcfg.Kind == "tcpserver" && !setsMaxConnections(cfg.Transport) {
 		tcfg.MaxConnections = DefaultMaxConnections
 	}
 	d, err := NewFromParts(spec, deps, tcfg, cfg.Framing, cfg.Decoder)
@@ -106,15 +106,16 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	return d, nil
 }
 
-// hasKey reports whether the JSON object raw sets key to a value. A key set
-// to null counts as unset, as it does for the tcp driver's pointer fields.
-func hasKey(raw json.RawMessage, key string) bool {
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil {
-		return false
+// setsMaxConnections reports whether the transport object sets maxConnections
+// to a value. Presence is decided the way the decoder finds the field, by
+// decoding into a pointer: the key matches ignoring case, the last spelling
+// wins, and null counts as unset, as it does for the tcp driver's pointer
+// fields.
+func setsMaxConnections(raw json.RawMessage) bool {
+	var probe struct {
+		MaxConnections *int `json:"maxConnections"`
 	}
-	v, ok := fields[key]
-	return ok && string(v) != "null"
+	return json.Unmarshal(raw, &probe) == nil && probe.MaxConnections != nil
 }
 
 // NewFromParts builds a stream driver from an already parsed transport
