@@ -729,6 +729,16 @@ services:
     # No hostname or container_name: `docker compose up --scale ingest-service=3`
     # runs three replicas, each identified by its container id (REPLICA_ID).
     restart: unless-stopped
+    # Compose kills a container 10 s after the stop signal by default, before the
+    # process has stopped its feeds, released their leases and drained the publisher.
+    # Give it SHUTDOWN_TIMEOUT_SEC (25, below) plus the HTTP server's own 5 s. That is
+    # usually enough, not a guarantee: a stalled Kafka can still outlast it.
+    stop_grace_period: 30s
+    # Optional: secrets/ingest.env (gitignored) holds SENTINEL_SECRET_NAME=value lines, written with
+    # that prefix, that secretRefs name as env:SENTINEL_SECRET_NAME; without the file nothing is added (Compose 2.24+).
+    env_file:
+      - path: ./secrets/ingest.env
+        required: false
     environment:
       APP_ENV: development
       KAFKA_BROKERS: kafka:9093
@@ -746,10 +756,18 @@ services:
       OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
       # aisstream.io API key, referenced by the aisstream feed's secretRefs
       AISSTREAM_API_KEY: ${AISSTREAM_API_KEY:-}
+      # Ports a TCP/UDP connection may not take (e.g. "3000-3005,5432"); blank uses the built-in default.
+      INGEST_RESERVED_PORTS: ${INGEST_RESERVED_PORTS:-}
+      # How long a graceful shutdown may take (the default). Keep stop_grace_period above it.
+      SHUTDOWN_TIMEOUT_SEC: "25"
     volumes:
+      # Runs as 10001:10001: Linux hosts need both folders readable by gid 10001 (docs/development.md).
       # Certificates and other files that secretRefs reference as file:/etc/sentinel/tak/...
       # (gitignored; empty is fine).
       - ./secrets/tak:/etc/sentinel/tak:ro
+      # Other files that secretRefs reference as file:/etc/sentinel/secrets/..., such as the
+      # PEMs of a TCP connection with mutual TLS (gitignored; empty is fine).
+      - ./secrets/ingest:/etc/sentinel/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -773,6 +791,81 @@ services:
           cpus: "0.1"
     networks:
       - sentinel-network
+
+  # Listener replica for TCP/UDP connections that external systems send to.
+  # It shares the host's network so a port chosen in Connections is
+  # reachable at once. Start with: docker compose --profile inbound up -d
+  # Docker Desktop (Mac/Windows) needs Settings > Resources > Network >
+  # "Enable host networking" (4.34+); Linux needs nothing.
+  # Host networking is incompatible with `networks:` and published ports, so
+  # this service reaches Kafka and Postgres through the ports they publish on
+  # the host, and cannot be scaled.
+  ingest-listener:
+    profiles: ["inbound"]
+    image: sentinel/ingest-service:dev
+    build:
+      context: .
+      dockerfile: ./apps/ingest-service/Dockerfile
+    container_name: sentinel-ingest-listener
+    network_mode: host
+    restart: unless-stopped
+    # As for ingest-service: longer than SHUTDOWN_TIMEOUT_SEC, or Compose kills it mid-shutdown.
+    stop_grace_period: 30s
+    # As for ingest-service: optional secrets/ingest.env, whose SENTINEL_SECRET_NAME=value lines secretRefs name as env:SENTINEL_SECRET_NAME.
+    env_file:
+      - path: ./secrets/ingest.env
+        required: false
+    environment:
+      APP_ENV: development
+      # 4000 is the other ingest replicas' port; on the host's network this one needs its own.
+      # Loopback only: the healthcheck runs here and the gateway never calls it, so the
+      # token-guarded management API stays off the LAN.
+      HTTP_ADDR: "127.0.0.1:4010"
+      REPLICA_ID: ingest-listener
+      INGEST_LISTENER: "true"
+      # The address senders use, shown in each connection's send guide.
+      INGEST_LISTENER_HOST: ${INGEST_LISTENER_HOST:-localhost}
+      INGEST_LISTENER_SHARED: ${INGEST_LISTENER_SHARED:-false}
+      KAFKA_BROKERS: localhost:9092
+      DATABASE_URL: postgres://sentinel:sentinel_dev@localhost:5432/sentinel?sslmode=disable
+      LEASE_TTL_SEC: "15"
+      LEASE_TICK_SEC: "2"
+      INGEST_SERVICE_TOKEN: ${INGEST_SERVICE_TOKEN:-dev-ingest-token}
+      # Ordinary feeds run here only when pinned to ingest-listener, or with
+      # INGEST_LISTENER_SHARED=true (then it takes its rendezvous share). Keep these
+      # settings the same as ingest-service for those cases; FEEDS_BOOTSTRAP_ENABLED
+      # matters on whichever replica starts first.
+      FEEDS_BOOTSTRAP_ENABLED: ${FEEDS_BOOTSTRAP_ENABLED:-}
+      OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
+      OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
+      AISSTREAM_API_KEY: ${AISSTREAM_API_KEY:-}
+      INGEST_RESERVED_PORTS: ${INGEST_RESERVED_PORTS:-}
+      SHUTDOWN_TIMEOUT_SEC: "25"
+    volumes:
+      # As for ingest-service: Linux hosts need both folders readable by gid 10001 (docs/development.md).
+      - ./secrets/tak:/etc/sentinel/tak:ro
+      - ./secrets/ingest:/etc/sentinel/secrets:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-schema:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4010/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "2.0"
+        reservations:
+          memory: 128m
+          cpus: "0.1"
 
   # ===========================================================================
   # Analytics Service (Go): behavioural baselines and findings

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sync/atomic"
 	"time"
 
 	gws "github.com/gorilla/websocket"
@@ -27,6 +28,11 @@ func init() {
 // Client is the websocket transport.
 type Client struct {
 	cfg transport.Config
+	// tlsrc is the TLS config in use, nil without TLS. It is built when Run
+	// starts, as it always was, so that a bad certificate stops the feed's start
+	// and not its configuration; it builds the config again before each dial when
+	// the config reloads.
+	tlsrc atomic.Pointer[transport.TLSSource]
 	transport.StateTracker
 }
 
@@ -47,11 +53,12 @@ func New(cfg transport.Config) (transport.Transport, error) {
 
 // Run dials, reads and reconnects until ctx ends.
 func (c *Client) Run(ctx context.Context, emit transport.Emit) error {
-	tlsCfg, err := c.cfg.TLSConfig()
+	src, err := transport.NewTLSSource(c.cfg, nil)
 	if err != nil {
 		return err
 	}
-	dialer := gws.Dialer{HandshakeTimeout: 10 * time.Second, TLSClientConfig: tlsCfg}
+	c.tlsrc.Store(src)
+	dialer := gws.Dialer{HandshakeTimeout: 10 * time.Second}
 	header := http.Header{}
 	if c.cfg.Username != "" {
 		req, _ := http.NewRequest(http.MethodGet, "/", nil)
@@ -60,6 +67,7 @@ func (c *Client) Run(ctx context.Context, emit transport.Emit) error {
 	}
 	backoff := time.Duration(0)
 	for ctx.Err() == nil {
+		dialer.TLSClientConfig = src.Fresh() // the material is read again for each dial
 		conn, resp, err := dialer.DialContext(ctx, c.cfg.URL, header)
 		if resp != nil && resp.Body != nil {
 			resp.Body.Close()
@@ -122,5 +130,9 @@ func (c *Client) read(ctx context.Context, conn *gws.Conn, emit transport.Emit) 
 	}
 }
 
-// State reports connectivity.
-func (c *Client) State() transport.State { return c.Get() }
+// State reports connectivity, and the TLS reloads when there is TLS.
+func (c *Client) State() transport.State {
+	st := c.Get()
+	c.tlsrc.Load().Apply(&st)
+	return st
+}

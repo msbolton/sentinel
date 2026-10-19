@@ -3,6 +3,8 @@ package lease
 import (
 	"context"
 	"os"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,5 +134,93 @@ func TestAcquireRenewStealRelease(t *testing.T) {
 		if r == "test-a" {
 			t.Fatal("leave must remove the replica row")
 		}
+	}
+}
+
+// withPrefix keeps the ids a test created: the database may hold replicas of
+// a running stack too.
+func withPrefix(prefix string, ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		if strings.HasPrefix(id, prefix) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// A listener's heartbeat records whether it also takes ordinary feeds, on the
+// first heartbeat and when a restart changes the setting. Listeners reports
+// every live listener and, among them, the dedicated ones.
+func TestHeartbeatRecordsListenerSharing(t *testing.T) {
+	pool, ctx := testPool(t)
+	const prefix = "test-sharing-"
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM sentinel.ingest_replicas WHERE replica_id LIKE $1`, prefix+"%")
+	})
+	dedicated := New(pool, prefix+"dedicated", Options{Listener: true, ListenerHost: "ingest.example"})
+	shared := New(pool, prefix+"shared", Options{Listener: true, ListenerShared: true})
+	plain := New(pool, prefix+"plain", Options{})
+	for _, c := range []*Coordinator{dedicated, shared, plain} {
+		if err := c.Heartbeat(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	all, ded, err := plain.Listeners(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{prefix + "dedicated", prefix + "shared"}; !slices.Equal(withPrefix(prefix, all), want) {
+		t.Errorf("all listeners = %v, want %v (an ordinary replica is no listener)", withPrefix(prefix, all), want)
+	}
+	if want := []string{prefix + "dedicated"}; !slices.Equal(withPrefix(prefix, ded), want) {
+		t.Errorf("dedicated listeners = %v, want %v", withPrefix(prefix, ded), want)
+	}
+
+	// The same replica restarted with sharing on: the next heartbeat updates the row.
+	restarted := New(pool, prefix+"dedicated", Options{Listener: true, ListenerShared: true})
+	if err := restarted.Heartbeat(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ded, err = plain.Listeners(ctx); err != nil || len(withPrefix(prefix, ded)) != 0 {
+		t.Errorf("after the restart dedicated listeners = %v (err %v), want none", withPrefix(prefix, ded), err)
+	}
+	// And back: the flag follows the replica, it is not sticky.
+	if err := dedicated.Heartbeat(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ded, err = plain.Listeners(ctx); err != nil || !slices.Equal(withPrefix(prefix, ded), []string{prefix + "dedicated"}) {
+		t.Errorf("after turning sharing off again dedicated listeners = %v (err %v)", withPrefix(prefix, ded), err)
+	}
+}
+
+// Rows written by code from before listener_shared existed never set it, and
+// the column defaults to false: such a listener is dedicated, and a replica
+// that is no listener is in neither list.
+func TestOldReplicaRowsDefaultToUnshared(t *testing.T) {
+	pool, ctx := testPool(t)
+	const prefix = "test-oldrow-"
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM sentinel.ingest_replicas WHERE replica_id LIKE $1`, prefix+"%")
+	})
+	// The columns older code's heartbeat wrote, and not listener_shared.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO sentinel.ingest_replicas (replica_id, started_at, heartbeat_at, expires_at, listener, listener_host)
+		VALUES ($1, NOW(), NOW(), NOW() + INTERVAL '1 minute', TRUE, 'old.example'),
+		       ($2, NOW(), NOW(), NOW() + INTERVAL '1 minute', FALSE, NULL)`, prefix+"listener", prefix+"plain"); err != nil {
+		t.Fatal(err)
+	}
+
+	all, dedicated, err := New(pool, prefix+"reader", Options{}).Listeners(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{prefix + "listener"}
+	if !slices.Equal(withPrefix(prefix, all), want) {
+		t.Errorf("all listeners = %v, want %v", withPrefix(prefix, all), want)
+	}
+	if !slices.Equal(withPrefix(prefix, dedicated), want) {
+		t.Errorf("dedicated listeners = %v, want %v: an old listener row is not shared", withPrefix(prefix, dedicated), want)
 	}
 }

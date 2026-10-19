@@ -3,12 +3,17 @@ package feed
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/registry"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 )
@@ -114,7 +119,7 @@ func preferAlways(owner string) Preferred {
 }
 
 func newLeasedSupervisor(reg *fakeRegistry, l *fakeLeaser, me string, prefer Preferred, factory func(driver.Spec) (driver.Driver, error)) *Supervisor {
-	return New(reg, &memPublisher{}, zap.NewNop(), nil, Options{
+	return New(reg, &memPublisher{}, zap.NewNop(), metrics.New(nil), Options{
 		ReplicaID: me, RetryMin: 10 * time.Millisecond, RetryMax: 20 * time.Millisecond,
 		Leaser: &replicaLeaser{fakeLeaser: l, me: me}, Preferred: prefer, RebalanceAfter: 40 * time.Millisecond,
 		Factory: func(spec driver.Spec, _ driver.Deps) (driver.Driver, error) { return factory(spec) },
@@ -127,7 +132,7 @@ func TestPreferredOwnerAcquiresAndStampsToken(t *testing.T) {
 	l := newFakeLeaser("r1", "r2")
 	pub := &memPublisher{}
 	d := newMockDriver()
-	sup := New(reg, pub, zap.NewNop(), nil, Options{ReplicaID: "r1", Leaser: &replicaLeaser{fakeLeaser: l, me: "r1"}, Preferred: preferAlways("r1"),
+	sup := New(reg, pub, zap.NewNop(), metrics.New(nil), Options{ReplicaID: "r1", Leaser: &replicaLeaser{fakeLeaser: l, me: "r1"}, Preferred: preferAlways("r1"),
 		Factory: func(driver.Spec, driver.Deps) (driver.Driver, error) { return d, nil }})
 	ctx := context.Background()
 	sup.Reconcile(ctx)
@@ -199,6 +204,54 @@ func TestLostLeaseStopsWithoutStatusWrite(t *testing.T) {
 	}
 }
 
+// A handover to the preferred replica and a lease another replica took each
+// count once for their feed; both paths panicked on counters that were never
+// created.
+func TestLeaseMetricsCountHandoverAndLoss(t *testing.T) {
+	ctx := context.Background()
+	counts := func(sup *Supervisor) (handovers, lost float64) {
+		return testutil.ToFloat64(sup.metrics.LeaseHandovers.WithLabelValues("a")),
+			testutil.ToFloat64(sup.metrics.LeasesLost.WithLabelValues("a"))
+	}
+
+	t.Run("handover", func(t *testing.T) {
+		reg := newFakeRegistry()
+		reg.set(feedSpec("a", 1, true))
+		l := newFakeLeaser("r1", "r2")
+		sup := newLeasedSupervisor(reg, l, "r2", preferAlways("r1"), func(driver.Spec) (driver.Driver, error) { return newMockDriver(), nil })
+		sup.Reconcile(ctx) // r1 should own it, so r2 waits
+		time.Sleep(l.ttl + 10*time.Millisecond)
+		sup.Reconcile(ctx) // r1 did not claim it within a TTL: r2 steps in
+		time.Sleep(50 * time.Millisecond)
+		sup.Reconcile(ctx) // r1 is live and preferred: r2 hands it over
+		if sup.Running("a") {
+			t.Fatal("r2 must have handed the feed over")
+		}
+		if handovers, lost := counts(sup); handovers != 1 || lost != 0 {
+			t.Errorf("after a handover: handovers=%v lost=%v, want 1 and 0", handovers, lost)
+		}
+	})
+
+	t.Run("lost lease", func(t *testing.T) {
+		reg := newFakeRegistry()
+		reg.set(feedSpec("a", 1, true))
+		l := newFakeLeaser("r1")
+		sup := newLeasedSupervisor(reg, l, "r1", preferAlways("r1"), func(driver.Spec) (driver.Driver, error) { return newMockDriver(), nil })
+		sup.Reconcile(ctx)
+		if !sup.Running("a") {
+			t.Fatal("feed should run")
+		}
+		l.steal("a", "r9")
+		sup.Reconcile(ctx)
+		if sup.Running("a") {
+			t.Fatal("a lost lease must stop the feed")
+		}
+		if handovers, lost := counts(sup); handovers != 0 || lost != 1 {
+			t.Errorf("after a lost lease: handovers=%v lost=%v, want 0 and 1", handovers, lost)
+		}
+	})
+}
+
 func TestPinnedFeedRunsOnlyThere(t *testing.T) {
 	reg := newFakeRegistry()
 	pinned := feedSpec("p", 1, true)
@@ -263,5 +316,72 @@ func TestTwoReplicasSplitFeedsAndShutdownLeaves(t *testing.T) {
 	}
 	if len(l.left) != 1 || l.left[0] != "r2" {
 		t.Errorf("shutdown must leave the replica set: %v", l.left)
+	}
+}
+
+// stallingLeaser is a leaser whose Acquire hangs, as a database stall does,
+// until its context ends.
+type stallingLeaser struct {
+	*replicaLeaser
+	entered chan struct{} // told when an Acquire starts
+	release chan struct{} // closed when the test ends, so a regression fails the test instead of leaking the call
+}
+
+func (l *stallingLeaser) Acquire(ctx context.Context, _ string) (int64, bool, error) {
+	select {
+	case l.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return 0, false, ctx.Err()
+	case <-l.release:
+		return 0, false, errors.New("released by the test")
+	}
+}
+
+// Reconcile takes a feed's lease with the supervisor's lock held, so a database
+// that stalls there must not hold up what needs the lock: the scrape of the
+// listener metrics, the status reads and the management API. The acquire gives
+// up after one lease TTL, past which the lease would have expired anyway, and
+// the feed is skipped this round.
+func TestStalledLeaseAcquireDoesNotBlockTheSupervisor(t *testing.T) {
+	reg := newFakeRegistry()
+	reg.set(feedSpec("a", 1, true))
+	l := newFakeLeaser("r1") // a 50 ms TTL
+	stall := &stallingLeaser{replicaLeaser: &replicaLeaser{fakeLeaser: l, me: "r1"}, entered: make(chan struct{}, 1), release: make(chan struct{})}
+	t.Cleanup(func() { close(stall.release) })
+	core, logs := observer.New(zapcore.WarnLevel)
+	sup := New(reg, &memPublisher{}, zap.New(core), metrics.New(nil), Options{
+		ReplicaID: "r1", Leaser: stall, Preferred: preferAlways("r1"),
+		Factory: func(driver.Spec, driver.Deps) (driver.Driver, error) { return newMockDriver(), nil },
+	})
+
+	reconciled := make(chan struct{})
+	go func() { defer close(reconciled); sup.Reconcile(context.Background()) }()
+	select {
+	case <-stall.entered: // Reconcile is inside Acquire, holding the lock
+	case <-time.After(5 * time.Second):
+		t.Fatal("Reconcile never asked for the lease")
+	}
+
+	scraped := make(chan struct{})
+	go func() { defer close(scraped); sup.ListenerStats() }()
+	select {
+	case <-scraped:
+	case <-time.After(time.Second):
+		t.Fatal("ListenerStats was still blocked 1 s into a stalled lease acquire")
+	}
+	select {
+	case <-reconciled:
+	case <-time.After(time.Second):
+		t.Fatal("Reconcile was still in a stalled lease acquire after 1 s; it must give up after one lease TTL")
+	}
+	if sup.Running("a") {
+		t.Error("a feed whose lease could not be taken must not run")
+	}
+	failed := logs.FilterMessage("lease acquire failed").All()
+	if len(failed) != 1 || failed[0].ContextMap()["error"] != context.DeadlineExceeded.Error() {
+		t.Errorf("warnings = %+v, want one \"lease acquire failed\" for the deadline", failed)
 	}
 }

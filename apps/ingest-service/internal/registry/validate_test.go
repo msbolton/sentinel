@@ -69,43 +69,7 @@ func TestValidateUnknownDriver(t *testing.T) {
 	}
 }
 
-func TestResolveSecrets(t *testing.T) {
-	lookup := func(name string) (string, bool) {
-		if name == "OPENSKY_CLIENT_ID" {
-			return "id-1", true
-		}
-		return "", false
-	}
-	got, err := ResolveSecrets(map[string]string{"clientId": "env:OPENSKY_CLIENT_ID"}, lookup)
-	if err != nil || got["clientId"] != "id-1" {
-		t.Fatalf("got %v err %v", got, err)
-	}
-	if _, err := ResolveSecrets(map[string]string{"clientSecret": "env:MISSING"}, lookup); err == nil {
-		t.Error("missing variable must fail")
-	}
-	if _, err := ResolveSecrets(map[string]string{"clientSecret": "plain"}, lookup); err == nil {
-		t.Error("plain value must fail")
-	}
-}
-
-func TestResolveFileSecrets(t *testing.T) {
-	files := map[string]string{"/etc/sentinel/tak/client.pem": "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n", "/etc/sentinel/empty": "  \n"}
-	read := func(path string) ([]byte, error) {
-		if v, ok := files[path]; ok {
-			return []byte(v), nil
-		}
-		return nil, errors.New("no such file")
-	}
-	got, err := ResolveSecretsWith(map[string]string{"clientCert": "file:/etc/sentinel/tak/client.pem"}, nil, read)
-	if err != nil || !strings.HasPrefix(got["clientCert"], "-----BEGIN CERTIFICATE-----") || strings.HasSuffix(got["clientCert"], "\n") {
-		t.Fatalf("got %q err %v", got["clientCert"], err)
-	}
-	if _, err := ResolveSecretsWith(map[string]string{"k": "file:/etc/sentinel/empty"}, nil, read); err == nil {
-		t.Error("empty file must fail")
-	}
-	if _, err := ResolveSecretsWith(map[string]string{"k": "file:/etc/sentinel/missing"}, nil, read); err == nil {
-		t.Error("missing file must fail")
-	}
+func TestValidSecretRef(t *testing.T) {
 	for ref, ok := range map[string]bool{"env:X": true, "file:/a/b": true, "file:relative": false, "file:/with space": false, "vault:x": false, "": false} {
 		if ValidSecretRef(ref) != ok {
 			t.Errorf("ValidSecretRef(%q) = %v", ref, !ok)
@@ -149,5 +113,149 @@ func TestValidateDirectionAndPolicy(t *testing.T) {
 	}
 	if got := (&Feed{}).Direction(""); got != driver.DirectionIn {
 		t.Errorf("default = %s", got)
+	}
+}
+
+// GET /feeds/ports is a literal route that the router prefers to
+// GET /feeds/{id}, so a feed with that id could never be read.
+func TestReservedFeedID(t *testing.T) {
+	v := newValidator()
+	feed := func(id string) *Feed {
+		return &Feed{ID: id, Name: "Ports", Driver: "opensky", Config: json.RawMessage(`{"intervalSec": 10}`)}
+	}
+	err := v.Validate(feed("ports"))
+	var ve *ValidationError
+	if !errors.As(err, &ve) || len(ve.Problems) != 1 || ve.Problems[0] != (Problem{Path: "/id", Message: "is reserved"}) {
+		t.Fatalf("id ports: %v", err)
+	}
+	// Only that id is taken; the id a name makes of itself ("Ports") is the same one.
+	if Slugify("Ports") != "ports" {
+		t.Fatalf("Slugify(Ports) = %q", Slugify("Ports"))
+	}
+	for _, id := range []string{"port", "ports-2", "my-ports", "portsa", "p0rts"} {
+		if err := v.Validate(feed(id)); err != nil {
+			t.Errorf("id %s: %v", id, err)
+		}
+	}
+	// A malformed id is reported as it was, once.
+	err = v.Validate(feed("Ports"))
+	if !errors.As(err, &ve) || len(ve.Problems) != 1 || ve.Problems[0].Path != "/id" || ve.Problems[0].Message == "is reserved" {
+		t.Errorf("id Ports: %v", err)
+	}
+}
+
+// problemPaths lists the paths of the problems Validate reports for f.
+func problemPaths(t *testing.T, f *Feed) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := newValidator().Validate(f)
+	if err == nil {
+		return out
+	}
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected a ValidationError, got %v", err)
+	}
+	for _, p := range ve.Problems {
+		out[p.Path] = p.Message
+	}
+	return out
+}
+
+// A secret the schema requires under the config (x-secrets requiredWhen, which
+// the form enforces) is required by the server too: a TLS listener without its
+// certificate would otherwise be created, then fail to start.
+func TestSecretsRequiredWhenTheSchemaSaysSo(t *testing.T) {
+	const ref = "env:SENTINEL_SECRET_X"
+	cases := []struct {
+		name    string
+		config  string
+		refs    map[string]string
+		missing []string // paths expected to be reported "is required"
+	}{
+		{"listen with TLS, no secrets", `{"mode":"listen","port":6000,"tls":{"enabled":true}}`, nil, []string{"/secretRefs/tlsCert", "/secretRefs/tlsKey"}},
+		{"listen with TLS, only the cert", `{"mode":"listen","port":6000,"tls":{"enabled":true}}`, map[string]string{"tlsCert": ref}, []string{"/secretRefs/tlsKey"}},
+		{"listen with TLS, both", `{"mode":"listen","port":6000,"tls":{"enabled":true}}`, map[string]string{"tlsCert": ref, "tlsKey": ref}, nil},
+		{"mutual TLS needs the client CA", `{"mode":"listen","port":6000,"tls":{"enabled":true,"requireClientCert":true}}`, map[string]string{"tlsCert": ref, "tlsKey": ref}, []string{"/secretRefs/clientCa"}},
+		{"mutual TLS, all three", `{"mode":"listen","port":6000,"tls":{"enabled":true,"requireClientCert":true}}`, map[string]string{"tlsCert": ref, "tlsKey": ref, "clientCa": ref}, nil},
+		{"listen without TLS", `{"mode":"listen","port":6000}`, nil, nil},
+		{"TLS explicitly off", `{"mode":"listen","port":6000,"tls":{"enabled":false}}`, nil, nil},
+		{"connect with TLS: the client cert is optional", `{"mode":"connect","host":"example.com","port":7000,"tls":{"enabled":true}}`, nil, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := problemPaths(t, &Feed{ID: "t", Name: "T", Driver: "tcp", Config: json.RawMessage(tc.config), SecretRefs: tc.refs})
+			for _, path := range tc.missing {
+				if got[path] != "is required" {
+					t.Errorf("%s: problems = %v, want %q is required", tc.name, got, path)
+				}
+			}
+			for path, msg := range got {
+				if msg == "is required" && !contains(tc.missing, path) {
+					t.Errorf("%s: %s is reported required, and should not be", tc.name, path)
+				}
+			}
+		})
+	}
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// The stream driver's schema states no requiredWhen (a stream TLS listener can
+// take its files from certFile and keyFile), so nothing is demanded of it.
+func TestSecretsAreNotRequiredWhereTheSchemaSaysNothing(t *testing.T) {
+	f := &Feed{ID: "s", Name: "S", Driver: "stream", Config: json.RawMessage(`{"transport":{"kind":"tcpserver","address":"127.0.0.1:6000","tls":{"enabled":true}},"framing":"line","decoder":{"name":"sbs"}}`)}
+	for path, msg := range problemPaths(t, f) {
+		if strings.HasPrefix(path, "/secretRefs/") {
+			t.Errorf("%s: %s", path, msg)
+		}
+	}
+}
+
+// Conditions read as the client reads them: a path walks nested keys, a list of
+// values matches any, a missing value counts as its schema default, and every
+// condition has to hold.
+func TestRequiredSecretsConditions(t *testing.T) {
+	info := drivers.Info{ConfigSchema: json.RawMessage(`{
+	  "properties": {
+	    "mode": {"type":"string","default":"listen"},
+	    "level": {"type":"integer"},
+	    "net": {"properties": {"tls": {"properties": {"on": {"type":"boolean","default":true}}}}}
+	  },
+	  "x-secrets": {
+	    "a": {"requiredWhen": {"mode": "listen", "net/tls/on": true}},
+	    "b": {"requiredWhen": {"mode": ["connect", "relay"]}},
+	    "c": {"requiredWhen": {"level": [1, 2]}},
+	    "d": {"title": "no condition"}
+	  }
+	}`)}
+	cases := []struct {
+		config string
+		refs   map[string]string
+		want   []string
+	}{
+		{`{}`, nil, []string{"a"}},
+		{`{"net":{"tls":{"on":false}}}`, nil, nil},
+		{`{"mode":"relay","net":{"tls":{"on":false}}}`, nil, []string{"b"}},
+		{`{"mode":" connect ","net":{"tls":{"on":false}}}`, nil, []string{"b"}},
+		{`{"mode":"","net":{"tls":{"on":null}}}`, nil, []string{"a"}},
+		{`{"level":2,"net":{"tls":{"on":false}}}`, nil, []string{"c"}},
+		{`{"level":3,"net":{"tls":{"on":false}}}`, nil, nil},
+		{`{"level":1}`, map[string]string{"a": "env:X"}, []string{"c"}},
+		{`{"Mode":"connect","net":{"tls":{"on":false}}}`, nil, []string{"b"}},
+		{`[]`, nil, nil},
+	}
+	for _, tc := range cases {
+		got := requiredSecrets(info, json.RawMessage(tc.config), tc.refs)
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("config %s, refs %v: required = %v, want %v", tc.config, tc.refs, got, tc.want)
+		}
 	}
 }

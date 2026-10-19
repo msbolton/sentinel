@@ -2,6 +2,7 @@ FROM node:22-alpine AS builder
 WORKDIR /build
 COPY package.json package-lock.json tsconfig.base.json nx.json ./
 COPY libs/ ./libs/
+COPY proto/ ./proto/
 COPY apps/client/ ./apps/client/
 # --legacy-peer-deps: jest 30 vs the Angular devkit optional peer (jest 29), same as local installs
 RUN npm ci --ignore-scripts --legacy-peer-deps

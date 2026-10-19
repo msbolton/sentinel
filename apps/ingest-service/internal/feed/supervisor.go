@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"slices"
 	"sync"
 	"time"
 
@@ -43,6 +44,13 @@ type Leaser interface {
 	TTL() time.Duration
 }
 
+// ListenerLister is implemented by leasers that know the listener replicas:
+// all of them, and the dedicated ones among them, which run listening
+// connections only.
+type ListenerLister interface {
+	Listeners(ctx context.Context) (all, dedicated []string, err error)
+}
+
 // Preferred picks a feed's owner from the live set; lease.Preferred by
 // default (rendezvous hash, pin wins).
 type Preferred func(feedID, pinned string, live []string) string
@@ -57,8 +65,23 @@ type Options struct {
 	StaleWarn      time.Duration // default health thresholds
 	StaleCritical  time.Duration
 	Secrets        registry.Lookup
-	Factory        Factory
-	RawMax         int
+	// SecretPolicy limits what the secret references of a feed may name when
+	// it starts; the zero value restricts nothing.
+	SecretPolicy registry.SecretPolicy
+	// SecretReloadEvery is how often a running feed reads its rotated secrets
+	// again (TLS certificates, mostly): handed to the drivers, which poll their
+	// transports with it. 0 means never.
+	SecretReloadEvery time.Duration
+	Factory           Factory
+	RawMax            int
+	// Listener means this replica takes listening connections (the ones that
+	// bind a port); ListenerHost is the address senders use to reach it.
+	// ListenerShared lets such a replica take its share of the ordinary feeds
+	// too; without it a listener runs only listening connections and the feeds
+	// pinned to it.
+	Listener       bool
+	ListenerHost   string
+	ListenerShared bool
 	// Leaser enables sharding; LeaseTick is how often leases are renewed
 	// and ownership re-evaluated (2 s), RebalanceAfter how long a feed
 	// keeps running here while another live replica is its preferred
@@ -134,6 +157,51 @@ func defaultPreferred(feedID, pinned string, live []string) string {
 	return best
 }
 
+// listens reports whether the feed binds a port.
+func listens(spec registry.Feed) bool {
+	_, _, ok := driver.ListenOf(spec.Driver, spec.Config)
+	return ok
+}
+
+// candidates is the replica set a feed may run on: the listener replicas for
+// a listening feed, the ordinary replicas for any other. Either can be empty,
+// and the feed then waits; there is no fallback onto a replica of the other
+// kind. Call with s.mu held.
+func (s *Supervisor) candidates(spec registry.Feed) []string {
+	if listens(spec) {
+		return s.listeners
+	}
+	return s.ordinary()
+}
+
+// ordinary is the live replicas that run ordinary feeds: all of them but the
+// dedicated listeners. Call with s.mu held.
+func (s *Supervisor) ordinary() []string {
+	if len(s.dedicated) == 0 {
+		return s.live
+	}
+	out := make([]string, 0, len(s.live))
+	for _, r := range s.live {
+		if !slices.Contains(s.dedicated, r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// Why a feed has no replica to run on: the reason label of FeedsUnplaced.
+const (
+	unplacedNoListener        = "no_listener"
+	unplacedNoOrdinaryReplica = "no_ordinary_replica"
+)
+
+// unplacedReasons are the reasons in the order noteUnplaced reports them, each
+// with the text that tells an operator what to do about it.
+var unplacedReasons = []struct{ reason, detail string }{
+	{unplacedNoListener, registry.NoListenerError},
+	{unplacedNoOrdinaryReplica, registry.NoOrdinaryReplicaError},
+}
+
 // instance is one feed this replica runs (or failed to start).
 type instance struct {
 	spec   registry.Feed
@@ -153,6 +221,11 @@ type instance struct {
 
 	token          int64     // lease fencing token; 0 without a leaser
 	elsewhereSince time.Time // when another live replica became the preferred owner
+
+	// listening is whether the feed binds a port, decided when the instance is
+	// created because ListenerStats asks on every scrape; a changed config is a
+	// new version and so a new instance.
+	listening bool
 }
 
 // Supervisor owns this replica's feed runners.
@@ -171,6 +244,11 @@ type Supervisor struct {
 	// owner had a lease TTL to claim it.
 	waitingSince map[string]time.Time
 	live         []string
+	listeners    []string // the live replicas that take listening connections
+	dedicated    []string // the listeners among them that take nothing else
+	// unplaced is, per reason, how many feeds had no replica at the last
+	// reconcile; noteUnplaced compares against it to log only the changes.
+	unplaced map[string]int
 	// connections is the set of feed ids that send (direction out or both),
 	// from the last listing; outbound policies use it to avoid re-exporting
 	// one connection's contributions on another.
@@ -251,7 +329,7 @@ func New(reg Registry, pub Publisher, logger *zap.Logger, m *metrics.Metrics, op
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Supervisor{reg: reg, pub: pub, logger: logger, metrics: m, opts: opts.withDefaults(), running: map[string]*instance{}, waitingSince: map[string]time.Time{}}
+	return &Supervisor{reg: reg, pub: pub, logger: logger, metrics: m, opts: opts.withDefaults(), running: map[string]*instance{}, waitingSince: map[string]time.Time{}, unplaced: map[string]int{}}
 }
 
 // ReplicaID returns this replica's id.
@@ -338,7 +416,16 @@ func (s *Supervisor) owns(ctx context.Context, spec registry.Feed, now time.Time
 		return 0, true
 	}
 	pinned := spec.Common().PinnedReplica
-	preferred := s.opts.Preferred(spec.ID, pinned, s.live)
+	if pinned == "" {
+		listening := listens(spec)
+		if listening && !s.opts.Listener {
+			return 0, false // listening connections run only on listener replicas
+		}
+		if !listening && s.opts.Listener && !s.opts.ListenerShared {
+			return 0, false // a dedicated listener never steps in for an ordinary feed
+		}
+	}
+	preferred := s.opts.Preferred(spec.ID, pinned, s.candidates(spec))
 	if pinned != "" && pinned != s.opts.ReplicaID {
 		return 0, false
 	}
@@ -353,7 +440,13 @@ func (s *Supervisor) owns(ctx context.Context, spec registry.Feed, now time.Time
 			return 0, false
 		}
 	}
-	token, got, err := s.opts.Leaser.Acquire(ctx, spec.ID)
+	// Reconcile holds s.mu here, so a database that stalls must not stall the
+	// supervisor with it: ListenerStats, Snapshot and the management API wait on
+	// the same lock. Past one lease TTL the lease would have expired anyway; the
+	// feed is skipped this round and the warning below says why.
+	acquireCtx, cancel := context.WithTimeout(ctx, s.opts.Leaser.TTL())
+	defer cancel()
+	token, got, err := s.opts.Leaser.Acquire(acquireCtx, spec.ID)
 	if err != nil {
 		s.logger.Warn("lease acquire failed", zap.String("feed", spec.ID), zap.Error(err))
 		return 0, false
@@ -372,7 +465,7 @@ func (s *Supervisor) rebalance(inst *instance, now time.Time) bool {
 	if s.opts.Leaser == nil || inst.token == 0 {
 		return false
 	}
-	preferred := s.opts.Preferred(inst.spec.ID, inst.spec.Common().PinnedReplica, s.live)
+	preferred := s.opts.Preferred(inst.spec.ID, inst.spec.Common().PinnedReplica, s.candidates(inst.spec))
 	if preferred == "" || preferred == s.opts.ReplicaID {
 		inst.elsewhereSince = time.Time{}
 		return false
@@ -425,12 +518,25 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 			s.live = live
 			s.mu.Unlock()
 		}
+		if ll, ok := s.opts.Leaser.(ListenerLister); ok {
+			listeners, dedicated, err := ll.Listeners(ctx)
+			if err != nil {
+				s.logger.Warn("reconcile: listing listener replicas failed", zap.Error(err))
+			} else {
+				s.mu.Lock()
+				s.listeners, s.dedicated = listeners, dedicated
+				s.mu.Unlock()
+			}
+		}
 	}
 
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()
 		return
+	}
+	if s.opts.Leaser != nil {
+		s.noteUnplaced(desired)
 	}
 	var toStop []*instance
 	var handover []*instance
@@ -484,11 +590,11 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 				s.mu.Unlock()
 				continue
 			}
-			inst = &instance{spec: spec, state: registry.StateStarting, token: token}
+			inst = &instance{spec: spec, state: registry.StateStarting, token: token, listening: listens(spec)}
 			if s.opts.Leaser != nil {
 				// Start the handover clock when we take a feed another live
 				// replica should own (it did not claim it within a TTL).
-				if p := s.opts.Preferred(spec.ID, spec.Common().PinnedReplica, s.live); p != "" && p != s.opts.ReplicaID {
+				if p := s.opts.Preferred(spec.ID, spec.Common().PinnedReplica, s.candidates(spec)); p != "" && p != s.opts.ReplicaID {
 					inst.elsewhereSince = now
 				}
 			}
@@ -502,6 +608,41 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 		}
 		s.mu.Unlock()
 		s.startInstance(ctx, inst)
+	}
+}
+
+// noteUnplaced counts the enabled feeds without a pin that no live replica may
+// run, by reason, and sets the FeedsUnplaced gauge from the counts. The log
+// says when feeds start to lack a replica and when none do, not on every
+// reconcile. These feeds wait until a replica that can run them is live: a
+// listener never fails over for an ordinary feed. Call with s.mu held.
+func (s *Supervisor) noteUnplaced(desired map[string]registry.Feed) {
+	counts := map[string]int{}
+	ordinary := len(s.ordinary())
+	for _, spec := range desired {
+		switch {
+		case spec.Common().PinnedReplica != "":
+			// A pin runs the feed on that replica or on none.
+		case listens(spec):
+			if len(s.listeners) == 0 {
+				counts[unplacedNoListener]++
+			}
+		case ordinary == 0:
+			counts[unplacedNoOrdinaryReplica]++
+		}
+	}
+	for _, r := range unplacedReasons {
+		n, before := counts[r.reason], s.unplaced[r.reason]
+		s.unplaced[r.reason] = n
+		if s.metrics != nil {
+			s.metrics.FeedsUnplaced.WithLabelValues(r.reason).Set(float64(n))
+		}
+		switch {
+		case before == 0 && n > 0:
+			s.logger.Warn("feeds have no replica to run on", zap.String("reason", r.reason), zap.Int("feeds", n), zap.String("detail", r.detail))
+		case before > 0 && n == 0:
+			s.logger.Info("no feed is left without a replica to run on", zap.String("reason", r.reason))
+		}
 	}
 }
 
@@ -554,14 +695,15 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 		s.logger.Error("feed failed to start", zap.String("feed", spec.ID), zap.String("driver", spec.Driver), zap.Error(err), zap.Duration("retry_in", delay))
 	}
 
-	secrets, err := registry.ResolveSecrets(spec.SecretRefs, s.opts.Secrets)
+	secrets, err := s.opts.SecretPolicy.Resolve(spec.SecretRefs, s.opts.Secrets, nil)
 	if err != nil {
 		fail(err)
 		return
 	}
 	common := spec.Common()
 	logger := s.logger.With(zap.String("feed", spec.ID), zap.String("driver", spec.Driver))
-	deps := driver.Deps{Logger: logger, Shapes: s.opts.Shapes}
+	deps := driver.Deps{Logger: logger, Shapes: s.opts.Shapes, ListenerHost: s.opts.ListenerHost,
+		ReloadSecrets: s.secretReloader(spec), SecretReloadEvery: s.opts.SecretReloadEvery}
 	if s.opts.Density != nil {
 		deps.Density = s.opts.Density(spec.ID, common.Classification)
 	}
@@ -610,6 +752,18 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 
 	if _, aware := drv.(aoi.AreaAware); aware {
 		s.applyArea(ctx, spec.ID)
+	}
+}
+
+// secretReloader is how a running feed resolves its secret references again:
+// the same policy-checked resolver that started it, so a variable outside the
+// allowed names or a file outside the allowed folders (a link re-pointed there
+// included) is refused now as it would have been then, and a reference that no
+// longer resolves is an error, never an empty secret.
+func (s *Supervisor) secretReloader(spec registry.Feed) func() (map[string]string, error) {
+	refs := spec.SecretRefs
+	return func() (map[string]string, error) {
+		return s.opts.SecretPolicy.Resolve(refs, s.opts.Secrets, nil)
 	}
 }
 
@@ -695,6 +849,34 @@ func (s *Supervisor) AreaStatus(id string) (aoi.Status, bool) {
 		return aoi.Status{}, false
 	}
 	return aa.AreaStatus(), true
+}
+
+// ListenerStats lists the listening feeds this replica runs, each with the
+// health detail its driver reports now; the Prometheus listener collector
+// reads it on every scrape. A feed that is starting, failed or stopped is not
+// listed, so a series never describes a listener that is not there.
+//
+// s.mu is held only to copy what to ask. Health reads transport state under
+// locks of its own and stays safe on a driver stopped in the meantime, so it
+// is called after the unlock, and a scrape never holds up Reconcile.
+func (s *Supervisor) ListenerStats() []metrics.ListenerStat {
+	type listener struct {
+		id, driver string
+		drv        driver.Driver
+	}
+	var running []listener
+	s.mu.Lock()
+	for id, inst := range s.running {
+		if inst.listening && inst.state == registry.StateRunning && inst.runner != nil {
+			running = append(running, listener{id, inst.spec.Driver, inst.runner.Driver()})
+		}
+	}
+	s.mu.Unlock()
+	stats := make([]metrics.ListenerStat, len(running))
+	for i, l := range running {
+		stats[i] = metrics.ListenerStat{FeedID: l.id, Driver: l.driver, Detail: l.drv.Health().Detail}
+	}
+	return stats
 }
 
 // Running reports whether this replica runs the feed.
@@ -790,6 +972,16 @@ func (s *Supervisor) statusOf(inst *instance, now time.Time) registry.Status {
 	detail := map[string]any{}
 	for k, v := range health.Detail {
 		detail[k] = v
+	}
+	// Whichever driver the feed runs, the cause of the last undecodable payload
+	// is reported under lastDecodeError. The management API hides that text from
+	// callers not cleared for the feed and, when the status's last error is the
+	// same text, hides that too. Only the stream driver keeps a copy of its own,
+	// written a moment before the runner records the cause; the runner's is the
+	// one reported, because it was recorded together with LastError and so
+	// cannot differ from it.
+	if stats.LastDecodeError != "" {
+		detail["lastDecodeError"] = stats.LastDecodeError
 	}
 	if areaAware {
 		detail["idle"] = as.Idle

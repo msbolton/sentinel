@@ -7,6 +7,10 @@
 -- release. Column names are camelCase (quoted) where the Go stores use
 -- camelCase. Extensions (postgis, timescaledb, age) are enabled by
 -- config/postgres/init-extensions.sql at database initialisation.
+--
+-- The ingest service checks at startup that the columns it depends on exist
+-- and refuses to start without them: a column added below with ALTER TABLE
+-- must also be listed in apps/ingest-service/internal/registry/schema.go.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
@@ -70,6 +74,17 @@ CREATE TABLE IF NOT EXISTS sentinel.ingest_replicas (
   heartbeat_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   expires_at    TIMESTAMPTZ NOT NULL
 );
+
+-- A listener replica runs with the host's network and takes the
+-- connections that bind a port (TCP/UDP listeners); listener_host is the
+-- address senders use, shown in the send guide. listener_shared is true when
+-- the listener also takes its share of the ordinary feeds
+-- (INGEST_LISTENER_SHARED); otherwise it is dedicated and runs listening
+-- connections and the feeds pinned to it only. A row written by code that
+-- predates the column reads as dedicated.
+ALTER TABLE sentinel.ingest_replicas ADD COLUMN IF NOT EXISTS listener BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE sentinel.ingest_replicas ADD COLUMN IF NOT EXISTS listener_host TEXT;
+ALTER TABLE sentinel.ingest_replicas ADD COLUMN IF NOT EXISTS listener_shared BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS sentinel.feed_leases (
   feed_id        VARCHAR(64) PRIMARY KEY REFERENCES sentinel.feeds(id) ON DELETE CASCADE,

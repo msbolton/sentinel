@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 
@@ -35,13 +36,16 @@ type Info struct {
 	ID           string          `json:"id"`
 	Name         string          `json:"name"`
 	Description  string          `json:"description"`
-	Source       string          `json:"source"` // EntitySource label written on observations ("" when the decoder decides)
+	Source       string          `json:"source"`    // EntitySource label written on observations ("" when the decoder decides)
 	Direction    string          `json:"direction"` // in | out | both
 	Capabilities []string        `json:"capabilities"`
 	ConfigSchema json.RawMessage `json:"configSchema"`
 	// SecretFields are secret_refs keys the driver expects; they must never
 	// appear in config.
 	SecretFields []string `json:"secretFields"`
+	// OpaqueConfig and HeaderMaps scope the key-case rule (see driver.Definition).
+	OpaqueConfig []string `json:"-"`
+	HeaderMaps   []string `json:"-"`
 	// AreaTTL is how long a pushed area stays valid without a refresh.
 	AreaTTL time.Duration `json:"-"`
 }
@@ -122,7 +126,7 @@ func Build(defs []driver.Definition) (*Catalog, error) {
 		if err != nil {
 			return nil, fmt.Errorf("compiling %s schema: %w", d.ID, err)
 		}
-		info := Info{ID: d.ID, Name: d.Name, Description: d.Description, Source: d.Source, Direction: string(d.Direction.Normalize()), Capabilities: d.Capabilities, ConfigSchema: raw, SecretFields: d.SecretFields, AreaTTL: d.AreaTTL}
+		info := Info{ID: d.ID, Name: d.Name, Description: d.Description, Source: d.Source, Direction: string(d.Direction.Normalize()), Capabilities: d.Capabilities, ConfigSchema: raw, SecretFields: d.SecretFields, OpaqueConfig: d.OpaqueConfig, HeaderMaps: d.HeaderMaps, AreaTTL: d.AreaTTL}
 		if info.Capabilities == nil {
 			info.Capabilities = []string{}
 		}
@@ -175,15 +179,42 @@ func (c *Catalog) Validate(driverID string, config json.RawMessage) []Problem {
 	return problems
 }
 
+// flatten reduces a validation error tree to one Problem per leaf. A leaf
+// that names absent properties becomes one Problem per property, each at the
+// property's own pointer, so a form can put the message on the field.
 func flatten(ve *jsonschema.ValidationError, out *[]Problem) {
 	if len(ve.Causes) == 0 {
-		*out = append(*out, Problem{
-			Path:    "/config/" + strings.Join(ve.InstanceLocation, "/"),
-			Message: ve.ErrorKind.LocalizedString(printer),
-		})
+		at := "/config"
+		for _, segment := range ve.InstanceLocation {
+			at += "/" + pointerEscaper.Replace(segment)
+		}
+		if missing := missingProperties(ve.ErrorKind); len(missing) > 0 {
+			for _, name := range missing {
+				*out = append(*out, Problem{Path: at + "/" + pointerEscaper.Replace(name), Message: "is required"})
+			}
+			return
+		}
+		*out = append(*out, Problem{Path: at, Message: ve.ErrorKind.LocalizedString(printer)})
 		return
 	}
 	for _, cause := range ve.Causes {
 		flatten(cause, out)
 	}
+}
+
+// pointerEscaper escapes one JSON-pointer segment (RFC 6901).
+var pointerEscaper = strings.NewReplacer("~", "~0", "/", "~1")
+
+// missingProperties lists the properties an error says are absent: the ones
+// required, or required because another property is present.
+func missingProperties(k jsonschema.ErrorKind) []string {
+	switch k := k.(type) {
+	case *kind.Required:
+		return k.Missing
+	case *kind.DependentRequired:
+		return k.Missing
+	case *kind.Dependency:
+		return k.Missing
+	}
+	return nil
 }

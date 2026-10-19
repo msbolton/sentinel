@@ -1,8 +1,10 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
   computed,
   effect,
+  inject,
   input,
   output,
   signal,
@@ -19,8 +21,8 @@ import {
   Validators,
 } from '@angular/forms';
 import { Subscription } from 'rxjs';
-import { FeedProblem, JsonSchema } from '../../models/feed.model';
-import { COMMON_OPTIONS_SCHEMA } from './common-options';
+import { FeedProblem, JsonSchema, JsonType, SecretMeta } from '../../models/feed.model';
+import { COMMON_OPTION_KEYS, COMMON_OPTIONS_SCHEMA } from './common-options';
 
 /** What the form emits whenever anything changes. */
 export interface SchemaFormChange {
@@ -29,7 +31,34 @@ export interface SchemaFormChange {
   valid: boolean;
 }
 
-export type FieldKind = 'text' | 'url' | 'number' | 'boolean' | 'select' | 'const' | 'array' | 'group' | 'secret';
+/**
+ * A remark about one field from whoever hosts the form: a free port to take, a warning about an open listener.
+ * It is advice shown with the field's own messages, never an error, and it never decides whether the form is valid.
+ */
+export interface FieldHint {
+  /** JSON pointer of the field or group it is about; a hint for one that is hidden or not on the form is not shown. */
+  path: string;
+  message: string;
+  level?: 'info' | 'warn';
+  /** A button beside the message that puts `value` in the field and leaves the focus there. */
+  action?: { label: string; value: unknown };
+}
+
+export type FieldKind = 'text' | 'url' | 'number' | 'boolean' | 'select' | 'const' | 'array' | 'group' | 'secret' | 'json';
+
+/** The value at `path` (read from a group of the form) is one of `values`. */
+export interface Condition {
+  path: string[];
+  values: unknown[];
+}
+
+/** What a schema asks of a field, but only while every `when` condition holds. */
+export interface Rule {
+  when: Condition[];
+  required?: boolean;
+  minimum?: number;
+  maximum?: number;
+}
 
 /** One rendered field; groups carry their children. */
 export interface FieldDef {
@@ -49,11 +78,41 @@ export interface FieldDef {
   /** `default` of an enum, named in the empty option. */
   defaultLabel?: string;
   constValue?: unknown;
+  /** `json`: the schema takes a plain string as well as an object. */
+  allowString?: boolean;
+  /** `json` with `allowString`: the string the field started with, emitted as written while the text is unchanged. */
+  stored?: string;
   control?: FormControl;
   children?: FieldDef[];
+  /** `group`: stored keys the schema does not describe, kept as they are. */
+  extras?: Record<string, unknown>;
+  /** `x-showWhen`: shown only while every condition holds. */
+  showWhen?: Condition[];
+  /** Requirements that bind only while their conditions hold: `allOf` rules, a secret's `requiredWhen`. */
+  rules?: Rule[];
+  /**
+   * The group the conditions of `showWhen` and `rules` are read from: the one this field's control lives in
+   * (its siblings), or the config root for a secret, whose control lives apart.
+   */
+  parent?: FormGroup;
 }
 
-export const SECRET_REF_PATTERN = /^(env:[A-Z0-9_]+|file:\/\S+)$/;
+/** The shape of a reference, as the ingest service reads it: a name that starts with a letter, or an absolute path. */
+export const SECRET_REF_PATTERN = /^(env:[A-Z][A-Z0-9_]*|file:\/\S+)$/;
+
+/**
+ * The ingest service reads a reference only if its `INGEST_SECRET_ENV_ALLOW` allows the variable (by default
+ * `OPENSKY_*`, `AISSTREAM_*` and `SENTINEL_SECRET_*`) or `INGEST_SECRET_FILE_DIRS` the folder of the file (by
+ * default `/etc/sentinel`). The form cannot know those settings: it checks the shape of a reference, suggests names
+ * the defaults allow, and leaves the rest to the server, whose refusal is shown at the field.
+ */
+const SECRET_ENV_PREFIX = 'SENTINEL_SECRET_';
+
+/** What a secret field says when it holds something that is not a reference: what to enter, and who decides. */
+const SECRET_REF_ADVICE =
+  'Use a reference, never the value: by default env:SENTINEL_SECRET_… (OPENSKY_… and AISSTREAM_… names work too) or ' +
+  "file:/etc/sentinel/… for a mounted file. The server's INGEST_SECRET_ENV_ALLOW and INGEST_SECRET_FILE_DIRS decide " +
+  'which variables and folders are allowed.';
 
 /**
  * Builds a reactive form from a driver's JSON Schema. Driver options and
@@ -70,6 +129,8 @@ export const SECRET_REF_PATTERN = /^(env:[A-Z0-9_]+|file:\/\S+)$/;
   styleUrl: './schema-form.component.scss',
 })
 export class SchemaFormComponent {
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+
   readonly schema = input<JsonSchema | null | undefined>(undefined);
   readonly secretFields = input<string[]>([]);
   readonly value = input<Record<string, unknown>>({});
@@ -82,12 +143,16 @@ export class SchemaFormComponent {
    * the schema or the initial value says.
    */
   readonly externalKeys = input<string[]>([]);
+  /** Remarks from the parent about fields, shown under the field they name. */
+  readonly hints = input<FieldHint[]>([]);
 
   readonly changed = output<SchemaFormChange>();
 
   readonly driverFields = signal<FieldDef[]>([]);
   readonly advancedFields = signal<FieldDef[]>([]);
   readonly secretDefs = signal<FieldDef[]>([]);
+  /** Stored top-level keys the form has no field for, kept as they are. */
+  readonly extras = signal<Record<string, unknown>>({});
   readonly advancedOpen = signal(false);
   /** Bumped on every form change so OnPush templates re-read control state. */
   readonly tick = signal(0);
@@ -97,41 +162,43 @@ export class SchemaFormComponent {
   readonly configGroup = new FormGroup<Record<string, AbstractControl>>({});
   readonly secretGroup = new FormGroup<Record<string, AbstractControl>>({});
 
-  private readonly problemIndex = computed(() => {
-    const index = new Map<string, string[]>();
-    for (const p of this.problems()) {
-      const list = index.get(p.path) ?? [];
-      list.push(p.message);
-      index.set(p.path, list);
-    }
-    return index;
-  });
-
   /** Problems resolved to the field (or group) they belong to, else to the form. */
   private readonly resolvedProblems = computed(() => {
-    const pointers = this.allPointers();
+    const fields = this.fieldsByPointer();
     const byPointer = new Map<string, string[]>();
     const unmatched: FeedProblem[] = [];
     for (const problem of this.problems()) {
-      const target = this.resolvePointer(problem.path, pointers);
+      const target = this.resolvePointer(problem.path, fields);
       if (target === null) {
         unmatched.push(problem);
         continue;
       }
-      const list = byPointer.get(target) ?? [];
-      list.push(problem.message);
-      byPointer.set(target, list);
+      const list = byPointer.get(target.pointer) ?? [];
+      list.push(describeProblem(problem, target));
+      byPointer.set(target.pointer, list);
     }
     return { byPointer, unmatched };
   });
 
   readonly unmatchedProblems = computed(() => this.resolvedProblems().unmatched);
 
-  private readonly allPointers = computed(() => {
-    const out: string[] = [];
+  /** Hints by the pointer of the field they name. */
+  private readonly hintsByPointer = computed(() => {
+    const byPointer = new Map<string, FieldHint[]>();
+    for (const hint of this.hints() ?? []) {
+      const list = byPointer.get(hint.path) ?? [];
+      list.push(hint);
+      byPointer.set(hint.path, list);
+    }
+    return byPointer;
+  });
+
+  /** Every field and group on the form by its pointer. */
+  private readonly fieldsByPointer = computed(() => {
+    const out = new Map<string, FieldDef>();
     const walk = (defs: FieldDef[]) => {
       for (const def of defs) {
-        out.push(def.pointer);
+        out.set(def.pointer, def);
         if (def.children) {
           walk(def.children);
         }
@@ -142,6 +209,9 @@ export class SchemaFormComponent {
     walk(this.secretDefs());
     return out;
   });
+
+  /** Property schemas of each group built, so a `showWhen` sibling's default can be found. */
+  private readonly siblingSchemas = new WeakMap<FormGroup, Record<string, JsonSchema>>();
 
   private changeSub: Subscription | null = null;
 
@@ -168,23 +238,28 @@ export class SchemaFormComponent {
       });
     });
     effect(() => {
-      // Problems under the advanced section should be visible.
-      const index = this.problemIndex();
+      // A problem that lands on a field of the advanced section, in one of its groups too, opens the section:
+      // otherwise its message is out of sight.
+      const targets = [...this.resolvedProblems().byPointer.keys()];
       const advanced = this.advancedFields();
-      if (advanced.some((d) => index.has(d.pointer))) {
+      const inAdvanced = advanced.some((d) =>
+        targets.some((target) => target === d.pointer || target.startsWith(d.pointer + '/')),
+      );
+      if (inAdvanced) {
         untracked(() => this.advancedOpen.set(true));
       }
     });
   }
 
+  /** Hidden fields keep their controls but do not count: only the fields on show must be valid. */
   get valid(): boolean {
-    return this.configGroup.valid && this.secretGroup.valid;
+    return this.allValid([...this.driverFields(), ...this.advancedFields(), ...this.secretDefs()]);
   }
 
   /** Current snapshot, the same shape `changed` emits. */
   snapshot(): SchemaFormChange {
     return {
-      config: this.collect([...this.driverFields(), ...this.advancedFields()]),
+      config: { ...this.extras(), ...this.collect([...this.driverFields(), ...this.advancedFields()]) },
       secretRefs: this.collectSecrets(),
       valid: this.valid,
     };
@@ -222,10 +297,11 @@ export class SchemaFormComponent {
   errorsOf(def: FieldDef): string[] {
     this.tick();
     const control = def.control;
-    if (!control || !control.errors || !(control.touched || control.dirty || this.showAll())) {
+    if (!(control?.touched || control?.dirty || this.showAll())) {
       return [];
     }
-    return describeErrors(control.errors);
+    // a rule's minimum replaces the field's own, so a value out of both ranges gets one message
+    return describeErrors({ ...control?.errors, ...this.conditionalErrors(def) });
   }
 
   /** Server-side messages addressed to this field (or group). */
@@ -235,6 +311,84 @@ export class SchemaFormComponent {
 
   hasIssue(def: FieldDef): boolean {
     return this.errorsOf(def).length > 0 || this.problemsOf(def).length > 0;
+  }
+
+  /** The parent's hints for this field or group, by its exact pointer (so none for a field that is not shown). */
+  hintsOf(def: FieldDef): FieldHint[] {
+    return this.hintsByPointer().get(def.pointer) ?? [];
+  }
+
+  /** DOM id of a note under a field: its help text, a validation error, a server problem or a hint. */
+  noteId(def: FieldDef, kind: 'help' | 'error' | 'problem' | 'hint', index = 0): string {
+    return kind === 'help' ? `${def.id}__help` : `${def.id}__${kind}-${index}`;
+  }
+
+  /**
+   * What `aria-describedby` names for a field or group, so that a screen reader reads its help, its messages and
+   * its hints along with it: the notes under it, in the order they are shown.
+   */
+  describedBy(def: FieldDef): string | null {
+    const ids = [
+      ...(def.help ? [this.noteId(def, 'help')] : []),
+      ...this.errorsOf(def).map((_, i) => this.noteId(def, 'error', i)),
+      ...this.problemsOf(def).map((_, i) => this.noteId(def, 'problem', i)),
+      ...this.hintsOf(def).map((_, i) => this.noteId(def, 'hint', i)),
+    ];
+    return ids.length > 0 ? ids.join(' ') : null;
+  }
+
+  /**
+   * Puts the value a hint offers in its field as if the user had typed it: the field counts as edited, and the
+   * focus moves to it, because the button that was pressed goes with the hint once the field no longer needs it.
+   */
+  applyHint(def: FieldDef, hint: FieldHint): void {
+    const control = def.control;
+    if (!hint.action || !control || this.disabled()) {
+      return;
+    }
+    let value = hint.action.value;
+    if (def.kind === 'number') {
+      // a number field takes a number, whatever form the parent gave it in; what does not read as one is not applied
+      const parsed = numberOf(value);
+      if (parsed === null) {
+        return;
+      }
+      value = parsed;
+    }
+    control.setValue(value);
+    control.markAsDirty();
+    control.markAsTouched();
+    this.tick.update((n) => n + 1);
+    this.focusField(def);
+  }
+
+  /** Moves the focus to the control of a field, found by the id it is shown with. */
+  private focusField(def: FieldDef): void {
+    const shown = Array.from(this.host.nativeElement.querySelectorAll<HTMLElement>('[id]'));
+    shown.find((el) => el.id === def.id)?.focus();
+  }
+
+  /** The names of the stored keys a form or group keeps without showing them. */
+  extraKeys(extras: Record<string, unknown> | undefined): string[] {
+    return Object.keys(extras ?? {});
+  }
+
+  /** A field with `x-showWhen` is shown only while each of its conditions holds. */
+  isShown(def: FieldDef, siblings: FormGroup | undefined = def.parent): boolean {
+    this.tick(); // re-evaluate on every form change (OnPush)
+    return this.visible(def, siblings);
+  }
+
+  /** Whether a field is marked as required: outright, or by a rule whose conditions hold right now. */
+  isRequired(def: FieldDef): boolean {
+    this.tick(); // re-evaluate on every form change (OnPush)
+    return def.required || this.activeRules(def).some((rule) => rule.required);
+  }
+
+  /** Whether any secret is on show; while none is, the Credentials section has nothing to ask. */
+  hasVisibleSecrets(): boolean {
+    this.tick(); // re-evaluate on every form change (OnPush)
+    return this.secretDefs().some((def) => this.visible(def));
   }
 
   // ---------------------------------------------------------------------
@@ -267,12 +421,22 @@ export class SchemaFormComponent {
       }
     }
 
+    this.siblingSchemas.set(this.configGroup, { ...(COMMON_OPTIONS_SCHEMA.properties ?? {}), ...properties });
+
+    // What the schema, the common options, the parent and the secrets do not claim is kept as stored,
+    // unless the schema forbids keys of its own: the server would refuse them.
+    const claimed = new Set([...Object.keys(properties), ...COMMON_OPTION_KEYS, ...external, ...secretKeys]);
+    this.extras.set(schema.additionalProperties === false ? {} : undescribed(value, claimed));
+
+    const rules = rulesOf(schema);
     const driverDefs: FieldDef[] = [];
     for (const [key, prop] of Object.entries(properties)) {
       if (secretKeys.has(key) || external.has(key)) {
         continue;
       }
-      driverDefs.push(this.buildField(key, prop, required.has(key), value[key], this.configGroup, '/config', 'sf'));
+      driverDefs.push(
+        this.buildField(key, prop, required.has(key), value[key], this.configGroup, '/config', 'sf', rules.get(key)),
+      );
     }
 
     const advancedDefs: FieldDef[] = [];
@@ -284,25 +448,33 @@ export class SchemaFormComponent {
       advancedDefs.push(this.buildField(key, prop, false, value[key], this.configGroup, '/config', 'sf-adv'));
     }
 
+    // What the driver says about its secrets: a name and an example, and when each is shown and needed.
+    // The conditions are read from the config, whose root is where the secrets' paths start.
+    const secretMeta = isRecord(schema['x-secrets']) ? schema['x-secrets'] : {};
     const secretDefs: FieldDef[] = [];
     const orderedSecrets = [...secretFields, ...[...secretKeys].filter((k) => !secretFields.includes(k))];
     for (const key of orderedSecrets) {
       const prop = properties[key];
+      const meta: SecretMeta | undefined = secretMeta[key];
       const control = new FormControl<string>(secretRefs[key] ?? '', {
         nonNullable: true,
         validators: [Validators.pattern(SECRET_REF_PATTERN)],
       });
       this.secretGroup.addControl(key, control, { emitEvent: false });
+      const requiredWhen = conditionsOf(meta?.requiredWhen, true);
       secretDefs.push({
         key,
         id: `sf-secret-${key}`,
         pointer: `/secretRefs/${key}`,
         kind: 'secret',
-        label: prop?.title ?? humanize(key),
-        help: prop?.description,
-        placeholder: `env:${toEnvName(key)}`,
+        label: meta?.title ?? prop?.title ?? humanize(key),
+        help: meta?.description ?? prop?.description,
+        placeholder: meta?.examples?.[0] ?? `env:${SECRET_ENV_PREFIX}${toEnvName(key)}`,
         required: false,
+        showWhen: conditionsOf(meta?.showWhen, true),
+        rules: requiredWhen.length > 0 ? [{ when: requiredWhen, required: true }] : [],
         control,
+        parent: this.configGroup,
       });
     }
 
@@ -330,6 +502,7 @@ export class SchemaFormComponent {
     parent: FormGroup<Record<string, AbstractControl>>,
     parentPointer: string,
     idPrefix: string,
+    rules: Rule[] = [],
   ): FieldDef {
     const base = {
       key,
@@ -338,24 +511,70 @@ export class SchemaFormComponent {
       label: prop.title ?? humanize(key),
       help: prop.description,
       required,
+      showWhen: conditionsOf(prop['x-showWhen']),
+      rules,
+      parent,
     };
 
     if (prop.const !== undefined) {
       return { ...base, kind: 'const', constValue: prop.const };
     }
 
-    const type = prop.type ?? (prop.properties ? 'object' : prop.enum ? 'string' : 'string');
+    const types = typesOf(prop);
 
-    if (type === 'object') {
+    // A required key the value leaves out starts at its schema default: the server applies
+    // no default to a missing required key. A stored value always wins.
+    const start = initial === undefined && required && prop.default !== undefined ? prop.default : initial;
+
+    // An object with no properties (a field map, headers) has no fields to build: it is edited as
+    // JSON text. A schema that also takes a string keeps one as typed.
+    if (types.includes('object') && Object.keys(prop.properties ?? {}).length === 0) {
+      const allowString = types.includes('string');
+      const text = isRecord(start) ? JSON.stringify(start, null, 2) : allowString && typeof start === 'string' ? start : '';
+      // Blank text is no value, as in every other field; any other string is kept as it was written.
+      const stored = allowString && typeof start === 'string' && textOf(start) !== '' ? start : undefined;
+      const control = new FormControl<string>(text, {
+        nonNullable: true,
+        validators: [jsonValidator(required, allowString)],
+      });
+      parent.addControl(key, control, { emitEvent: false });
+      return {
+        ...base,
+        kind: 'json',
+        allowString,
+        stored,
+        placeholder: JSON.stringify(prop.examples?.[0], null, 2) ?? '{ "key": "value" }',
+        help: prop.description ? `${prop.description} JSON object.` : 'JSON object.',
+        control,
+      };
+    }
+
+    if (types.includes('object')) {
       const group = new FormGroup<Record<string, AbstractControl>>({});
       parent.addControl(key, group, { emitEvent: false });
+      this.siblingSchemas.set(group, prop.properties ?? {});
       const nestedRequired = new Set(prop.required ?? []);
       const nestedValue = isRecord(initial) ? initial : {};
+      const nestedRules = rulesOf(prop);
       const children = Object.entries(prop.properties ?? {}).map(([childKey, childProp]) =>
-        this.buildField(childKey, childProp, nestedRequired.has(childKey), nestedValue[childKey], group, base.pointer, base.id),
+        this.buildField(
+          childKey,
+          childProp,
+          nestedRequired.has(childKey),
+          nestedValue[childKey],
+          group,
+          base.pointer,
+          base.id,
+          nestedRules.get(childKey),
+        ),
       );
-      return { ...base, kind: 'group', children };
+      // Stored keys the group does not describe are kept, unless it forbids them.
+      const extras =
+        prop.additionalProperties === false ? {} : undescribed(nestedValue, new Set(Object.keys(prop.properties ?? {})));
+      return { ...base, kind: 'group', children, extras };
     }
+
+    const type = types[0];
 
     const validators: ValidatorFn[] = [];
     if (required) {
@@ -364,7 +583,7 @@ export class SchemaFormComponent {
 
     if (prop.enum) {
       const control = new FormControl<string | number | ''>(
-        isEnumValue(initial, prop.enum) ? initial : '',
+        isEnumValue(start, prop.enum) ? start : '',
         { nonNullable: true, validators },
       );
       parent.addControl(key, control, { emitEvent: false });
@@ -379,7 +598,7 @@ export class SchemaFormComponent {
 
     if (type === 'boolean') {
       const control = new FormControl<boolean>(
-        typeof initial === 'boolean' ? initial : prop.default === true,
+        typeof start === 'boolean' ? start : prop.default === true,
         { nonNullable: true },
       );
       parent.addControl(key, control, { emitEvent: false });
@@ -399,7 +618,7 @@ export class SchemaFormComponent {
       if (prop.exclusiveMinimum !== undefined) {
         validators.push(exclusiveMinValidator(prop.exclusiveMinimum));
       }
-      const control = new FormControl<number | null>(typeof initial === 'number' ? initial : null, validators);
+      const control = new FormControl<number | null>(typeof start === 'number' ? start : null, validators);
       parent.addControl(key, control, { emitEvent: false });
       return {
         ...base,
@@ -413,7 +632,7 @@ export class SchemaFormComponent {
     if (type === 'array') {
       const minItems = prop.minItems ?? 0;
       validators.push(arrayValidator(required, minItems));
-      const initialList = Array.isArray(initial) ? initial.map(String).join(', ') : '';
+      const initialList = Array.isArray(start) ? start.map(String).join(', ') : '';
       const control = new FormControl<string>(initialList, { nonNullable: true, validators });
       parent.addControl(key, control, { emitEvent: false });
       return {
@@ -432,7 +651,7 @@ export class SchemaFormComponent {
     if (prop.pattern) {
       validators.push(Validators.pattern(new RegExp(prop.pattern)));
     }
-    const control = new FormControl<string>(typeof initial === 'string' ? initial : '', {
+    const control = new FormControl<string>(typeof start === 'string' ? start : '', {
       nonNullable: true,
       validators,
     });
@@ -457,6 +676,9 @@ export class SchemaFormComponent {
   private collect(defs: FieldDef[]): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     for (const def of defs) {
+      if (!this.visible(def)) {
+        continue; // hidden: the control keeps its value, the config leaves it out
+      }
       const v = this.valueOf(def);
       if (v !== undefined) {
         out[def.key] = v;
@@ -470,8 +692,24 @@ export class SchemaFormComponent {
       case 'const':
         return def.constValue;
       case 'group': {
-        const nested = this.collect(def.children ?? []);
+        const nested = { ...def.extras, ...this.collect(def.children ?? []) };
         return Object.keys(nested).length > 0 ? nested : undefined;
+      }
+      case 'json': {
+        // A stored string is not parsed or trimmed until the user changes it: a driver may send a string as
+        // it is but compact an object (httpjson does), and parsing rounds integers a number cannot hold.
+        if (def.stored !== undefined && def.control?.value === def.stored) {
+          return def.stored;
+        }
+        const text = textOf(def.control?.value);
+        if (text === '') {
+          return undefined;
+        }
+        const parsed = parseJson(text);
+        if (isRecord(parsed)) {
+          return Object.keys(parsed).length > 0 ? parsed : undefined;
+        }
+        return def.allowString ? text : undefined;
       }
       case 'boolean':
         return def.control?.value === true;
@@ -500,6 +738,9 @@ export class SchemaFormComponent {
   private collectSecrets(): Record<string, string> {
     const out: Record<string, string> = {};
     for (const def of this.secretDefs()) {
+      if (!this.visible(def)) {
+        continue; // hidden: the control keeps its value, the refs leave it out
+      }
       const v = (def.control?.value ?? '').trim();
       if (v !== '') {
         out[def.key] = v;
@@ -509,18 +750,90 @@ export class SchemaFormComponent {
   }
 
   private allValid(defs: FieldDef[]): boolean {
-    return defs.every((d) => (d.control ? d.control.valid : true) && this.allValid(d.children ?? []));
+    return defs.every(
+      (d) =>
+        !this.visible(d) ||
+        ((d.control ? d.control.valid : true) && !this.conditionalErrors(d) && this.allValid(d.children ?? [])),
+    );
+  }
+
+  /** `isShown` without the signal read, for code that must not track `tick`. */
+  private visible(def: FieldDef, siblings: FormGroup | undefined = def.parent): boolean {
+    if (!def.showWhen || !siblings) {
+      return true;
+    }
+    return def.showWhen.every((cond) => this.matches(cond, siblings));
+  }
+
+  /** The rules of a field whose conditions all hold right now. */
+  private activeRules(def: FieldDef): Rule[] {
+    const base = def.parent;
+    return base ? (def.rules ?? []).filter((rule) => rule.when.every((cond) => this.matches(cond, base))) : [];
+  }
+
+  /** What the rules in force find wrong with a field, in the shape of the validators' errors. */
+  private conditionalErrors(def: FieldDef): ValidationErrors | null {
+    const rules = this.activeRules(def);
+    if (rules.length === 0) {
+      return null;
+    }
+    const errors: ValidationErrors = {};
+    // a field with an error of its own (JSON that does not parse, say) is not reported as missing as well
+    if (rules.some((rule) => rule.required) && !def.control?.errors && this.isEmpty(def)) {
+      errors['required'] = true;
+    }
+    const value = def.control?.value;
+    if (def.kind === 'number' && typeof value === 'number' && !Number.isNaN(value)) {
+      // with no bound at all these are -Infinity and Infinity, which nothing falls outside
+      const min = Math.max(...rules.flatMap((rule) => (rule.minimum === undefined ? [] : [rule.minimum])));
+      const max = Math.min(...rules.flatMap((rule) => (rule.maximum === undefined ? [] : [rule.maximum])));
+      if (value < min) {
+        errors['min'] = { min, actual: value };
+      }
+      if (value > max) {
+        errors['max'] = { max, actual: value };
+      }
+    }
+    return Object.keys(errors).length > 0 ? errors : null;
+  }
+
+  /** Whether a field leaves nothing behind in the config (a secret: in secretRefs). */
+  private isEmpty(def: FieldDef): boolean {
+    return def.kind === 'secret' ? textOf(def.control?.value) === '' : this.valueOf(def) === undefined;
+  }
+
+  /**
+   * Whether the value at the condition's path, read from `base`, is one of its values. A value left empty
+   * counts as the default of its field, if the schema gives one.
+   */
+  private matches(cond: Condition, base: FormGroup): boolean {
+    let current: unknown = base.get(cond.path)?.value;
+    if (typeof current === 'string') {
+      current = current.trim();
+    }
+    if (current === '' || current === null || current === undefined) {
+      const holder = cond.path.length > 1 ? base.get(cond.path.slice(0, -1)) : base;
+      current = holder instanceof FormGroup ? this.defaultOf(holder, cond.path[cond.path.length - 1]) : undefined;
+    }
+    return cond.values.includes(current);
+  }
+
+  /** What an empty field counts as: its schema's `const`, else its `default`. */
+  private defaultOf(group: FormGroup, key: string): unknown {
+    const prop = this.siblingSchemas.get(group)?.[key];
+    return prop?.const !== undefined ? prop.const : prop?.default;
   }
 
   /** Exact pointer, else the longest field pointer the problem sits under. */
-  private resolvePointer(path: string, pointers: string[]): string | null {
-    if (pointers.includes(path)) {
-      return path;
+  private resolvePointer(path: string, fields: ReadonlyMap<string, FieldDef>): FieldDef | null {
+    const exact = fields.get(path);
+    if (exact) {
+      return exact;
     }
-    let best: string | null = null;
-    for (const p of pointers) {
-      if (path.startsWith(p + '/') && (best === null || p.length > best.length)) {
-        best = p;
+    let best: FieldDef | null = null;
+    for (const def of fields.values()) {
+      if (path.startsWith(def.pointer + '/') && (best === null || def.pointer.length > best.pointer.length)) {
+        best = def;
       }
     }
     return best;
@@ -543,8 +856,120 @@ function toEnvName(key: string): string {
     .toUpperCase();
 }
 
+/**
+ * Reads `{ key: value | [values] }` as conditions that must all hold: the `x-showWhen` of a field, whose
+ * keys are its siblings, or with `nested` the `showWhen` and `requiredWhen` of a secret, whose keys are
+ * slash-separated paths from the config root (`tls/enabled`).
+ */
+function conditionsOf(when: unknown, nested = false): Condition[] {
+  if (!isRecord(when)) {
+    return [];
+  }
+  return Object.entries(when).map(([key, value]) => ({
+    path: nested ? key.split('/') : [key],
+    values: Array.isArray(value) ? value : [value],
+  }));
+}
+
+/**
+ * The conditional requirements an object schema states in its `allOf`, by the property they bind. The
+ * form reads entries shaped `{ if: { properties: { k: { const | enum } } }, then: { required: [...],
+ * properties: { p: { minimum, maximum } } } }` and nothing else of them; what it cannot read is left to
+ * the server, which checks every rule.
+ */
+function rulesOf(schema: JsonSchema): Map<string, Rule[]> {
+  const rules = new Map<string, Rule[]>();
+  for (const entry of Array.isArray(schema.allOf) ? schema.allOf : []) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const when = conditionOfIf(entry.if);
+    const then = entry.then;
+    if (!when || !isRecord(then)) {
+      continue;
+    }
+    const required = Array.isArray(then.required) ? then.required : [];
+    const limits = isRecord(then.properties) ? then.properties : {};
+    for (const key of new Set([...required, ...Object.keys(limits)])) {
+      const bounds = limits[key];
+      const rule: Rule = { when: [when] };
+      if (required.includes(key)) {
+        rule.required = true;
+      }
+      if (isRecord(bounds) && typeof bounds.minimum === 'number') {
+        rule.minimum = bounds.minimum;
+      }
+      if (isRecord(bounds) && typeof bounds.maximum === 'number') {
+        rule.maximum = bounds.maximum;
+      }
+      if (rule.required || rule.minimum !== undefined || rule.maximum !== undefined) {
+        rules.set(key, [...(rules.get(key) ?? []), rule]);
+      }
+    }
+  }
+  return rules;
+}
+
+/**
+ * The one condition an `if` states: a single property tested against a `const` or an `enum`, with at most
+ * a `required` that names that property. An `if` that says anything more is not one the form can read, and
+ * guessing at it would ask for fields the server does not.
+ */
+function conditionOfIf(test: unknown): Condition | undefined {
+  if (!isRecord(test) || !isRecord(test.properties)) {
+    return undefined;
+  }
+  // any other keyword changes what the if means
+  if (Object.keys(test).some((keyword) => keyword !== 'properties' && keyword !== 'required')) {
+    return undefined;
+  }
+  const tested = Object.entries(test.properties);
+  if (tested.length !== 1) {
+    return undefined;
+  }
+  const [key, prop] = tested[0];
+  const presence = test.required ?? [];
+  if (!Array.isArray(presence) || presence.some((name) => name !== key) || !isRecord(prop)) {
+    return undefined;
+  }
+  if (prop.const !== undefined) {
+    return { path: [key], values: [prop.const] };
+  }
+  return Array.isArray(prop.enum) ? { path: [key], values: prop.enum } : undefined;
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** `type` as a list: a schema names one type or several, and none means an object with properties, else a string. */
+function typesOf(prop: JsonSchema): JsonType[] {
+  return Array.isArray(prop.type) ? prop.type : [prop.type ?? (prop.properties ? 'object' : 'string')];
+}
+
+/** The entries of `value` whose keys are not in `known`. */
+function undescribed(value: Record<string, unknown>, known: ReadonlySet<string>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !known.has(key)));
+}
+
+/** `v` as a number, if it is one or is text that reads as one. */
+function numberOf(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+/** The trimmed text of a text control's value. */
+function textOf(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+/** `text` parsed as JSON, or `undefined` when it is not JSON (a parse never yields `undefined`). */
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
 }
 
 function isEnumValue(v: unknown, options: Array<string | number>): v is string | number {
@@ -576,6 +1001,24 @@ function exclusiveMinValidator(min: number): ValidatorFn {
       return null;
     }
     return typeof v === 'number' && v > min ? null : { exclusiveMinimum: { min, actual: v } };
+  };
+}
+
+/** A JSON field holds one object. Where a string is allowed too, any other text is that string. */
+function jsonValidator(required: boolean, allowString: boolean): ValidatorFn {
+  return (control) => {
+    const text = textOf(control.value);
+    if (text === '') {
+      return required ? { required: true } : null;
+    }
+    if (allowString) {
+      return null;
+    }
+    const parsed = parseJson(text);
+    if (parsed === undefined) {
+      return { json: true };
+    }
+    return isRecord(parsed) ? null : { jsonObject: true };
   };
 }
 
@@ -614,10 +1057,16 @@ function describeErrors(errors: ValidationErrors): string[] {
       case 'integer':
         out.push('Must be a whole number.');
         break;
+      case 'json':
+        out.push('Not valid JSON.');
+        break;
+      case 'jsonObject':
+        out.push('Must be a JSON object, like {"key": "value"}.');
+        break;
       case 'pattern':
         out.push(
           detail.requiredPattern === SECRET_REF_PATTERN.toString()
-            ? 'Use a reference like env:MY_SECRET or file:/etc/sentinel/secret, never the value.'
+            ? SECRET_REF_ADVICE
             : 'Does not match the required format.',
         );
         break;
@@ -626,4 +1075,22 @@ function describeErrors(errors: ValidationErrors): string[] {
     }
   }
   return out;
+}
+
+/**
+ * What a server problem reads as on the field it is shown on. The server reports a problem at the pointer of
+ * the property it is about, so below an object (a JSON field, a group) the rest of the pointer names that
+ * property. A list is one control, and a problem at the field itself needs no naming.
+ */
+function describeProblem(problem: FeedProblem, target: FieldDef): string {
+  if (problem.path === target.pointer || (target.kind !== 'json' && target.kind !== 'group')) {
+    return problem.message;
+  }
+  const rest = problem.path.slice(target.pointer.length + 1).split('/').map(unescapeSegment).join('/');
+  return `${rest}: ${problem.message}`;
+}
+
+/** A JSON Pointer segment as the key it stands for: `~1` is read before `~0`, so `~01` is `~1` and not `/`. */
+function unescapeSegment(segment: string): string {
+  return segment.replace(/~1/g, '/').replace(/~0/g, '~');
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/sentinel/ingest-service/internal/aoi"
+	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/registry"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 )
@@ -114,7 +117,7 @@ func feedSpec(id string, version int, enabled bool) registry.Feed {
 }
 
 func newSupervisor(reg *fakeRegistry, factory func(driver.Spec) (driver.Driver, error)) *Supervisor {
-	return New(reg, &memPublisher{}, zap.NewNop(), nil, Options{
+	return New(reg, &memPublisher{}, zap.NewNop(), metrics.New(nil), Options{
 		ReplicaID: "r1", RetryMin: 10 * time.Millisecond, RetryMax: 20 * time.Millisecond,
 		Factory: func(spec driver.Spec, _ driver.Deps) (driver.Driver, error) { return factory(spec) },
 	})
@@ -169,6 +172,28 @@ func TestReconcileStartsStopsAndRestartsOnVersion(t *testing.T) {
 	sup.Reconcile(ctx)
 	if sup.Running("a") || built[1].stopped.Load() != 1 || reg.status("a").State != registry.StateStopped {
 		t.Fatalf("disable: running=%v stopped=%d status=%+v", sup.Running("a"), built[1].stopped.Load(), reg.status("a"))
+	}
+}
+
+// Metrics are optional: a supervisor built without them still starts a feed
+// and stops it when it loses the lease.
+func TestSupervisorRunsWithoutMetrics(t *testing.T) {
+	reg := newFakeRegistry()
+	reg.set(feedSpec("a", 1, true))
+	l := newFakeLeaser("r1")
+	sup := New(reg, &memPublisher{}, zap.NewNop(), nil, Options{
+		ReplicaID: "r1", Leaser: &replicaLeaser{fakeLeaser: l, me: "r1"}, Preferred: preferAlways("r1"),
+		Factory: func(driver.Spec, driver.Deps) (driver.Driver, error) { return newMockDriver(), nil },
+	})
+	ctx := context.Background()
+	sup.Reconcile(ctx)
+	if !sup.Running("a") {
+		t.Fatal("feed should run without metrics")
+	}
+	l.steal("a", "r9")
+	sup.Reconcile(ctx)
+	if sup.Running("a") {
+		t.Fatal("a lost lease must stop the feed without metrics")
 	}
 }
 
@@ -288,5 +313,248 @@ func TestRunStopsEverythingOnCancel(t *testing.T) {
 	<-done
 	if d.stopped.Load() != 1 || len(reg.released) != 1 || reg.status("a").State != registry.StateStopped {
 		t.Errorf("shutdown: stopped=%d released=%v status=%+v", d.stopped.Load(), reg.released, reg.status("a"))
+	}
+}
+
+// detailOf reads the detail of a status.
+func detailOf(t *testing.T, st registry.Status) map[string]any {
+	t.Helper()
+	var detail map[string]any
+	if err := json.Unmarshal(st.Detail, &detail); err != nil {
+		t.Fatalf("detail %s: %v", st.Detail, err)
+	}
+	return detail
+}
+
+// The management API hides the text of a decoder's error from callers not
+// cleared for the feed, and finds it under detail.lastDecodeError. When that
+// text is also the status's last error, the two must be the same text whatever
+// driver the feed runs: only the stream driver reports the key itself, so the
+// supervisor writes it from the runner's record of the dead letter.
+func TestStatusNamesTheDecodeErrorWhateverTheDriver(t *testing.T) {
+	const decodeText = `omm json: invalid character '<' looking for beginning of value`
+	deadLetters := func(ctx context.Context, sink driver.Sink) error {
+		sink.DeadLetter([]byte("<html>"), "parse_error", errors.New(decodeText))
+		<-ctx.Done()
+		return nil
+	}
+	for _, tc := range []struct {
+		name         string
+		drv          *scriptedDriver
+		wantLast     string // the status's last error
+		wantDecode   string // detail.lastDecodeError, "" for none
+		decodeAbsent bool
+	}{
+		{
+			name:       "a driver that reports nothing of it",
+			drv:        &scriptedDriver{run: deadLetters, health: driver.Health{Detail: map[string]any{"polls": 3}}},
+			wantLast:   decodeText,
+			wantDecode: decodeText,
+		},
+		{
+			// The stream driver keeps its own copy, written a moment before the
+			// runner's; the status says what the runner recorded with its last
+			// error, so that the two cannot differ.
+			name:       "a driver that reports its own text for it",
+			drv:        &scriptedDriver{run: deadLetters, health: driver.Health{Detail: map[string]any{"lastDecodeError": "the driver's own, newer text"}}},
+			wantLast:   decodeText,
+			wantDecode: decodeText,
+		},
+		{
+			name: "a connection error and no decode error",
+			drv: &scriptedDriver{
+				run:    func(ctx context.Context, _ driver.Sink) error { <-ctx.Done(); return nil },
+				health: driver.Health{LastError: "dial tcp 10.0.0.9:4001: connect: connection refused"},
+			},
+			wantLast:     "dial tcp 10.0.0.9:4001: connect: connection refused",
+			decodeAbsent: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := newFakeRegistry()
+			sup := newSupervisor(reg, func(driver.Spec) (driver.Driver, error) { return tc.drv, nil })
+			t.Cleanup(sup.shutdown)
+			ctx := context.Background()
+			reg.set(feedSpec("a", 1, true))
+			sup.Reconcile(ctx)
+			if !waitFor(func() bool { st, _ := sup.Snapshot("a"); return st.LastError != "" }, 2*time.Second) {
+				st, _ := sup.Snapshot("a")
+				t.Fatalf("no last error in %+v", st)
+			}
+			st, _ := sup.Snapshot("a")
+			detail := detailOf(t, st)
+			got, has := detail["lastDecodeError"]
+			if st.LastError != tc.wantLast || (tc.decodeAbsent && has) || (!tc.decodeAbsent && got != tc.wantDecode) {
+				t.Errorf("last error %q, detail.lastDecodeError %v (present %v); want %q and %q (absent %v)", st.LastError, got, has, tc.wantLast, tc.wantDecode, tc.decodeAbsent)
+			}
+			// What the replica stores for the others to read says the same.
+			sup.flushStatus(ctx)
+			row := reg.status("a")
+			if row.LastError != st.LastError || detailOf(t, row)["lastDecodeError"] != detail["lastDecodeError"] {
+				t.Errorf("stored status: last error %q, detail.lastDecodeError %v; the snapshot has %q and %v", row.LastError, detailOf(t, row)["lastDecodeError"], st.LastError, detail["lastDecodeError"])
+			}
+		})
+	}
+}
+
+// A feed that stops with an error shows that error, not a decode error that
+// came before it, and an instance that is not running carries no decode text.
+func TestStatusOfAFailedFeedIsNotADecodeError(t *testing.T) {
+	reg := newFakeRegistry()
+	sup := newSupervisor(reg, func(driver.Spec) (driver.Driver, error) {
+		return &scriptedDriver{run: func(_ context.Context, sink driver.Sink) error {
+			sink.DeadLetter([]byte("x"), "parse_error", errors.New("bad json"))
+			return errors.New("listen tcp :6001: address already in use")
+		}}, nil
+	})
+	t.Cleanup(sup.shutdown)
+	reg.set(feedSpec("a", 1, true))
+	sup.Reconcile(context.Background())
+	if !waitFor(func() bool { st, _ := sup.Snapshot("a"); return st.State == registry.StateError }, 2*time.Second) {
+		st, _ := sup.Snapshot("a")
+		t.Fatalf("the failure was not noticed: %+v", st)
+	}
+	st, _ := sup.Snapshot("a")
+	if st.LastError != "listen tcp :6001: address already in use" {
+		t.Errorf("last error = %q, want the failure that stopped the feed", st.LastError)
+	}
+	if _, has := detailOf(t, st)["lastDecodeError"]; has {
+		t.Errorf("detail = %s: a feed that is not running reports a decode error", st.Detail)
+	}
+}
+
+// A secret reference outside the policy stops the feed from starting, with an
+// error that names the variable, and the driver is never built; one inside it
+// starts as before.
+func TestStartRefusesASecretOutsideThePolicy(t *testing.T) {
+	built := make(chan driver.Spec, 4)
+	reg := newFakeRegistry()
+	sup := New(reg, &memPublisher{}, zap.NewNop(), metrics.New(nil), Options{
+		ReplicaID: "r1", RetryMin: 10 * time.Millisecond, RetryMax: 20 * time.Millisecond,
+		SecretPolicy: registry.SecretPolicy{EnvAllow: []string{"OPENSKY_*"}, FileDirs: []string{"/etc/sentinel"}},
+		Secrets:      func(name string) (string, bool) { return "v-" + name, true },
+		Factory: func(spec driver.Spec, _ driver.Deps) (driver.Driver, error) {
+			built <- spec
+			return newMockDriver(), nil
+		},
+	})
+	t.Cleanup(sup.shutdown)
+
+	bad := feedSpec("bad", 1, true)
+	bad.SecretRefs = map[string]string{"apiKey": "env:DATABASE_URL"}
+	good := feedSpec("good", 1, true)
+	good.SecretRefs = map[string]string{"apiKey": "env:OPENSKY_CLIENT_ID"}
+	reg.set(bad, good)
+	sup.Reconcile(context.Background())
+
+	if !waitFor(func() bool { st, _ := sup.Snapshot("bad"); return st.State == registry.StateError }, 2*time.Second) {
+		st, _ := sup.Snapshot("bad")
+		t.Fatalf("bad feed state %q, want error", st.State)
+	}
+	st, _ := sup.Snapshot("bad")
+	if !strings.Contains(st.LastError, "DATABASE_URL") || !strings.Contains(st.LastError, "INGEST_SECRET_ENV_ALLOW") {
+		t.Errorf("last error %q", st.LastError)
+	}
+	if !waitFor(func() bool { st, _ := sup.Snapshot("good"); return st.State == registry.StateRunning }, 2*time.Second) {
+		st, _ := sup.Snapshot("good")
+		t.Fatalf("good feed state %q (%s)", st.State, st.LastError)
+	}
+	close(built)
+	for spec := range built {
+		if spec.FeedID == "bad" {
+			t.Error("the driver of a refused feed was built")
+		}
+		if spec.FeedID == "good" && spec.Secrets["apiKey"] != "v-OPENSKY_CLIENT_ID" {
+			t.Errorf("good secrets %v", spec.Secrets)
+		}
+	}
+}
+
+// A driver is handed a function that resolves its secret references again,
+// under the same policy that checked them at start, and how often to call it.
+func TestStartInstancePassesSecretReloader(t *testing.T) {
+	type got struct {
+		spec driver.Spec
+		deps driver.Deps
+	}
+	built := make(chan got, 4)
+	var version atomic.Int64
+	version.Store(1)
+	reg := newFakeRegistry()
+	sup := New(reg, &memPublisher{}, zap.NewNop(), metrics.New(nil), Options{
+		ReplicaID: "r1", RetryMin: 10 * time.Millisecond, RetryMax: 20 * time.Millisecond,
+		SecretPolicy:      registry.SecretPolicy{EnvAllow: []string{"OPENSKY_*"}, FileDirs: []string{"/etc/sentinel"}},
+		SecretReloadEvery: 45 * time.Second,
+		Secrets: func(name string) (string, bool) {
+			return "v" + strconv.FormatInt(version.Load(), 10) + "-" + name, true
+		},
+		Factory: func(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
+			built <- got{spec, deps}
+			return newMockDriver(), nil
+		},
+	})
+	t.Cleanup(sup.shutdown)
+	f := feedSpec("a", 1, true)
+	f.SecretRefs = map[string]string{"apiKey": "env:OPENSKY_CLIENT_ID"}
+	reg.set(f)
+	sup.Reconcile(context.Background())
+
+	var g got
+	select {
+	case g = <-built:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the driver was not built")
+	}
+	if g.deps.SecretReloadEvery != 45*time.Second {
+		t.Errorf("SecretReloadEvery = %v, want 45s", g.deps.SecretReloadEvery)
+	}
+	if g.deps.ReloadSecrets == nil {
+		t.Fatal("the driver got no secret reloader")
+	}
+	if g.spec.Secrets["apiKey"] != "v1-OPENSKY_CLIENT_ID" {
+		t.Fatalf("secrets at start: %v", g.spec.Secrets)
+	}
+	version.Store(2) // the secret was rotated
+	again, err := g.deps.ReloadSecrets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again["apiKey"] != "v2-OPENSKY_CLIENT_ID" {
+		t.Errorf("reloaded secrets = %v, want the rotated value", again)
+	}
+}
+
+// The reloader enforces the policy as the start does: a reference outside it,
+// or a file that cannot be read now, is an error, never an empty secret.
+func TestSecretReloaderFollowsThePolicy(t *testing.T) {
+	built := make(chan driver.Deps, 2)
+	reg := newFakeRegistry()
+	sup := New(reg, &memPublisher{}, zap.NewNop(), metrics.New(nil), Options{
+		ReplicaID: "r1", RetryMin: 10 * time.Millisecond, RetryMax: 20 * time.Millisecond,
+		SecretPolicy: registry.SecretPolicy{EnvAllow: []string{"OPENSKY_*"}, FileDirs: []string{"/etc/sentinel"}},
+		Secrets: func(name string) (string, bool) {
+			if name == "OPENSKY_GONE" {
+				return "", false
+			}
+			return "v", true
+		},
+		Factory: func(_ driver.Spec, deps driver.Deps) (driver.Driver, error) {
+			built <- deps
+			return newMockDriver(), nil
+		},
+	})
+	t.Cleanup(sup.shutdown)
+	f := feedSpec("a", 1, true)
+	f.SecretRefs = map[string]string{"apiKey": "env:OPENSKY_GONE"}
+	reg.set(f)
+	// Not resolvable at start, so no driver is built: the reloader cannot be asked
+	// from a driver. Ask the supervisor's own function the way startInstance builds it.
+	reload := sup.secretReloader(f)
+	if _, err := reload(); err == nil || !strings.Contains(err.Error(), "OPENSKY_GONE") {
+		t.Errorf("reload of an unset variable: err = %v, want one naming it", err)
+	}
+	f.SecretRefs = map[string]string{"apiKey": "env:DATABASE_URL"}
+	if _, err := sup.secretReloader(f)(); err == nil || !strings.Contains(err.Error(), "DATABASE_URL") {
+		t.Errorf("reload of a reference outside the policy: err = %v, want one naming the variable", err)
 	}
 }

@@ -14,6 +14,7 @@ import (
 const (
 	Line         = "line"         // newline-delimited text; CR and LF stripped, blank lines dropped by the scanner
 	LengthPrefix = "lengthprefix" // 2-byte big-endian length then payload
+	Delimited    = "delimited"    // protobuf varint length then payload (writeDelimitedTo, protodelim)
 	Beast        = "beast"        // Mode-S Beast binary: 0x1a-escaped frames
 	XMLEvent     = "xmlevent"     // Cursor-on-Target: one <event>...</event> per frame
 	Message      = "message"      // message transports: no framing
@@ -29,6 +30,8 @@ func New(name string, maxFrame int) (bufio.SplitFunc, error) {
 		return lineSplit, nil
 	case LengthPrefix:
 		return lengthPrefixSplit(maxFrame), nil
+	case Delimited:
+		return delimitedSplit(maxFrame), nil
 	case Beast:
 		return beastSplit, nil
 	case XMLEvent:
@@ -42,7 +45,7 @@ func New(name string, maxFrame int) (bufio.SplitFunc, error) {
 // Known reports whether name is a framer name (including "message").
 func Known(name string) bool {
 	switch name {
-	case "", Line, LengthPrefix, Beast, XMLEvent, Message:
+	case "", Line, LengthPrefix, Delimited, Beast, XMLEvent, Message:
 		return true
 	}
 	return false
@@ -76,6 +79,43 @@ func lengthPrefixSplit(maxFrame int) bufio.SplitFunc {
 			return 0, nil, nil
 		}
 		return 2 + n, data[2 : 2+n], nil
+	}
+}
+
+// delimitedSplit frames length-delimited protobuf: an unsigned varint
+// length, then that many bytes. A length over maxFrame or a varint longer
+// than ten bytes is an error, so a hostile prefix cannot force an
+// allocation.
+func delimitedSplit(maxFrame int) bufio.SplitFunc {
+	return func(data []byte, atEOF bool) (int, []byte, error) {
+		if len(data) == 0 {
+			return 0, nil, nil
+		}
+		n, size := binary.Uvarint(data)
+		if size < 0 {
+			return 0, nil, errors.New("malformed length varint")
+		}
+		if size == 0 { // the varint continues past the data we have
+			if len(data) >= binary.MaxVarintLen64 {
+				return 0, nil, errors.New("malformed length varint")
+			}
+			if atEOF {
+				return 0, nil, errors.New("truncated length prefix")
+			}
+			return 0, nil, nil
+		}
+		if maxFrame > 0 && n > uint64(maxFrame) {
+			return 0, nil, ErrFrameTooLong
+		}
+		// Compare before converting: an unbounded n can exceed int.
+		if n > uint64(len(data)-size) {
+			if atEOF {
+				return 0, nil, errors.New("truncated frame")
+			}
+			return 0, nil, nil
+		}
+		total := size + int(n)
+		return total, data[size:total], nil
 	}
 }
 

@@ -19,7 +19,7 @@
     "protocol": { "type": "string", "enum": ["xml"], "default": "xml", "title": "Wire protocol", "description": "XML CoT; TAK Protocol (protobuf) negotiation is not offered yet." },
     "heartbeatSec": { "type": "integer", "minimum": 5, "default": 30, "title": "Heartbeat (s)", "description": "Interval of the t-x-c-t ping that keeps the session alive." },
     "readTimeoutSec": { "type": "integer", "minimum": 0, "default": 75, "title": "Read timeout (s)", "description": "Close and reconnect when nothing arrives for this long (0 = never)." },
-    "maxFrameBytes": { "type": "integer", "minimum": 1024, "default": 1048576, "title": "Max event size (bytes)" },
+    "maxFrameBytes": { "type": "integer", "minimum": 1024, "maximum": 16777216, "default": 1048576, "title": "Max event size (bytes)" },
     "tracks": {
       "type": "object", "title": "Tracks", "additionalProperties": false,
       "properties": {
@@ -43,5 +43,10 @@
         "fillColor": { "type": "integer", "default": 1090453504, "title": "Fill colour (ARGB)" }
       }
     }
+  },
+  "x-secrets": {
+    "clientCert": { "title": "Client certificate (PEM)", "description": "The certificate Sentinel presents to the TAK Server; its TLS streaming port (usually 8089) asks for one. Give the client key with it.", "examples": ["file:/etc/sentinel/tak/client.pem"], "showWhen": { "tls/enabled": true } },
+    "clientKey": { "title": "Client private key (PEM)", "description": "The key of the client certificate. Give the certificate with it.", "examples": ["file:/etc/sentinel/tak/client.key"], "showWhen": { "tls/enabled": true } },
+    "caCert": { "title": "Server CA (PEM)", "description": "Signs the TAK Server's certificate; empty trusts the system roots.", "examples": ["file:/etc/sentinel/tak/ca.pem"], "showWhen": { "tls/enabled": true } }
   }
 }

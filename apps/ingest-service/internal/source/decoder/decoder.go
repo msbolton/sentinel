@@ -40,6 +40,27 @@ func SkipReason(err error) string {
 	return ""
 }
 
+// Reject marks a frame that decoded but cannot become an observation; the
+// stream driver dead-letters it under reason instead of parse_error.
+func Reject(reason string, err error) error { return &rejectError{reason: reason, err: err} }
+
+type rejectError struct {
+	reason string
+	err    error
+}
+
+func (e *rejectError) Error() string { return e.reason + ": " + e.err.Error() }
+func (e *rejectError) Unwrap() error { return e.err }
+
+// RejectReason extracts the reason from a Reject error ("" for other errors).
+func RejectReason(err error) string {
+	var re *rejectError
+	if errors.As(err, &re) {
+		return re.reason
+	}
+	return ""
+}
+
 // Decoder decodes one frame at a time. Decode is called from one goroutine
 // per feed; implementations need no locking of their own state.
 type Decoder interface {

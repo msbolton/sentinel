@@ -31,7 +31,11 @@ type feedDTO struct {
 	Status       registry.Status   `json:"status"`
 }
 
-func toFeedDTO(f registry.Feed, catalog *drivers.Catalog) feedDTO {
+// toFeedDTO renders f for a caller. cleared says whether the caller's clearance
+// reaches the feed's classification (clearedFor); when it does not, the decoder
+// error texts in the status are left out. It is a parameter so that no route
+// can render a status without deciding.
+func toFeedDTO(f registry.Feed, catalog *drivers.Catalog, cleared bool) feedDTO {
 	dto := feedDTO{
 		ID: f.ID, Name: f.Name, Description: f.Description, Driver: f.Driver,
 		Builtin: f.Builtin, Enabled: f.Enabled, Version: f.Version,
@@ -56,6 +60,9 @@ func toFeedDTO(f registry.Feed, catalog *drivers.Catalog) feedDTO {
 		dto.Status = *f.Status
 	} else {
 		dto.Status = registry.Status{State: registry.StateStopped, Health: registry.HealthUnknown}
+	}
+	if !cleared {
+		dto.Status = withoutDecoderTexts(dto.Status)
 	}
 	if len(dto.Status.Detail) == 0 {
 		dto.Status.Detail = json.RawMessage("{}")

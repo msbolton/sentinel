@@ -10,16 +10,55 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // Frame is one unit of input handed to a decoder.
 type Frame struct {
 	Payload    []byte
 	ReceivedAt time.Time
-	Remote     string            // peer address, topic or queue the frame came from
+	Remote     string            // peer address, topic, queue or URL the frame came from; see RedactRemote
 	Attrs      map[string]string // transport-specific metadata (MQTT topic, STOMP headers)
+}
+
+// RedactRemote returns remote without the parts of a URL that can hold a
+// secret: the user and password, the query and the fragment. A remote is
+// normally a peer address, a topic or a queue, and comes back as it is; a
+// WebSocket feed's is the URL it is configured with, which can carry a token.
+// Anything that records a Frame.Remote (the dead-letter topic, the health
+// detail, an observation's sensor id) should pass it through first.
+//
+// Only text containing "://" is taken for a URL, so a name such as
+// "sensors:temp?unit=c" is never touched. Such text is cut at its first '?' or
+// '#', and the user and password are removed: whatever lies between "://" and
+// the last '@' before the next '/' (the last, because a password may hold an
+// unescaped '@'). The rest is kept exactly as written. The work is done on the
+// text, not on a parsed URL, so a URL that does not parse is redacted all the
+// same instead of being let through for being malformed.
+func RedactRemote(remote string) string {
+	i := strings.Index(remote, "://")
+	if i < 0 {
+		return remote
+	}
+	if cut := strings.IndexAny(remote, "?#"); cut >= 0 {
+		remote = remote[:cut]
+		if cut < i {
+			return remote // the "://" was in the query or the fragment, and went with it
+		}
+	}
+	start := i + len("://")
+	authority := remote[start:]
+	if slash := strings.IndexByte(authority, '/'); slash >= 0 {
+		authority = authority[:slash]
+	}
+	if at := strings.LastIndexByte(authority, '@'); at >= 0 {
+		remote = remote[:start] + remote[start+at+1:]
+	}
+	return remote
 }
 
 // ErrBackpressure is returned by an Emit when the feed cannot take the frame
@@ -82,13 +121,55 @@ type Config struct {
 	Password string `json:"-"` // from secret refs
 	TLS      *TLS   `json:"tls"`
 
+	// Listener protection (tcpserver, udp).
+	Allow                      []string `json:"allow"`                      // IPs or CIDRs allowed to send; empty = anyone who can reach the port
+	MaxConnections             int      `json:"maxConnections"`             // tcpserver: concurrent connections; 0 = unlimited
+	MaxMessagesPerSec          int      `json:"maxMessagesPerSec"`          // frames per second for the listener; 0 = unlimited
+	MaxMessagesPerSecPerSender int      `json:"maxMessagesPerSecPerSender"` // frames per second for each sender IP, within the listener's; 0 = no per-sender limit
+
+	// TLS material from secret references; never part of the config JSON.
+	CertPEM, KeyPEM, ClientCAPEM, CAPEM []byte `json:"-"`
+
+	// ReloadTLS returns the TLS material as it is now: the secret references
+	// resolved again. Fields it leaves empty fall back to the files named in TLS
+	// (CertFile and the others), which are read again too. With ReloadEvery above
+	// zero every transport that uses TLS follows a rotation: a listener (tcpserver)
+	// polls and swaps what it serves at each tick, a transport that dials builds
+	// its config again before each dial. The exception is an MQTT broker reached
+	// over ws:// or wss://, or with all_proxy set, which keeps the config it
+	// started with. A reload that fails keeps what is in use.
+	// Nil, or a zero ReloadEvery, turns reloading off. Set by the stream driver,
+	// never from the feed's JSON.
+	ReloadTLS   func() (TLSMaterial, error) `json:"-"`
+	ReloadEvery time.Duration               `json:"-"`
+
+	// Logger receives a transport's diagnostics (a TLS handshake that failed,
+	// and who it was with); nil is silent. The stream driver sets it to its
+	// feed's logger.
+	Logger *zap.Logger `json:"-"`
+
+	// ReceiveBufferBytes is the socket receive buffer a datagram listener (udp)
+	// asks the OS for; 0 = DefaultReceiveBufferBytes. The OS may grant another
+	// size, which the listener reports in its health.
+	ReceiveBufferBytes int `json:"receiveBufferBytes"`
+
 	// MaxFrameBytes bounds one frame for stream transports (default 1 MiB).
 	MaxFrameBytes int `json:"maxFrameBytes"`
 	// ReadTimeoutSec closes an idle stream connection (0 = none).
 	ReadTimeoutSec int `json:"readTimeoutSec"`
+	// FileDirs confines the TLS files (TLS.CAFile and the others) to these
+	// folders every time they are read; nil reads them as they are. Set by the
+	// driver from the secret policy, never from the feed's JSON.
+	FileDirs []string `json:"-"`
 	// Framing names the framer for stream transports (default line).
 	Framing string `json:"-"`
 }
+
+// TLSMaterial is the PEM of a transport's TLS secrets: its own certificate and
+// key, the CA that signs the clients a listener accepts, and the CA that signs
+// the server a client dials. An empty field means the secret is not set, and
+// the file the TLS options name (if any) is read instead.
+type TLSMaterial struct{ CertPEM, KeyPEM, ClientCAPEM, CAPEM []byte }
 
 // TLS options for stream transports.
 type TLS struct {
@@ -98,6 +179,8 @@ type TLS struct {
 	CAFile             string `json:"caFile"`
 	CertFile           string `json:"certFile"`
 	KeyFile            string `json:"keyFile"`
+	ClientCAFile       string `json:"clientCaFile"`      // tcpserver: CA that signs accepted client certificates
+	RequireClientCert  bool   `json:"requireClientCert"` // tcpserver only: mutual TLS; transports that dial ignore it
 }
 
 // MaxFrame returns the configured frame bound or the default.
@@ -108,6 +191,25 @@ func (c Config) MaxFrame() int {
 	return 1 << 20
 }
 
+const (
+	// DefaultReceiveBufferBytes is the receive buffer a datagram listener asks
+	// for when the config names none: well above the OS default (about 200 KiB
+	// on Linux), so that a burst waits in the buffer instead of being dropped.
+	// The driver schemas state it as the default.
+	DefaultReceiveBufferBytes = 4 << 20
+	// MaxReceiveBufferBytes is the largest receive buffer a config may ask for,
+	// which the driver schemas state as the maximum of receiveBufferBytes.
+	MaxReceiveBufferBytes = 64 << 20
+)
+
+// ReceiveBuffer returns the configured receive buffer size or the default.
+func (c Config) ReceiveBuffer() int {
+	if c.ReceiveBufferBytes > 0 {
+		return c.ReceiveBufferBytes
+	}
+	return DefaultReceiveBufferBytes
+}
+
 // Factory builds a transport from its config.
 type Factory func(cfg Config) (Transport, error)
 
@@ -116,10 +218,7 @@ type Definition struct {
 	Kind        string
 	Type        Kind
 	Description string
-	// Listens is true for transports that bind a local port and so must be
-	// pinned to one replica.
-	Listens bool
-	New     Factory
+	New         Factory
 }
 
 var (

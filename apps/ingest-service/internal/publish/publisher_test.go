@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,21 +11,28 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/protobuf/proto"
 
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
+	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/obs"
 )
 
 type fakeProducer struct {
 	mu       sync.Mutex
 	msgs     []*kafka.Message
+	calls    atomic.Int32 // how many times Produce was called, whatever it answered
 	fullLeft atomic.Int32 // how many times to answer "queue full"
 	fail     error
 }
 
 func (f *fakeProducer) Produce(msg *kafka.Message) error {
+	f.calls.Add(1)
 	if f.fullLeft.Load() > 0 {
 		f.fullLeft.Add(-1)
 		return kafka.NewError(kafka.ErrQueueFull, "queue full", false)
@@ -139,22 +147,403 @@ func TestEmitBlocksWhenShardFullAndHonoursContext(t *testing.T) {
 	pub.Close()
 }
 
+func headers(m *kafka.Message) map[string]string {
+	out := map[string]string{}
+	for _, h := range m.Headers {
+		out[h.Key] = string(h.Value)
+	}
+	return out
+}
+
 func TestDeadLetterIsRateLimited(t *testing.T) {
 	fp := &fakeProducer{}
 	pub := New(fp, nil, nil, Options{DLQRatePerSec: 1, DLQBurst: 3})
 	for i := 0; i < 10; i++ {
-		pub.DeadLetter("feed-a", "tcp", "sbs", []byte("garbage"), "parse_error", errors.New("bad"))
+		pub.DeadLetter(obs.DeadLetter{FeedID: "feed-a", Driver: "tcp", Decoder: "sbs", Sender: "10.0.0.5:4000", Raw: []byte("garbage"), Reason: "parse_error", Cause: errors.New("bad")})
 	}
-	pub.DeadLetter("feed-b", "tcp", "sbs", []byte("garbage"), "panic", nil)
+	pub.DeadLetter(obs.DeadLetter{FeedID: "feed-b", Driver: "tcp", Decoder: "sbs", Raw: []byte("garbage"), Reason: "panic"})
 	a := fp.byTopic("observations.dlq")
 	if len(a) != 4 {
 		t.Fatalf("dead letters = %d, want 3 (burst) + 1 (other feed)", len(a))
 	}
-	hdr := map[string]string{}
-	for _, h := range a[0].Headers {
-		hdr[h.Key] = string(h.Value)
-	}
-	if hdr["feed-id"] != "feed-a" || hdr["reason"] != "parse_error" || hdr["error"] != "bad" || hdr["decoder"] != "sbs" || string(a[0].Value) != "garbage" {
+	hdr := headers(a[0])
+	if hdr["feed-id"] != "feed-a" || hdr["driver"] != "tcp" || hdr["reason"] != "parse_error" || hdr["error"] != "bad" ||
+		hdr["decoder"] != "sbs" || hdr["sender"] != "10.0.0.5:4000" || string(a[0].Value) != "garbage" {
 		t.Fatalf("headers = %v", hdr)
+	}
+	// A dead letter whose sender is unknown still carries the header, empty,
+	// as it does for a decoder it cannot name.
+	other := headers(a[3])
+	if sender, ok := other["sender"]; other["feed-id"] != "feed-b" || !ok || sender != "" || other["error"] != "" {
+		t.Errorf("headers of the other feed's dead letter = %v, want an empty sender and error", other)
+	}
+}
+
+// The rate limit counts what it drops, by reason.
+func TestDeadLetterRateLimitDropIsCounted(t *testing.T) {
+	fp := &fakeProducer{}
+	m := metrics.New(nil)
+	pub := New(fp, m, nil, Options{DLQRatePerSec: 1, DLQBurst: 1})
+	for i := 0; i < 3; i++ {
+		pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "parse_error", Raw: []byte("x")})
+	}
+	if got := testutil.ToFloat64(m.DeadLetterDropped.WithLabelValues("f", "rate_limited")); got != 2 {
+		t.Errorf("dropped rate_limited = %v, want 2", got)
+	}
+}
+
+// A letter the producer refuses is lost, so it is counted as dropped as well as
+// logged: a full queue or a message over the broker's limit is otherwise
+// invisible to anyone watching the metrics.
+func TestDeadLetterProduceFailureIsCounted(t *testing.T) {
+	fp := &fakeProducer{}
+	fp.fullLeft.Store(1)
+	m := metrics.New(nil)
+	pub := New(fp, m, nil, Options{})
+	pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "parse_error", Raw: []byte("x")})
+	pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "parse_error", Raw: []byte("y")})
+	if got := testutil.ToFloat64(m.DeadLetterDropped.WithLabelValues("f", "produce_failed")); got != 1 {
+		t.Errorf("dropped produce_failed = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.DeadLetterTotal.WithLabelValues("f", "parse_error")); got != 1 {
+		t.Errorf("dead letters counted as sent = %v, want only the one that was produced", got)
+	}
+}
+
+// A payload over the cap is cut to it and says so, with the size it arrived
+// with; one at the cap goes whole and without the headers.
+func TestDeadLetterRawIsCapped(t *testing.T) {
+	fp := &fakeProducer{}
+	pub := New(fp, nil, nil, Options{})
+	raw := bytes.Repeat([]byte("a"), 1<<20)
+	pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "oversize", Raw: raw})
+	pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "parse_error", Raw: raw[:DeadLetterRawMax]})
+	msgs := fp.byTopic("observations.dlq")
+	if len(msgs) != 2 {
+		t.Fatalf("dead letters = %d, want 2", len(msgs))
+	}
+	if len(msgs[0].Value) != DeadLetterRawMax {
+		t.Errorf("cut value = %d bytes, want %d", len(msgs[0].Value), DeadLetterRawMax)
+	}
+	if h := headers(msgs[0]); h["raw-truncated"] != "true" || h["raw-size"] != "1048576" {
+		t.Errorf("headers of a cut letter = %v, want raw-truncated=true and raw-size=1048576", h)
+	}
+	if len(raw) != 1<<20 {
+		t.Error("the caller's payload was changed")
+	}
+	if h := headers(msgs[1]); len(msgs[1].Value) != DeadLetterRawMax || h["raw-truncated"] != "" || h["raw-size"] != "" {
+		t.Errorf("a payload at the cap: %d bytes, headers %v; want it whole with no cut headers", len(msgs[1].Value), h)
+	}
+}
+
+// received-at is when the frame arrived, so a dead letter that waited behind
+// a busy decoder still says when its sender sent it. A payload that was never
+// a frame (a polled response) has no such time and is stamped when it is
+// dead-lettered.
+func TestDeadLetterReceivedAt(t *testing.T) {
+	fp := &fakeProducer{}
+	pub := New(fp, nil, nil, Options{})
+	frame := time.Date(2026, 10, 18, 12, 0, 0, 123456789, time.FixedZone("UTC+2", 2*3600))
+	pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "parse_error", ReceivedAt: frame})
+	before := time.Now()
+	pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "bad_response"})
+	after := time.Now()
+
+	msgs := fp.byTopic("observations.dlq")
+	if len(msgs) != 2 {
+		t.Fatalf("dead letters = %d, want 2", len(msgs))
+	}
+	if got, want := headers(msgs[0])["received-at"], "2026-10-18T10:00:00.123456789Z"; got != want {
+		t.Errorf("received-at of a frame = %q, want the frame's own time %q", got, want)
+	}
+	stamped, err := time.Parse(time.RFC3339Nano, headers(msgs[1])["received-at"])
+	if err != nil {
+		t.Fatalf("received-at of a payload with no frame: %v", err)
+	}
+	if stamped.Before(before) || stamped.After(after) {
+		t.Errorf("received-at = %v, want the time of dead-lettering, between %v and %v", stamped, before, after)
+	}
+}
+
+// stuckProducer is a producer that takes a call and never gives it back, until
+// it is released: the worst a Kafka that cannot be reached can do to a shard.
+type stuckProducer struct {
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func newStuckProducer(t *testing.T) *stuckProducer {
+	s := &stuckProducer{release: make(chan struct{})}
+	t.Cleanup(func() { close(s.release) }) // lets the stuck shard go when the test is over
+	return s
+}
+
+func (s *stuckProducer) Produce(*kafka.Message) error {
+	s.calls.Add(1)
+	<-s.release
+	return nil
+}
+
+// closeWithin runs CloseWithin and fails the test, rather than hanging it, if it
+// does not return in time.
+func closeWithin(t *testing.T, pub *Publisher, d time.Duration) (abandoned int, took time.Duration) {
+	t.Helper()
+	type result struct{ abandoned int }
+	done := make(chan result, 1)
+	start := time.Now()
+	go func() { done <- result{pub.CloseWithin(d)} }()
+	select {
+	case r := <-done:
+		return r.abandoned, time.Since(start)
+	case <-time.After(5 * time.Second):
+		t.Fatalf("CloseWithin(%v) had not returned after 5 s", d)
+		return 0, 0
+	}
+}
+
+// Shutdown with Kafka unreachable: the producer takes a call and never answers,
+// so the shard never gets to the next observation and Close would wait for it
+// forever. CloseWithin returns when its time is up, and says how many
+// observations it gave up on: the one the producer holds and the ones queued.
+func TestCloseWithinReturnsWhenTheProducerBlocksForever(t *testing.T) {
+	sp := newStuckProducer(t)
+	core, logs := observer.New(zapcore.WarnLevel)
+	pub := New(sp, nil, zap.New(core), Options{Shards: 1, Buffer: 2})
+	pub.Start()
+	for i := 0; i < 3; i++ { // one in the producer's hands, two in the shard's queue
+		if err := pub.Emit(context.Background(), observation("f", "AAA111", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !waitFor(func() bool { return sp.calls.Load() == 1 }) {
+		t.Fatal("the shard never called the producer")
+	}
+
+	abandoned, took := closeWithin(t, pub, 100*time.Millisecond)
+	if took < 100*time.Millisecond {
+		t.Errorf("CloseWithin(100ms) returned after %v: before its time was up", took)
+	}
+	if took > 2*time.Second {
+		t.Errorf("CloseWithin(100ms) took %v, want it to return soon after its 100ms", took)
+	}
+	if abandoned != 3 {
+		t.Errorf("abandoned = %d, want 3: the observation in the producer and the two queued", abandoned)
+	}
+	entries := logs.FilterMessage("publisher gave up on observations that were not handed to the producer").All()
+	if len(entries) != 1 || entries[0].ContextMap()["abandoned"] != int64(3) {
+		t.Errorf("log = %v, want one warning that says 3 were abandoned", logs.All())
+	}
+	if err := pub.Emit(context.Background(), observation("f", "AAA111", 9)); !errors.Is(err, ErrClosed) {
+		t.Errorf("emit after CloseWithin = %v, want ErrClosed", err)
+	}
+	pub.Close() // a second close has nothing left to wait for
+}
+
+// A producer that answers "queue full" for ever, as one whose Kafka is down does
+// once its queue has filled, keeps a shard retrying. CloseWithin stops the
+// retrying, so that nothing calls the producer after it returns and the caller
+// can close the producer.
+func TestCloseWithinStopsTheShardsRetrying(t *testing.T) {
+	fp := &fakeProducer{}
+	fp.fullLeft.Store(1 << 30)
+	// Room for all six on one shard, so that no Emit waits on a shard that is
+	// stuck retrying, wherever the keys hash.
+	pub := New(fp, nil, nil, Options{Shards: 2, Buffer: 8, QueueFullWait: time.Millisecond})
+	pub.Start()
+	for i := 0; i < 6; i++ {
+		if err := pub.Emit(context.Background(), observation("f", fmt.Sprintf("K%d", i), i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !waitFor(func() bool { return fp.calls.Load() >= 10 }) {
+		t.Fatal("the shards were not retrying")
+	}
+
+	abandoned, _ := closeWithin(t, pub, 50*time.Millisecond)
+	if abandoned != 6 {
+		t.Errorf("abandoned = %d, want all 6", abandoned)
+	}
+	after := fp.calls.Load()
+	time.Sleep(100 * time.Millisecond) // many retries' worth
+	if now := fp.calls.Load(); now != after {
+		t.Errorf("the producer was called %d more times after CloseWithin returned", now-after)
+	}
+}
+
+// When Kafka takes everything in time, CloseWithin is Close: it waits for the
+// drain, loses nothing and reports that nothing was abandoned.
+func TestCloseWithinDrainsWhenTheProducerKeepsUp(t *testing.T) {
+	fp := &fakeProducer{}
+	pub := New(fp, nil, nil, Options{Shards: 4, Buffer: 16})
+	pub.Start()
+	const n = 200
+	for i := 0; i < n; i++ {
+		if err := pub.Emit(context.Background(), observation("f", fmt.Sprintf("K%d", i%7), i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	abandoned, _ := closeWithin(t, pub, 10*time.Second)
+	if abandoned != 0 {
+		t.Errorf("abandoned = %d, want 0", abandoned)
+	}
+	if got := len(fp.byTopic("observations.raw")); got != n {
+		t.Errorf("produced %d of %d", got, n)
+	}
+}
+
+// waitFor polls cond for a few seconds.
+func waitFor(cond func() bool) bool {
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if cond() {
+			return true
+		}
+	}
+	return cond()
+}
+
+// An Emit blocked on a full shard when the publisher closes is let go with
+// ErrClosed. It used to panic with "send on closed channel", which at shutdown
+// would have skipped everything that follows (leases, status rows). The shard
+// is stuck retrying a full producer queue, as with Kafka down, so the Emits
+// really are blocked when CloseWithin runs; run repeatedly under -race.
+func TestEmitBlockedOnAFullShardReturnsErrClosedWhenThePublisherCloses(t *testing.T) {
+	for round := 0; round < 50; round++ {
+		fp := &fakeProducer{}
+		fp.fullLeft.Store(1 << 30)
+		pub := New(fp, nil, nil, Options{Shards: 1, Buffer: 1, QueueFullWait: time.Millisecond})
+		pub.Start()
+		// One observation retrying in the shard's hands and one in the buffer: the shard is full.
+		for i := 0; i < 2; i++ {
+			if err := pub.Emit(context.Background(), observation("f", "AAA111", i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !waitFor(func() bool { return fp.calls.Load() >= 1 }) {
+			t.Fatal("the shard never called the producer")
+		}
+		const emitters = 8
+		errs := make(chan error, emitters)
+		started := make(chan struct{}, emitters)
+		for i := 0; i < emitters; i++ {
+			go func() {
+				started <- struct{}{}
+				errs <- pub.Emit(context.Background(), observation("f", "AAA111", 100+i))
+			}()
+		}
+		for i := 0; i < emitters; i++ {
+			<-started
+		}
+		abandoned, _ := closeWithin(t, pub, 20*time.Millisecond)
+		for i := 0; i < emitters; i++ {
+			select {
+			case err := <-errs:
+				if !errors.Is(err, ErrClosed) {
+					t.Fatalf("round %d: a blocked Emit returned %v, want ErrClosed", round, err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("round %d: an Emit was still blocked after CloseWithin", round)
+			}
+		}
+		if abandoned != 2 {
+			t.Fatalf("round %d: abandoned = %d, want the 2 that were accepted: an Emit that was refused is not one", round, abandoned)
+		}
+	}
+}
+
+// Nothing an Emit accepted is lost to the close: every observation Emit returned
+// nil for is handed to the producer when the producer keeps up, however the
+// Emits and the close interleave.
+func TestEmitsRacingCloseLoseNothingThatWasAccepted(t *testing.T) {
+	for round := 0; round < 50; round++ {
+		fp := &fakeProducer{}
+		pub := New(fp, nil, nil, Options{Shards: 4, Buffer: 4})
+		pub.Start()
+		var accepted atomic.Int64
+		var wg sync.WaitGroup
+		for g := 0; g < 8; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := 0; i < 200; i++ {
+					switch err := pub.Emit(context.Background(), observation("f", fmt.Sprintf("K%d", g), i)); {
+					case err == nil:
+						accepted.Add(1)
+					case errors.Is(err, ErrClosed):
+						return
+					default:
+						t.Errorf("Emit returned %v", err)
+						return
+					}
+				}
+			}()
+		}
+		time.Sleep(time.Duration(round%5) * 100 * time.Microsecond)
+		abandoned, _ := closeWithin(t, pub, 10*time.Second)
+		wg.Wait()
+		if got := int64(len(fp.byTopic("observations.raw"))); abandoned != 0 || got != accepted.Load() {
+			t.Fatalf("round %d: %d accepted, %d produced, %d abandoned", round, accepted.Load(), got, abandoned)
+		}
+	}
+}
+
+// A dead letter that arrives once the publisher is closing is dropped and
+// counted: the producer is about to be flushed and closed, and a letter handed
+// to it then is lost without a trace.
+func TestDeadLetterAfterCloseProducesNothing(t *testing.T) {
+	fp := &fakeProducer{}
+	m := metrics.New(nil)
+	pub := New(fp, m, nil, Options{})
+	pub.Start()
+	pub.Close()
+	pub.DeadLetter(obs.DeadLetter{FeedID: "late", Reason: "parse_error", Raw: []byte("garbage")})
+	if got := fp.calls.Load(); got != 0 {
+		t.Errorf("Produce was called %d times for a dead letter after Close, want none", got)
+	}
+	if got := testutil.ToFloat64(m.DeadLetterDropped.WithLabelValues("late", "closing")); got != 1 {
+		t.Errorf("dead_letter_dropped = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.DeadLetterTotal.WithLabelValues("late", "parse_error")); got != 0 {
+		t.Errorf("dead_letter_total = %v, want 0", got)
+	}
+}
+
+// blockingProducer holds a Produce until it is let go.
+type blockingProducer struct {
+	fakeProducer
+	in      chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingProducer) Produce(msg *kafka.Message) error {
+	b.in <- struct{}{}
+	<-b.release
+	return b.fakeProducer.Produce(msg)
+}
+
+// A dead letter already on its way to the producer when the publisher closes is
+// finished first: the close waits for it, so the producer is flushed after it
+// and not before.
+func TestCloseWaitsForADeadLetterInFlight(t *testing.T) {
+	bp := &blockingProducer{in: make(chan struct{}), release: make(chan struct{})}
+	pub := New(bp, nil, nil, Options{})
+	pub.Start()
+	go pub.DeadLetter(obs.DeadLetter{FeedID: "f", Reason: "parse_error"})
+	<-bp.in // inside Produce
+
+	closed := make(chan struct{})
+	go func() { pub.Close(); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a dead letter was still inside Produce")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(bp.release)
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return once the dead letter was produced")
+	}
+	if got := len(bp.byTopic("observations.dlq")); got != 1 {
+		t.Errorf("dead letters produced = %d, want the one that was in flight", got)
 	}
 }

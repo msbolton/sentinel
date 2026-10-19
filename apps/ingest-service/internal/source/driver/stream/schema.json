@@ -20,31 +20,38 @@
         "clientId": { "type": "string", "title": "MQTT client id" },
         "queue": { "type": "string", "minLength": 1, "title": "STOMP queue" },
         "username": { "type": "string", "title": "Username", "description": "The password comes from secretRefs.password." },
-        "maxFrameBytes": { "type": "integer", "minimum": 64, "default": 1048576, "title": "Maximum frame size (bytes)" },
+        "maxFrameBytes": { "type": "integer", "minimum": 64, "maximum": 16777216, "default": 1048576, "title": "Maximum frame size (bytes)" },
         "readTimeoutSec": { "type": "integer", "minimum": 0, "default": 0, "title": "Read timeout (s)", "description": "Close an idle stream connection after this long; 0 disables." },
+        "allow": { "type": "array", "items": { "type": "string", "minLength": 1 }, "title": "Allowed senders", "description": "IP addresses or CIDR ranges allowed to send; empty allows anyone who can reach the port. UDP source addresses can be forged.", "x-showWhen": { "kind": ["tcpserver", "udp"] } },
+        "maxConnections": { "type": "integer", "minimum": 0, "default": 50, "title": "Max connections", "description": "tcpserver: concurrent connections; 0 = unlimited", "x-showWhen": { "kind": "tcpserver" } },
+        "maxMessagesPerSec": { "type": "integer", "minimum": 0, "default": 0, "title": "Max messages per second", "description": "tcpserver and udp: shared by every sender of the listener; 0 = unlimited", "x-showWhen": { "kind": ["tcpserver", "udp"] } },
+        "maxMessagesPerSecPerSender": { "type": "integer", "minimum": 0, "default": 0, "title": "Max messages per second per sender", "description": "tcpserver and udp: how many messages a second one sender IP address may send, within the limit above that all senders share; 0 = no per-sender limit. Senders behind one NAT share a limit.", "x-showWhen": { "kind": ["tcpserver", "udp"] } },
+        "receiveBufferBytes": { "type": "integer", "minimum": 0, "maximum": 67108864, "default": 4194304, "title": "Receive buffer (bytes)", "description": "udp: the socket buffer the operating system keeps for this port while Sentinel catches up. A burst beyond it is dropped by the OS. 0 = 4 MiB. The OS may grant less (Linux caps it at net.core.rmem_max), and health shows what the OS reports as receiveBufferEffectiveBytes: Linux reports twice the size it granted, so a stock host shows 425984 for the 4 MiB default. On Linux health counts every datagram the kernel drops on the socket as kernelDropped: a full buffer, memory limits, checksum and filter drops.", "x-showWhen": { "kind": "udp" } },
         "tls": {
           "type": "object",
           "title": "TLS",
           "properties": {
             "enabled": { "type": "boolean", "default": false },
+            "requireClientCert": { "type": "boolean", "default": false, "title": "Require client certificates", "description": "Mutual TLS, verified against the client CA, which comes from the clientCa secret or from tls.clientCaFile. It applies to kind tcpserver only; the other kinds ignore it.", "x-showWhen": { "enabled": true } },
             "insecureSkipVerify": { "type": "boolean", "default": false },
             "serverName": { "type": "string" },
             "caFile": { "type": "string" },
             "certFile": { "type": "string" },
-            "keyFile": { "type": "string" }
+            "keyFile": { "type": "string" },
+            "clientCaFile": { "type": "string", "title": "Client CA file", "description": "tcpserver: a file holding the PEM of the CA that signs the senders' certificates, instead of the clientCa secret, which wins when both are set. It needs requireClientCert.", "x-showWhen": { "enabled": true, "requireClientCert": true } }
           }
         }
       },
       "allOf": [
-        { "if": { "properties": { "kind": { "const": "tcpclient" } } }, "then": { "required": ["address"] } },
-        { "if": { "properties": { "kind": { "const": "tcpserver" } } }, "then": { "required": ["address"] } },
-        { "if": { "properties": { "kind": { "const": "udp" } } }, "then": { "required": ["address"] } },
-        { "if": { "properties": { "kind": { "const": "websocket" } } }, "then": { "required": ["url"] } },
-        { "if": { "properties": { "kind": { "const": "mqtt" } } }, "then": { "required": ["brokerUrl", "topics"] } },
-        { "if": { "properties": { "kind": { "const": "stomp" } } }, "then": { "required": ["brokerUrl", "queue"] } }
+        { "if": { "properties": { "kind": { "const": "tcpclient" } }, "required": ["kind"] }, "then": { "required": ["address"] } },
+        { "if": { "properties": { "kind": { "const": "tcpserver" } }, "required": ["kind"] }, "then": { "required": ["address"] } },
+        { "if": { "properties": { "kind": { "const": "udp" } }, "required": ["kind"] }, "then": { "required": ["address"] } },
+        { "if": { "properties": { "kind": { "const": "websocket" } }, "required": ["kind"] }, "then": { "required": ["url"] } },
+        { "if": { "properties": { "kind": { "const": "mqtt" } }, "required": ["kind"] }, "then": { "required": ["brokerUrl", "topics"] } },
+        { "if": { "properties": { "kind": { "const": "stomp" } }, "required": ["kind"] }, "then": { "required": ["brokerUrl", "queue"] } }
       ]
     },
-    "framing": { "type": "string", "enum": ["line", "lengthprefix", "beast", "xmlevent", "message"], "title": "Framing", "description": "How a byte stream is split into frames (stream transports); message transports deliver whole messages." },
+    "framing": { "type": "string", "enum": ["line", "delimited", "lengthprefix", "beast", "xmlevent", "message"], "title": "Framing", "description": "How a byte stream is split into frames (stream transports); message transports deliver whole messages." },
     "decoder": {
       "type": "object",
       "title": "Decoder",
@@ -52,7 +59,19 @@
       "properties": {
         "name": { "type": "string", "enum": ["json", "nmea-gps", "nmea-ais", "cot", "sbs", "beast", "link16"], "title": "Format" },
         "options": { "type": "object", "title": "Decoder options" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "name": { "const": "nmea-gps" } }, "required": ["name"] },
+          "then": { "required": ["options"], "properties": { "options": { "required": ["sourceEntityId"], "properties": { "sourceEntityId": { "type": "string", "pattern": "\\S" } } } } }
+        }
+      ]
     }
+  },
+  "x-secrets": {
+    "tlsCert": { "title": "TLS certificate (PEM)", "examples": ["file:/etc/sentinel/secrets/server.pem"] },
+    "tlsKey": { "title": "TLS private key (PEM)", "examples": ["file:/etc/sentinel/secrets/server.key"] },
+    "clientCa": { "title": "Client CA (PEM)", "examples": ["file:/etc/sentinel/secrets/clients-ca.pem"], "showWhen": { "transport/kind": "tcpserver", "transport/tls/enabled": true, "transport/tls/requireClientCert": true } },
+    "serverCa": { "title": "Server CA (PEM)", "examples": ["file:/etc/sentinel/secrets/ca.pem"] }
   }
 }

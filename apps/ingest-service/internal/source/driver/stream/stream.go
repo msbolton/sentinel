@@ -11,7 +11,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -33,16 +36,31 @@ var schema []byte
 // decoder; set from configuration before feeds start.
 var FrameBuffer = 1024
 
+// FileDirs are the folders the TLS files of a transport (certFile, keyFile,
+// caFile, clientCaFile) may be read from, as the secret references' files
+// are; set from configuration before feeds start. Nil restricts nothing, as
+// the zero secret policy does; a non-nil list, even an empty one, restricts to
+// its folders, so a policy that allows no folders allows no TLS file.
+var FileDirs []string
+
 const mqttBlockFor = 2 * time.Second
+
+// DefaultMaxConnections is how many connections a tcpserver transport accepts
+// at once when the config sets no maxConnections; an explicit 0 means
+// unlimited. Each connection costs a descriptor, a goroutine and a frame
+// buffer, which is why a listener is capped unless told otherwise. The tcp
+// driver uses the same number, and both schemas state it as the default.
+const DefaultMaxConnections = 50
 
 func init() {
 	driver.Register(driver.Definition{
 		ID: ID, Name: "Message stream",
 		Description:  "Reports delivered over TCP, UDP, WebSocket, MQTT or STOMP in a supported wire format.",
 		Capabilities: []string{},
-		SecretFields: []string{"password"},
+		SecretFields: []string{"password", "tlsCert", "tlsKey", "clientCa", "serverCa"},
 		ConfigSchema: schema,
 		New:          New,
+		Listen:       listenOf,
 	})
 }
 
@@ -60,9 +78,12 @@ type Driver struct {
 	tcfg      transport.Config
 	tdef      transport.Definition
 	transport transport.Transport
+	noter     transport.MalformedNoter // the transport, if it tells its senders apart
 	decoder   decoder.Decoder
 	ddef      decoder.Definition
 	policy    string
+
+	malformed atomic.Int64 // frames the decoder dead-lettered
 
 	mu       sync.Mutex
 	lastErr  string
@@ -79,38 +100,99 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := checkTLSFiles(tcfg.TLS); err != nil {
+		return nil, err
+	}
+	// A tcpserver is capped unless the config says otherwise. This is decided
+	// here, not in NewFromParts, because only the raw config can tell an
+	// absent maxConnections from an explicit 0 (unlimited).
+	if tcfg.Kind == "tcpserver" && !setsMaxConnections(cfg.Transport) {
+		tcfg.MaxConnections = DefaultMaxConnections
+	}
+	d, err := NewFromParts(spec, deps, tcfg, cfg.Framing, cfg.Decoder)
+	if err != nil {
+		return nil, err // not d: a nil *Driver would be a non-nil driver.Driver
+	}
+	return d, nil
+}
+
+// setsMaxConnections reports whether the transport object sets maxConnections
+// to a value. Presence is decided the way the decoder finds the field, by
+// decoding into a pointer: the key matches ignoring case, the last spelling
+// wins, and null counts as unset, as it does for the tcp driver's pointer
+// fields.
+func setsMaxConnections(raw json.RawMessage) bool {
+	var probe struct {
+		MaxConnections *int `json:"maxConnections"`
+	}
+	return json.Unmarshal(raw, &probe) == nil && probe.MaxConnections != nil
+}
+
+// checkTLSFiles refuses a TLS file outside FileDirs once, at start, so that
+// a feed whose files are out of bounds fails to start with a clear error. The
+// config keeps the path as written and every read of the file is confined to
+// FileDirs again (transport.Config.FileDirs), so a rotated certificate is
+// followed and a link re-pointed out of the folder is refused when it is read.
+func checkTLSFiles(t *transport.TLS) error {
+	if t == nil || FileDirs == nil {
+		return nil
+	}
+	for _, f := range []struct{ field, path string }{{"certFile", t.CertFile}, {"keyFile", t.KeyFile}, {"caFile", t.CAFile}, {"clientCaFile", t.ClientCAFile}} {
+		if f.path == "" {
+			continue
+		}
+		if _, err := transport.ResolveUnder(f.path, FileDirs); err != nil {
+			if errors.Is(err, transport.ErrOutsideDirs) {
+				return fmt.Errorf("tls.%s: %s", f.field, transport.OutsideMessage(f.path))
+			}
+			return fmt.Errorf("tls.%s: %w", f.field, err)
+		}
+	}
+	return nil
+}
+
+// NewFromParts builds a stream driver from an already parsed transport
+// config, a framing name and a decoder section. The tcp and udp drivers
+// use it to assemble the same pipeline from a flatter config; it applies
+// the same framing checks as New.
+func NewFromParts(spec driver.Spec, deps driver.Deps, tcfg transport.Config, framingName string, dec decoder.Config) (*Driver, error) {
 	tdef, ok := transport.Lookup(tcfg.Kind)
 	if !ok {
 		return nil, fmt.Errorf("unknown transport %q (known: %v)", tcfg.Kind, transport.Kinds())
 	}
-	if !framing.Known(cfg.Framing) {
-		return nil, fmt.Errorf("unknown framing %q", cfg.Framing)
+	if !framing.Known(framingName) {
+		return nil, fmt.Errorf("unknown framing %q", framingName)
 	}
 	switch tdef.Type {
 	case transport.KindStream:
-		if cfg.Framing == framing.Message {
-			return nil, fmt.Errorf("transport %s is a byte stream and needs a framer (line, lengthprefix, beast, xmlevent)", tcfg.Kind)
+		if framingName == framing.Message {
+			return nil, fmt.Errorf("transport %s is a byte stream and needs a framer (line, delimited, lengthprefix, beast, xmlevent)", tcfg.Kind)
 		}
-		tcfg.Framing = cfg.Framing
+		tcfg.Framing = framingName
 	case transport.KindMessage:
-		if cfg.Framing != "" && cfg.Framing != framing.Message && !(tcfg.Kind == "udp" && cfg.Framing == framing.Line) {
+		if framingName != "" && framingName != framing.Message && !(tcfg.Kind == "udp" && framingName == framing.Line) {
 			return nil, fmt.Errorf("transport %s delivers whole messages; framing must be \"message\"", tcfg.Kind)
 		}
-		tcfg.Framing = cfg.Framing
+		tcfg.Framing = framingName
 	}
-	tcfg.Password = spec.Secrets["password"]
+	ApplySecrets(&tcfg, spec.Secrets)
+	if tcfg.TLS != nil && tcfg.TLS.Enabled {
+		tcfg.ReloadTLS, tcfg.ReloadEvery = reloadTLS(spec.Secrets, deps.ReloadSecrets), deps.SecretReloadEvery
+	}
+	tcfg.Logger = deps.Logger
+	tcfg.FileDirs = FileDirs
 	t, err := tdef.New(tcfg)
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Decoder.Name == "" {
+	if dec.Name == "" {
 		return nil, errors.New("decoder.name is required")
 	}
-	ddef, ok := decoder.Lookup(cfg.Decoder.Name)
+	ddef, ok := decoder.Lookup(dec.Name)
 	if !ok {
-		return nil, fmt.Errorf("unknown decoder %q (known: %v)", cfg.Decoder.Name, decoder.Names())
+		return nil, fmt.Errorf("unknown decoder %q (known: %v)", dec.Name, decoder.Names())
 	}
-	dec, err := ddef.New(cfg.Decoder.Options)
+	decoded, err := ddef.New(dec.Options)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +205,45 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	default:
 		return nil, fmt.Errorf("unknown backpressure policy %q", policy)
 	}
-	return &Driver{spec: spec, logger: deps.Logger, tcfg: tcfg, tdef: tdef, transport: t, decoder: dec, ddef: ddef, policy: policy}, nil
+	noter, _ := t.(transport.MalformedNoter)
+	return &Driver{spec: spec, logger: deps.Logger, tcfg: tcfg, tdef: tdef, transport: t, noter: noter, decoder: decoded, ddef: ddef, policy: policy}, nil
+}
+
+// ApplySecrets copies resolved secret references into the transport
+// config: the password, and TLS material as PEM.
+func ApplySecrets(tcfg *transport.Config, secrets map[string]string) {
+	tcfg.Password = secrets["password"]
+	*tcfg = tcfg.WithMaterial(MaterialFrom(secrets))
+}
+
+// MaterialFrom is the TLS material among resolved secrets: tlsCert, tlsKey,
+// clientCa and serverCa. A secret that is not set is empty material, and the
+// transport reads the file of the same purpose instead, if the config names one.
+func MaterialFrom(secrets map[string]string) transport.TLSMaterial {
+	pemOf := func(k string) []byte {
+		if v := secrets[k]; v != "" {
+			return []byte(v)
+		}
+		return nil
+	}
+	return transport.TLSMaterial{CertPEM: pemOf("tlsCert"), KeyPEM: pemOf("tlsKey"), ClientCAPEM: pemOf("clientCa"), CAPEM: pemOf("serverCa")}
+}
+
+// reloadTLS is the transport's way to read its TLS material again: the secret
+// references resolved anew through reload (the supervisor's, which applies the
+// secret policy), or the secrets of the start where nothing resolves them. The
+// files the TLS options name are read again by the transport itself.
+func reloadTLS(start map[string]string, reload func() (map[string]string, error)) func() (transport.TLSMaterial, error) {
+	return func() (transport.TLSMaterial, error) {
+		secrets := start
+		if reload != nil {
+			var err error
+			if secrets, err = reload(); err != nil {
+				return transport.TLSMaterial{}, err
+			}
+		}
+		return MaterialFrom(secrets), nil
+	}
 }
 
 func defaultPolicy(kind string) string {
@@ -134,6 +254,45 @@ func defaultPolicy(kind string) string {
 		return driver.BackpressureNack
 	}
 	return driver.BackpressureBlock
+}
+
+// listenOf reports the network and port a listening stream transport binds.
+// A tcpserver or udp transport always listens: an address with no numeric
+// port (no port at all, or a service name) reports port 0, so the registry's
+// port rules refuse it instead of it surfacing at bind time. Only
+// non-listening kinds and config that does not decode report ok=false. Only
+// the kind and address are read, so a mistyped unrelated field (allow, say)
+// cannot turn a listener into a non-listener and skip the checks on it.
+func listenOf(raw json.RawMessage) (string, int, bool) {
+	var cfg struct {
+		Transport struct {
+			Kind    string `json:"kind"`
+			Address string `json:"address"`
+		} `json:"transport"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return "", 0, false
+	}
+	var network string
+	switch cfg.Transport.Kind {
+	case "tcpserver":
+		network = "tcp"
+	case "udp":
+		network = "udp"
+	default:
+		return "", 0, false
+	}
+	_, p, err := net.SplitHostPort(cfg.Transport.Address)
+	if err != nil {
+		return network, 0, true
+	}
+	// Digits only, as the transports read a port: Atoi would take "+8080" for
+	// 8080 and let the uniqueness check count a port the transport refuses.
+	port, err := strconv.ParseUint(p, 10, 16)
+	if err != nil {
+		return network, 0, true
+	}
+	return network, int(port), true
 }
 
 // Run pumps frames from the transport through the decoder into the sink.
@@ -239,19 +398,37 @@ func (d *Driver) decodeLoop(ctx context.Context, frames <-chan transport.Frame, 
 
 func (d *Driver) decodeOne(ctx context.Context, f transport.Frame, sink driver.Sink) {
 	out, err := d.safeDecode(f)
+	// A WebSocket feed's remote is its URL, which can carry an API key, so
+	// wherever the remote is recorded (the sender of a dead letter, the sensor
+	// an observation defaults to) it is in its redacted form.
+	remote := transport.RedactRemote(f.Remote)
 	if err != nil {
 		if reason := decoder.SkipReason(err); reason != "" {
 			sink.Skipped(reason)
 			return
 		}
+		msg := err.Error()
 		d.mu.Lock()
-		d.lastErr = err.Error()
+		d.lastErr = msg
 		d.mu.Unlock()
 		reason := "parse_error"
+		if r := decoder.RejectReason(err); r != "" {
+			reason = r
+		}
 		if errors.Is(err, errPanic) {
 			reason = "panic"
 		}
-		sink.DeadLetter(f.Payload, reason, err)
+		// The sender's row is updated before the counter, so that whoever waits
+		// for the counter to move finds the row already moved.
+		if d.noter != nil {
+			d.noter.NoteMalformed(remote, reason, msg)
+		}
+		d.malformed.Add(1)
+		if ps, ok := sink.(driver.ProvenanceSink); ok {
+			ps.DeadLetterFrom(f.Payload, reason, err, driver.Provenance{Decoder: d.ddef.Name, Sender: remote, ReceivedAt: f.ReceivedAt})
+		} else {
+			sink.DeadLetter(f.Payload, reason, err)
+		}
 		return
 	}
 	for _, o := range out {
@@ -265,10 +442,16 @@ func (d *Driver) decodeOne(ctx context.Context, f transport.Frame, sink driver.S
 			o.ReceivedAt = f.ReceivedAt
 		}
 		if o.SensorID == "" {
-			o.SensorID = f.Remote
+			o.SensorID = remote
 		}
-		o.RawContentType = d.ddef.ContentType
-		o.Raw = f.Payload
+		if o.RawContentType == "" {
+			o.RawContentType = d.ddef.ContentType
+		}
+		// An observation is the whole frame's unless its decoder kept the part
+		// it came from (an element of a JSON array).
+		if len(o.Raw) == 0 {
+			o.Raw = f.Payload
+		}
 		if err := sink.Emit(ctx, o); err != nil {
 			return
 		}
@@ -305,6 +488,7 @@ func (d *Driver) Health() driver.Health {
 		"transport": d.tcfg.Kind, "decoder": d.ddef.Name, "framing": d.tcfg.Framing, "backpressure": d.policy,
 		"connected": st.Connected, "connections": st.Connections,
 	}}
+	h.Detail["malformed"] = d.malformed.Load()
 	if lastDecode != "" {
 		h.Detail["lastDecodeError"] = lastDecode
 	}

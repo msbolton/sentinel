@@ -4,7 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,9 +20,15 @@ import (
 	"github.com/sentinel/ingest-service/internal/source/decoder"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 	"github.com/sentinel/ingest-service/internal/source/transport"
+	"github.com/sentinel/ingest-service/internal/source/transport/transporttest"
 
 	_ "github.com/sentinel/ingest-service/internal/source/decoder/sbs"
+	_ "github.com/sentinel/ingest-service/internal/source/decoder/sentinelobs"
+	_ "github.com/sentinel/ingest-service/internal/source/transport/stomp"
+	_ "github.com/sentinel/ingest-service/internal/source/transport/tcpclient"
 	_ "github.com/sentinel/ingest-service/internal/source/transport/tcpserver"
+	_ "github.com/sentinel/ingest-service/internal/source/transport/udp"
+	_ "github.com/sentinel/ingest-service/internal/source/transport/websocket"
 )
 
 type memSink struct {
@@ -183,6 +194,254 @@ func TestDecoderPanicIsDeadLettered(t *testing.T) {
 	cancel()
 }
 
+// provSink is a memSink that also takes the provenance of a dead letter, as
+// the feed runner does: the stream driver prefers that to the plain
+// DeadLetter, so a dead letter lands in letters and not in the memSink's.
+type provSink struct {
+	*memSink
+	pmu     sync.Mutex
+	letters []provLetter
+}
+
+type provLetter struct {
+	raw, reason string
+	cause       error
+	p           driver.Provenance
+}
+
+func (s *provSink) DeadLetterFrom(raw []byte, reason string, cause error, p driver.Provenance) {
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	s.letters = append(s.letters, provLetter{string(raw), reason, cause, p})
+}
+
+func (s *provSink) fromLetters() []provLetter {
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	return append([]provLetter(nil), s.letters...)
+}
+
+// sendGarbage runs a tcpserver stream feed with the sentinel decoder into
+// sink, sends it one line that is not a sentinel.v1.Observation, and returns
+// the driver with the client's end of the connection, whose local address is
+// the sender as the server sees it.
+func sendGarbage(t *testing.T, sink driver.Sink) (*Driver, net.Conn) {
+	t.Helper()
+	addr := freePort(t)
+	spec := driver.Spec{FeedID: "g", Driver: ID, Config: json.RawMessage(`{"transport":{"kind":"tcpserver","address":"` + addr + `"},"framing":"line","decoder":{"name":"sentinel"}}`)}
+	d, err := New(spec, driver.Deps{Logger: zap.NewNop()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = d.Run(ctx, sink) }()
+	t.Cleanup(func() { cancel(); <-done })
+	var conn net.Conn
+	if !waitFor(func() bool {
+		c, err := net.Dial("tcp", addr)
+		if err == nil {
+			conn = c
+		}
+		return err == nil
+	}, 2*time.Second) {
+		t.Fatal("server did not come up")
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if _, err := conn.Write([]byte("garbage\n")); err != nil {
+		t.Fatal(err)
+	}
+	return d.(*Driver), conn
+}
+
+// senderStats is the senders list of a listening transport in the driver's
+// health detail.
+func senderStats(t *testing.T, d *Driver) []transport.SenderStat {
+	t.Helper()
+	list, ok := d.Health().Detail["senders"].([]transport.SenderStat)
+	if !ok {
+		t.Fatalf("detail.senders = %T, want []transport.SenderStat", d.Health().Detail["senders"])
+	}
+	return list
+}
+
+// An undecodable message is dead-lettered with the decoder that refused it,
+// the sender it came from and the time it arrived, and the listener counts it
+// against that sender, so an integrator can see which sender is at fault.
+func TestDeadLetterCarriesProvenanceAndNotesSender(t *testing.T) {
+	sink := &provSink{memSink: newSink()}
+	before := time.Now().Add(-time.Second)
+	d, conn := sendGarbage(t, sink)
+	if !waitFor(func() bool { return len(sink.fromLetters()) == 1 }, 2*time.Second) {
+		t.Fatalf("no dead letter with provenance; plain dead letters: %v", sink.deadLetters())
+	}
+	got := sink.fromLetters()[0]
+	if got.reason != "parse_error" || got.raw != "garbage" || got.cause == nil {
+		t.Errorf("dead letter = %+v, want garbage under parse_error with its cause", got)
+	}
+	if got.p.Decoder != "sentinel" || got.p.Sender != conn.LocalAddr().String() {
+		t.Errorf("provenance = %+v, want decoder sentinel and sender %s", got.p, conn.LocalAddr())
+	}
+	if got.p.ReceivedAt.Before(before) || got.p.ReceivedAt.After(time.Now()) {
+		t.Errorf("receivedAt = %v, want the time the frame arrived (after %v)", got.p.ReceivedAt, before)
+	}
+	if plain := sink.deadLetters(); len(plain) != 0 {
+		t.Errorf("a sink that takes provenance also got the plain dead letter %v", plain)
+	}
+
+	senders := senderStats(t, d)
+	if len(senders) != 1 {
+		t.Fatalf("senders = %+v, want the one client", senders)
+	}
+	s := senders[0]
+	if s.Remote != got.p.Sender || s.Malformed != 1 || s.LastReason != "parse_error" || s.LastError != got.cause.Error() || s.LastMalformedAt == nil {
+		t.Errorf("sender = %+v, want one undecodable message, reason parse_error, error %q", s, got.cause)
+	}
+	if s.Messages != 1 || !s.Connected {
+		t.Errorf("sender = %+v, want its one message counted and the connection still open", s)
+	}
+	// The management API leaves this text out of a status read by a caller not
+	// cleared for the feed, and finds it by this key (mgmt.withoutErrorTexts).
+	if text, _ := d.Health().Detail["lastDecodeError"].(string); text != got.cause.Error() {
+		t.Errorf("detail.lastDecodeError = %q, want the decoder's error %q", text, got.cause)
+	}
+}
+
+// A sink that does not take provenance (every polled driver's tests, and any
+// sink written before it existed) still gets the dead letter, and the sender
+// is still noted.
+func TestPlainSinkStillGetsDeadLetters(t *testing.T) {
+	sink := newSink()
+	d, conn := sendGarbage(t, sink)
+	if !waitFor(func() bool { return len(sink.deadLetters()) == 1 }, 2*time.Second) {
+		t.Fatalf("dead letters = %v", sink.deadLetters())
+	}
+	if got := sink.deadLetters()[0]; got != "parse_error:garbage" {
+		t.Errorf("dead letter = %q", got)
+	}
+	senders := senderStats(t, d)
+	if len(senders) != 1 || senders[0].Remote != conn.LocalAddr().String() || senders[0].Malformed != 1 || senders[0].LastReason != "parse_error" {
+		t.Errorf("senders = %+v, want the client with one undecodable message", senders)
+	}
+}
+
+// A transport that cannot tell senders apart (it is not a listener, so there is
+// no sender to note) still has the provenance name the decoder and the
+// frame's origin, whatever that is: a topic, a queue or an address.
+func TestProvenanceFromATransportWithoutSenders(t *testing.T) {
+	received := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	tr := &originTransport{frame: transport.Frame{Payload: []byte("x"), ReceivedAt: received, Remote: "sensors/ais"}}
+	d := newFakeDriver(driver.BackpressureBlock, tr, panicDecoder{})
+	sink := &provSink{memSink: newSink()}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = d.Run(ctx, sink) }()
+	defer func() { cancel(); <-done }()
+	if !waitFor(func() bool { return len(sink.fromLetters()) == 1 }, time.Second) {
+		t.Fatal("no dead letter")
+	}
+	got := sink.fromLetters()[0]
+	if got.reason != "panic" || got.p.Decoder != "fake" || got.p.Sender != "sensors/ais" || !got.p.ReceivedAt.Equal(received) {
+		t.Errorf("dead letter = %+v, want the panic from the fake decoder, frame origin sensors/ais, received %v", got, received)
+	}
+}
+
+// A WebSocket feed's remote is the URL it is configured with, which usually
+// carries an API key in its query. The sender on the dead letter and the
+// remote a listener is told to note have the user, query and fragment removed,
+// so none of them reaches the dead-letter topic or the health detail.
+func TestURLCredentialsStayOutOfDeadLetterProvenance(t *testing.T) {
+	const remote = "wss://user:tok@feed.example.com:443/stream?key=abc#top"
+	const want = "wss://feed.example.com:443/stream"
+	tr := &noteTransport{originTransport: originTransport{frame: transport.Frame{Payload: []byte("x"), ReceivedAt: time.Now().UTC(), Remote: remote}}}
+	d := newFakeDriver(driver.BackpressureBlock, tr, panicDecoder{})
+	d.noter = tr
+	sink := &provSink{memSink: newSink()}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = d.Run(ctx, sink) }()
+	defer func() { cancel(); <-done }()
+	if !waitFor(func() bool { return len(sink.fromLetters()) == 1 }, time.Second) {
+		t.Fatal("no dead letter")
+	}
+	if got := sink.fromLetters()[0].p.Sender; got != want {
+		t.Errorf("sender = %q, want %q", got, want)
+	}
+	if notes := tr.notes(); len(notes) != 1 || notes[0] != want {
+		t.Errorf("noted remotes = %q, want only %q", notes, want)
+	}
+}
+
+// An observation whose message names no sensor is attributed to the remote its
+// frame came from, which for a WebSocket feed is the URL it is configured
+// with, key and all. The default drops the credentials, as the dead-letter
+// sender does; a sensor id the message supplies is the sender's own and is
+// kept as sent.
+func TestSensorIDDefaultsToTheRedactedRemote(t *testing.T) {
+	for name, tc := range map[string]struct{ remote, sensorID, want string }{
+		"a URL remote loses its key":            {"wss://feed.example.com:443/stream?key=abc", "", "wss://feed.example.com:443/stream"},
+		"a URL remote loses its user as well":   {"wss://user:tok@feed.example.com/stream?key=abc#top", "", "wss://feed.example.com/stream"},
+		"a peer address is kept":                {"10.0.0.5:4000", "", "10.0.0.5:4000"},
+		"a topic is kept":                       {"sensors/ais/1", "", "sensors/ais/1"},
+		"a topic with a colon and a query":      {"sensors:temp?unit=c", "", "sensors:temp?unit=c"},
+		"a queue with a colon and a selector":   {"jms.queue:orders?sel=1", "", "jms.queue:orders?sel=1"},
+		"a sensor id the message names is kept": {"wss://feed.example.com/stream?key=abc", "wss://rx.example.com/s?site=7", "wss://rx.example.com/s?site=7"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr := &originTransport{frame: transport.Frame{Payload: []byte("x"), ReceivedAt: time.Now().UTC(), Remote: tc.remote}}
+			dec := decoder.Stateless(func(transport.Frame) ([]*obs.Observation, error) {
+				o := &obs.Observation{SourceEntityID: "a", SensorID: tc.sensorID}
+				o.SetPosition(1, 1)
+				return []*obs.Observation{o}, nil
+			})
+			d := newFakeDriver(driver.BackpressureBlock, tr, dec)
+			sink := newSink()
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() { defer close(done); _ = d.Run(ctx, sink) }()
+			defer func() { cancel(); <-done }()
+			if !waitFor(func() bool { return sink.count() == 1 }, time.Second) {
+				t.Fatal("no observation")
+			}
+			sink.mu.Lock()
+			defer sink.mu.Unlock()
+			if got := sink.obs[0].SensorID; got != tc.want {
+				t.Errorf("sensor id = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// originTransport emits one frame as given.
+type originTransport struct{ frame transport.Frame }
+
+func (o *originTransport) Run(ctx context.Context, emit transport.Emit) error {
+	_ = emit(ctx, o.frame)
+	<-ctx.Done()
+	return nil
+}
+func (o *originTransport) State() transport.State { return transport.State{Connected: true} }
+
+// noteTransport is an originTransport that, as a listener does, takes note of
+// each undecodable message: it keeps the remote it was told of.
+type noteTransport struct {
+	originTransport
+	mu    sync.Mutex
+	noted []string
+}
+
+func (n *noteTransport) NoteMalformed(remote, _, _ string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.noted = append(n.noted, remote)
+}
+
+func (n *noteTransport) notes() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]string(nil), n.noted...)
+}
+
 func TestBackpressurePolicies(t *testing.T) {
 	saved := FrameBuffer
 	FrameBuffer = 1
@@ -273,11 +532,400 @@ func TestNewRejectsBadConfigs(t *testing.T) {
 		"gps needs entity id": `{"transport":{"kind":"tcpserver","address":":0"},"decoder":{"name":"nmea-gps"}}`,
 	}
 	for name, cfg := range cases {
-		if _, err := New(driver.Spec{FeedID: "x", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()}); err == nil {
+		d, err := New(driver.Spec{FeedID: "x", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+		if err == nil {
 			t.Errorf("%s: expected an error", name)
+		}
+		// An untyped nil: a typed nil *Driver in the interface is not == nil.
+		if d != nil {
+			t.Errorf("%s: driver = %#v alongside the error, want nil", name, d)
 		}
 	}
 	if _, err := New(driver.Spec{FeedID: "x", Backpressure: "maybe", Config: json.RawMessage(`{"transport":{"kind":"tcpserver","address":":0"},"decoder":{"name":"sbs"}}`)}, driver.Deps{Logger: zap.NewNop()}); err == nil {
 		t.Error("unknown backpressure policy must be rejected")
+	}
+}
+
+func TestRejectReasonAndDecoderContentType(t *testing.T) {
+	tr := &fakeTransport{frames: [][]byte{[]byte("rejected"), []byte("kept"), []byte("defaulted")}}
+	dec := decoder.Stateless(func(f transport.Frame) ([]*obs.Observation, error) {
+		switch string(f.Payload) {
+		case "rejected":
+			return nil, decoder.Reject("missing_identity", errors.New("no identity"))
+		case "kept":
+			o := &obs.Observation{SourceEntityID: "a", RawContentType: "application/x-protobuf"}
+			o.SetPosition(1, 1)
+			return []*obs.Observation{o}, nil
+		}
+		o := &obs.Observation{SourceEntityID: "b"}
+		o.SetPosition(1, 1)
+		return []*obs.Observation{o}, nil
+	})
+	d := newFakeDriver(driver.BackpressureBlock, tr, dec)
+	d.ddef.ContentType = "text/plain"
+	sink := newSink()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = d.Run(ctx, sink) }()
+	if !waitFor(func() bool { return sink.count() == 2 && len(sink.deadLetters()) == 1 }, time.Second) {
+		t.Fatalf("observations=%d dlq=%v", sink.count(), sink.deadLetters())
+	}
+	if dl := sink.deadLetters()[0]; dl != "missing_identity:rejected" {
+		t.Errorf("dead letter = %q, want it filed under the decoder's reason", dl)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if got := sink.obs[0].RawContentType; got != "application/x-protobuf" {
+		t.Errorf("a decoder-set content type = %q, want it kept", got)
+	}
+	if got := sink.obs[1].RawContentType; got != "text/plain" {
+		t.Errorf("content type without a decoder value = %q, want the definition's", got)
+	}
+}
+
+func TestApplySecretsAndMalformedCount(t *testing.T) {
+	var tcfg transport.Config
+	ApplySecrets(&tcfg, map[string]string{"password": "p", "tlsCert": "C", "tlsKey": "K", "clientCa": "CC", "serverCa": "SC"})
+	if tcfg.Password != "p" || string(tcfg.CertPEM) != "C" || string(tcfg.KeyPEM) != "K" || string(tcfg.ClientCAPEM) != "CC" || string(tcfg.CAPEM) != "SC" {
+		t.Errorf("tcfg = %+v", tcfg)
+	}
+	d, err := NewFromParts(driver.Spec{FeedID: "f"}, driver.Deps{Logger: zap.NewNop()},
+		transport.Config{Kind: "udp", Address: "127.0.0.1:0"}, "", decoder.Config{Name: "sentinel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := newSink()
+	d.decodeOne(context.Background(), transport.Frame{Payload: []byte{0xff, 0xff, 0xff}}, sink)
+	if d.Health().Detail["malformed"] != int64(1) || len(sink.deadLetters()) != 1 {
+		t.Errorf("detail = %+v, dlq = %v", d.Health().Detail, sink.deadLetters())
+	}
+}
+
+// A tcpserver feed that sets no maxConnections caps its connections at
+// DefaultMaxConnections, as the tcp driver does; a value it does set, 0
+// (unlimited) included, is kept. New decides this from the raw config,
+// because the parsed config cannot tell an absent key from 0. Only a
+// tcpserver has connections to cap.
+func TestTCPServerDefaultsMaxConnections(t *testing.T) {
+	cases := []struct {
+		name, transport string
+		want            int
+	}{
+		{"tcpserver, absent", `{"kind":"tcpserver","address":"127.0.0.1:0"}`, 50},
+		{"tcpserver, null", `{"kind":"tcpserver","address":"127.0.0.1:0","maxConnections":null}`, 50},
+		{"tcpserver, explicit 0 is unlimited", `{"kind":"tcpserver","address":"127.0.0.1:0","maxConnections":0}`, 0},
+		{"tcpserver, explicit 5", `{"kind":"tcpserver","address":"127.0.0.1:0","maxConnections":5}`, 5},
+		// encoding/json matches the key ignoring case, so these set it too; the
+		// last spelling wins when there are two.
+		{"tcpserver, MaxConnections 5", `{"kind":"tcpserver","address":"127.0.0.1:0","MaxConnections":5}`, 5},
+		{"tcpserver, MAXCONNECTIONS 0", `{"kind":"tcpserver","address":"127.0.0.1:0","MAXCONNECTIONS":0}`, 0},
+		{"tcpserver, two spellings, the last wins", `{"kind":"tcpserver","address":"127.0.0.1:0","maxConnections":7,"MaxConnections":5}`, 5},
+		{"tcpserver, MaxConnections null", `{"kind":"tcpserver","address":"127.0.0.1:0","MaxConnections":null}`, 50},
+		{"udp, absent", `{"kind":"udp","address":"127.0.0.1:0"}`, 0},
+	}
+	for _, tc := range cases {
+		cfg := `{"transport":` + tc.transport + `,"framing":"line","decoder":{"name":"sbs"}}`
+		d, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		if got := d.(*Driver).tcfg.MaxConnections; got != tc.want {
+			t.Errorf("%s: maxConnections = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A listening transport takes its per-sender rate from the transport section
+// beside the shared rate, and the two are independent. Absent, it is 0: no
+// per-sender limit.
+func TestListenerReadsMaxMessagesPerSecPerSender(t *testing.T) {
+	cases := []struct {
+		name, transport     string
+		wantShared, wantPer int
+	}{
+		{"tcpserver, absent", `{"kind":"tcpserver","address":"127.0.0.1:0"}`, 0, 0},
+		{"tcpserver, both", `{"kind":"tcpserver","address":"127.0.0.1:0","maxMessagesPerSec":500,"maxMessagesPerSecPerSender":20}`, 500, 20},
+		{"tcpserver, per sender only", `{"kind":"tcpserver","address":"127.0.0.1:0","maxMessagesPerSecPerSender":20}`, 0, 20},
+		{"udp, per sender", `{"kind":"udp","address":"127.0.0.1:0","maxMessagesPerSecPerSender":20}`, 0, 20},
+	}
+	for _, tc := range cases {
+		cfg := `{"transport":` + tc.transport + `,"framing":"line","decoder":{"name":"sbs"}}`
+		d, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		got := d.(*Driver).tcfg
+		if got.MaxMessagesPerSec != tc.wantShared || got.MaxMessagesPerSecPerSender != tc.wantPer {
+			t.Errorf("%s: maxMessagesPerSec = %d, maxMessagesPerSecPerSender = %d; want %d and %d", tc.name, got.MaxMessagesPerSec, got.MaxMessagesPerSecPerSender, tc.wantShared, tc.wantPer)
+		}
+	}
+}
+
+// A datagram transport takes its receive buffer from the transport section.
+// Absent, it is 0 and the transport uses its own default; a size the transport
+// would refuse stops the feed from being built.
+func TestListenerReadsReceiveBufferBytes(t *testing.T) {
+	cases := []struct {
+		name, transport string
+		want            int
+		wantErr         bool
+	}{
+		{"udp, absent", `{"kind":"udp","address":"127.0.0.1:0"}`, 0, false},
+		{"udp, set", `{"kind":"udp","address":"127.0.0.1:0","receiveBufferBytes":262144}`, 262144, false},
+		{"udp, too big", `{"kind":"udp","address":"127.0.0.1:0","receiveBufferBytes":67108865}`, 0, true},
+		{"udp, negative", `{"kind":"udp","address":"127.0.0.1:0","receiveBufferBytes":-1}`, 0, true},
+	}
+	for _, tc := range cases {
+		cfg := `{"transport":` + tc.transport + `,"framing":"line","decoder":{"name":"sbs"}}`
+		d, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%s: err = %v, want an error: %v", tc.name, err, tc.wantErr)
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		if got := d.(*Driver).tcfg.ReceiveBufferBytes; got != tc.want {
+			t.Errorf("%s: receiveBufferBytes = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A client CA verifies only the certificates a listener asks for, so a stream
+// listener that holds the clientCa secret without requireClientCert is
+// refused, as the tcp driver refuses it, instead of accepting every sender
+// unchecked.
+func TestStreamRefusesClientCAWithoutRequireClientCert(t *testing.T) {
+	ca := transporttest.NewCA(t)
+	pair := ca.Issue(t, "localhost")
+	secrets := map[string]string{"tlsCert": string(pair.CertPEM), "tlsKey": string(pair.KeyPEM), "clientCa": string(ca.CertPEM)}
+	build := func(tlsSection string) error {
+		cfg := `{"transport":{"kind":"tcpserver","address":"127.0.0.1:0"` + tlsSection + `},"framing":"line","decoder":{"name":"sbs"}}`
+		_, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg), Secrets: secrets}, driver.Deps{Logger: zap.NewNop()})
+		return err
+	}
+	for name, tlsSection := range map[string]string{
+		"no tls section":        ``,
+		"TLS off":               `,"tls":{"enabled":false,"requireClientCert":true}`,
+		"requireClientCert off": `,"tls":{"enabled":true}`,
+	} {
+		err := build(tlsSection)
+		if err == nil || !strings.Contains(err.Error(), "clientCa") || !strings.Contains(err.Error(), "requireClientCert") {
+			t.Errorf("%s: err = %v, want one naming clientCa and requireClientCert", name, err)
+		}
+	}
+	if err := build(`,"tls":{"enabled":true,"requireClientCert":true}`); err != nil {
+		t.Errorf("mutual TLS with a client CA: %v", err)
+	}
+}
+
+// A tcpserver feed with requireClientCert and TLS off is refused, with no
+// secrets at all: it would run plain and open.
+func TestStreamRefusesRequireClientCertWithTLSOff(t *testing.T) {
+	cfg := `{"transport":{"kind":"tcpserver","address":"127.0.0.1:0","tls":{"enabled":false,"requireClientCert":true}},"framing":"line","decoder":{"name":"sbs"}}`
+	_, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+	if err == nil || !strings.Contains(err.Error(), "requireClientCert is set but TLS is off") {
+		t.Errorf("err = %v, want the requireClientCert-without-TLS refusal", err)
+	}
+}
+
+// requireClientCert is a listener setting: a transport that dials out has no
+// senders to ask for certificates and ignores the flag, so with TLS on and no
+// client CA it builds like any other. tcpclient and stomp build their TLS
+// config in New, so they are the dialers this can check there; websocket and
+// mqtt build theirs when they start.
+func TestDialersIgnoreRequireClientCert(t *testing.T) {
+	for kind, c := range map[string]struct{ transport, framing string }{
+		"tcpclient": {`{"kind":"tcpclient","address":"127.0.0.1:30003","tls":{"enabled":true,"requireClientCert":true}}`, "line"},
+		"stomp":     {`{"kind":"stomp","brokerUrl":"127.0.0.1:61613","queue":"/queue/x","tls":{"enabled":true,"requireClientCert":true}}`, "message"},
+	} {
+		cfg := `{"transport":` + c.transport + `,"framing":"` + c.framing + `","decoder":{"name":"sbs"}}`
+		if _, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()}); err != nil {
+			t.Errorf("%s with requireClientCert and no client CA: %v", kind, err)
+		}
+	}
+}
+
+// The schema's maxConnections default is what the form shows a tcpserver feed
+// will use when it sets none, and New applies DefaultMaxConnections: they must
+// stay one number.
+func TestSchemaDefaultMatchesDefaultMaxConnections(t *testing.T) {
+	var doc struct {
+		Properties struct {
+			Transport struct {
+				Properties struct {
+					MaxConnections struct {
+						Default *int `json:"default"`
+					} `json:"maxConnections"`
+				} `json:"properties"`
+			} `json:"transport"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schema, &doc); err != nil {
+		t.Fatal(err)
+	}
+	def := doc.Properties.Transport.Properties.MaxConnections.Default
+	if def == nil {
+		t.Fatalf("the schema gives transport.maxConnections no default, want DefaultMaxConnections (%d)", DefaultMaxConnections)
+	}
+	if *def != DefaultMaxConnections {
+		t.Errorf("schema transport.maxConnections default = %d, want DefaultMaxConnections (%d)", *def, DefaultMaxConnections)
+	}
+}
+
+// The form titles each TLS secret from the schema's x-secrets. A stream's TLS
+// is not always governed by tls.enabled (a wss:// URL or an ssl:// broker turns
+// it on too), so no secret is hidden or required by it, with one exception: only
+// a tcpserver that requires client certificates reads a client CA. It refuses
+// one it would not check, so the form offers clientCa to that listener alone.
+// It does not require it there: the listener may take its client CA from
+// tls.clientCaFile, which the form neither shows nor checks, so a requirement
+// would block saving a valid config.
+func TestSchemaTitlesTheTLSSecrets(t *testing.T) {
+	var doc struct {
+		Secrets map[string]map[string]json.RawMessage `json:"x-secrets"`
+	}
+	if err := json.Unmarshal(schema, &doc); err != nil {
+		t.Fatal(err)
+	}
+	def, ok := driver.Lookup(ID)
+	if !ok {
+		t.Fatal("the stream driver is not registered")
+	}
+	for _, name := range []string{"tlsCert", "tlsKey", "clientCa", "serverCa"} {
+		if _, ok := doc.Secrets[name]; !ok {
+			t.Errorf("x-secrets has no entry for %s", name)
+		}
+	}
+	// A tcpserver, with TLS on, asking senders for certificates.
+	mutualTLS := map[string]any{"transport/kind": "tcpserver", "transport/tls/enabled": true, "transport/tls/requireClientCert": true}
+	for name, meta := range doc.Secrets {
+		if !slices.Contains(def.SecretFields, name) {
+			t.Errorf("x-secrets describes %s, which is not one of the driver's secret fields %v", name, def.SecretFields)
+		}
+		var title string
+		if err := json.Unmarshal(meta["title"], &title); err != nil || title == "" {
+			t.Errorf("x-secrets.%s has no title", name)
+		}
+		for _, condition := range []string{"showWhen", "requiredWhen"} {
+			var got map[string]any
+			raw, has := meta[condition]
+			if has {
+				if err := json.Unmarshal(raw, &got); err != nil {
+					t.Errorf("x-secrets.%s %s is not an object: %v", name, condition, err)
+				}
+			}
+			var want map[string]any // nil: absent, as for every secret but clientCa's showWhen
+			if name == "clientCa" && condition == "showWhen" {
+				want = mutualTLS
+			}
+			if has != (want != nil) || !maps.Equal(got, want) {
+				t.Errorf("x-secrets.%s %s = %v (present: %v), want %v (present: %v)", name, condition, got, has, want, want != nil)
+			}
+		}
+	}
+}
+
+// The TLS files a stream transport reads from disk are held to the folders in
+// FileDirs, as the secret references are; a link inside a folder that leads
+// out of it is refused too. With no FileDirs set nothing is held back.
+func TestNewHoldsTLSFilesToFileDirs(t *testing.T) {
+	root := t.TempDir()
+	allowed := filepath.Join(root, "allowed")
+	if err := os.MkdirAll(allowed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside.pem")
+	for _, f := range []string{filepath.Join(allowed, "cert.pem"), outside} {
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	escape := filepath.Join(allowed, "escape.pem")
+	if err := os.Symlink(outside, escape); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	saved := FileDirs
+	defer func() { FileDirs = saved }()
+
+	build := func(field, path string) error {
+		tls, _ := json.Marshal(map[string]any{"enabled": true, field: path})
+		cfg := `{"transport":{"kind":"tcpserver","address":"127.0.0.1:0","tls":` + string(tls) + `},"framing":"line","decoder":{"name":"sbs"}}`
+		_, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+		return err
+	}
+	FileDirs = []string{allowed}
+	for _, field := range []string{"certFile", "keyFile", "caFile", "clientCaFile"} {
+		// The file inside is fine as far as the policy goes (a lone certFile
+		// fails later, in the TLS setup, which New does not run).
+		if err := build(field, filepath.Join(allowed, "cert.pem")); err != nil && strings.Contains(err.Error(), "INGEST_SECRET_FILE_DIRS") {
+			t.Errorf("%s inside: %v", field, err)
+		}
+		for name, path := range map[string]string{"outside": outside, "dotdot": filepath.Join(allowed, "..", "outside.pem"), "link out": escape} {
+			err := build(field, path)
+			if err == nil || !strings.Contains(err.Error(), "tls."+field) || !strings.Contains(err.Error(), "INGEST_SECRET_FILE_DIRS") {
+				t.Errorf("%s %s: %v", field, name, err)
+			}
+		}
+	}
+	FileDirs = nil
+	if err := build("certFile", outside); err != nil && strings.Contains(err.Error(), "INGEST_SECRET_FILE_DIRS") {
+		t.Errorf("no FileDirs: %v", err)
+	}
+}
+
+// New keeps the TLS file paths as configured, links and all, and passes the
+// folders on to the transport so that every read of the files is confined to
+// them again: a rotated certificate is then followed, and a link re-pointed
+// out of the folder is refused when it is read.
+func TestNewKeepsTheConfiguredTLSPathsAndPassesTheFolders(t *testing.T) {
+	root := t.TempDir()
+	allowed := filepath.Join(root, "allowed")
+	if err := os.MkdirAll(allowed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(allowed, "ca-2024.pem"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(allowed, "ca.pem")
+	if err := os.Symlink("ca-2024.pem", link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	saved := FileDirs
+	defer func() { FileDirs = saved }()
+	FileDirs = []string{allowed}
+	cfg := `{"transport":{"kind":"websocket","url":"wss://127.0.0.1:1/x","tls":{"enabled":true,"caFile":"` + link + `"}},"framing":"message","decoder":{"name":"sbs"}}`
+	d, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := d.(*Driver).tcfg
+	if tc.TLS.CAFile != link {
+		t.Errorf("caFile = %q, want the configured %q", tc.TLS.CAFile, link)
+	}
+	if !slices.Equal(tc.FileDirs, []string{allowed}) {
+		t.Errorf("FileDirs = %v", tc.FileDirs)
+	}
+}
+
+// A non-nil FileDirs restricts, an empty one to nothing at all, as a secret
+// policy with no folders does; nil, the zero policy, restricts nothing.
+func TestNewWithNoAllowedFolders(t *testing.T) {
+	saved := FileDirs
+	defer func() { FileDirs = saved }()
+	cfg := `{"transport":{"kind":"tcpserver","address":"127.0.0.1:0","tls":{"enabled":true,"caFile":"/etc/sentinel/ca.pem"}},"framing":"line","decoder":{"name":"sbs"}}`
+	build := func() error {
+		_, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+		return err
+	}
+	FileDirs = []string{}
+	if err := build(); err == nil || !strings.Contains(err.Error(), "tls.caFile") || !strings.Contains(err.Error(), "outside the folders INGEST_SECRET_FILE_DIRS allows") || strings.Contains(err.Error(), "secret reference") {
+		t.Errorf("empty folders: %v", err)
+	}
+	FileDirs = nil
+	if err := build(); err != nil && strings.Contains(err.Error(), "INGEST_SECRET_FILE_DIRS") {
+		t.Errorf("nil folders: %v", err)
 	}
 }

@@ -39,6 +39,10 @@ const (
 	maxJitter              = 5 * time.Minute
 	maxBackoff             = time.Minute
 	maxRetryAfter          = 6 * time.Hour
+	// deadLetterSample is how much of a response that cannot be parsed is
+	// dead-lettered: the start of it says what came back, and the whole of it
+	// can be megabytes.
+	deadLetterSample = 64 << 10
 )
 
 //go:embed schema.json
@@ -395,6 +399,11 @@ func (d *Driver) fetchSelection(ctx context.Context, sink driver.Sink, sel selec
 	}
 	records, err := tlesgp4.ParseOMM(resp.Body)
 	if err != nil {
+		// Dead-lettered like the other pollers' unparseable responses, so that its
+		// error text reaches the status as a decoder's does, through the runner,
+		// and is hidden from callers not cleared for the feed. The error returned
+		// stays what it was, and so does the driver's health.
+		sink.DeadLetter(sample(resp.Body), "parse_error", fmt.Errorf("%s: %w", sel.Key(), err))
 		return nil, resp.Status, 0, err
 	}
 	ids = make([]int, 0, len(records))
@@ -413,6 +422,9 @@ func (d *Driver) fetchSelection(ctx context.Context, sink driver.Sink, sel selec
 	d.mu.Unlock()
 	return ids, resp.Status, 0, nil
 }
+
+// sample is the start of a response, as much of it as is dead-lettered.
+func sample(body []byte) []byte { return body[:min(len(body), deadLetterSample)] }
 
 // parseRetryAfter reads a Retry-After header as seconds or an HTTP date,
 // capped so a hostile value cannot park the feed for days.

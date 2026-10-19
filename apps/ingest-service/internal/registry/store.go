@@ -129,8 +129,29 @@ func (s *Store) Get(ctx context.Context, id string) (Feed, error) {
 	return f, nil
 }
 
+// Guard checks a feed about to be written against every feed in the registry
+// and returns the problems that refuse the write. others holds every stored
+// feed, f itself included when it is already stored, with only ID, Name,
+// Driver, Config and Enabled set: its other fields are zero. A guarded write
+// runs the guard under the advisory lock named by feedPortsLockKey.
+type Guard func(f Feed, others []Feed) []Problem
+
+// feedPortsLockKey names the transaction-level advisory lock a guarded write
+// holds from its check to its commit, so that two connections cannot both be
+// checked for the same port before either is stored. It is hashed with
+// hashtext, as the analytics baseline job hashes its own key.
+const feedPortsLockKey = "sentinel.ingest.feed-ports"
+
 // Create inserts a feed with version 1 and returns the stored row.
 func (s *Store) Create(ctx context.Context, f *Feed) error {
+	return s.CreateGuarded(ctx, f, nil)
+}
+
+// CreateGuarded is Create once g has accepted the feed. g runs in the insert's
+// transaction under the advisory lock on feed ports (see runGuard); its
+// problems come back as a *ValidationError and nothing is stored. A nil g
+// takes no lock.
+func (s *Store) CreateGuarded(ctx context.Context, f *Feed, g Guard) error {
 	if f.SecretRefs == nil {
 		f.SecretRefs = map[string]string{}
 	}
@@ -138,6 +159,9 @@ func (s *Store) Create(ctx context.Context, f *Feed) error {
 		f.Config = json.RawMessage("{}")
 	}
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if err := runGuard(ctx, tx, *f, g); err != nil {
+			return err
+		}
 		_, err := tx.Exec(ctx, `
 			INSERT INTO sentinel.feeds (id, name, description, driver, config, secret_refs, enabled, builtin, created_by)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''))`,
@@ -164,6 +188,12 @@ func (s *Store) Create(ctx context.Context, f *Feed) error {
 // Update replaces the mutable columns, bumps the version, and returns the
 // stored row. Driver and builtin are immutable.
 func (s *Store) Update(ctx context.Context, f *Feed) error {
+	return s.UpdateGuarded(ctx, f, nil)
+}
+
+// UpdateGuarded is Update once g has accepted the feed, checked and refused the
+// way CreateGuarded does.
+func (s *Store) UpdateGuarded(ctx context.Context, f *Feed, g Guard) error {
 	if f.SecretRefs == nil {
 		f.SecretRefs = map[string]string{}
 	}
@@ -171,6 +201,9 @@ func (s *Store) Update(ctx context.Context, f *Feed) error {
 		f.Config = json.RawMessage("{}")
 	}
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if err := runGuard(ctx, tx, *f, g); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `
 			UPDATE sentinel.feeds
 			   SET name = $2, description = $3, config = $4, secret_refs = $5, enabled = $6,
@@ -281,6 +314,40 @@ func (s *Store) ReleaseStatuses(ctx context.Context, replica string) error {
 	return nil
 }
 
+// Replica is a live ingest replica and the role it plays: an ordinary
+// replica, or a listener (with the address senders use) that is shared when it
+// also takes ordinary feeds.
+type Replica struct {
+	ID       string `json:"id"`
+	Listener bool   `json:"listener"`
+	Shared   bool   `json:"shared"`
+	Host     string `json:"host"`
+}
+
+// NoListenerError is shown on listening connections while no listener replica is live.
+const NoListenerError = "no listener replica (run the ingest listener: INGEST_LISTENER=true)"
+
+// NoOrdinaryReplicaError is shown on ordinary feeds while the only live replicas are dedicated listeners.
+const NoOrdinaryReplicaError = "no ingest replica for this feed: the only live replicas are listeners, which run listening connections only (start ingest-service, or set INGEST_LISTENER_SHARED=true on the listener)"
+
+// LiveReplicas lists the unexpired replicas with their roles, by id.
+func (s *Store) LiveReplicas(ctx context.Context) ([]Replica, error) {
+	rows, err := s.pool.Query(ctx, `SELECT replica_id, listener, listener_shared, COALESCE(listener_host, '') FROM sentinel.ingest_replicas WHERE expires_at > NOW() ORDER BY replica_id`)
+	if err != nil {
+		return nil, fmt.Errorf("listing live replicas: %w", err)
+	}
+	defer rows.Close()
+	var out []Replica
+	for rows.Next() {
+		var r Replica
+		if err := rows.Scan(&r.ID, &r.Listener, &r.Shared, &r.Host); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // GetArea returns the pushed area for a feed, or an inactive area when none
 // has been pushed.
 func (s *Store) GetArea(ctx context.Context, id string) (Area, error) {
@@ -370,6 +437,42 @@ func (s *Store) listen(ctx context.Context, out chan<- Change) error {
 	}
 }
 
+// runGuard is the check of a guarded write, made inside its transaction: it
+// takes the advisory lock on feed ports, reads every feed and runs g. The lock
+// is held until the transaction ends. The transaction is READ COMMITTED (see
+// runInTx), so the read takes its snapshot only once the lock is granted and
+// sees what the writer that held the lock before committed. Problems refuse the
+// write as a *ValidationError, which the management API maps to 422. A nil g
+// checks nothing and takes no lock.
+func runGuard(ctx context.Context, tx pgx.Tx, f Feed, g Guard) error {
+	if g == nil {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, feedPortsLockKey); err != nil {
+		return fmt.Errorf("locking feed ports: %w", err)
+	}
+	rows, err := tx.Query(ctx, `SELECT id, name, driver, config, enabled FROM sentinel.feeds ORDER BY created_at, id`)
+	if err != nil {
+		return fmt.Errorf("reading feeds to check: %w", err)
+	}
+	defer rows.Close()
+	var others []Feed
+	for rows.Next() {
+		var o Feed
+		if err := rows.Scan(&o.ID, &o.Name, &o.Driver, &o.Config, &o.Enabled); err != nil {
+			return fmt.Errorf("scanning feed to check: %w", err)
+		}
+		others = append(others, o)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("reading feeds to check: %w", err)
+	}
+	if problems := g(f, others); len(problems) > 0 {
+		return &ValidationError{Problems: problems}
+	}
+	return nil
+}
+
 func notify(ctx context.Context, tx pgx.Tx, channel, payload string) error {
 	if _, err := tx.Exec(ctx, "SELECT pg_notify($1, $2)", channel, payload); err != nil {
 		return fmt.Errorf("notifying %s: %w", channel, err)
@@ -377,13 +480,34 @@ func notify(ctx context.Context, tx pgx.Tx, channel, payload string) error {
 	return nil
 }
 
+// txBeginner starts a transaction; *pgxpool.Pool is one, and tests use a fake.
+type txBeginner interface {
+	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
+}
+
 func (s *Store) inTx(ctx context.Context, fn func(pgx.Tx) error) error {
-	tx, err := s.pool.Begin(ctx)
+	return runInTx(ctx, s.pool, fn)
+}
+
+// runInTx runs fn in a transaction on db: committed when fn returns nil, rolled
+// back when it returns an error or panics.
+//
+// Every store transaction is READ COMMITTED. That is the Postgres default, but
+// it is pinned because runGuard depends on it: each statement takes a fresh
+// snapshot, so the read after the lock wait sees the previous holder's commit.
+// Under REPEATABLE READ the snapshot would be taken at the lock statement,
+// before the wait, and the lock would protect nothing; under SERIALIZABLE the
+// losing save would fail with a serialization error (40001).
+func runInTx(ctx context.Context, db txBeginner, fn func(pgx.Tx) error) error {
+	tx, err := db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
+	// Deferred so that a panic in fn cannot strand the transaction, and the port
+	// lock it may hold, on a connection that never returns to the pool. A no-op
+	// once Commit has run.
+	defer func() { _ = tx.Rollback(ctx) }()
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback(ctx)
 		return err
 	}
 	return tx.Commit(ctx)

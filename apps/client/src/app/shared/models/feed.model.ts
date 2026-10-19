@@ -71,19 +71,41 @@ export interface ReplaceFeedRequest {
   enabled: boolean;
 }
 
+export type JsonType = 'object' | 'string' | 'number' | 'integer' | 'boolean' | 'array';
+
+/** What a driver says about one of its secrets (`x-secrets`), so the form can name it and ask for it when it is needed. */
+export interface SecretMeta {
+  title?: string;
+  description?: string;
+  /** Sample references; the first is the placeholder. */
+  examples?: string[];
+  /**
+   * Shown only while every entry holds: `{ "<path>": value | [values] }`, a path being slash-separated and
+   * relative to the config root (`tls/enabled`).
+   */
+  showWhen?: Record<string, unknown>;
+  /** Required only while every entry holds, written like `showWhen`. */
+  requiredWhen?: Record<string, unknown>;
+}
+
 /** The subset of JSON Schema the driver config schemas use. */
 export interface JsonSchema {
   $schema?: string;
   $id?: string;
-  type?: 'object' | 'string' | 'number' | 'integer' | 'boolean' | 'array';
+  /** One type, or several: `["object", "string"]` takes either. */
+  type?: JsonType | JsonType[];
   title?: string;
   description?: string;
   properties?: Record<string, JsonSchema>;
+  /** What keys beyond `properties` may hold: `false` forbids them, a schema types their values. */
+  additionalProperties?: boolean | JsonSchema;
   required?: string[];
   items?: JsonSchema;
   enum?: Array<string | number>;
   const?: string | number | boolean;
   default?: unknown;
+  /** Sample values; the first one is the placeholder of an object edited as JSON. */
+  examples?: unknown[];
   minimum?: number;
   maximum?: number;
   exclusiveMinimum?: number;
@@ -93,6 +115,10 @@ export interface JsonSchema {
   format?: string;
   /** Marks a property whose value is a secret reference and belongs in secretRefs. */
   'x-secret'?: boolean;
+  /** Shows the property only while its siblings have these values: `{ "<siblingKey>": value | [values] }`, every entry holding. */
+  'x-showWhen'?: Record<string, unknown>;
+  /** At the root: what the driver says about each of its secrets, by name. */
+  'x-secrets'?: Record<string, SecretMeta>;
   allOf?: JsonSchema[];
   if?: JsonSchema;
   then?: JsonSchema;
@@ -236,6 +262,80 @@ export interface FeedProblem {
 export interface FeedErrorResponse {
   error: string;
   details?: FeedProblem[];
+}
+
+/** A run of ports, both ends included. */
+export interface PortRange {
+  from: number;
+  to: number;
+}
+
+/** A port a listening connection holds. */
+export interface ListenPort {
+  protocol: 'tcp' | 'udp';
+  port: number;
+  feedId: string;
+  /** The connection's name; the hints name it by its id when the server sends none. */
+  feedName?: string;
+  /** A disabled connection keeps its port, so nobody else may take it. */
+  enabled: boolean;
+}
+
+/**
+ * `GET /api/v1/feeds/ports`: which ports a listening connection may bind. `min` and `max` bound them, `reserved`
+ * are Sentinel's own (INGEST_RESERVED_PORTS), `taken` are held by connections. `suggested` is a free port per
+ * protocol for a connection that has none yet. The form offers it when it is free there too; one inside `min`
+ * and `max` that is not free is where the search for a free port starts instead (from the next port), and a
+ * missing one, or one outside them, is ignored (the search starts at 6000).
+ */
+export interface ListenPorts {
+  min: number;
+  max: number;
+  reserved: PortRange[];
+  taken: ListenPort[];
+  suggested: Partial<Record<'tcp' | 'udp', number>>;
+}
+
+/** How many rejects the panel asks for; the server's default, and it allows up to 100. */
+export const DEAD_LETTERS_LIMIT = 20;
+
+/**
+ * One message a connection rejected, as `GET /api/v1/feeds/{id}/deadletters` lists it. The server writes every field
+ * except `payload` and `payloadEncoding`, which come only with `payload=true`. What it does not know therefore arrives
+ * empty, not left out: `""` for `error`, `driver`, `decoder` and `sender`, and Go's zero time (`0001-01-01T00:00:00Z`)
+ * for `at`. A server that leaves such a key out instead is read the same way: either is "not recorded".
+ */
+export interface DeadLetter {
+  /** When the connection rejected it; Go's zero time when the server does not know. */
+  at: string;
+  /** Why, as a short code (`parse_error`…). */
+  reason: string;
+  /** The decoder's own words, which can quote part of the message. */
+  error?: string;
+  driver?: string;
+  decoder?: string;
+  /** Who sent it: `ip:port`, or `""` when the driver could not tell. */
+  sender?: string;
+  /** The size of the whole message in bytes, whatever part of it `payload` holds. */
+  size: number;
+  /** Where the reject sits in the dead-letter topic. */
+  partition: number;
+  offset: number;
+  /** The start of the message, up to 1 KiB of it; only with `payload=true`. */
+  payload?: string;
+  /** `utf8` when `payload` is the text, `base64` when the bytes it holds are not valid UTF-8. */
+  payloadEncoding?: 'utf8' | 'base64';
+  /** Whether `payload` stops short of `size`. */
+  payloadTruncated?: boolean;
+}
+
+/** The answer to `GET /api/v1/feeds/{id}/deadletters`: this connection's rejects, newest first. */
+export interface DeadLetterPage {
+  letters: DeadLetter[];
+  /** How many dead-letter records the server looked through to find them. */
+  scanned: number;
+  /** True when the server stopped scanning at its deadline, so it may have missed some. */
+  partial: boolean;
 }
 
 /** A feed's direction, with older servers (no field) treated as a source. */

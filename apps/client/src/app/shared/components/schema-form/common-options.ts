@@ -2,8 +2,9 @@ import { JsonSchema } from '../../models/feed.model';
 
 /**
  * Runtime options every driver accepts alongside its own configuration.
- * Mirrors apps/ingest-service/internal/drivers/schemas/common.json; the
- * values land in the feed's config next to the driver's own keys.
+ * Mirrors apps/ingest-service/internal/drivers/schemas/common.json, bar the
+ * options the connection form owns (common-options.spec.ts pins the two
+ * together); the values land in the feed's config next to the driver's own keys.
  */
 export const COMMON_OPTIONS_SCHEMA: JsonSchema = {
   title: 'Common feed options',
@@ -30,7 +31,7 @@ export const COMMON_OPTIONS_SCHEMA: JsonSchema = {
     pinnedReplica: {
       type: 'string',
       title: 'Pinned replica',
-      description: 'Run this feed only on the named ingest replica (required for listening transports).',
+      description: 'Run this feed only on the named ingest replica. Optional: a connection that listens on a port runs on a listener replica by default.',
     },
     rawPayload: {
       type: 'string',
@@ -42,12 +43,13 @@ export const COMMON_OPTIONS_SCHEMA: JsonSchema = {
       type: 'object',
       title: 'Delivery tuning',
       description: 'How a sending connection paces what it delivers. Only read for connections that send.',
+      additionalProperties: false,
       properties: {
-        queueMax: { type: 'integer', minimum: 1, title: 'Queue max', description: 'Events waiting to go out before the oldest are dropped.' },
-        perEntityMinSec: { type: 'number', minimum: 0, title: 'Per-entity minimum (s)', description: 'Updates for one entity closer together than this are coalesced.' },
-        maxEventsPerSec: { type: 'number', minimum: 0, title: 'Max events per second' },
-        maxLagSec: { type: 'number', minimum: 0, title: 'Max lag (s)', description: 'Events older than this are dropped rather than delivered late.' },
-        policyExitGraceSec: { type: 'number', minimum: 0, title: 'Policy exit grace (s)', description: 'How long an entity that left the policy keeps being delivered.' },
+        queueMax: { type: 'integer', minimum: 100, default: 10000, title: 'Queue max', description: 'Events waiting to go out before the oldest are dropped.' },
+        perEntityMinSec: { type: 'number', minimum: 0, default: 5, title: 'Per-entity minimum (s)', description: 'Updates for one entity closer together than this are coalesced.' },
+        maxEventsPerSec: { type: 'integer', minimum: 1, default: 200, title: 'Max events per second' },
+        maxLagSec: { type: 'integer', minimum: 0, default: 300, title: 'Max lag (s)', description: 'Events older than this are dropped rather than delivered late.' },
+        policyExitGraceSec: { type: 'integer', minimum: 0, default: 30, title: 'Policy exit grace (s)', description: 'How long an entity that left the policy keeps being delivered.' },
       },
     },
   },

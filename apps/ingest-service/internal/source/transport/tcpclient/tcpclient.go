@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/sentinel/ingest-service/internal/source/transport"
@@ -27,8 +28,11 @@ func init() {
 
 // Client is the tcpclient transport.
 type Client struct {
-	cfg transport.Config
-	tls *tls.Config
+	cfg   transport.Config
+	tlsrc *transport.TLSSource // nil without TLS; builds the config again before each dial when the config reloads
+	// connects counts successful dials, messages the frames read, and since
+	// is when the live connection came up (unix nanoseconds, 0 while down).
+	connects, messages, since atomic.Int64
 	transport.StateTracker
 }
 
@@ -40,11 +44,11 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	if _, _, err := net.SplitHostPort(cfg.Address); err != nil {
 		return nil, errors.New("tcpclient: address must be host:port")
 	}
-	t, err := cfg.TLSConfig()
+	src, err := transport.NewTLSSource(cfg, nil)
 	if err != nil {
 		return nil, err
 	}
-	return &Client{cfg: cfg, tls: t}, nil
+	return &Client{cfg: cfg, tlsrc: src}, nil
 }
 
 // Run dials, scans and reconnects until ctx ends.
@@ -61,6 +65,8 @@ func (c *Client) Run(ctx context.Context, emit transport.Emit) error {
 			continue
 		}
 		backoff = 0
+		c.connects.Add(1)
+		c.since.Store(time.Now().UnixNano())
 		c.Set(func(s *transport.State) { s.Connected = true; s.Connections = 1; s.LastError = "" })
 		done := make(chan struct{})
 		go func() {
@@ -70,9 +76,14 @@ func (c *Client) Run(ctx context.Context, emit transport.Emit) error {
 			case <-done:
 			}
 		}()
-		err = transport.ScanConn(ctx, conn, c.cfg, emit)
+		counted := func(ctx context.Context, f transport.Frame) error {
+			c.messages.Add(1)
+			return emit(ctx, f)
+		}
+		err = transport.ScanConn(ctx, conn, c.cfg, counted)
 		close(done)
 		conn.Close()
+		c.since.Store(0)
 		c.Set(func(s *transport.State) {
 			s.Connected = false
 			s.Connections = 0
@@ -93,12 +104,29 @@ func (c *Client) Run(ctx context.Context, emit transport.Emit) error {
 
 func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 	d := net.Dialer{Timeout: dialTimeout}
-	if c.tls != nil {
-		td := tls.Dialer{NetDialer: &d, Config: c.tls}
+	// Each dial reads the TLS material again (a rotated CA or client certificate
+	// is followed at the next reconnect); a reload that fails dials with the
+	// config in use.
+	if t := c.tlsrc.Fresh(); t != nil {
+		td := tls.Dialer{NetDialer: &d, Config: t}
 		return td.DialContext(ctx, "tcp", c.cfg.Address)
 	}
 	return d.DialContext(ctx, "tcp", c.cfg.Address)
 }
 
-// State reports connectivity.
-func (c *Client) State() transport.State { return c.Get() }
+// State reports connectivity, the remote, messages and reconnects (dials
+// after the first). since is when the live connection came up, and is absent
+// while the connection is down.
+func (c *Client) State() transport.State {
+	st := c.Get()
+	reconnects := c.connects.Load() - 1
+	if reconnects < 0 {
+		reconnects = 0
+	}
+	st.Detail = map[string]any{"remote": c.cfg.Address, "messages": c.messages.Load(), "reconnects": reconnects}
+	if ns := c.since.Load(); ns > 0 {
+		st.Detail["since"] = time.Unix(0, ns).UTC().Format(time.RFC3339)
+	}
+	c.tlsrc.Apply(&st)
+	return st
+}

@@ -24,10 +24,18 @@ spec:
         prometheus.io/path: /metrics
     spec:
       terminationGracePeriodSeconds: 30
+      {{- with .Values.ingestService.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: ingest-service
           image: "{{ .Values.ingestService.image.repository }}:{{ .Values.ingestService.image.tag }}"
           imagePullPolicy: {{ .Values.ingestService.image.pullPolicy | default "IfNotPresent" }}
+          {{- with .Values.ingestService.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 4000
@@ -77,6 +85,11 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+          {{- if .Values.ingestService.secretEnv.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.ingestService.secretEnv.existingSecret }}
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /health
@@ -97,11 +110,20 @@ spec:
             - name: tak-secrets
               mountPath: {{ .Values.ingestService.tak.mountPath }}
               readOnly: true
+            {{- if .Values.ingestService.secretFiles.existingSecret }}
+            # Files that feed secretRefs name as file:/etc/sentinel/secrets/...
+            # (TLS certificates and keys, for example): one per key of the Secret.
+            - name: secret-files
+              mountPath: {{ .Values.ingestService.secretFiles.mountPath }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tak-secrets
           secret:
             secretName: {{ default (printf "%s-ingest-tak" (include "sentinel.fullname" .)) .Values.ingestService.tak.existingSecret }}
             optional: true
+            # Group-readable by the pod's fsGroup only, like the secret-files volume.
+            defaultMode: 0440
             items:
               - key: tak-client-cert
                 path: client.pem
@@ -109,6 +131,12 @@ spec:
                 path: client.key
               - key: tak-ca
                 path: ca.pem
+        {{- if .Values.ingestService.secretFiles.existingSecret }}
+        - name: secret-files
+          secret:
+            secretName: {{ .Values.ingestService.secretFiles.existingSecret }}
+            defaultMode: 0440
+        {{- end }}
 ---
 {{- if and (not .Values.ingestService.tak.existingSecret) .Values.ingestService.tak.clientCert }}
 apiVersion: v1

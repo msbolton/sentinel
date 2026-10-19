@@ -3,21 +3,26 @@ package feed
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/obs"
+	"github.com/sentinel/ingest-service/internal/publish"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 )
 
 type memPublisher struct {
 	mu   sync.Mutex
 	obs  []*obs.Observation
-	dlq  []string
+	dlq  []obs.DeadLetter
 	fail error
 }
 
@@ -30,10 +35,15 @@ func (p *memPublisher) Emit(_ context.Context, o *obs.Observation) error {
 	p.obs = append(p.obs, o)
 	return nil
 }
-func (p *memPublisher) DeadLetter(feedID, driverID, decoder string, raw []byte, reason string, cause error) {
+func (p *memPublisher) DeadLetter(dl obs.DeadLetter) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.dlq = append(p.dlq, feedID+"/"+driverID+"/"+reason)
+	p.dlq = append(p.dlq, dl)
+}
+func (p *memPublisher) deadLetters() []obs.DeadLetter {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]obs.DeadLetter(nil), p.dlq...)
 }
 func (p *memPublisher) observations() []*obs.Observation {
 	p.mu.Lock()
@@ -66,7 +76,8 @@ func TestRunnerStampsProvenanceAndDedupes(t *testing.T) {
 		sink.DeadLetter([]byte("garbage"), "parse_error", errors.New("bad"))
 		return nil
 	}}
-	r := NewRunner("feed-x", "stream", drv, pub, metrics.New(nil), zap.NewNop(), RunnerOptions{RawMax: 4})
+	m := metrics.New(nil)
+	r := NewRunner("feed-x", "stream", drv, pub, m, zap.NewNop(), RunnerOptions{RawMax: 4})
 	if err := r.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -85,11 +96,82 @@ func TestRunnerStampsProvenanceAndDedupes(t *testing.T) {
 		t.Errorf("raw = %q truncated=%v", o.Raw, o.RawTruncated)
 	}
 	st := r.Stats()
-	if st.FramesTotal != 3 || st.Observations != 2 || st.EntitiesLast != 2 || st.ErrorsTotal != 1 || st.LastSuccessAt.IsZero() || st.LastError != "bad" {
+	if st.Received != 3 || st.Observations != 2 || st.EntitiesLast != 2 || st.ErrorsTotal != 1 || st.LastSuccessAt.IsZero() || st.LastError != "bad" {
 		t.Errorf("stats = %+v", st)
 	}
-	if len(pub.dlq) != 1 || pub.dlq[0] != "feed-x/stream/parse_error" {
-		t.Errorf("dlq = %v", pub.dlq)
+	// Received counts what the driver emitted, the duplicate included;
+	// observations_total what was published after it was suppressed.
+	for name, c := range map[string]struct {
+		got  float64
+		want float64
+	}{
+		"observations_received_total": {testutil.ToFloat64(m.ObservationsReceived.WithLabelValues("feed-x", "stream")), 3},
+		"observations_total":          {testutil.ToFloat64(m.ObservationsTotal.WithLabelValues("feed-x", "stream")), 2},
+		"duplicates_total":            {testutil.ToFloat64(m.DuplicatesTotal.WithLabelValues("feed-x")), 1},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want %v", name, c.got, c.want)
+		}
+	}
+	// A driver that says nothing of who sent the payload leaves the sender, the
+	// decoder and the receive time empty for the publisher to fill in.
+	dls := pub.deadLetters()
+	if len(dls) != 1 {
+		t.Fatalf("dlq = %+v, want one dead letter", dls)
+	}
+	if dl := dls[0]; dl.FeedID != "feed-x" || dl.Driver != "stream" || dl.Reason != "parse_error" || string(dl.Raw) != "garbage" ||
+		dl.Cause == nil || dl.Cause.Error() != "bad" || dl.Decoder != "" || dl.Sender != "" || !dl.ReceivedAt.IsZero() {
+		t.Errorf("dead letter = %+v", dl)
+	}
+}
+
+// A driver that knows who sent a payload says so through DeadLetterFrom, and
+// the publisher gets the sender, the decoder and the time the frame arrived
+// beside the runner's own feed and driver. The plain DeadLetter still works.
+func TestRunnerDeadLetterProvenance(t *testing.T) {
+	pub := &memPublisher{}
+	core, logs := observer.New(zapcore.DebugLevel)
+	received := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	cause := errors.New("bad")
+	drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+		ps, ok := sink.(driver.ProvenanceSink)
+		if !ok {
+			return errors.New("the runner is not a driver.ProvenanceSink")
+		}
+		ps.DeadLetterFrom([]byte("garbage"), "parse_error", cause, driver.Provenance{Decoder: "sbs", Sender: "10.0.0.5:4000", ReceivedAt: received})
+		sink.DeadLetter([]byte("<html>"), "bad_response", errors.New("not json"))
+		return nil
+	}}
+	r := NewRunner("feed-x", "stream", drv, pub, metrics.New(nil), zap.New(core), RunnerOptions{})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	dls := pub.deadLetters()
+	if len(dls) != 2 {
+		t.Fatalf("dlq = %+v, want two dead letters", dls)
+	}
+	from := dls[0]
+	if from.FeedID != "feed-x" || from.Driver != "stream" || from.Decoder != "sbs" || from.Sender != "10.0.0.5:4000" ||
+		from.Reason != "parse_error" || from.Cause != cause || string(from.Raw) != "garbage" || !from.ReceivedAt.Equal(received) {
+		t.Errorf("dead letter with provenance = %+v", from)
+	}
+	plain := dls[1]
+	if plain.FeedID != "feed-x" || plain.Driver != "stream" || plain.Reason != "bad_response" || string(plain.Raw) != "<html>" ||
+		plain.Decoder != "" || plain.Sender != "" || !plain.ReceivedAt.IsZero() {
+		t.Errorf("plain dead letter = %+v, want no decoder, sender or receive time", plain)
+	}
+
+	// Both are accounted the same way.
+	if st := r.Stats(); st.ErrorsTotal != 2 || st.LastError != "not json" {
+		t.Errorf("stats = %+v, want two errors, the last being not json", st)
+	}
+	entries := logs.FilterMessage("frame dead-lettered").All()
+	if len(entries) != 2 {
+		t.Fatalf("%d dead-letter log entries, want 2", len(entries))
+	}
+	if ctx := entries[0].ContextMap(); ctx["sender"] != "10.0.0.5:4000" || ctx["decoder"] != "sbs" || ctx["reason"] != "parse_error" {
+		t.Errorf("log fields = %v, want the sender and decoder named", ctx)
 	}
 }
 
@@ -155,5 +237,72 @@ func TestRunnerPropagatesPublishError(t *testing.T) {
 	r := NewRunner("f", "d", drv, pub, nil, nil, RunnerOptions{})
 	if err := r.Run(context.Background()); err == nil || err.Error() != "closed" {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// The cause of an undecodable payload is kept apart from the other errors a
+// runner records: its text can repeat the payload, and the status shows it
+// under a key of its own.
+func TestRunnerKeepsTheLastDecodeErrorApart(t *testing.T) {
+	const decodeText = `proto: (line 1:2): unknown field "launchCode"`
+	drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+		sink.DeadLetter([]byte("garbage"), "parse_error", errors.New(decodeText))
+		return nil
+	}}
+	r := NewRunner("feed-x", "stream", drv, &memPublisher{}, metrics.New(nil), zap.NewNop(), RunnerOptions{})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st := r.Stats(); st.LastError != decodeText || st.LastDecodeError != decodeText {
+		t.Fatalf("after a dead letter: last error %q, last decode error %q; want both %q", st.LastError, st.LastDecodeError, decodeText)
+	}
+
+	// A driver-level failure replaces the last error but not the decode error,
+	// which stays what it was: the last undecodable payload.
+	r.Failed(errors.New("connection lost"))
+	if st := r.Stats(); st.LastError != "connection lost" || st.LastDecodeError != decodeText {
+		t.Errorf("after a failure: last error %q, last decode error %q", st.LastError, st.LastDecodeError)
+	}
+
+	// A dead letter that says nothing of why leaves both as they were.
+	r.DeadLetter([]byte("x"), "parse_error", nil)
+	if st := r.Stats(); st.LastError != "connection lost" || st.LastDecodeError != decodeText {
+		t.Errorf("after a dead letter with no cause: last error %q, last decode error %q", st.LastError, st.LastDecodeError)
+	}
+
+	// The next one replaces the decode error as it replaces the last error.
+	r.DeadLetterFrom([]byte("y"), "missing_identity", errors.New("missing_identity: no identity"), driver.Provenance{Decoder: "sentinel"})
+	if st := r.Stats(); st.LastError != "missing_identity: no identity" || st.LastDecodeError != "missing_identity: no identity" {
+		t.Errorf("after another: last error %q, last decode error %q", st.LastError, st.LastDecodeError)
+	}
+}
+
+// An observation refused because the publisher is closing is the shutdown, not
+// a fault: it is no more worth a warning than the context ending is. Any other
+// publish error still is.
+func TestRunnerDoesNotWarnWhenThePublisherIsClosing(t *testing.T) {
+	ts := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		err  error
+		warn bool
+	}{
+		"publisher closed": {publish.ErrClosed, false},
+		"wrapped":          {fmt.Errorf("emit: %w", publish.ErrClosed), false},
+		"canceled":         {context.Canceled, false},
+		"a real failure":   {errors.New("kafka down"), true},
+	} {
+		core, logs := observer.New(zapcore.DebugLevel)
+		pub := &memPublisher{fail: tc.err}
+		drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+			_ = sink.Emit(ctx, fix("a", 40, -80, ts))
+			return nil
+		}}
+		r := NewRunner("feed-x", "stream", drv, pub, metrics.New(nil), zap.New(core), RunnerOptions{})
+		if err := r.Run(context.Background()); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := logs.FilterMessage("observation not published").Len() > 0; got != tc.warn {
+			t.Errorf("%s: warned = %v, want %v", name, got, tc.warn)
+		}
 	}
 }

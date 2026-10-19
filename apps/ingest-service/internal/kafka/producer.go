@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"go.uber.org/zap"
@@ -98,11 +99,21 @@ func (p *Producer) Flush(timeoutMs int) int {
 	return p.producer.Flush(timeoutMs)
 }
 
-// Close flushes remaining messages and shuts down the producer.
-func (p *Producer) Close() {
+// defaultCloseFlush is how long Close waits for messages to be delivered when
+// the caller has no deadline of its own.
+const defaultCloseFlush = 10 * time.Second
+
+// Close flushes remaining messages, for up to 10 s, and shuts down the producer.
+func (p *Producer) Close() { p.CloseWithin(defaultCloseFlush) }
+
+// CloseWithin flushes remaining messages, waiting up to d for them to be
+// delivered, and shuts down the producer. With Kafka unreachable nothing is
+// delivered, so d is how long the flush is allowed to wait for nothing. Only the
+// first call to Close or CloseWithin does anything; the others return at once.
+func (p *Producer) CloseWithin(d time.Duration) {
 	p.stopOnce.Do(func() {
-		p.logger.Info("flushing kafka producer")
-		remaining := p.producer.Flush(10000)
+		p.logger.Info("flushing kafka producer", zap.Duration("timeout", d))
+		remaining := p.producer.Flush(int(d / time.Millisecond))
 		if remaining > 0 {
 			p.logger.Warn("kafka producer closed with unflushed messages",
 				zap.Int("remaining", remaining),

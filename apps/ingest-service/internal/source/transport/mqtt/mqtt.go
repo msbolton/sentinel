@@ -4,8 +4,13 @@ package mqtt
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"os"
+	"sync/atomic"
 	"time"
 
 	paho "github.com/eclipse/paho.mqtt.golang"
@@ -28,7 +33,8 @@ func init() {
 
 // Subscriber is the mqtt transport.
 type Subscriber struct {
-	cfg transport.Config
+	cfg   transport.Config
+	tlsrc atomic.Pointer[transport.TLSSource] // the TLS config in use, built when Run starts; nil without TLS
 	transport.StateTracker
 }
 
@@ -88,10 +94,21 @@ func (s *Subscriber) Run(ctx context.Context, emit transport.Emit) error {
 	if s.cfg.Username != "" {
 		opts.SetUsername(s.cfg.Username).SetPassword(s.cfg.Password)
 	}
-	if tlsCfg, err := s.cfg.TLSConfig(); err != nil {
+	src, err := transport.NewTLSSource(s.cfg, nil)
+	if err != nil {
 		return err
-	} else if tlsCfg != nil {
+	}
+	s.tlsrc.Store(src)
+	if tlsCfg := src.Current(); tlsCfg != nil {
 		opts.SetTLSConfig(tlsCfg)
+		// paho keeps the config it is given for the life of the client, and it
+		// connects again by itself after a loss. To follow a rotation, a broker
+		// reached over TLS directly is dialed here, with the config built again for
+		// each connection. WebSocket brokers and a proxy (all_proxy) keep the
+		// config of the start.
+		if s.cfg.Reloading() && tlsScheme(s.cfg.BrokerURL) && os.Getenv("all_proxy") == "" {
+			opts.SetCustomOpenConnectionFn(s.dialTLS)
+		}
 	}
 	client := paho.NewClient(opts)
 
@@ -125,5 +142,33 @@ func (s *Subscriber) Run(ctx context.Context, emit transport.Emit) error {
 	return nil
 }
 
-// State reports connectivity.
-func (s *Subscriber) State() transport.State { return s.Get() }
+// tlsScheme reports whether the broker URL is one paho reaches with a plain TLS
+// dial (the schemes its own dialer treats that way).
+func tlsScheme(broker string) bool {
+	u, err := url.Parse(broker)
+	if err != nil {
+		return false
+	}
+	switch u.Scheme {
+	case "ssl", "tls", "mqtts", "mqtt+ssl", "tcps":
+		return true
+	}
+	return false
+}
+
+// dialTLS opens the connection paho asks for, as paho does for these schemes,
+// but with the TLS config built again from the reloaded material.
+func (s *Subscriber) dialTLS(uri *url.URL, o paho.ClientOptions) (net.Conn, error) {
+	d := o.Dialer
+	if d == nil {
+		d = &net.Dialer{Timeout: o.ConnectTimeout}
+	}
+	return tls.DialWithDialer(d, "tcp", uri.Host, s.tlsrc.Load().Fresh())
+}
+
+// State reports connectivity, and the TLS reloads when there is TLS.
+func (s *Subscriber) State() transport.State {
+	st := s.Get()
+	s.tlsrc.Load().Apply(&st)
+	return st
+}

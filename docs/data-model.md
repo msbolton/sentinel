@@ -4,11 +4,11 @@
 
 ### Schema management
 
-The schema is a directory of idempotent SQL files, `db/schema/`, one per area (`10_entities.sql`, `20_track_points.sql`, `70_feeds.sql`, `80_observations.sql`, …), applied in file-name order with psql. The `db-schema` compose service applies them before any application service starts and `make db-schema` applies them to the running `sentinel-postgres` container. Re-applying after an edit is how the schema changes before the first release: every file is written so that running it again on a database that already has the objects is a no-op (`CREATE … IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, guarded `DO` blocks), and the files also carry the repairs that bring a database created by the former TypeORM schema in line. Versioned migrations start at the first release. Extensions (`postgis`, `timescaledb`, `age`) are created once by `config/postgres/init-extensions.sql` at database initialisation.
+The schema is a directory of idempotent SQL files, `db/schema/`, one per area (`10_entities.sql`, `20_track_points.sql`, `70_feeds.sql`, `80_observations.sql`, …), applied in file-name order with psql. The `db-schema` compose service applies them before any application service starts, `make db-schema` applies them to the running `sentinel-postgres` container, and the Helm chart's `dbSchema` hook Job applies them after a first install and before every upgrade (`docs/infrastructure.md`). Re-applying after an edit is how the schema changes before the first release: every file is written so that running it again on a database that already has the objects is a no-op (`CREATE … IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, guarded `DO` blocks), and the files also carry the repairs that bring a database created by the former TypeORM schema in line. Versioned migrations start at the first release. Extensions (`postgis`, `timescaledb`, `age`) are created once by `config/postgres/init-extensions.sql` at database initialisation.
 
 Column names are camelCase and must be quoted in SQL (for example `"entityType"`, `"lastSeenAt"`). Enum-like columns are `VARCHAR`; the Go stores bind plain strings. Tables with an `"updatedAt"` column keep it current through the `sentinel.set_updated_at()` trigger.
 
-To change the schema, edit the area's file (or add a new `NN_<area>.sql`; a table that references another must sort after it) and run `make db-schema`.
+To change the schema, edit the area's file (or add a new `NN_<area>.sql`; a table that references another must sort after it) and run `make db-schema`. The ingest service checks at start that the columns it needs exist and exits with `database schema is out of date` when they do not (`docs/development.md`); a column added to `70_feeds.sql` with `ALTER` must also be listed in `RequiredColumns` in `apps/ingest-service/internal/registry/schema.go`.
 
 
 All tables live under the `sentinel` schema. PostGIS provides the `geometry` type for spatial columns.
@@ -78,11 +78,11 @@ The feed registry (see `docs/feeds.md`).
 
 | Table | Content |
 |-------|---------|
-| `feeds` | Desired state: `id` (slug, primary key), `name`, `description`, `driver`, `config` (JSONB, validated against the driver's schema), `secret_refs` (JSONB of `env:` references), `enabled`, `builtin`, `version`, `created_by`, timestamps |
-| `feed_status` | Observed state written by the owning replica: `owner`, `state`, `health`, `last_error`, `last_message_at`, `last_success_at`, `messages_total`, `entities_last`, `errors_total`, `applied_version`, `detail` (JSONB), `updated_at` |
+| `feeds` | Desired state: `id` (slug, primary key), `name`, `description`, `driver`, `config` (JSONB, validated against the driver's schema), `secret_refs` (JSONB of `env:` or `file:` references, never values; which variables and folders a reference may name is the ingest service's secret policy, `docs/feeds.md`), `enabled`, `builtin`, `version`, `created_by`, timestamps |
+| `feed_status` | Observed state written by the owning replica: `owner`, `state`, `health`, `last_error`, `last_message_at`, `last_success_at`, `messages_total`, `entities_last`, `errors_total`, `applied_version`, `detail` (JSONB: a listening connection reports `listen`, the `senders` table, its counters and TLS reload state there, see `docs/feeds.md`), `updated_at` |
 | `feed_areas` | The area of interest pushed by the gateway: `active`, `clients`, `boxes` (JSONB), `expires_at` |
 | `feed_leases` | Which replica owns the feed: `owner_id`, `fencing_token`, `acquired_at`, `heartbeat_at`, `expires_at` |
-| `ingest_replicas` | Live replicas by heartbeat: `replica_id`, `started_at`, `heartbeat_at`, `expires_at` |
+| `ingest_replicas` | Live replicas by heartbeat: `replica_id`, `started_at`, `heartbeat_at`, `expires_at`, `listener` (takes the connections that bind a port), `listener_shared` (a listener that also runs ordinary feeds; default false) and `listener_host` (the address senders use) |
 
 ### sentinel.feed_ageout_config
 
@@ -142,7 +142,7 @@ Enum-like columns are `VARCHAR` holding the bare protobuf enum name without its 
 | Topic | Partitions | Retention | Key | Message | Producers | Consumers |
 |-------|-----------|-----------|-----|---------|-----------|-----------|
 | `observations.raw` | 24 | 3 days | identity (`ICAO24:ABC123`, else `feed:<id>:<sourceEntityId>`) | `sentinel.v1.Observation` | ingest replicas | entity-service |
-| `observations.dlq` | 3 | 30 days | feed id | raw payload; headers `driver`, `decoder`, `reason`, `error`, `received-at` | ingest replicas | operators |
+| `observations.dlq` | 3 | 30 days | feed id | raw payload; headers `driver`, `decoder`, `sender` (the remote address, so a sender's IP stays for the topic's 30 days), `reason`, `error`, `received-at` (when the frame arrived) | ingest replicas | operators |
 | `entities.events` | 12 | 7 days | entity id | `sentinel.v1.EntityEvent`: full `Entity` snapshot plus one of created, updated, position (with an `ObservationRef`), deleted, stale, aged_out, restored; the `event-type` header names the case | entity-service | track, alert, search, analytics, gateway |
 | `alerts.events` | 3 | 30 days | entity id | `sentinel.v1.AlertEvent` with `producer` | alert-service, analytics | alert-service, gateway |
 

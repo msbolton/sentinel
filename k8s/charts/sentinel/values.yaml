@@ -120,6 +120,27 @@ ingestService:
     limits:
       cpu: 4000m
       memory: 512Mi
+  # Both ingest Deployments (the listener runs the same image) run as 10001, the
+  # user of apps/ingest-service/Dockerfile, with every capability dropped: the
+  # service binds only ports from 1024 up. fsGroup makes the Secret files (tak
+  # and secretFiles, both mounted with mode 0440) readable by the group. A
+  # platform that assigns the ids itself needs runAsUser, runAsGroup and fsGroup
+  # dropped: set each to null, as in
+  # --set ingestService.podSecurityContext.runAsUser=null.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    # false until a full run on a read-only root has been seen working. The
+    # service writes no file of its own, so true is expected to work.
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: [ALL]
   # Secret holding INGEST_SERVICE_TOKEN (and optional OPENSKY_CLIENT_ID /
   # OPENSKY_CLIENT_SECRET). Leave existingSecret empty to have the chart
   # create one from the values below.
@@ -133,19 +154,60 @@ ingestService:
     tickSec: 2
     rebalanceSec: 30
   env: {}
-  # TAK connection certificates, mounted at mountPath so feeds can reference
-  # them as file:/etc/sentinel/tak/client.pem etc. Either name an existing
-  # Secret with keys tak-client-cert, tak-client-key and tak-ca, or set the
-  # PEM values here and the chart creates one.
+  # TAK connection certificates, mounted at mountPath (mode 0440) so feeds can
+  # reference them as file:/etc/sentinel/tak/client.pem etc. Either name an
+  # existing Secret with keys tak-client-cert, tak-client-key and tak-ca, or set
+  # the PEM values here and the chart creates one.
   tak:
     existingSecret: ""
     clientCert: ""
     clientKey: ""
     ca: ""
+    # A mountPath outside /etc/sentinel needs INGEST_SECRET_FILE_DIRS set (ingestService.env) to name it.
     mountPath: /etc/sentinel/tak
+  # Files for feed secretRefs to name as file:/etc/sentinel/secrets/<key>, such
+  # as the PEMs of a TCP connection with mutual TLS. Name an existing Secret:
+  # each of its keys becomes a file under mountPath (mode 0440), so each key
+  # must be a valid file name. The kubelet refreshes the files within about a
+  # minute of a change to the Secret. Leave existingSecret empty to mount none.
+  secretFiles:
+    existingSecret: ""
+    # A mountPath outside /etc/sentinel needs INGEST_SECRET_FILE_DIRS set (ingestService.env) to name it.
+    mountPath: /etc/sentinel/secrets
+  # A Secret whose keys become environment variables of the ingest and listener
+  # pods, for secretRefs to name as env:SENTINEL_SECRET_... (env above takes plain values only).
+  # Every key of it reaches both pods, through envFrom, and can set any
+  # configuration the chart leaves unset (LEASE_ENABLED or
+  # FEEDS_BOOTSTRAP_ENABLED, for example). So the keys should be secret
+  # material, named for the INGEST_SECRET_ENV_ALLOW policy of the ingest service
+  # (default OPENSKY_*,AISSTREAM_*,SENTINEL_SECRET_*), and nothing else.
+  # Leave existingSecret empty to add none.
+  secretEnv:
+    existingSecret: ""
+  # Needs the Prometheus Operator CRDs. Renders a ServiceMonitor for the ingest
+  # service and, while the listener is enabled, a PodMonitor for the listener,
+  # which has no Service.
   serviceMonitor:
     enabled: false
     interval: 30s
+
+ingestListener:
+  # Runs the TCP/UDP connections external systems send to, with
+  # hostNetwork on a labelled node so any port chosen in Connections is
+  # reachable on that node's address. Open those ports in the node's
+  # firewall or security group. Label the node first, or the Pod stays
+  # Pending: kubectl label node <name> sentinel.io/ingest-listener=true
+  enabled: true
+  host: ""            # address senders use; defaults to the node IP
+  # false: the listener runs listening connections and the feeds pinned to it,
+  # nothing else, so ordinary feeds need an ingest-service replica. true: it
+  # also takes its rendezvous share of the ordinary feeds.
+  shared: false
+  nodeSelector:
+    sentinel.io/ingest-listener: "true"
+  resources:
+    requests: { cpu: 250m, memory: 128Mi }
+    limits: { cpu: 2000m, memory: 512Mi }
 
 # Go behavioural-analysis service. One replica: detector state is in process
 # and the hourly baseline job takes a Postgres advisory lock, so a second
@@ -204,7 +266,20 @@ postgresql:
           LOAD 'age';
           SET search_path = ag_catalog, "$user", public;
           SELECT create_graph('entity_graph');
-          CREATE SCHEMA IF NOT EXISTS sentinel;
+          -- Owned by the role the services connect as, so that the dbSchema Job
+          -- (which runs as that role) can create and alter the tables. The name
+          -- must be postgresql.auth.username; a values file is not templated.
+          CREATE SCHEMA IF NOT EXISTS sentinel AUTHORIZATION sentinel;
+          -- The GeoServer role, created here without a password so that
+          -- 90_gis_views.sql finds it and needs no CREATEROLE. It cannot log in
+          -- until ALTER ROLE sentinel_gis PASSWORD sets one.
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sentinel_gis') THEN
+              CREATE ROLE sentinel_gis LOGIN;
+            END IF;
+          END
+          $$;
     resources:
       requests:
         cpu: 500m
@@ -215,6 +290,57 @@ postgresql:
     persistence:
       size: 50Gi
 
+# Applies db/schema with a Helm hook Job: after the first install creates the
+# release's resources, and before every upgrade (a failing Job aborts it). It
+# runs the files in name order, every one idempotent. Helm waits for the Job
+# only as long as --timeout (5m by default); pass --timeout 15m to wait as long
+# as the Job may run (activeDeadlineSeconds). On a first install leave out
+# --wait and --atomic: Helm would wait for ingest pods that cannot start until
+# this Job has run. Needs Helm: kubectl apply of the rendered chart ignores
+# hooks.
+#
+# What the database must provide for the Job to work as a plain role:
+# - The Job connects as the role in the database-url key of the
+#   <release>-postgresql Secret. That role must be postgresql.auth.username, the
+#   role the services and the gateway use. No chart template creates the key;
+#   the operator supplies it.
+# - That role owns schema sentinel, and the role sentinel_gis exists. The
+#   postgresql initdb script above creates both, but only on an empty data
+#   directory: an existing release needs, once and as a superuser, ALTER SCHEMA
+#   sentinel OWNER TO <role> and CREATE ROLE sentinel_gis LOGIN.
+# - sentinel_gis has no password, so it cannot log in until ALTER ROLE
+#   sentinel_gis PASSWORD ... sets the one GeoServer's provisioning uses
+#   (GIS_DB_PASSWORD, from geoserver.gisDbPassword).
+dbSchema:
+  enabled: true
+  image: postgres:16-alpine   # needs psql and pg_isready
+  backoffLimit: 10
+  activeDeadlineSeconds: 900
+  # Small but present, so a namespace ResourceQuota that demands requests and
+  # limits cannot reject the hook pod.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  # Not root, with the hardening of the ingest pods (no fsGroup: its one volume
+  # is a ConfigMap, readable by all). The id is the chart's 10001, not the
+  # image's own postgres user (70 in the Alpine tags, 999 in the Debian ones):
+  # that way the chart names one id, whatever image is set above. psql and
+  # pg_isready need no passwd entry, home directory or writable path, only a
+  # DATABASE_URL that names its user. Set a key to null to drop it.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
 
 kafka:
   enabled: true

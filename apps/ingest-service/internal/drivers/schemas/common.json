@@ -8,7 +8,7 @@
     "staleWarnSec": { "type": "integer", "minimum": 1, "title": "Stale warning (s)", "description": "Health turns to warn when no report has arrived for this long." },
     "staleCriticalSec": { "type": "integer", "minimum": 1, "title": "Stale critical (s)", "description": "Health turns to critical when no report has arrived for this long." },
     "backpressure": { "type": "string", "enum": ["block", "drop", "nack"], "title": "Backpressure policy" },
-    "pinnedReplica": { "type": "string", "title": "Pinned replica", "description": "Run this feed only on the named ingest replica (required for listening transports)." },
+    "pinnedReplica": { "type": "string", "title": "Pinned replica", "description": "Run this feed only on the named ingest replica. Optional: a connection that listens on a port runs on a listener replica by default." },
     "rawPayload": { "type": "string", "enum": ["none", "bounded", "full"], "default": "bounded", "title": "Raw payload retention" },
     "classification": { "type": "string", "enum": ["UNCLASSIFIED", "CONFIDENTIAL", "SECRET", "TOP_SECRET"], "default": "UNCLASSIFIED", "title": "Classification", "description": "Stamped on every observation this feed emits unless the decoder reports a higher level. Entities keep the highest level any feed reported." },
     "direction": { "type": "string", "enum": ["in", "out", "both"], "title": "Direction", "description": "Narrows a driver that can do both to one way; cannot widen a driver's own direction." },

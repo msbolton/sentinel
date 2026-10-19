@@ -28,8 +28,8 @@ const (
 	CapabilityArea = "area"
 	// CapabilityPoll means the driver polls a remote API on an interval.
 	CapabilityPoll = "poll"
-	// CapabilityListen means the driver binds a port and must be pinned to
-	// one replica.
+	// CapabilityListen means the driver binds a port, so it runs on a
+	// listener replica.
 	CapabilityListen = "listen"
 )
 
@@ -59,6 +59,17 @@ type Deps struct {
 	// Density publishes the counts a driver keeps for areas too large to
 	// store objects one by one (nil when the replica has no producer).
 	Density DensityPublisher
+	// ListenerHost is the address senders reach this replica's listeners
+	// at (INGEST_LISTENER_HOST); empty on replicas that are not listeners.
+	ListenerHost string
+	// ReloadSecrets resolves the feed's secret references again, under the
+	// policy that checked them at start, and returns them as Spec.Secrets was
+	// first. A driver calls it to follow a rotation of the TLS material; nil
+	// when nothing resolves secrets (tests).
+	ReloadSecrets func() (map[string]string, error)
+	// SecretReloadEvery is how often a driver reads rotated secrets again
+	// (INGEST_TLS_RELOAD_SEC); 0 means never.
+	SecretReloadEvery time.Duration
 }
 
 // DensityPublisher sends a feed's density grids to the density.events
@@ -93,7 +104,8 @@ type Sink interface {
 	// driver, receive time, raw payload bounds, id). It blocks while the
 	// publisher is saturated and returns ctx.Err() when the run ends.
 	Emit(ctx context.Context, o *obs.Observation) error
-	// DeadLetter records a payload nothing could decode.
+	// DeadLetter records a payload nothing could decode. A sink that also
+	// implements ProvenanceSink is told where it came from as well.
 	DeadLetter(raw []byte, reason string, cause error)
 	// Skipped counts a frame that produced no observation, by reason.
 	Skipped(reason string)
@@ -102,6 +114,27 @@ type Sink interface {
 	Succeeded(count int)
 	// Blocked accounts time spent waiting on backpressure.
 	Blocked(d time.Duration)
+}
+
+// Provenance says where a dead-lettered payload came from.
+type Provenance struct {
+	// Decoder is the decoder that refused the payload.
+	Decoder string
+	// Sender is the remote address, topic, queue or URL the payload came
+	// from. A URL arrives without its user, query and fragment, which can
+	// hold credentials (transport.RedactRemote).
+	Sender string
+	// ReceivedAt is when the frame arrived, which may be well before it was
+	// decoded; zero when the payload was never a frame.
+	ReceivedAt time.Time
+}
+
+// ProvenanceSink is an optional interface of a Sink: one that takes the
+// provenance of a dead letter. A driver that knows it calls DeadLetterFrom
+// when the sink has it and DeadLetter otherwise. It is separate from Sink so
+// that every existing Sink keeps compiling.
+type ProvenanceSink interface {
+	DeadLetterFrom(raw []byte, reason string, cause error, p Provenance)
 }
 
 // UpdateKind says what an outbound entity update means to the remote.
@@ -196,6 +229,11 @@ func (d Direction) Valid() bool {
 	return false
 }
 
+// ListenFunc reports whether a feed with this config binds a local port
+// (and which), so it must run on a listener replica and its port must not
+// clash with another connection's.
+type ListenFunc func(config json.RawMessage) (network string, port int, ok bool)
+
 // Definition registers one driver with its catalog information.
 type Definition struct {
 	ID          string
@@ -211,11 +249,21 @@ type Definition struct {
 	// SecretFields are secret_refs keys the driver expects; they must never
 	// appear in config.
 	SecretFields []string
+	// OpaqueConfig lists the config members (JSON pointers below the config,
+	// like "/body") whose content is data the driver passes on, not settings it
+	// decodes into fields: the key-case rule does not look inside them.
+	OpaqueConfig []string
+	// HeaderMaps lists the config members that are maps of HTTP header names
+	// to values (like "/headers"). Header names are case-insensitive, so two
+	// that differ only in case are refused with a message of their own.
+	HeaderMaps []string
 	// AreaTTL is how long a pushed area stays valid without a refresh.
 	AreaTTL time.Duration
 	// ConfigSchema is the JSON Schema the feed config must satisfy.
 	ConfigSchema json.RawMessage
 	New          Factory
+	// Listen is set by drivers whose feeds may bind a port.
+	Listen ListenFunc
 }
 
 // HasCapability reports whether the definition advertises cap.
@@ -295,4 +343,13 @@ func Seconds(v int, def time.Duration) time.Duration {
 		return time.Duration(v) * time.Second
 	}
 	return def
+}
+
+// ListenOf asks the driver whether a feed with this config listens.
+func ListenOf(driverID string, config json.RawMessage) (string, int, bool) {
+	d, ok := Lookup(driverID)
+	if !ok || d.Listen == nil {
+		return "", 0, false
+	}
+	return d.Listen(config)
 }

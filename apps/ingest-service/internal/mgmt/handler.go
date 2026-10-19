@@ -19,8 +19,10 @@ import (
 	"github.com/sentinel/go-common/middleware"
 
 	"github.com/sentinel/ingest-service/internal/aoi"
+	"github.com/sentinel/ingest-service/internal/dlq"
 	"github.com/sentinel/ingest-service/internal/drivers"
 	"github.com/sentinel/ingest-service/internal/registry"
+	"github.com/sentinel/ingest-service/internal/source/driver"
 )
 
 // maxBoxes bounds an area push; the gateway sends at most two.
@@ -30,12 +32,13 @@ const maxBoxes = 4
 type FeedStore interface {
 	List(ctx context.Context) ([]registry.Feed, error)
 	Get(ctx context.Context, id string) (registry.Feed, error)
-	Create(ctx context.Context, f *registry.Feed) error
-	Update(ctx context.Context, f *registry.Feed) error
+	CreateGuarded(ctx context.Context, f *registry.Feed, g registry.Guard) error
+	UpdateGuarded(ctx context.Context, f *registry.Feed, g registry.Guard) error
 	SetEnabled(ctx context.Context, id string, enabled bool) (registry.Feed, error)
 	Delete(ctx context.Context, id string) error
 	GetArea(ctx context.Context, id string) (registry.Area, error)
 	SetArea(ctx context.Context, a registry.Area) error
+	LiveReplicas(ctx context.Context) ([]registry.Replica, error)
 }
 
 // Runtime is the local-replica fast path: live status for feeds running
@@ -56,6 +59,11 @@ type Handler struct {
 	// StaleAfter is how old a status row written by another replica may be
 	// before the feed renders as unassigned (three heartbeats, 15 s).
 	StaleAfter time.Duration
+	// Reserved are the ports a listening connection may not bind (Sentinel's own).
+	Reserved registry.PortSet
+	// DeadLetters reads a connection's recent dead letters for GET
+	// /feeds/{id}/deadletters. Nil leaves the route answering 501.
+	DeadLetters dlq.Reader
 }
 
 // NewHandler wires the handler. runtime may be nil (status-only replicas).
@@ -66,9 +74,63 @@ func NewHandler(store FeedStore, catalog *drivers.Catalog, rt Runtime, logger *z
 	return &Handler{store: store, catalog: catalog, validator: &registry.Validator{Catalog: catalog}, runtime: rt, logger: logger, StaleAfter: 15 * time.Second}
 }
 
-// present overlays the live status when the feed runs on this replica and
-// renders a stale row from a silent replica as unassigned.
-func (h *Handler) present(f registry.Feed) registry.Feed {
+// placement is the mix of live replicas one request sees. known is false when
+// the lookup failed, and then nothing is said about where a feed can run.
+type placement struct {
+	known     bool
+	live      int // every live replica
+	listeners int // those that take listening connections
+	ordinary  int // those that take ordinary feeds: the non-listeners and the shared listeners
+}
+
+// placement looks the live replicas up once for a request. A failed lookup
+// leaves the mix unknown, so no feed is explained by it either way; reading
+// it as no replicas would blame a missing listener for as long as the lookup
+// fails.
+func (h *Handler) placement(ctx context.Context) placement {
+	replicas, err := h.store.LiveReplicas(ctx)
+	if err != nil {
+		h.logger.Warn("listing live replicas failed", zap.Error(err))
+		return placement{}
+	}
+	p := placement{known: true, live: len(replicas)}
+	for _, r := range replicas {
+		if r.Listener {
+			p.listeners++
+		}
+		if !r.Listener || r.Shared {
+			p.ordinary++
+		}
+	}
+	return p
+}
+
+// unassigned returns f with its status replaced by unassigned and the reason
+// it has no replica; the rest of a stored status stands.
+func unassigned(f registry.Feed, reason string) registry.Feed {
+	st := registry.Status{FeedID: f.ID}
+	if f.Status != nil {
+		st = *f.Status
+	}
+	st.State, st.Health, st.LastError = registry.StateUnassigned, registry.HealthUnknown, reason
+	f.Status = &st
+	return f
+}
+
+// render is f as the caller who made r may see it: the decoder error texts in
+// its status are left out unless the caller's clearance reaches the feed's
+// classification. Every route that returns a feed or its status renders through
+// here.
+func (h *Handler) render(r *http.Request, f registry.Feed) feedDTO {
+	return toFeedDTO(f, h.catalog, clearedFor(r, f))
+}
+
+// present overlays the live status when the feed runs on this replica,
+// renders a stale row from a silent replica as unassigned, and explains an
+// enabled feed that has no replica to run on: a listening connection with no
+// listener replica live, and an ordinary feed when the only live replicas are
+// dedicated listeners.
+func (h *Handler) present(f registry.Feed, p placement) registry.Feed {
 	if h.runtime != nil {
 		if st, live := h.runtime.Snapshot(f.ID); live {
 			st.FeedID = f.ID
@@ -86,6 +148,19 @@ func (h *Handler) present(f registry.Feed) registry.Feed {
 		st.Health = registry.HealthUnknown
 		f.Status = &st
 	}
+	// Only a feed not running here gets this far, so a feed this replica runs
+	// (LEASE_ENABLED=false) is never explained away. A feed pinned to a
+	// replica runs there, whatever the others are.
+	if !p.known || !f.Enabled || f.Common().PinnedReplica != "" {
+		return f
+	}
+	if _, _, listening := driver.ListenOf(f.Driver, f.Config); listening {
+		if p.listeners == 0 {
+			return unassigned(f, registry.NoListenerError)
+		}
+	} else if p.live > 0 && p.ordinary == 0 {
+		return unassigned(f, registry.NoOrdinaryReplicaError)
+	}
 	return f
 }
 
@@ -96,6 +171,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, guard func(http.Handler) ht
 	}
 	route := func(pattern string, fn http.HandlerFunc) { mux.Handle(pattern, guard(fn)) }
 	route("GET /feeds", h.list)
+	route("GET /feeds/ports", h.ports) // a literal path beats GET /feeds/{id}; the id ports is reserved
 	route("POST /feeds", h.create)
 	route("GET /feeds/{id}", h.get)
 	route("PUT /feeds/{id}", h.replace)
@@ -104,6 +180,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, guard func(http.Handler) ht
 	route("POST /feeds/{id}/enable", h.setEnabled(true))
 	route("POST /feeds/{id}/disable", h.setEnabled(false))
 	route("GET /feeds/{id}/status", h.status)
+	route("GET /feeds/{id}/deadletters", h.deadLetters)
 	route("GET /feeds/{id}/area", h.getArea)
 	route("PUT /feeds/{id}/area", h.putArea)
 	route("GET /drivers", h.listDrivers)
@@ -123,6 +200,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		b := v == "true"
 		enabled = &b
 	}
+	p := h.placement(r.Context())
 	out := make([]feedDTO, 0, len(feeds))
 	for _, f := range feeds {
 		if driver != "" && f.Driver != driver {
@@ -137,7 +215,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		dto := toFeedDTO(h.present(f), h.catalog)
+		dto := h.render(r, h.present(f, p))
 		// direction=in|out lists every feed that moves data that way, so
 		// "both" matches either; direction=both matches only "both".
 		if direction != "" && !matchesDirection(dto.Direction, direction) {
@@ -146,6 +224,45 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		out = append(out, dto)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// portsResponse is the body of GET /feeds/ports, which the Connections form
+// reads to help an operator choose a port for a listening connection.
+type portsResponse struct {
+	// Min and Max bound the ports a listening connection may bind.
+	Min int `json:"min"`
+	Max int `json:"max"`
+	// Reserved are the ports Sentinel itself uses, as ranges.
+	Reserved []registry.PortRange `json:"reserved"`
+	// Taken are the ports listening connections hold, disabled ones included.
+	Taken []registry.PortUse `json:"taken"`
+	// Suggested maps a protocol, tcp or udp, to a port that is free for it. A
+	// protocol with no free port is left out.
+	Suggested map[string]int `json:"suggested"`
+}
+
+// ports reports which listening ports are taken and which are reserved, and
+// suggests a free one for each protocol. It applies the rules of the port check
+// that guards a save to the same feeds, so the two agree. The answer is advice:
+// a save checks again under its lock, and a port that another process holds on
+// the listener host is invisible here and fails when the connection starts.
+func (h *Handler) ports(w http.ResponseWriter, r *http.Request) {
+	feeds, err := h.store.List(r.Context())
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	taken := registry.PortsInUse(feeds)
+	resp := portsResponse{
+		Min: registry.MinPort, Max: registry.MaxPort,
+		Reserved: h.Reserved.Ranges(), Taken: taken, Suggested: map[string]int{},
+	}
+	for _, protocol := range []string{"tcp", "udp"} {
+		if port := registry.SuggestPort(protocol, registry.SuggestFrom, taken, h.Reserved); port != 0 {
+			resp.Suggested[protocol] = port
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func matchesDirection(have, want string) bool {
@@ -165,7 +282,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toFeedDTO(h.present(f), h.catalog))
+	writeJSON(w, http.StatusOK, h.render(r, h.present(f, h.placement(r.Context()))))
 }
 
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
@@ -174,7 +291,7 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toFeedDTO(h.present(f), h.catalog).Status)
+	writeJSON(w, http.StatusOK, h.render(r, h.present(f, h.placement(r.Context()))).Status)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
@@ -197,12 +314,16 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	if err := h.store.Create(r.Context(), &f); err != nil {
+	if problems := h.portProblems(f); len(problems) > 0 {
+		h.fail(w, &registry.ValidationError{Problems: problems})
+		return
+	}
+	if err := h.store.CreateGuarded(r.Context(), &f, h.portGuard(f)); err != nil {
 		h.fail(w, err)
 		return
 	}
 	h.logger.Info("feed created", zap.String("feed", f.ID), zap.String("driver", f.Driver), zap.String("by", f.CreatedBy))
-	writeJSON(w, http.StatusCreated, toFeedDTO(f, h.catalog))
+	writeJSON(w, http.StatusCreated, h.render(r, f))
 }
 
 func (h *Handler) replace(w http.ResponseWriter, r *http.Request) {
@@ -293,12 +414,35 @@ func (h *Handler) saveUpdate(w http.ResponseWriter, r *http.Request, f *registry
 		h.fail(w, err)
 		return
 	}
-	if err := h.store.Update(r.Context(), f); err != nil {
+	if problems := h.portProblems(*f); len(problems) > 0 {
+		h.fail(w, &registry.ValidationError{Problems: problems})
+		return
+	}
+	if err := h.store.UpdateGuarded(r.Context(), f, h.portGuard(*f)); err != nil {
 		h.fail(w, err)
 		return
 	}
 	h.logger.Info("feed updated", zap.String("feed", f.ID), zap.Int("version", f.Version))
-	writeJSON(w, http.StatusOK, toFeedDTO(*f, h.catalog))
+	writeJSON(w, http.StatusOK, h.render(r, *f))
+}
+
+// portProblems checks the feed's allowlist, which needs no other feed. Its
+// listening port is checked against every other feed by portGuard.
+func (h *Handler) portProblems(f registry.Feed) []registry.Problem {
+	return registry.CheckAllow(f)
+}
+
+// portGuard is the port check the store makes when it saves the proposed feed,
+// under a lock so that two saves cannot take the same port. It is nil for a
+// connection that does not listen: it has no port to check, and the lock is
+// not worth taking.
+func (h *Handler) portGuard(proposed registry.Feed) registry.Guard {
+	if _, _, listens := driver.ListenOf(proposed.Driver, proposed.Config); !listens {
+		return nil
+	}
+	return func(f registry.Feed, others []registry.Feed) []registry.Problem {
+		return registry.CheckPorts(f, others, h.Reserved)
+	}
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
@@ -327,7 +471,7 @@ func (h *Handler) setEnabled(enabled bool) http.HandlerFunc {
 			h.fail(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, toFeedDTO(f, h.catalog))
+		writeJSON(w, http.StatusOK, h.render(r, f))
 	}
 }
 
@@ -505,3 +649,7 @@ func mergeConfig(base, patch json.RawMessage) (json.RawMessage, error) {
 	}
 	return json.Marshal(b)
 }
+
+// UseSecretPolicy limits what the secret references and stream TLS files of a
+// connection may name when it is saved. Call it before serving.
+func (h *Handler) UseSecretPolicy(p registry.SecretPolicy) { h.validator.Secrets = p }

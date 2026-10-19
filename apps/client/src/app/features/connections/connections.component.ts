@@ -13,7 +13,12 @@ import {
   policySummaryOf,
   sinkDetailOf,
 } from '../../shared/models/feed.model';
+import { HasRoleDirective } from '../../shared/directives/has-role.directive';
 import { ConnectionFormComponent } from './connection-form.component';
+import { DeadLettersComponent } from './dead-letters.component';
+import { SendGuideComponent } from './send-guide.component';
+import { endpointLabel, sendTarget } from './send-guide';
+import { listenOf } from './listen-config';
 
 export type DrawerState = { mode: 'create' } | { mode: 'edit'; feed: Feed };
 
@@ -27,10 +32,17 @@ interface FeedRow {
   sending: boolean;
   /** One line for a sending connection's policy. */
   policySummary: string;
+  /** What the Source column shows. */
+  sourceLabel: string;
+  /** Whether the connection listens on a port, whatever its driver. */
+  listening: boolean;
   sink: SinkDetail;
   highlights: string[];
-  detailEntries: Array<{ key: string; value: string }>;
+  detailEntries: Array<{ key: string; value: string; withheld: boolean }>;
 }
+
+/** Which connections the list shows. */
+export type ConnectionFilter = 'all' | 'listening';
 
 const STATE_LABELS: Record<FeedState, string> = {
   stopped: 'Stopped',
@@ -63,13 +75,16 @@ const HEALTH_LABELS: Record<FeedHealthLevel, string> = {
 @Component({
   selector: 'app-connections',
   standalone: true,
-  imports: [DecimalPipe, ConnectionFormComponent],
+  imports: [DecimalPipe, ConnectionFormComponent, DeadLettersComponent, HasRoleDirective, SendGuideComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './connections.component.html',
   styleUrl: './connections.component.scss',
 })
 export class ConnectionsComponent implements OnInit, OnDestroy {
   private readonly feedService = inject(FeedService);
+
+  /** Who sees a connection's recent rejects; the server refuses everyone else, so this only spares them the panel. */
+  readonly deadLetterRoles = ['sentinel-operator', 'sentinel-admin'];
 
   readonly loading = this.feedService.loading;
   readonly loadError = this.feedService.error;
@@ -81,6 +96,7 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
   readonly confirmingDelete = signal<string | null>(null);
   readonly deleting = signal<string | null>(null);
   readonly drawer = signal<DrawerState | null>(null);
+  readonly filter = signal<ConnectionFilter>('all');
   private readonly pendingEnabled = signal<Record<string, boolean>>({});
 
   readonly hasLoaded = computed(() => this.feedService.hasLoaded || this.feedService.feeds().length > 0);
@@ -98,14 +114,20 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
         direction: directionOf(feed),
         sending: isSending(feed),
         policySummary: policySummaryOf(policy && typeof policy === 'object' ? (policy as ConnectionPolicy) : undefined),
+        sourceLabel: sourceLabelOf(feed),
+        // A tcp connection in connect mode has the driver's "listen" capability but binds nothing.
+        listening: listenOf(feed.driver, feed.config) !== null,
         sink,
-        highlights: highlightsOf(feed.status?.detail, sink),
+        highlights: highlightsOf(feed.status?.detail, sink, feed),
         detailEntries: Object.entries(feed.status?.detail ?? {})
           .filter(([key]) => key !== 'leaseToken')
-          .map(([key, value]) => ({ key, value: formatDetail(value) })),
+          .map(([key, value]) => ({ key, value: formatDetail(value), withheld: isWithheld(value) })),
       };
     });
   });
+
+  readonly listeningCount = computed(() => this.rows().filter((row) => row.listening).length);
+  readonly visibleRows = computed(() => (this.filter() === 'listening' ? this.rows().filter((row) => row.listening) : this.rows()));
 
   private release: (() => void) | null = null;
   private clock: ReturnType<typeof setInterval> | null = null;
@@ -129,6 +151,12 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
   }
 
   // --- presentation -----------------------------------------------------
+
+  /** "host:port/protocol" for a TCP or UDP connection, null for the other drivers. */
+  endpointOf(feed: Feed): string | null {
+    const target = sendTarget(feed);
+    return target ? endpointLabel(target) : null;
+  }
 
   stateLabel(state: FeedState): string {
     return STATE_LABELS[state] ?? state;
@@ -258,8 +286,26 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
   }
 }
 
+/**
+ * What the Source column shows: the label the server gives, else for TCP and UDP the format they
+ * read (and, for Sentinel's own, the source it assumes), which is all they have to say about it.
+ */
+function sourceLabelOf(feed: Feed): string {
+  if (feed.source) {
+    return feed.source;
+  }
+  if (feed.driver !== 'tcp' && feed.driver !== 'udp') {
+    return '';
+  }
+  const config = feed.config ?? {};
+  const format = typeof config['format'] === 'string' && config['format'] !== '' ? config['format'] : 'sentinel';
+  // Only Sentinel's own format has a default source; the form drops it for the others.
+  const source = config['defaultSource'];
+  return format === 'sentinel' && typeof source === 'string' && source !== '' ? `${format} · ${source}` : format;
+}
+
 /** The driver detail values worth a glance in the row. */
-function highlightsOf(detail: Record<string, unknown> | undefined, sink: SinkDetail): string[] {
+function highlightsOf(detail: Record<string, unknown> | undefined, sink: SinkDetail, feed: Feed): string[] {
   if (!detail) {
     return [];
   }
@@ -267,8 +313,9 @@ function highlightsOf(detail: Record<string, unknown> | undefined, sink: SinkDet
   if (sink.remotePeer) {
     out.push(sink.remotePeer);
   }
+  // TLS is configured, not verified: the driver reports what it was set up with.
   if (sink.tls === true) {
-    out.push('tls: ok');
+    out.push('tls');
   }
   if (detail['idle'] === true) {
     out.push('idle');
@@ -279,14 +326,35 @@ function highlightsOf(detail: Record<string, unknown> | undefined, sink: SinkDet
   if (typeof detail['effectiveIntervalSec'] === 'number') {
     out.push(`every ${detail['effectiveIntervalSec']}s`);
   }
-  if (typeof detail['connections'] === 'number') {
+  if (feed.driver === 'udp' || detail['transport'] === 'udp') {
+    // Datagrams have no connections to count (it is always 0); who has been sending is the news.
+    const senders = detail['distinctSenders'];
+    if (typeof senders === 'number') {
+      out.push(`${senders} sender${senders === 1 ? '' : 's'}`);
+    }
+  } else if (typeof detail['connections'] === 'number') {
     out.push(`${detail['connections']} conn`);
   }
   return out;
 }
 
+/**
+ * Whether a detail value is blank because the server withheld it (it blanks the texts of a connection above the caller's
+ * clearance) or never had it: an empty text, or a map in which every value is one.
+ */
+function isWithheld(value: unknown): boolean {
+  if (value === '') {
+    return true;
+  }
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const values = Object.values(value);
+    return values.length > 0 && values.every((v) => v === '');
+  }
+  return false;
+}
+
 function formatDetail(value: unknown): string {
-  if (value === null || value === undefined) {
+  if (value === null || value === undefined || isWithheld(value)) {
     return '—';
   }
   if (typeof value === 'object') {

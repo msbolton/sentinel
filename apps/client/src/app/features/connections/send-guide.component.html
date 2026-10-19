@@ -1,0 +1,156 @@
+@if (target(); as t) {
+  <section class="send-guide" [attr.aria-labelledby]="idBase() + '-h'">
+    @if (t.mode === 'listen') {
+      <h4 [id]="idBase() + '-h'">Send to <code>{{ endpoint() }}</code></h4>
+      <p class="muted format">
+        {{ t.protocol === 'tcp' ? 'TCP' : 'UDP' }}, format <code>{{ formatLabel() }}</code>, framing <code>{{ t.framing }}</code>: {{ framingNote() }}.
+        @if (t.tls) {
+          TLS required{{ t.requireClientCert ? ', with a client certificate signed by the configured CA' : '' }}.
+        }
+        @if (jsonSample()) {
+          A line may also hold a JSON array of up to {{ jsonBatchMax }} observations.
+        }
+      </p>
+    } @else {
+      <h4 [id]="idBase() + '-h'">Connects to <code>{{ endpoint() }}</code></h4>
+      <p class="muted format">Sentinel connects and reads {{ formatLabel() }} messages, framing <code>{{ t.framing }}</code>: {{ framingNote() }}.</p>
+      @if (connectedSince(); as since) {
+        <p class="muted since">Connected since {{ since | date: 'HH:mm:ss' }}</p>
+      }
+    }
+    <!-- Always in the page, so a screen reader announces a message that appears in it. -->
+    <div class="status" role="status">
+      @if (lastError(); as err) {
+        <p class="warn">Last error: {{ err }}</p>
+      } @else if (notListening()) {
+        <p class="warn">{{ notListening() }}</p>
+      }
+      @if (allowOpen()) {
+        <p class="warn">No allowlist: anyone who can reach this port can send.</p>
+      }
+      @if (certNotice(); as notice) {
+        <p class="warn">{{ notice }}</p>
+      }
+    </div>
+    @if (t.mode === 'listen') {
+      @if (testCommand(); as test) {
+        <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: test }" />
+      }
+      @if (jsonSample(); as sample) {
+        <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: sample }" />
+      }
+      @if (jsonBatchSample(); as batch) {
+        <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: batch }" />
+      }
+      @if (showExamples()) {
+        <details class="examples">
+          <summary>Sender examples (Go, Python)</summary>
+          <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: go() }" />
+          <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: python() }" />
+        </details>
+      } @else {
+        @if (noExamplesNote(); as why) {
+          <p class="muted note">{{ why }}</p>
+        }
+      }
+    }
+    <p class="label">Protocol definitions</p>
+    <p class="protos">
+      @for (f of protoFiles; track f) {
+        <a [href]="'assets/proto/sentinel/v1/' + f" [attr.download]="f">{{ f }}</a>{{ $last ? '' : ' · ' }}
+      }
+    </p>
+    @if (senders().length > 0) {
+      <table class="senders">
+        <caption>
+          Senders in the last 10 minutes
+          @if (distinctSenders() > senders().length) {
+            (showing {{ senders().length }} of {{ distinctSenders() }})
+          }
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Sender</th>
+            <th scope="col">Messages</th>
+            <th scope="col">Last</th>
+            @if (showSince()) {
+              <th scope="col">Connected since</th>
+            }
+            @if (hasRateLimited()) {
+              <th scope="col">Rate limited</th>
+            }
+            @if (hasDiagnostics()) {
+              <th scope="col">Undecodable</th>
+              <th scope="col">Last reason</th>
+            }
+          </tr>
+        </thead>
+        <tbody>
+          @for (s of senders(); track s.remote) {
+            <tr>
+              <td class="mono">{{ s.remote }}{{ s.connected ? ' (connected)' : '' }}</td>
+              <td>{{ s.messages | number }}</td>
+              <td>
+                @if (senderTime(s.lastAt); as last) {
+                  {{ last | date: 'HH:mm:ss' }}
+                } @else {
+                  <span title="connected, nothing received yet">—</span>
+                }
+              </td>
+              @if (showSince()) {
+                <td>
+                  @if (s.connected && senderTime(s.since); as since) {
+                    {{ since | date: 'HH:mm:ss' }}
+                  } @else {
+                    —
+                  }
+                </td>
+              }
+              @if (hasRateLimited()) {
+                <td>{{ s.rateLimited ?? 0 | number }}</td>
+              }
+              @if (hasDiagnostics()) {
+                <td>{{ s.malformed ?? 0 | number }}</td>
+                <td [attr.title]="s.lastError || null">{{ s.lastReason }}</td>
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+    @if (counters().length > 0) {
+      <dl class="counters">
+        @for (c of counters(); track c.key) {
+          <div [title]="c.help">
+            <dt>{{ c.label }}</dt>
+            <dd>{{ c.value | number }}</dd>
+          </div>
+        }
+      </dl>
+      <details class="glossary">
+        <summary>What the counters mean</summary>
+        <dl>
+          @for (c of counters(); track c.key) {
+            <dt>{{ c.label }}</dt>
+            <dd>{{ c.help }}</dd>
+          }
+        </dl>
+      </details>
+    }
+    <span class="sr-only" aria-live="polite">{{ copied() ? 'Copied to the clipboard' : '' }}</span>
+  </section>
+}
+
+<ng-template #snippet let-s>
+  <figure class="snippet">
+    <figcaption [id]="idBase() + '-' + s.key">{{ s.title }}</figcaption>
+    <pre #pre class="mono" tabindex="0" role="region" [attr.aria-labelledby]="idBase() + '-' + s.key">{{ s.text }}</pre>
+    <button
+      type="button"
+      class="copy"
+      [class.copied]="copied() === s.key"
+      [attr.aria-describedby]="idBase() + '-' + s.key"
+      (click)="copy(s, pre)"
+    >{{ copied() === s.key ? 'Copied' : 'Copy' }}</button>
+  </figure>
+</ng-template>

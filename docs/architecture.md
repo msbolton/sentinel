@@ -131,9 +131,9 @@ sequenceDiagram
 ```
 
 1. **Desired state** is a row in `sentinel.feeds`: id, driver, validated `config`, `secret_refs`, `enabled`, `version`. The operator's Connections page and the management API write it; Postgres LISTEN/NOTIFY tells every ingest replica.
-2. **Ownership.** Each enabled feed runs on exactly one replica, chosen by rendezvous hashing over the live replicas (or pinned). The owner renews a `feed_leases` row; acquisition bumps a fencing token that travels on every observation and guards status writes.
-3. **Driver.** The supervisor builds the driver from the catalog, wraps it in a runner and starts it. Pollers (`opensky`, `intelsky`, `celestrak`, `httpjson`) call an API on a schedule; `aisstream` keeps WebSocket subscriptions that follow the viewports and a watchlist; `stream` composes a transport, a framer and a decoder from config; `tak` owns one session to a TAK Server.
-4. **Runner.** Stamps provenance (feed id, driver, receive time, lease token) and the feed's classification (a decoder may only raise it), guarantees an identity, bounds the raw payload, suppresses repeated fixes, computes a deterministic observation id and publishes to `observations.raw` keyed by identity. Undecodable payloads go to `observations.dlq` with the reason in headers.
+2. **Ownership.** Each enabled feed runs on exactly one replica, chosen by rendezvous hashing over the live ordinary replicas (the listener replicas, which run nothing else, for a connection that binds a port; or pinned). The owner renews a `feed_leases` row; acquisition bumps a fencing token that travels on every observation and guards status writes.
+3. **Driver.** The supervisor builds the driver from the catalog, wraps it in a runner and starts it. Pollers (`opensky`, `intelsky`, `celestrak`, `httpjson`) call an API on a schedule; `aisstream` keeps WebSocket subscriptions that follow the viewports and a watchlist; `stream` composes a transport, a framer and a decoder from config; `tcp` and `udp` take what external systems send (Sentinel's own `sentinel.v1.Observation` or a device format) and, because they bind a port the operator chooses, run only on a listener replica (`INGEST_LISTENER`, on the host's network); `tak` owns one session to a TAK Server.
+4. **Runner.** Stamps provenance (feed id, driver, receive time, lease token) and the feed's classification (a decoder may only raise it), guarantees an identity, bounds the raw payload, suppresses repeated fixes, computes a deterministic observation id and publishes to `observations.raw` keyed by identity. Undecodable payloads go to `observations.dlq` with the reason, decoder and sender in headers; operators read the newest of a connection's through `GET /api/v1/feeds/{id}/deadletters`.
 5. **Area of interest.** Drivers with the `area` capability poll, or in CelesTrak's case emit, only what connected map clients can see. The gateway aggregates client viewports and pushes them to every such feed with a 90 s lease, so polling stops when nobody is looking or the gateway dies.
 6. **Fusion.** The entity service resolves the observation's identities to an entity (creating one when needed), applies the newest-fix-wins rule across feeds, replicas and out-of-order delivery, keeps the highest classification any feed reported, records the contributing feed in `entity_sources`, and emits one typed event per change on `entities.events`.
 7. **Consumers.** The track service stores every accepted fix with provenance; the alert service evaluates geofences and rules; the search service updates its index; the analytics service judges the fix against the entity's baseline; the gateway bridge streams to browsers; outbound connections forward to their remote.
@@ -223,6 +223,7 @@ Order: UNCLASSIFIED < CONFIDENTIAL < SECRET < TOP_SECRET. The order lives once i
 - **Clearance** comes from the `classification-u|c|s|ts` realm roles.
 - **API keys** are per-user, viewer-only, capped at the issuer's clearance, hashed at rest and revocable.
 - **Service token**: the ingest management API additionally checks the gateway's `INGEST_SERVICE_TOKEN`.
+- **Secret references**: a feed's `secretRefs` may name only the variables and folders the ingest service allows (`INGEST_SECRET_ENV_ALLOW`, `INGEST_SECRET_FILE_DIRS`; a breaking change from accepting any), and the ingest image runs as the non-root user 10001 (`docs/feeds.md`).
 - **Development**: `AUTH_DEV_BYPASS=true` makes the gateway treat every request as `dev-operator` with every role and TOP_SECRET clearance; refused in production.
 
 ## Communication patterns
@@ -239,7 +240,7 @@ Order: UNCLASSIFIED < CONFIDENTIAL < SECRET < TOP_SECRET. The order lives once i
 | Topic | Key | Message | Producers | Consumers |
 |-------|-----|---------|-----------|-----------|
 | `observations.raw` | identity (`ICAO24:ABC123`, `feed:<id>:<sourceEntityId>`) | `sentinel.v1.Observation` | ingest replicas | entity-service |
-| `observations.dlq` | feed id | raw payload + reason headers | ingest replicas | operators |
+| `observations.dlq` | feed id | raw payload + reason, decoder and sender headers | ingest replicas | operators (`/feeds/{id}/deadletters`) |
 | `entities.events` | entity id | `sentinel.v1.EntityEvent` (full snapshot + event oneof) | entity-service | track, alert, search, analytics, gateway, outbound connections |
 | `alerts.events` | entity id | `sentinel.v1.AlertEvent` | alert-service, analytics | alert-service, gateway, outbound connections |
 | `density.events` | feed id | `sentinel.v1.DensityGrid` (distinct objects per grid cell) | ingest (`aisstream`) | gateway |
@@ -256,8 +257,8 @@ Partitioning by key keeps one object's reports and one entity's events in order.
 
 ## Deployment
 
-- **Docker Compose** runs the whole stack for development: `docker-compose.infra.yml` for the data stores and Keycloak alone, `docker-compose.yml` for everything. One-shot jobs apply the schema (`db-schema`), create topics, provision GeoServer (`geoserver-init`) and MinIO. Ingest scales with `--scale ingest-service=N`.
-- **Kubernetes** uses the Helm chart under `k8s/charts/sentinel` (gateway and ingest deployments, optional GeoServer with the same provisioning script, a TAK certificate secret mount) and a Kustomize overlay per environment under `k8s/overlays`.
+- **Docker Compose** runs the whole stack for development: `docker-compose.infra.yml` for the data stores and Keycloak alone, `docker-compose.yml` for everything. One-shot jobs apply the schema (`db-schema`), create topics, provision GeoServer (`geoserver-init`) and MinIO. Ingest scales with `--scale ingest-service=N`; the `inbound` profile adds the host-networked `ingest-listener`.
+- **Kubernetes** uses the Helm chart under `k8s/charts/sentinel` (gateway and ingest deployments, optional GeoServer with the same provisioning script, a TAK certificate secret mount, the host-networked ingest listener on a labelled node, and a hook Job that applies `db/schema` before each upgrade) and a Kustomize overlay per environment under `k8s/overlays`.
 - **Images** are built per service from each app's `Dockerfile`; Go services build with `-tags dynamic` for librdkafka.
 
 ## Repository layout
@@ -293,7 +294,7 @@ sentinel/
 ├── docker-compose.infra.yml   data stores and Keycloak only
 ├── Makefile                   proto, build, dev, test, db-schema, docker targets
 ├── nx.json, package.json      Nx workspace; every app and lib is an Nx project
-└── secrets/                   gitignored; TAK certificates mounted into ingest
+└── secrets/                   gitignored; TAK and listener certificates and ingest.env, supplied to ingest
 ```
 
 ### apps/
@@ -346,17 +347,18 @@ Go forbids importing another module's `internal`, so services share code only th
 
 | Package | Role |
 |---------|------|
-| `registry` | the feeds table: types, validation (JSON Schema plus common options), secret refs (`env:` and `file:`), LISTEN/NOTIFY |
+| `registry` | the feeds table: types, validation (JSON Schema plus common options), secret refs (`env:` and `file:`, held to the `INGEST_SECRET_*` policy), LISTEN/NOTIFY |
 | `lease` | one owner per feed with heartbeats, rendezvous hashing and fencing tokens |
 | `feed` | the runner (one feed's lifecycle) and the supervisor (reconciles registry against running feeds, builds pumps) |
 | `drivers` | driver catalog and `drivers/schemas/*.json` including the shared `common.json` |
 | `mgmt` | management API proxied by the gateway under `/api/v1/feeds` and `/api/v1/drivers` |
 | `aoi` | area-of-interest pushes from the gateway |
 | `obs`, `dedupe`, `wire`, `publish`, `kafka` | an observation's path from driver to `observations.raw`: the domain type, repeat suppression, protobuf encoding, the publisher with dead-lettering |
+| `dlq` | reads `observations.dlq` back for the management API (a connection's recent dead letters), without a consumer group |
 | `density` | the per-feed publisher drivers use for `density.events` (vessel counts for views over a feed's cap), stamped with the feed id and classification |
 | `policy` | the pure sharing-policy evaluator for connections |
 | `outbound` | the pump: per-connection consumer, coalescing queue, rate limiting, shape source for geofences and locations |
-| `health`, `metrics` | readiness and Prometheus collectors |
+| `health`, `metrics` | readiness and Prometheus collectors, including the `listener_*` series read from the listening drivers' health |
 | `source` | the pluggable layer, below |
 
 `source/` separates how bytes arrive from what they mean:

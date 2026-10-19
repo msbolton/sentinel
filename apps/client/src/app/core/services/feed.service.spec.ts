@@ -2,7 +2,7 @@ import { TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { FeedService, problemsOf } from './feed.service';
-import { Feed, FeedStatus } from '../../shared/models/feed.model';
+import { DeadLetterPage, Feed, FeedStatus, ListenPorts } from '../../shared/models/feed.model';
 
 function makeStatus(overrides: Partial<FeedStatus> = {}): FeedStatus {
   return {
@@ -40,6 +40,15 @@ function makeFeed(id: string, overrides: Partial<Feed> = {}): Feed {
     ...overrides,
   };
 }
+
+/** What `GET /api/v1/feeds/ports` answers. */
+const listenPorts: ListenPorts = {
+  min: 1024,
+  max: 65535,
+  reserved: [{ from: 3000, to: 3005 }],
+  taken: [{ protocol: 'udp', port: 10110, feedId: 'pier', feedName: 'Pier AIS', enabled: true }],
+  suggested: { tcp: 6000, udp: 10111 },
+};
 
 describe('FeedService', () => {
   let service: FeedService;
@@ -97,6 +106,157 @@ describe('FeedService', () => {
     ]);
     expect(service.drivers().map((d) => d.id)).toEqual(['opensky']);
     expect(service.driver('opensky')?.name).toBe('OpenSky');
+  });
+
+  it('loadPorts() fetches the ports listening connections hold and keeps the answer', () => {
+    expect(service.listenPorts()).toBeNull();
+
+    service.loadPorts().subscribe();
+    const req = http.expectOne('/api/v1/feeds/ports');
+    expect(req.request.method).toBe('GET');
+    req.flush(listenPorts);
+
+    expect(service.listenPorts()).toEqual(listenPorts);
+    // it is not a feed, and leaves the feeds alone
+    expect(service.feeds()).toEqual([]);
+  });
+
+  it('loadPorts() holds no answer while it asks, and none when the request fails', () => {
+    service.loadPorts().subscribe();
+    http.expectOne('/api/v1/feeds/ports').flush(listenPorts);
+    expect(service.listenPorts()).toEqual(listenPorts);
+
+    // the earlier answer is not the latest once the question is asked again
+    service.loadPorts().subscribe();
+    const second = http.expectOne('/api/v1/feeds/ports');
+    expect(service.listenPorts()).toBeNull();
+    second.flush({ ...listenPorts, suggested: { tcp: 6001 } });
+    expect(service.listenPorts()?.suggested).toEqual({ tcp: 6001 });
+
+    let failed = false;
+    service.loadPorts().subscribe({ error: () => (failed = true) });
+    http.expectOne('/api/v1/feeds/ports').flush({ error: 'not found' }, { status: 404, statusText: 'Not Found' });
+
+    expect(failed).toBe(true);
+    expect(service.listenPorts()).toBeNull();
+  });
+
+  describe('loadPorts() when it is called again before the first call is answered', () => {
+    /** Two calls with nothing answered yet: the earlier request and the later one. */
+    function twoCalls() {
+      service.loadPorts().subscribe({ error: () => undefined });
+      service.loadPorts().subscribe({ error: () => undefined });
+      const [first, second] = http.match('/api/v1/feeds/ports');
+      expect(first).toBeDefined();
+      expect(second).toBeDefined();
+      return { first, second };
+    }
+    const older = { ...listenPorts, suggested: { tcp: 6001 } };
+    const newer = { ...listenPorts, suggested: { tcp: 6002 } };
+
+    it('keeps the answer to the latest call when the earlier request answers after it', () => {
+      const { first, second } = twoCalls();
+      expect(service.listenPorts()).toBeNull();
+
+      second.flush(newer);
+      first.flush(older);
+
+      expect(service.listenPorts()?.suggested).toEqual({ tcp: 6002 });
+    });
+
+    it('keeps the answer to the latest call when the earlier request fails after it', () => {
+      const { first, second } = twoCalls();
+
+      second.flush(newer);
+      first.flush({ error: 'gone' }, { status: 502, statusText: 'Bad Gateway' });
+
+      expect(service.listenPorts()?.suggested).toEqual({ tcp: 6002 });
+    });
+
+    it('holds no answer when the latest call fails, whatever the earlier one says later', () => {
+      const { first, second } = twoCalls();
+
+      second.flush({ error: 'gone' }, { status: 502, statusText: 'Bad Gateway' });
+      first.flush(older);
+
+      expect(service.listenPorts()).toBeNull();
+    });
+
+    it('ignores the earlier answer even when it comes first, as the question now is the latest call\'s', () => {
+      const { first, second } = twoCalls();
+
+      first.flush(older);
+      // the question is still open, so there is no answer to give yet
+      expect(service.listenPorts()).toBeNull();
+
+      second.flush(newer);
+      expect(service.listenPorts()?.suggested).toEqual({ tcp: 6002 });
+    });
+  });
+
+  describe('deadLetters()', () => {
+    /** What `GET /api/v1/feeds/{id}/deadletters` answers (Task 23's contract). */
+    const answer = {
+      letters: [
+        {
+          at: '2026-10-18T12:00:00Z',
+          reason: 'parse_error',
+          error: 'not a sentinel.v1.Observation in JSON: …',
+          driver: 'tcp',
+          decoder: 'sentinel',
+          sender: '10.0.0.5:51234',
+          size: 17,
+          partition: 0,
+          offset: 42,
+        },
+      ],
+      scanned: 120,
+      partial: false,
+    };
+
+    it('asks for the newest 20, and for the payloads only when told to', () => {
+      let got: DeadLetterPage | undefined;
+      service.deadLetters('sensor-tcp').subscribe((page) => (got = page));
+      const plain = http.expectOne('/api/v1/feeds/sensor-tcp/deadletters?limit=20');
+      expect(plain.request.method).toBe('GET');
+      plain.flush(answer);
+      expect(got).toEqual(answer);
+
+      service.deadLetters('sensor-tcp', { payload: true }).subscribe();
+      http.expectOne('/api/v1/feeds/sensor-tcp/deadletters?limit=20&payload=true').flush(answer);
+
+      service.deadLetters('sensor-tcp', { payload: false }).subscribe();
+      http.expectOne('/api/v1/feeds/sensor-tcp/deadletters?limit=20').flush(answer);
+    });
+
+    it('writes the connection id as one path segment', () => {
+      service.deadLetters('a/b c').subscribe();
+      http.expectOne('/api/v1/feeds/a%2Fb%20c/deadletters?limit=20').flush(answer);
+    });
+
+    it('reads a list the server sent as null or left out as no letters', () => {
+      const got: DeadLetterPage[] = [];
+      service.deadLetters('x').subscribe((page) => got.push(page));
+      http.expectOne('/api/v1/feeds/x/deadletters?limit=20').flush({ letters: null, scanned: 120, partial: false });
+      service.deadLetters('x').subscribe((page) => got.push(page));
+      http.expectOne('/api/v1/feeds/x/deadletters?limit=20').flush({});
+
+      expect(got).toEqual([
+        { letters: [], scanned: 120, partial: false },
+        { letters: [], scanned: 0, partial: false },
+      ]);
+    });
+
+    it('hands the status of a refusal to the caller, which tells 403 from 501 from 502', () => {
+      const statuses: number[] = [];
+      for (const status of [403, 501, 502]) {
+        service.deadLetters('x').subscribe({ error: (err: HttpErrorResponse) => statuses.push(err.status) });
+        http.expectOne('/api/v1/feeds/x/deadletters?limit=20').flush({ error: 'no' }, { status, statusText: 'No' });
+      }
+      expect(statuses).toEqual([403, 501, 502]);
+      // and it is not a feeds failure: the list and its error are the list's own
+      expect(service.error()).toBeNull();
+    });
   });
 
   it('setEnabled() posts to enable/disable and updates the feed in place', () => {

@@ -87,7 +87,8 @@
   }
 
   input,
-  select {
+  select,
+  textarea {
     width: 100%;
     padding: 6px 10px;
     background: var(--bg-primary);
@@ -112,8 +113,14 @@
     cursor: pointer;
   }
 
+  textarea {
+    min-height: 6em;
+    resize: vertical;
+  }
+
   &.has-issue input,
-  &.has-issue select {
+  &.has-issue select,
+  &.has-issue textarea {
     border-color: var(--accent-red);
   }
 }
@@ -162,6 +169,52 @@
   &.sf-error-server::before {
     content: 'Server: ';
     opacity: 0.7;
+  }
+}
+
+// A remark from the parent: advice under the field, which may carry the call to action, so its text has to be
+// readable on every theme. --text-muted is not (2.0 to 3.2 : 1 on the drawer). On the drawer and on a group,
+// --accent-cyan is 6.3 : 1 or better in all five themes and --accent-yellow 7.6 : 1 or better.
+// A caution says so in words as well as in colour.
+.sf-hint {
+  margin: 0;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--accent-cyan);
+
+  &.sf-hint-warn {
+    color: var(--accent-yellow);
+  }
+}
+
+.sf-hint-level {
+  font-weight: 600;
+}
+
+// --text-primary is 7.3 : 1 or better on --bg-tertiary in all five themes; --text-secondary is 3.4 : 1 on night vision.
+.sf-hint-action {
+  margin-left: 6px;
+  padding: 1px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+
+  &:hover:not(:disabled) {
+    border-color: var(--border-active);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 1px;
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.6;
   }
 }
 

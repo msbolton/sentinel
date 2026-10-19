@@ -1,13 +1,16 @@
 import { Injectable, inject, signal, computed, DestroyRef } from '@angular/core';
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { Observable, tap, retry, timer, Subscription, interval, startWith, switchMap, catchError, of } from 'rxjs';
+import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
+import { Observable, tap, retry, timer, Subscription, interval, startWith, switchMap, catchError, of, defer, map } from 'rxjs';
 import {
+  DEAD_LETTERS_LIMIT,
+  DeadLetterPage,
   Feed,
   FeedDriver,
   CreateFeedRequest,
   ReplaceFeedRequest,
   FeedErrorResponse,
   FeedProblem,
+  ListenPorts,
 } from '../../shared/models/feed.model';
 
 /**
@@ -22,18 +25,24 @@ export class FeedService {
   private readonly destroyRef = inject(DestroyRef);
   private readonly feedsUrl = '/api/v1/feeds';
   private readonly driversUrl = '/api/v1/drivers';
+  private readonly portsUrl = '/api/v1/feeds/ports';
 
   private readonly feedsState = signal<Feed[]>([]);
   private readonly driversState = signal<FeedDriver[]>([]);
+  private readonly listenPortsState = signal<ListenPorts | null>(null);
   private readonly loadingState = signal(false);
   private readonly errorState = signal<string | null>(null);
   private loaded = false;
+  /** Counts the calls of `loadPorts`, so that only the latest one may answer. */
+  private portsCalls = 0;
   private pollers = 0;
   private pollSub: Subscription | null = null;
 
   /** Every feed, built-ins first (server order). */
   readonly feeds = this.feedsState.asReadonly();
   readonly drivers = this.driversState.asReadonly();
+  /** The answer to the latest `loadPorts`: null before it, while it waits, and when it failed. */
+  readonly listenPorts = this.listenPortsState.asReadonly();
   readonly loading = this.loadingState.asReadonly();
   readonly error = this.errorState.asReadonly();
   readonly enabledFeeds = computed(() => this.feedsState().filter((f) => f.enabled));
@@ -65,6 +74,41 @@ export class FeedService {
   /** Fetches the driver catalog (schemas included). */
   loadDrivers(): Observable<FeedDriver[]> {
     return this.http.get<FeedDriver[]>(this.driversUrl).pipe(tap((d) => this.driversState.set(d)));
+  }
+
+  /**
+   * Asks which ports listening connections hold, which Sentinel keeps for itself and which one to suggest.
+   * `listenPorts` holds the answer to the latest call and to no other: asking again drops what it held, an
+   * earlier call that is answered late is ignored (its own subscriber still gets the reply), and a failure
+   * leaves none. A failure is the caller's to ignore, as the server checks the port when a connection is saved.
+   */
+  loadPorts(): Observable<ListenPorts> {
+    return defer(() => {
+      const call = ++this.portsCalls;
+      this.listenPortsState.set(null);
+      return this.http.get<ListenPorts>(this.portsUrl).pipe(
+        tap((ports) => {
+          if (call === this.portsCalls) {
+            this.listenPortsState.set(ports);
+          }
+        }),
+      );
+    });
+  }
+
+  /**
+   * A connection's recent rejects (dead letters), newest first. The payloads, up to 1 KiB of each message, come
+   * only with `payload`. Nothing is kept here: the caller holds the answer, and a 403 (not cleared for the
+   * connection), 501 (the server cannot read them) or 502 (Kafka failed) reaches it as the error.
+   */
+  deadLetters(id: string, options: { payload?: boolean } = {}): Observable<DeadLetterPage> {
+    let params = new HttpParams().set('limit', String(DEAD_LETTERS_LIMIT));
+    if (options.payload) {
+      params = params.set('payload', 'true');
+    }
+    return this.http
+      .get<Partial<DeadLetterPage> | null>(`${this.feedsUrl}/${encodeURIComponent(id)}/deadletters`, { params })
+      .pipe(map(deadLetterPageOf));
   }
 
   driver(id: string): FeedDriver | undefined {
@@ -155,4 +199,15 @@ export function problemsOf(err: unknown): { message: string; problems: FeedProbl
 
 function messageOf(err: unknown): string {
   return problemsOf(err).message;
+}
+
+/** The answer made safe to read: Go writes a list with nothing in it as null, and may leave a field out. */
+function deadLetterPageOf(raw: Partial<DeadLetterPage> | null | undefined): DeadLetterPage {
+  const letters = raw?.letters;
+  const scanned = raw?.scanned;
+  return {
+    letters: Array.isArray(letters) ? letters : [],
+    scanned: typeof scanned === 'number' ? scanned : 0,
+    partial: raw?.partial === true,
+  };
 }

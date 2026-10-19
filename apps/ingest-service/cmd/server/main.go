@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 
 	"github.com/sentinel/ingest-service/internal/config"
 	"github.com/sentinel/ingest-service/internal/density"
+	"github.com/sentinel/ingest-service/internal/dlq"
 	"github.com/sentinel/ingest-service/internal/drivers"
 	"github.com/sentinel/ingest-service/internal/feed"
 	"github.com/sentinel/ingest-service/internal/health"
@@ -31,6 +34,10 @@ import (
 	_ "github.com/sentinel/ingest-service/internal/source/all" // registers transports, decoders and drivers
 	"github.com/sentinel/ingest-service/internal/source/driver/stream"
 )
+
+// The coordinator must keep telling the supervisor which replicas listen;
+// without it a listening connection would never find a home.
+var _ feed.ListenerLister = (*lease.Coordinator)(nil)
 
 func main() {
 	logger, err := newLogger()
@@ -46,6 +53,15 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		logger.Fatal("invalid configuration", zap.Error(err))
 	}
+	for _, w := range cfg.Warnings() {
+		logger.Warn(w)
+	}
+	// Parsed with the rest of the configuration, before anything starts: a bad
+	// value must not stop the service once feeds have taken their leases.
+	reserved, err := cfg.ReservedPortSet()
+	if err != nil {
+		logger.Fatal("invalid configuration", zap.Error(err))
+	}
 	if cfg.ServiceToken == "" {
 		logger.Warn("INGEST_SERVICE_TOKEN is not set; the management API accepts unauthenticated callers (development only)")
 	}
@@ -54,10 +70,19 @@ func main() {
 		zap.String("observation_topic", cfg.KafkaObservationTopic),
 		zap.String("http_addr", cfg.HTTPAddr),
 		zap.String("replica_id", cfg.ReplicaID),
+		zap.Bool("listener", cfg.Listener),
+		zap.Bool("listener_shared", cfg.ListenerShared),
 		zap.Int("publisher_shards", cfg.PublisherShards),
 		zap.Int("frame_buffer", cfg.FrameBuffer),
+		zap.Strings("secret_env_allow", cfg.SecretEnvAllow),
+		zap.Strings("secret_file_dirs", cfg.SecretFileDirs),
+		zap.Int("tls_reload_sec", cfg.TLSReloadSec),
 	)
 	stream.FrameBuffer = cfg.FrameBuffer
+	secretPolicy := cfg.SecretPolicy()
+	if !secretPolicy.Unrestricted() {
+		stream.FileDirs = append([]string{}, secretPolicy.FileDirs...) // non-nil: restricted
+	}
 
 	promReg := prometheus.NewRegistry()
 	promReg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
@@ -89,6 +114,15 @@ func main() {
 		logger.Fatal("failed to connect to postgres for the feed registry", zap.Error(err))
 	}
 	defer reg.Close()
+	// db/schema is applied outside the service. Refuse to run against one older
+	// than this code: a missing column otherwise fails quietly (the listener
+	// replica never registers, for one).
+	schemaCtx, schemaCancel := context.WithTimeout(ctx, 10*time.Second)
+	err = reg.CheckSchema(schemaCtx)
+	schemaCancel()
+	if err != nil {
+		logger.Fatal(schemaCheckMessage(err), zap.Error(err))
+	}
 	if err := reg.EnsureBuiltins(ctx, cfg.FeedsBootstrapEnabled); err != nil {
 		logger.Fatal("failed to ensure built-in feeds", zap.Error(err))
 	}
@@ -97,28 +131,36 @@ func main() {
 
 	// Supervisor: runs the feeds this replica owns and reports status.
 	supOpts := feed.Options{
-		ReplicaID:      cfg.ReplicaID,
-		RetryMin:       cfg.FeedRetryMin,
-		RetryMax:       cfg.FeedRetryMax,
-		StaleWarn:      cfg.FeedStaleWarn,
-		StaleCritical:  cfg.FeedStaleCritical,
-		RawMax:         cfg.RawPayloadMaxBytes,
-		LeaseTick:      cfg.LeaseTick,
-		RebalanceAfter: cfg.LeaseRebalance,
-		Shapes:         outbound.NewShapeStore(reg.Pool()),
-		Density:        density.New(producer, commonkafka.TopicDensityEvents).For,
+		ReplicaID:         cfg.ReplicaID,
+		RetryMin:          cfg.FeedRetryMin,
+		RetryMax:          cfg.FeedRetryMax,
+		StaleWarn:         cfg.FeedStaleWarn,
+		StaleCritical:     cfg.FeedStaleCritical,
+		RawMax:            cfg.RawPayloadMaxBytes,
+		Listener:          cfg.Listener,
+		ListenerHost:      cfg.ListenerHost,
+		ListenerShared:    cfg.ListenerShared,
+		LeaseTick:         cfg.LeaseTick,
+		RebalanceAfter:    cfg.LeaseRebalance,
+		SecretPolicy:      secretPolicy,
+		SecretReloadEvery: time.Duration(cfg.TLSReloadSec) * time.Second,
+		Shapes:            outbound.NewShapeStore(reg.Pool()),
+		Density:           density.New(producer, commonkafka.TopicDensityEvents).For,
 		ConsumerFactory: func(groupID, clientID string) (outbound.Consumer, error) {
 			return commonkafka.NewBatchConsumer(cfg.KafkaBrokers, groupID, clientID, "latest", commonkafka.BatchOptions{MaxMessages: 200, MaxWait: 200 * time.Millisecond, MaxRetries: 1}, logger.With(zap.String("group", groupID)))
 		},
 	}
 	if cfg.LeaseEnabled {
-		supOpts.Leaser = lease.New(reg.Pool(), cfg.ReplicaID, lease.Options{TTL: cfg.LeaseTTL})
+		supOpts.Leaser = lease.New(reg.Pool(), cfg.ReplicaID, lease.Options{TTL: cfg.LeaseTTL, Listener: cfg.Listener, ListenerHost: cfg.ListenerHost, ListenerShared: cfg.ListenerShared})
 		supOpts.Preferred = lease.Preferred
 		logger.Info("feed leases enabled", zap.Duration("ttl", cfg.LeaseTTL), zap.Duration("tick", cfg.LeaseTick), zap.Duration("rebalance_after", cfg.LeaseRebalance))
 	} else {
 		logger.Warn("LEASE_ENABLED=false: this replica runs every enabled feed")
 	}
 	sup := feed.New(reg, publisher, logger, m, supOpts)
+	// The listeners' counters, connections and senders live in their drivers'
+	// health detail; this reads them when Prometheus scrapes.
+	promReg.MustRegister(metrics.NewListenerCollector(sup))
 	supervisorDone := make(chan struct{})
 	go func() {
 		defer close(supervisorDone)
@@ -130,10 +172,14 @@ func main() {
 	healthHandler := health.NewHandler(producer, promReg, logger)
 	healthHandler.RegisterRoutes(mux)
 	mgmtHandler := mgmt.NewHandler(reg, catalog, sup, logger)
+	closeDeadLetters := serveDeadLetters(mgmtHandler, cfg, logger)
+	defer closeDeadLetters(dlq.Deadline) // a no-op once shutdown has closed it
 	mgmtHandler.StaleAfter = 3 * cfg.LeaseTick * 2
 	if cfg.LeaseEnabled {
 		mgmtHandler.StaleAfter = cfg.LeaseTTL
 	}
+	mgmtHandler.Reserved = reserved
+	mgmtHandler.UseSecretPolicy(secretPolicy)
 	mgmtHandler.RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
 
 	httpServer := &http.Server{
@@ -163,8 +209,8 @@ func main() {
 	}
 
 	// Graceful shutdown, bounded by SHUTDOWN_TIMEOUT_SEC: readiness 503 →
-	// supervisor stops drivers → publisher drains → producer flushes →
-	// HTTP shutdown → close.
+	// supervisor stops drivers → publisher drains → HTTP shutdown → producer
+	// flushes → dead-letter reader closes.
 	logger.Info("initiating graceful shutdown", zap.Duration("timeout", cfg.ShutdownTimeout))
 	deadline := time.Now().Add(cfg.ShutdownTimeout)
 	healthHandler.SetDraining(true)
@@ -174,22 +220,69 @@ func main() {
 	case <-time.After(time.Until(deadline)):
 		logger.Warn("feed supervisor did not stop in time")
 	}
-	publisher.Close()
-	flushMs := int(time.Until(deadline) / time.Millisecond)
-	if flushMs < 1000 {
-		flushMs = 1000
-	}
-	if remaining := producer.Flush(flushMs); remaining > 0 {
-		logger.Warn("kafka producer still has unflushed messages", zap.Int("remaining", remaining))
-	}
+	// With Kafka unreachable nothing drains: the shards cannot hand their
+	// observations over and a flush delivers none. So the publisher waits only
+	// until the deadline and then gives up on what it still holds (and logs how
+	// much), the HTTP server gets what is left of the deadline (at most 5 s), and
+	// the producer's one flush happens in its close, for the time then left but
+	// at least a second, and the dead-letter reader's close after it has the same
+	// floor. The process thus ends at most about two seconds after the deadline,
+	// inside the grace period the orchestrator allows.
+	publisher.CloseWithin(time.Until(deadline))
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), min(5*time.Second, max(time.Until(deadline), 0)))
 	defer shutdownCancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http server shutdown error", zap.Error(err))
 	}
 
+	// The producer's deferred Close flushes for 10 s whatever the deadline; closing
+	// it here makes that one a no-op.
+	producer.CloseWithin(max(time.Until(deadline), time.Second))
+
+	// The dead-letter reader's consumer is closed last, with the time that is
+	// left but at least a second: a read stuck in librdkafka must not hold the
+	// process past its deadline. The deferred stop is then a no-op.
+	closeDeadLetters(max(time.Until(deadline), time.Second))
+
 	logger.Info("sentinel ingest service shut down gracefully")
+}
+
+// schemaCheckMessage is the fatal log message for a CheckSchema error. Only a
+// *registry.SchemaError means the schema is older than this code. Any other
+// error (a timeout, a permissions error, a dropped connection) means the check
+// did not finish, and calling the schema out of date would send the operator
+// to apply db/schema when the cause is elsewhere.
+func schemaCheckMessage(err error) string {
+	if errors.As(err, new(*registry.SchemaError)) {
+		return "database schema is out of date"
+	}
+	return "checking the database schema failed"
+}
+
+// serveDeadLetters gives the management API a reader of observations.dlq for
+// GET /feeds/{id}/deadletters, and returns what releases it. The reader makes
+// its own Kafka consumer when the first request comes, so a Kafka that is down
+// at startup does not stop the service. With DLQ_PEEK_MAX_SCAN=0 it gives the
+// API none: the endpoint then answers 501, and nothing is created.
+func serveDeadLetters(h *mgmt.Handler, cfg *config.Config, logger *zap.Logger) (closeWithin func(time.Duration)) {
+	if cfg.DLQPeekMaxScan <= 0 {
+		logger.Info("dead-letter viewing is off", zap.Int("dlq_peek_max_scan", cfg.DLQPeekMaxScan))
+		return func(time.Duration) {}
+	}
+	reader := dlq.NewKafkaReader(cfg.KafkaBrokers, cfg.KafkaDeadLetterTopic, cfg.DLQPeekMaxScan, logger)
+	h.DeadLetters = reader
+	return once(reader.CloseWithin)
+}
+
+// once makes a close that takes a time bound run a single time: the first call
+// does the work with its bound, and the later ones return at once. The explicit
+// close at the end of shutdown thereby disarms the deferred one, so that a read
+// stuck in the consumer, which made the first give up, is not waited on again
+// past the orchestrator's grace period.
+func once(f func(time.Duration)) func(time.Duration) {
+	var o sync.Once
+	return func(d time.Duration) { o.Do(func() { f(d) }) }
 }
 
 func driverIDs(c *drivers.Catalog) []string {

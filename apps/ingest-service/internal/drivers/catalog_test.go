@@ -2,10 +2,14 @@ package drivers
 
 import (
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	_ "github.com/sentinel/ingest-service/internal/source/all"
+	"github.com/sentinel/ingest-service/internal/source/driver"
+	"github.com/sentinel/ingest-service/internal/source/transport"
 )
 
 func TestDefaultCatalogListsDrivers(t *testing.T) {
@@ -21,7 +25,7 @@ func TestDefaultCatalogListsDrivers(t *testing.T) {
 			t.Errorf("%s schema is not JSON: %v", d.ID, err)
 		}
 	}
-	for _, want := range []string{"opensky", "celestrak", "aisstream", "intelsky", "stream", "httpjson"} {
+	for _, want := range []string{"opensky", "celestrak", "aisstream", "intelsky", "stream", "httpjson", "tcp", "udp"} {
 		if !ids[want] {
 			t.Errorf("missing driver %s", want)
 		}
@@ -57,8 +61,21 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 		"stream3":    `{"transport": {"kind": "websocket", "url": "wss://x/y"}, "decoder": {"name": "json", "options": {"records": "ac"}}}`,
 		"stream4":    `{"transport": {"kind": "tcpclient", "address": "readsb:30005"}, "framing": "beast", "decoder": {"name": "beast"}}`,
 		"stream5":    `{"transport": {"kind": "udp", "address": ":10110"}, "decoder": {"name": "nmea-ais"}, "pinnedReplica": "site-1"}`,
+		"stream6":    `{"transport": {"kind": "tcpserver", "address": ":4001", "allow": ["10.0.0.0/8"], "maxConnections": 20, "maxMessagesPerSec": 500, "tls": {"enabled": true, "requireClientCert": true}}, "decoder": {"name": "json"}}`,
+		"stream7":    `{"transport": {"kind": "tcpserver", "address": ":4001", "maxConnections": 0, "maxMessagesPerSec": 0}, "decoder": {"name": "json"}}`,
+		"stream8":    `{"transport": {"kind": "udp", "address": ":4001", "maxMessagesPerSec": 1000, "maxMessagesPerSecPerSender": 50}, "decoder": {"name": "json"}}`,
+		"stream9":    `{"transport": {"kind": "udp", "address": ":4001", "receiveBufferBytes": 8388608}, "decoder": {"name": "json"}}`,
 		"httpjson":   `{"url": "https://api.example.com/v2/point/{lat}/{lon}/{radius_nm}", "intervalSec": 15, "requireArea": true, "decoder": {"options": {"records": "ac", "identityType": "ICAO24", "fields": {"id": "hex", "latitude": "lat", "longitude": "lon"}}}}`,
 		"tak":        `{"address": "tak.example.org:8089", "siteId": "east", "direction": "both", "tls": {"enabled": true, "serverName": "tak.example.org"}, "heartbeatSec": 30, "tracks": {"staleSec": 120}, "alerts": {"emergencyMinSeverity": "CRITICAL"}, "shapes": {"enabled": true, "refreshSec": 60}, "policy": {"entityTypes": ["AIRCRAFT", "VESSEL"], "feeds": ["opensky"], "boxes": [{"north": 40, "south": 35, "east": -74, "west": -80}], "classificationCeiling": "UNCLASSIFIED", "alerts": {"enabled": true, "minSeverity": "MEDIUM"}}, "outbound": {"perEntityMinSec": 5, "maxEventsPerSec": 100}}`,
+		"tcp":        `{"mode": "listen", "port": 6000}`,
+		"tcp2":       `{"mode": "connect", "host": "feeds.example", "port": 7000, "format": "cot", "tls": {"enabled": true}}`,
+		"tcp3":       `{"mode": "listen", "port": 6000, "maxMessagesPerSec": 1000, "maxMessagesPerSecPerSender": 50}`,
+		"udp":        `{"port": 10110, "format": "nmea-ais"}`,
+		"udp2":       `{"port": 10111, "encoding": "json", "allow": ["10.0.0.0/8", "192.0.2.7"], "maxMessageBytes": 1500, "maxMessagesPerSec": 0}`,
+		"udp3":       `{"port": 10112, "maxMessagesPerSec": 1000, "maxMessagesPerSecPerSender": 50}`,
+		"udp4":       `{"port": 10113, "receiveBufferBytes": 4194304}`,
+		"udp5":       `{"port": 10114, "receiveBufferBytes": 0}`,
+		"udp6":       `{"port": 10115, "receiveBufferBytes": 67108864}`,
 		"empty":      ``,
 	}
 	for driver, cfg := range cases {
@@ -66,10 +83,14 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 		switch d {
 		case "empty":
 			d = "intelsky"
-		case "stream2", "stream3", "stream4", "stream5":
+		case "stream2", "stream3", "stream4", "stream5", "stream6", "stream7", "stream8", "stream9":
 			d = "stream"
 		case "celestrak2":
 			d = "celestrak"
+		case "tcp2", "tcp3":
+			d = "tcp"
+		case "udp2", "udp3", "udp4", "udp5", "udp6":
+			d = "udp"
 		case "aisstream2":
 			d = "aisstream"
 		}
@@ -96,18 +117,46 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		{"aisstream", `{"watchlistMmsi": ["12345"]}`, "/config/watchlistMmsi/0"},
 		{"aisstream", `{"messageTypes": ["SafetyBroadcastMessage"]}`, "/config/messageTypes/0"},
 		{"aisstream", `{"movingIntervalSec": -1}`, "/config/movingIntervalSec"},
-		{"stream", `{"transport": {"kind": "mqtt"}, "decoder": {"name": "json"}}`, "/config/transport"},
+		{"stream", `{"transport": {"kind": "mqtt"}, "decoder": {"name": "json"}}`, "/config/transport/brokerUrl"},
 		{"stream", `{"transport": {"kind": "tcpserver", "address": ":4001"}, "decoder": {"name": "xml"}}`, "/config/decoder/name"},
 		{"stream", `{"transport": {"kind": "ftp", "address": ":4001"}, "decoder": {"name": "sbs"}}`, "/config/transport/kind"},
-		{"stream", `{"transport": {"kind": "websocket"}, "decoder": {"name": "json"}}`, "/config/transport"},
-		{"stream", `{"decoder": {"name": "json"}}`, "/config/"},
+		{"stream", `{"transport": {"kind": "websocket"}, "decoder": {"name": "json"}}`, "/config/transport/url"},
+		{"stream", `{"decoder": {"name": "json"}}`, "/config/transport"},
+		{"stream", `{"transport": {"kind": "tcpserver", "address": ":4001", "maxConnections": -1}, "decoder": {"name": "json"}}`, "/config/transport/maxConnections"},
+		{"stream", `{"transport": {"kind": "udp", "address": ":4001", "maxMessagesPerSec": -1}, "decoder": {"name": "json"}}`, "/config/transport/maxMessagesPerSec"},
+		{"stream", `{"transport": {"kind": "tcpserver", "address": ":4001", "maxMessagesPerSecPerSender": -1}, "decoder": {"name": "json"}}`, "/config/transport/maxMessagesPerSecPerSender"},
+		{"stream", `{"transport": {"kind": "udp", "address": ":4001", "maxMessagesPerSecPerSender": "fast"}, "decoder": {"name": "json"}}`, "/config/transport/maxMessagesPerSecPerSender"},
+		{"stream", `{"transport": {"kind": "udp", "address": ":4001", "allow": "oops"}, "decoder": {"name": "json"}}`, "/config/transport/allow"},
+		{"stream", `{"transport": {"kind": "tcpserver", "address": ":4001", "tls": {"enabled": true, "requireClientCert": "yes"}}, "decoder": {"name": "json"}}`, "/config/transport/tls/requireClientCert"},
 		{"nope", `{}`, "/driver"},
 		{"intelsky", `{not json`, "/config"},
-		{"tak", `{"siteId": "east"}`, "/config/"},
+		{"tak", `{"siteId": "east"}`, "/config/address"},
 		{"tak", `{"address": "h:1", "protocol": "protobuf"}`, "/config/protocol"},
 		{"tak", `{"address": "h:1", "policy": {"boxes": [{"north": 1, "south": 0, "east": 0, "west": 0, "depth": 1}]}}`, "/config/policy/boxes/0"},
 		{"tak", `{"address": "h:1", "policy": {"classificationCeiling": "ULTRA"}}`, "/config/policy/classificationCeiling"},
 		{"tak", `{"address": "h:1", "outbound": {"queueMax": 1}}`, "/config/outbound/queueMax"},
+		{"tcp", `{"mode": "listen"}`, "/config/port"},
+		{"tcp", `{"mode": "listen", "port": 80}`, "/config/port"},
+		{"tcp", `{"mode": "connect", "port": 7000}`, "/config/host"},
+		{"tcp", `{"mode": "listen", "port": 6000, "format": "xml"}`, "/config/format"},
+		{"tcp", `{"mode": "listen", "port": 6000, "tls": {"enabled": true, "certFile": "/x"}}`, "/config/tls"},
+		{"tcp", `{"mode": "listen", "port": 6000, "tls": {"enabled": true, "requireClientCrt": true}}`, "/config/tls"},
+		{"udp", `{}`, "/config/port"},
+		{"udp", `{"port": 80}`, "/config/port"},
+		{"udp", `{"port": 70000}`, "/config/port"},
+		{"udp", `{"port": 10110, "format": "beast"}`, "/config/format"},
+		{"udp", `{"port": 10110, "allow": "oops"}`, "/config/allow"},
+		{"udp", `{"port": 10110, "maxMessageBytes": 70000}`, "/config/maxMessageBytes"},
+		{"udp", `{"port": 10110, "maxMessagesPerSecPerSender": -1}`, "/config/maxMessagesPerSecPerSender"},
+		{"udp", `{"port": 10110, "receiveBufferBytes": -1}`, "/config/receiveBufferBytes"},
+		{"udp", `{"port": 10110, "receiveBufferBytes": 67108865}`, "/config/receiveBufferBytes"},
+		{"udp", `{"port": 10110, "receiveBufferBytes": 1.5}`, "/config/receiveBufferBytes"},
+		{"udp", `{"port": 10110, "receiveBufferBytes": "big"}`, "/config/receiveBufferBytes"},
+		{"stream", `{"transport": {"kind": "udp", "address": ":4001", "receiveBufferBytes": -1}, "decoder": {"name": "json"}}`, "/config/transport/receiveBufferBytes"},
+		{"stream", `{"transport": {"kind": "udp", "address": ":4001", "receiveBufferBytes": 67108865}, "decoder": {"name": "json"}}`, "/config/transport/receiveBufferBytes"},
+		{"stream", `{"transport": {"kind": "udp", "address": ":4001", "receiveBufferBytes": "big"}, "decoder": {"name": "json"}}`, "/config/transport/receiveBufferBytes"},
+		{"tcp", `{"mode": "listen", "port": 6000, "maxMessagesPerSecPerSender": -1}`, "/config/maxMessagesPerSecPerSender"},
+		{"tcp", `{"mode": "listen", "port": 6000, "maxMessagesPerSecPerSender": 1.5}`, "/config/maxMessagesPerSecPerSender"},
 	}
 	for _, tc := range cases {
 		problems := c.Validate(tc.driver, json.RawMessage(tc.cfg))
@@ -124,5 +173,452 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		if !found {
 			t.Errorf("%s %s: problems %+v lack path %s", tc.driver, tc.cfg, problems, tc.wantPath)
 		}
+	}
+}
+
+// problemPaths lists the paths of problems in sorted order, so a test can
+// compare the exact set a config is refused at.
+func problemPaths(problems []Problem) []string {
+	paths := make([]string, 0, len(problems))
+	for _, p := range problems {
+		paths = append(paths, p.Path)
+	}
+	slices.Sort(paths)
+	return paths
+}
+
+// A missing property is reported at the property itself rather than at the
+// object that lacks it, so a form can put the message on the field.
+func TestValidateRequiredPointsAtTheField(t *testing.T) {
+	c := Default()
+	cases := []struct {
+		name, driver, cfg string
+		want              []string
+	}{
+		{"tcp listen without a port", "tcp", `{"mode": "listen"}`, []string{"/config/port"}},
+		{"tcp connect without a host", "tcp", `{"mode": "connect", "port": 7000}`, []string{"/config/host"}},
+		{"tcp without a mode", "tcp", `{}`, []string{"/config/mode"}},
+		{"udp without a port", "udp", `{}`, []string{"/config/port"}},
+		{"stream without a transport", "stream", `{"decoder": {"name": "json"}}`, []string{"/config/transport"}},
+		{"stream without transport or decoder", "stream", `{}`, []string{"/config/decoder", "/config/transport"}},
+		{"mqtt without a broker or topics", "stream", `{"transport": {"kind": "mqtt"}, "decoder": {"name": "json"}}`, []string{"/config/transport/brokerUrl", "/config/transport/topics"}},
+		{"websocket without a url", "stream", `{"transport": {"kind": "websocket"}, "decoder": {"name": "json"}}`, []string{"/config/transport/url"}},
+		{"tak without an address", "tak", `{"siteId": "east"}`, []string{"/config/address"}},
+		{"transport and decoder with nothing in them", "stream", `{"transport": {}, "decoder": {}}`, []string{"/config/decoder/name", "/config/transport/kind"}},
+		{"sharing box without its corners", "tak", `{"address": "h:1", "policy": {"boxes": [{"north": 1}]}}`, []string{"/config/policy/boxes/0/east", "/config/policy/boxes/0/south", "/config/policy/boxes/0/west"}},
+		{"stream nmea-gps without options", "stream", `{"transport": {"kind": "tcpclient", "address": "gps:2947"}, "decoder": {"name": "nmea-gps"}}`, []string{"/config/decoder/options"}},
+		{"stream nmea-gps without a platform id", "stream", `{"transport": {"kind": "tcpclient", "address": "gps:2947"}, "decoder": {"name": "nmea-gps", "options": {}}}`, []string{"/config/decoder/options/sourceEntityId"}},
+	}
+	for _, tc := range cases {
+		problems := c.Validate(tc.driver, json.RawMessage(tc.cfg))
+		if got := problemPaths(problems); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: problem paths = %v, want %v (%+v)", tc.name, got, tc.want, problems)
+		}
+		for _, p := range problems {
+			if p.Message != "is required" {
+				t.Errorf("%s: message at %s = %q, want %q", tc.name, p.Path, p.Message, "is required")
+			}
+		}
+	}
+}
+
+// Each keyword that names absent properties reports them at the properties,
+// whatever depth they sit at, and a name holding "/" or "~" is escaped as
+// RFC 6901 says.
+func TestValidateRequiredPointsForEveryKeyword(t *testing.T) {
+	cases := []struct {
+		name, schema, cfg string
+		want              []string
+	}{
+		{"required",
+			`{"type": "object", "required": ["a/b", "c~d"], "properties": {"e/f": {"type": "object", "required": ["g~h"]}}}`,
+			`{"e/f": {}}`,
+			[]string{"/config/a~1b", "/config/c~0d", "/config/e~1f/g~0h"}},
+		{"dependentRequired",
+			`{"type": "object", "dependentRequired": {"user": ["password", "realm/id"]}, "properties": {"auth": {"type": "object", "dependentRequired": {"user": ["pass~word"]}}}}`,
+			`{"user": "u", "auth": {"user": "u"}}`,
+			[]string{"/config/auth/pass~0word", "/config/password", "/config/realm~1id"}},
+		{"dependencies",
+			`{"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "dependencies": {"user": ["password", "realm/id"]}}`,
+			`{"user": "u"}`,
+			[]string{"/config/password", "/config/realm~1id"}},
+	}
+	for _, tc := range cases {
+		c, err := Build([]driver.Definition{{ID: "probe", ConfigSchema: json.RawMessage(tc.schema)}})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		problems := c.Validate("probe", json.RawMessage(tc.cfg))
+		if got := problemPaths(problems); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: problem paths = %v, want %v (%+v)", tc.name, got, tc.want, problems)
+		}
+		for _, p := range problems {
+			if p.Message != "is required" {
+				t.Errorf("%s: message at %s = %q, want %q", tc.name, p.Path, p.Message, "is required")
+			}
+		}
+	}
+}
+
+// Every problem path is a JSON pointer: the config itself is /config, not
+// /config/, and a name holding "/" or "~" is escaped.
+func TestValidateProblemPathsAreJSONPointers(t *testing.T) {
+	cases := []struct {
+		name, schema, cfg, want string
+	}{
+		{"the config itself", `{"type": "object", "additionalProperties": false}`, `{"x": 1}`, "/config"},
+		{"a name holding a slash", `{"type": "object", "properties": {"a/b": {"type": "integer"}}}`, `{"a/b": "x"}`, "/config/a~1b"},
+		{"a name holding a tilde", `{"type": "object", "properties": {"a~b": {"type": "object", "properties": {"c/d": {"type": "integer"}}}}}`, `{"a~b": {"c/d": "x"}}`, "/config/a~0b/c~1d"},
+	}
+	for _, tc := range cases {
+		c, err := Build([]driver.Definition{{ID: "probe", ConfigSchema: json.RawMessage(tc.schema)}})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := problemPaths(c.Validate("probe", json.RawMessage(tc.cfg))); !slices.Equal(got, []string{tc.want}) {
+			t.Errorf("%s: problem paths = %v, want [%s]", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The nmea-gps decoder refuses to start without the platform its receiver
+// reports, so a tcp or udp connection reading it is refused up front, at the
+// field. Every other format is left alone.
+func TestValidateNMEAGPSNeedsASourceEntityID(t *testing.T) {
+	c := Default()
+	const optionsPath, idPath = "/config/decoderOptions", "/config/decoderOptions/sourceEntityId"
+	listeners := []struct{ name, driver, cfg string }{
+		{"tcp listen", "tcp", `"mode": "listen", "port": 6001`},
+		{"tcp connect", "tcp", `"mode": "connect", "host": "gps.example", "port": 2947`},
+		{"udp", "udp", `"port": 6001`},
+	}
+	cases := []struct {
+		name, rest string
+		want       []string // exact problem paths; none means accepted
+	}{
+		{"an id", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": "truck-1"}`, nil},
+		{"an id with a name and type", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": "truck-1", "name": "Truck 1", "entityType": "VEHICLE"}`, nil},
+		{"no options", `"format": "nmea-gps"`, []string{optionsPath}},
+		{"empty options", `"format": "nmea-gps", "decoderOptions": {}`, []string{idPath}},
+		{"options without an id", `"format": "nmea-gps", "decoderOptions": {"name": "Truck 1"}`, []string{idPath}},
+		{"an empty id", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": ""}`, []string{idPath}},
+		{"a blank id", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": "   "}`, []string{idPath}},
+		{"an id of tabs and a newline", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": "\t\n"}`, []string{idPath}},
+		{"an id with spaces around it", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": " truck-1 "}`, nil},
+		{"a number for the id", `"format": "nmea-gps", "decoderOptions": {"sourceEntityId": 7}`, []string{idPath}},
+		{"options that are not an object", `"format": "nmea-gps", "decoderOptions": "truck-1"`, []string{optionsPath}},
+		// No other format is asked for an id, with options or without.
+		{"no format", ``, nil},
+		{"sentinel", `"format": "sentinel"`, nil},
+		{"json", `"format": "json"`, nil},
+		{"json with a field map", `"format": "json", "decoderOptions": {"fields": {"latitude": "lat", "longitude": "lon"}}`, nil},
+		{"cot", `"format": "cot"`, nil},
+		{"cot with options", `"format": "cot", "decoderOptions": {"skipSite": "east"}`, nil},
+		{"nmea-ais", `"format": "nmea-ais"`, nil},
+		{"sbs", `"format": "sbs"`, nil},
+		{"link16", `"format": "link16"`, nil},
+		{"an id without the format", `"decoderOptions": {"sourceEntityId": "truck-1"}`, nil},
+	}
+	for _, l := range listeners {
+		for _, tc := range cases {
+			cfg := "{" + l.cfg
+			if tc.rest != "" {
+				cfg += ", " + tc.rest
+			}
+			cfg += "}"
+			problems := c.Validate(l.driver, json.RawMessage(cfg))
+			if got := problemPaths(problems); !slices.Equal(got, tc.want) {
+				t.Errorf("%s, %s: problem paths = %v, want %v (config %s, problems %+v)", l.name, tc.name, got, tc.want, cfg, problems)
+			}
+		}
+	}
+}
+
+// The stream driver's nmea-gps decoder refuses to start without the platform
+// its receiver reports, as the tcp and udp ones do, so a stream connection
+// naming it is refused up front, at the field. The rule is the decoder's, so
+// it holds whatever the transport, and every other decoder is left alone.
+func TestValidateStreamNMEAGPSNeedsASourceEntityID(t *testing.T) {
+	c := Default()
+	const optionsPath, idPath = "/config/decoder/options", "/config/decoder/options/sourceEntityId"
+	transports := []struct{ name, section string }{
+		{"tcpclient", `{"kind": "tcpclient", "address": "gps.example:2947"}`},
+		{"tcpserver", `{"kind": "tcpserver", "address": ":4001"}`},
+		{"udp", `{"kind": "udp", "address": ":4001"}`},
+	}
+	cases := []struct {
+		name, decoder string
+		want          []string // exact problem paths; none means accepted
+	}{
+		{"an id", `{"name": "nmea-gps", "options": {"sourceEntityId": "truck-1"}}`, nil},
+		{"an id with a name and type", `{"name": "nmea-gps", "options": {"sourceEntityId": "truck-1", "name": "Truck 1", "entityType": "VEHICLE"}}`, nil},
+		{"no options", `{"name": "nmea-gps"}`, []string{optionsPath}},
+		{"empty options", `{"name": "nmea-gps", "options": {}}`, []string{idPath}},
+		{"options without an id", `{"name": "nmea-gps", "options": {"name": "Truck 1"}}`, []string{idPath}},
+		{"an empty id", `{"name": "nmea-gps", "options": {"sourceEntityId": ""}}`, []string{idPath}},
+		{"a blank id", `{"name": "nmea-gps", "options": {"sourceEntityId": "   "}}`, []string{idPath}},
+		{"an id of tabs and a newline", `{"name": "nmea-gps", "options": {"sourceEntityId": "\t\n"}}`, []string{idPath}},
+		{"an id with spaces around it", `{"name": "nmea-gps", "options": {"sourceEntityId": " truck-1 "}}`, nil},
+		{"a number for the id", `{"name": "nmea-gps", "options": {"sourceEntityId": 7}}`, []string{idPath}},
+		{"options that are not an object", `{"name": "nmea-gps", "options": "truck-1"}`, []string{optionsPath}},
+		// No other decoder is asked for an id, with options or without.
+		{"json", `{"name": "json"}`, nil},
+		{"json with a field map", `{"name": "json", "options": {"fields": {"latitude": "lat", "longitude": "lon"}}}`, nil},
+		{"cot", `{"name": "cot"}`, nil},
+		{"nmea-ais", `{"name": "nmea-ais"}`, nil},
+		{"sbs", `{"name": "sbs"}`, nil},
+		{"beast", `{"name": "beast"}`, nil},
+		{"link16", `{"name": "link16"}`, nil},
+		{"an id on another decoder", `{"name": "json", "options": {"sourceEntityId": "truck-1"}}`, nil},
+		// With no name the decoder is refused for that, and for nothing else.
+		{"an id without a decoder name", `{"options": {"sourceEntityId": "truck-1"}}`, []string{"/config/decoder/name"}},
+	}
+	for _, tr := range transports {
+		for _, tc := range cases {
+			cfg := `{"transport": ` + tr.section + `, "decoder": ` + tc.decoder + `}`
+			problems := c.Validate("stream", json.RawMessage(cfg))
+			if got := problemPaths(problems); !slices.Equal(got, tc.want) {
+				t.Errorf("%s, %s: problem paths = %v, want %v (config %s, problems %+v)", tr.name, tc.name, got, tc.want, cfg, problems)
+			}
+		}
+	}
+}
+
+// The receive buffer's default and ceiling are stated twice: in the schemas the
+// form and the API read, and in the constants the transport applies. They must
+// say the same.
+func TestReceiveBufferSchemasAgreeWithTheTransport(t *testing.T) {
+	c := Default()
+	for id, path := range map[string][]string{
+		"udp":    {"properties", "receiveBufferBytes"},
+		"stream": {"properties", "transport", "properties", "receiveBufferBytes"},
+	} {
+		info, ok := c.Get(id)
+		if !ok {
+			t.Fatalf("no %s driver", id)
+		}
+		var node any
+		if err := json.Unmarshal(info.ConfigSchema, &node); err != nil {
+			t.Fatalf("%s schema: %v", id, err)
+		}
+		for _, key := range path {
+			m, _ := node.(map[string]any)
+			if node = m[key]; node == nil {
+				t.Fatalf("%s schema has no %s", id, strings.Join(path, "."))
+			}
+		}
+		prop := node.(map[string]any)
+		for key, want := range map[string]float64{"minimum": 0, "default": transport.DefaultReceiveBufferBytes, "maximum": transport.MaxReceiveBufferBytes} {
+			if got, ok := prop[key].(float64); !ok || got != want {
+				t.Errorf("%s schema: receiveBufferBytes %s = %v, want %v, the transport's", id, key, prop[key], want)
+			}
+		}
+	}
+}
+
+// secretMeta is one x-secrets entry, as far as the catalog checks it.
+type secretMeta struct {
+	Title        string         `json:"title"`
+	ShowWhen     map[string]any `json:"showWhen"`
+	RequiredWhen map[string]any `json:"requiredWhen"`
+}
+
+// propertyNode is a schema as far as a secret's conditions care: the nested
+// properties a path walks through.
+type propertyNode struct {
+	Properties map[string]propertyNode `json:"properties"`
+}
+
+// has reports whether the slash-separated path names a property, following
+// nested properties from this schema.
+func (n propertyNode) has(path string) bool {
+	for _, name := range strings.Split(path, "/") {
+		next, ok := n.Properties[name]
+		if !ok {
+			return false
+		}
+		n = next
+	}
+	return true
+}
+
+// A schema describes its secrets under x-secrets, so the form can label each
+// one, hint at a reference, and show or require it only while its conditions
+// hold. The form reads the entries by secret name and the conditions by
+// property path, so a typo in either is silent: an entry for a secret the
+// driver does not take is never used, and a condition on a property the schema
+// lacks never holds.
+func TestSecretMetadataNamesDeclaredSecrets(t *testing.T) {
+	// The drivers whose forms take TLS material, and the secrets each must
+	// describe, so that a dropped block fails here instead of passing for want
+	// of anything to check.
+	wantDescribed := map[string][]string{
+		"tcp":    {"tlsCert", "tlsKey", "clientCa", "serverCa"},
+		"stream": {"tlsCert", "tlsKey", "clientCa", "serverCa"},
+		"tak":    {"clientCert", "clientKey", "caCert"},
+	}
+	for _, info := range Default().List() {
+		var schema struct {
+			Properties map[string]propertyNode `json:"properties"`
+			Secrets    map[string]secretMeta   `json:"x-secrets"`
+		}
+		if err := json.Unmarshal(info.ConfigSchema, &schema); err != nil {
+			t.Errorf("%s: the schema does not decode: %v", info.ID, err)
+			continue
+		}
+		root := propertyNode{Properties: schema.Properties}
+		for _, name := range wantDescribed[info.ID] {
+			if _, ok := schema.Secrets[name]; !ok {
+				t.Errorf("%s: x-secrets has no entry for %s", info.ID, name)
+			}
+		}
+		for name, meta := range schema.Secrets {
+			if !slices.Contains(info.SecretFields, name) {
+				t.Errorf("%s: x-secrets describes %s, which is not one of the driver's secret fields %v", info.ID, name, info.SecretFields)
+			}
+			if meta.Title == "" {
+				t.Errorf("%s: x-secrets.%s has no title", info.ID, name)
+			}
+			for when, conditions := range map[string]map[string]any{"showWhen": meta.ShowWhen, "requiredWhen": meta.RequiredWhen} {
+				for path := range conditions {
+					if !root.has(path) {
+						t.Errorf("%s: x-secrets.%s.%s tests %q, which is not a property path in the schema", info.ID, name, when, path)
+					}
+				}
+			}
+		}
+	}
+}
+
+// schemaProp finds the property at path (property names, from the schema's
+// root) in a driver's config schema.
+func schemaProp(t *testing.T, c *Catalog, driverID string, path ...string) map[string]any {
+	t.Helper()
+	info, ok := c.Get(driverID)
+	if !ok {
+		t.Fatalf("no %s driver", driverID)
+	}
+	var node map[string]any
+	if err := json.Unmarshal(info.ConfigSchema, &node); err != nil {
+		t.Fatalf("%s schema: %v", driverID, err)
+	}
+	for _, name := range path {
+		props, _ := node["properties"].(map[string]any)
+		next, ok := props[name].(map[string]any)
+		if !ok {
+			t.Fatalf("%s schema has no property %s", driverID, strings.Join(path, "."))
+		}
+		node = next
+	}
+	return node
+}
+
+// text is a schema node's string field, "" when it has none.
+func text(node map[string]any, key string) string {
+	s, _ := node[key].(string)
+	return s
+}
+
+// A frame limit has a ceiling, so a stored config cannot ask the listener for a
+// buffer the size of the address space. The tcp driver's maxMessageBytes has
+// had one; the stream and tak limits are held to the same number.
+func TestFrameLimitsHaveTheSameCeiling(t *testing.T) {
+	c := Default()
+	const ceiling = 16 << 20
+	cases := []struct {
+		name, driver, field, cfg string // cfg holds %d for the limit
+		path                     string
+	}{
+		{"tcp", "tcp", "maxMessageBytes", `{"mode": "connect", "host": "h", "port": 7000, "maxMessageBytes": %d}`, "/config/maxMessageBytes"},
+		{"stream", "stream", "maxFrameBytes", `{"transport": {"kind": "tcpclient", "address": "h:1", "maxFrameBytes": %d}, "decoder": {"name": "json"}}`, "/config/transport/maxFrameBytes"},
+		{"tak", "tak", "maxFrameBytes", `{"address": "h:8087", "maxFrameBytes": %d}`, "/config/maxFrameBytes"},
+	}
+	for _, tc := range cases {
+		at := func(limit int) []string {
+			return problemPaths(c.Validate(tc.driver, json.RawMessage(fmt.Sprintf(tc.cfg, limit))))
+		}
+		if got := at(ceiling); len(got) != 0 {
+			t.Errorf("%s: %s of %d (the ceiling) was refused: %v", tc.name, tc.field, ceiling, got)
+		}
+		if got := at(ceiling + 1); !slices.Equal(got, []string{tc.path}) {
+			t.Errorf("%s: %s of %d: problem paths = %v, want [%s]", tc.name, tc.field, ceiling+1, got, tc.path)
+		}
+	}
+}
+
+// The TAK form takes its TLS material from the secrets, which mean nothing
+// while TLS is off, so it shows them only once TLS is on, as the tcp form does.
+func TestTAKSecretsAreShownOnlyWithTLS(t *testing.T) {
+	info, ok := Default().Get("tak")
+	if !ok {
+		t.Fatal("no tak driver")
+	}
+	var schema struct {
+		Secrets map[string]secretMeta `json:"x-secrets"`
+	}
+	if err := json.Unmarshal(info.ConfigSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range info.SecretFields {
+		meta, ok := schema.Secrets[name]
+		if !ok {
+			t.Errorf("x-secrets has no entry for %s", name)
+			continue
+		}
+		if len(meta.ShowWhen) != 1 || meta.ShowWhen["tls/enabled"] != true {
+			t.Errorf("x-secrets.%s.showWhen = %v, want only tls/enabled: true", name, meta.ShowWhen)
+		}
+	}
+	if len(schema.Secrets) == 0 {
+		t.Error("tak describes no secrets")
+	}
+}
+
+// A stream connection can name its client CA as a file, which the transport
+// accepts, so the form offers the field and the requireClientCert hint says
+// there are two places the CA can come from.
+func TestStreamTLSSchemaDescribesTheClientCA(t *testing.T) {
+	c := Default()
+	file := schemaProp(t, c, "stream", "transport", "tls", "clientCaFile")
+	if text(file, "type") != "string" || text(file, "title") == "" || text(file, "description") == "" {
+		t.Errorf("clientCaFile = %v, want a titled, described string", file)
+	}
+	require := schemaProp(t, c, "stream", "transport", "tls", "requireClientCert")
+	for _, want := range []string{"clientCa secret", "tls.clientCaFile"} {
+		if !strings.Contains(text(require, "description"), want) {
+			t.Errorf("requireClientCert description = %q, want it to name %q", text(require, "description"), want)
+		}
+	}
+	if showWhen, _ := require["x-showWhen"].(map[string]any); len(showWhen) != 1 || showWhen["enabled"] != true {
+		t.Errorf("requireClientCert x-showWhen = %v, want only enabled: true, as before", require["x-showWhen"])
+	}
+}
+
+// What the descriptions tell an operator has to be what the code does. These
+// pin the facts a description states, not its wording.
+func TestSchemaDescriptionsStateWhatTheCodeDoes(t *testing.T) {
+	c := Default()
+	mentions := func(node map[string]any, key string, wants ...string) {
+		t.Helper()
+		for _, want := range wants {
+			if !strings.Contains(text(node, key), want) {
+				t.Errorf("%s = %q, want it to mention %q", key, text(node, key), want)
+			}
+		}
+	}
+
+	// The sentinel JSON format takes an array of up to 100 observations on a line.
+	mentions(schemaProp(t, c, "tcp", "encoding"), "description", "array of up to 100")
+	mentions(schemaProp(t, c, "udp", "encoding"), "description", "array of up to 100")
+
+	// Linux reports twice the size it granted, and the kernel's drop count is
+	// everything it drops on the socket, not only a full buffer.
+	for name, node := range map[string]map[string]any{
+		"udp":    schemaProp(t, c, "udp", "receiveBufferBytes"),
+		"stream": schemaProp(t, c, "stream", "transport", "receiveBufferBytes"),
+	} {
+		t.Run(name+" receiveBufferBytes", func(t *testing.T) {
+			mentions(node, "description", "twice", "425984", "receiveBufferEffectiveBytes", "kernelDropped", "memory limits", "checksum", "filter")
+		})
 	}
 }
