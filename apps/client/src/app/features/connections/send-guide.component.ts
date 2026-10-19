@@ -154,6 +154,27 @@ export class SendGuideComponent {
   });
 
   readonly lastError = computed(() => this.feed().status?.lastError);
+  /**
+   * Why a listening connection has no address to send to yet, worded by the state it is in: a disabled
+   * or stopped connection is not waiting for a replica, so it must not say that it is. Empty once the
+   * listener has reported where it listens.
+   */
+  readonly notListening = computed(() => {
+    const t = this.target();
+    if (!t || t.mode !== 'listen' || t.host) return '';
+    const feed = this.feed();
+    if (!feed.enabled) return 'This connection is disabled.';
+    switch (feed.status?.state) {
+      case 'stopped':
+        return 'This connection is stopped.';
+      case 'error':
+        return 'This connection is in an error state.';
+      case 'unassigned':
+        return 'Not placed on a listener replica yet.';
+      default:
+        return 'Not running on a listener replica yet.';
+    }
+  });
   private readonly detail = computed<Record<string, unknown>>(() => this.feed().status?.detail ?? {});
   readonly allowOpen = computed(() => {
     const t = this.target();

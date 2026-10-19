@@ -283,6 +283,37 @@ describe('SendGuideComponent', () => {
     expect(status()).toBe('Last error: no listener replica (run the ingest listener: INGEST_LISTENER=true)');
   });
 
+  it('words the status by the state of a connection that is not listening', () => {
+    const config = { mode: 'listen', port: 6000, allow: ['10.0.0.0/8'] };
+    const withState = (state: Feed['status']['state'], enabled = true): Feed => {
+      const feed = makeFeed({ driver: 'tcp', config });
+      return { ...feed, enabled, status: { ...feed.status, state } };
+    };
+
+    render(withState('stopped', false));
+    expect(status()).toBe('This connection is disabled.');
+
+    // A disabled connection is disabled whatever state it was last in.
+    render(withState('running', false));
+    expect(status()).toBe('This connection is disabled.');
+
+    render(withState('stopped'));
+    expect(status()).toBe('This connection is stopped.');
+
+    render(withState('error'));
+    expect(status()).toBe('This connection is in an error state.');
+
+    render(withState('unassigned'));
+    expect(status()).toBe('Not placed on a listener replica yet.');
+
+    render(withState('starting'));
+    expect(status()).toBe('Not running on a listener replica yet.');
+
+    // Once the listener says where it listens there is nothing to explain, enabled or not.
+    render({ ...withState('running'), status: { ...withState('running').status, detail: listening('tcp', 6000) } });
+    expect(status()).toBe('');
+  });
+
   it('keeps its status region in the page when there is nothing to say, so a change is announced', () => {
     render(makeFeed({ driver: 'tcp', config: { mode: 'listen', port: 6000, allow: ['10.0.0.0/8'] }, detail: listening('tcp', 6000) }));
     const region = el.querySelector('[role=status]');

@@ -22,8 +22,8 @@
     <div class="status" role="status">
       @if (lastError(); as err) {
         <p class="warn">Last error: {{ err }}</p>
-      } @else if (t.mode === 'listen' && !t.host) {
-        <p class="warn">Not running on a listener replica yet.</p>
+      } @else if (notListening()) {
+        <p class="warn">{{ notListening() }}</p>
       }
       @if (allowOpen()) {
         <p class="warn">No allowlist: anyone who can reach this port can send.</p>
