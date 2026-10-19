@@ -26,6 +26,7 @@
         "maxConnections": { "type": "integer", "minimum": 0, "default": 50, "title": "Max connections", "description": "tcpserver: concurrent connections; 0 = unlimited", "x-showWhen": { "kind": "tcpserver" } },
         "maxMessagesPerSec": { "type": "integer", "minimum": 0, "default": 0, "title": "Max messages per second", "description": "tcpserver and udp: shared by every sender of the listener; 0 = unlimited", "x-showWhen": { "kind": ["tcpserver", "udp"] } },
         "maxMessagesPerSecPerSender": { "type": "integer", "minimum": 0, "default": 0, "title": "Max messages per second per sender", "description": "tcpserver and udp: how many messages a second one sender IP address may send, within the limit above that all senders share; 0 = no per-sender limit. Senders behind one NAT share a limit.", "x-showWhen": { "kind": ["tcpserver", "udp"] } },
+        "receiveBufferBytes": { "type": "integer", "minimum": 0, "maximum": 67108864, "default": 4194304, "title": "Receive buffer (bytes)", "description": "udp: the socket buffer the operating system keeps for this port while Sentinel catches up. A burst beyond it is dropped by the OS; on Linux health counts those datagrams as kernelDropped. 0 = 4 MiB. The OS may grant less (Linux caps it at net.core.rmem_max); health shows the size granted as receiveBufferEffectiveBytes.", "x-showWhen": { "kind": "udp" } },
         "tls": {
           "type": "object",
           "title": "TLS",

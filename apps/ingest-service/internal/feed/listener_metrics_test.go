@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -210,10 +211,19 @@ func TestListenerStatsWhileReconciling(t *testing.T) {
 	}
 }
 
+// datagramOnlyDetailKeys are the health detail keys only a datagram listener
+// has. A listener whose senders connect has no receive buffer of its own to
+// size and no datagrams for the kernel to drop, so it must not report them: the
+// series would claim a count it cannot make. kernelDropped is an event the
+// collector exports; receiveBufferEffectiveBytes is a size, which it does not.
+var datagramOnlyDetailKeys = []string{"kernelDropped", "receiveBufferEffectiveBytes"}
+
 // The collector reads counters out of the health detail by key. A driver that
 // renames one, or reports it as a string, would leave its metric silently
-// empty, so this builds the three kinds of listener (without running them)
-// and asks the collector what it exports from each one's real detail.
+// empty, so this builds the kinds of listener (without running them) and asks
+// the collector what it exports from each one's real detail. Every listener is
+// held to every event, except that the events only datagram listeners have are
+// asked of those alone.
 func TestListenerDetailKeysAreNumeric(t *testing.T) {
 	const (
 		events      = "sentinel_ingest_listener_events_total"
@@ -228,11 +238,12 @@ func TestListenerDetailKeysAreNumeric(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, driverID, config string
-		datagrams              bool // no connections to count
+		datagrams              bool // a datagram listener: no connections to count, and the datagram-only keys
 	}{
 		{"tcp listen", "tcp", `{"mode":"listen","port":6000,"address":"127.0.0.1"}`, false},
 		{"udp", "udp", `{"port":10110,"address":"127.0.0.1"}`, true},
 		{"stream tcpserver", "stream", `{"transport":{"kind":"tcpserver","address":"127.0.0.1:6001"},"framing":"line","decoder":{"name":"nmea-ais"}}`, false},
+		{"stream udp", "stream", `{"transport":{"kind":"udp","address":"127.0.0.1:6002"},"framing":"line","decoder":{"name":"nmea-ais"}}`, true},
 	} {
 		drv, err := driver.New(driver.Spec{FeedID: "f", Driver: tc.driverID, Config: json.RawMessage(tc.config)}, driver.Deps{})
 		if err != nil {
@@ -241,8 +252,26 @@ func TestListenerDetailKeysAreNumeric(t *testing.T) {
 		detail := drv.Health().Detail
 
 		for _, key := range metrics.ListenerEventKeys() {
+			if !tc.datagrams && slices.Contains(datagramOnlyDetailKeys, key) {
+				continue // asked below not to be there
+			}
 			if exported(events, map[string]any{key: detail[key]}) != 1 {
 				t.Errorf("%s: Health().Detail[%q] = %#v (%T), which the listener collector does not export as an event", tc.name, key, detail[key], detail[key])
+			}
+		}
+		for _, key := range datagramOnlyDetailKeys {
+			if _, has := detail[key]; has != tc.datagrams {
+				t.Errorf("%s: Health().Detail has %q = %v; only a datagram listener reports it (this one is a datagram listener: %v)", tc.name, key, has, tc.datagrams)
+			}
+		}
+		// A size is a number the client reads and no event of the collector's: it
+		// is reported as one, and the collector exports no series for it.
+		if tc.datagrams {
+			if _, ok := detail["receiveBufferEffectiveBytes"].(int64); !ok {
+				t.Errorf("%s: Health().Detail[receiveBufferEffectiveBytes] = %#v (%T), want an int64", tc.name, detail["receiveBufferEffectiveBytes"], detail["receiveBufferEffectiveBytes"])
+			}
+			if got := exported(events, map[string]any{"receiveBufferEffectiveBytes": detail["receiveBufferEffectiveBytes"]}); got != 0 {
+				t.Errorf("%s: the collector exported %d event series from receiveBufferEffectiveBytes, a size", tc.name, got)
 			}
 		}
 		if exported(senders, map[string]any{"distinctSenders": detail["distinctSenders"]}) != 1 {

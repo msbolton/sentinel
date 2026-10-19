@@ -436,3 +436,92 @@ func TestUDPStateTruncatesSendersButCountsThemAll(t *testing.T) {
 		t.Errorf("distinctSenders = %v, want 60", st.Detail["distinctSenders"])
 	}
 }
+
+// A datagram listener reports both numbers from the start, as numbers, so the
+// shape of its health does not depend on whether its socket is open yet, or on
+// the OS: the size is 0 until the socket is open, and the kernel's drop count
+// is 0 where the OS cannot report it.
+func TestUDPReportsReceiveBufferAndKernelDropsFromTheStart(t *testing.T) {
+	tr, err := New(transport.Config{Kind: "udp", Address: "127.0.0.1:9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"receiveBufferEffectiveBytes", "kernelDropped"} {
+		if v, ok := tr.State().Detail[key].(int64); !ok || v != 0 {
+			t.Errorf("detail[%q] = %#v before the socket is open, want int64 0", key, tr.State().Detail[key])
+		}
+	}
+}
+
+// The listener asks the OS for the receive buffer its config names, 4 MiB when
+// it names none, and reports the size the OS says the socket has. That is not
+// the ask: Linux keeps twice the ask but caps the ask at net.core.rmem_max,
+// and other systems cap it their own way. So what is expected is the size a
+// socket of this machine reports after the same ask, not a fixed number.
+func TestReceiveBufferApplied(t *testing.T) {
+	grantedFor := func(t *testing.T, ask int) int64 {
+		t.Helper()
+		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pc.Close()
+		conn := pc.(*net.UDPConn)
+		if err := conn.SetReadBuffer(ask); err != nil {
+			t.Fatalf("a socket could not be given a receive buffer of %d bytes: %v", ask, err)
+		}
+		size, err := receiveBufferSize(conn)
+		if err != nil {
+			t.Skipf("this platform cannot say how big a socket's receive buffer is: %v", err)
+		}
+		return int64(size)
+	}
+	for _, tc := range []struct {
+		name       string
+		configured int // transport.Config.ReceiveBufferBytes
+		asked      int // what the socket is expected to be asked for
+	}{
+		{"none configured", 0, transport.DefaultReceiveBufferBytes},
+		{"a size configured", 64 << 10, 64 << 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := grantedFor(t, tc.asked)
+			tr, err := New(transport.Config{Kind: "udp", Address: freeUDPAddr(t), ReceiveBufferBytes: tc.configured})
+			if err != nil {
+				t.Fatal(err)
+			}
+			stop := transporttest.Run(t, tr, (&transporttest.Collector{}).Emit)
+			defer stop()
+			if !transporttest.WaitFor(func() bool { return tr.State().Connected }, 2*time.Second) {
+				t.Fatal("listener not up")
+			}
+			// The size is recorded before the listener reports itself connected.
+			got, ok := tr.State().Detail["receiveBufferEffectiveBytes"].(int64)
+			if !ok || got <= 0 {
+				t.Fatalf("receiveBufferEffectiveBytes = %#v, want a positive int64", tr.State().Detail["receiveBufferEffectiveBytes"])
+			}
+			if got != want {
+				t.Errorf("receiveBufferEffectiveBytes = %d, want %d: what this machine reports for a socket asked for %d bytes", got, want, tc.asked)
+			}
+			if n, ok := tr.State().Detail["kernelDropped"].(int64); !ok || n != 0 {
+				t.Errorf("kernelDropped = %#v with nothing sent, want int64 0", tr.State().Detail["kernelDropped"])
+			}
+		})
+	}
+}
+
+// A buffer the schema would refuse is refused here too, so a stored config
+// that skipped the API cannot hand the OS a size that means nothing (a negative
+// one, say, which different kernels read as different buffers).
+func TestUDPRefusesAReceiveBufferOutOfRange(t *testing.T) {
+	for _, size := range []int{-1, transport.MaxReceiveBufferBytes + 1} {
+		if _, err := New(transport.Config{Kind: "udp", Address: "127.0.0.1:9", ReceiveBufferBytes: size}); err == nil {
+			t.Errorf("receiveBufferBytes %d was accepted", size)
+		}
+	}
+	for _, size := range []int{0, 4096, transport.DefaultReceiveBufferBytes, transport.MaxReceiveBufferBytes} {
+		if _, err := New(transport.Config{Kind: "udp", Address: "127.0.0.1:9", ReceiveBufferBytes: size}); err != nil {
+			t.Errorf("receiveBufferBytes %d: %v", size, err)
+		}
+	}
+}

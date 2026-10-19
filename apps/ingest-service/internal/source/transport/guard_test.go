@@ -44,6 +44,46 @@ func TestAllowlistMatchesMappedIPv4(t *testing.T) {
 	}
 }
 
+// AllowsAddr is the check for a sender whose address is already parsed, as a
+// datagram listener's is: it must answer as Allows does for the same address,
+// and cost no allocation, since it runs for every datagram.
+func TestAllowsAddr(t *testing.T) {
+	a, err := ParseAllowlist([]string{"10.0.0.0/8", "192.168.1.20", "2001:db8::/32"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ip, want := range map[string]bool{
+		"10.1.2.3": true, "192.168.1.20": true, "192.168.1.21": false, "11.0.0.1": false,
+		"2001:db8::1": true, "2001:db9::1": false,
+		// An IPv4-mapped IPv6 sender is the IPv4 address it wraps, so it matches
+		// an IPv4 entry and only that.
+		"::ffff:10.0.0.5": true, "::ffff:192.168.1.20": true, "::ffff:11.0.0.1": false,
+	} {
+		addr := netip.MustParseAddr(ip)
+		if got := a.AllowsAddr(addr); got != want {
+			t.Errorf("AllowsAddr(%s) = %v, want %v", ip, got, want)
+		}
+		// The string form of the same sender, with a port, gets the same answer.
+		if got := a.Allows(netip.AddrPortFrom(addr, 4000).String()); got != want {
+			t.Errorf("Allows(%q) = %v, want %v: it must answer as AllowsAddr does", netip.AddrPortFrom(addr, 4000), got, want)
+		}
+	}
+	if a.AllowsAddr(netip.Addr{}) {
+		t.Error("the zero address is nobody, so it is not on a list")
+	}
+	open, _ := ParseAllowlist(nil)
+	for _, addr := range []netip.Addr{netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("2001:4860::1"), {}} {
+		if !open.AllowsAddr(addr) {
+			t.Errorf("an empty list refused %v: it allows anyone", addr)
+		}
+	}
+
+	sender := netip.MustParseAddr("::ffff:10.1.2.3")
+	if n := testing.AllocsPerRun(100, func() { a.AllowsAddr(sender) }); n != 0 {
+		t.Errorf("AllowsAddr allocated %v times per call, want none: it runs for every datagram", n)
+	}
+}
+
 func TestLimiter(t *testing.T) {
 	var unlimited *Limiter
 	if !unlimited.Allow() || NewLimiter(0) != nil {

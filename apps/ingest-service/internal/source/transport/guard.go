@@ -54,6 +54,18 @@ func (a Allowlist) Allows(remote string) bool {
 	if err != nil {
 		return false
 	}
+	return a.AllowsAddr(addr)
+}
+
+// AllowsAddr reports whether the sender at addr may send, as Allows does for
+// the same address. A listener that already holds the sender's parsed address
+// (a datagram's) asks this, so it neither builds the address as text nor
+// parses it again for every datagram; it allocates nothing. The zero Addr is
+// nobody, so it is refused unless the list is open.
+func (a Allowlist) AllowsAddr(addr netip.Addr) bool {
+	if a.Open() {
+		return true
+	}
 	addr = addr.Unmap()
 	for _, p := range a.prefixes {
 		if p.Contains(addr) {

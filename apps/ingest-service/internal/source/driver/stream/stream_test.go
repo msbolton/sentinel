@@ -649,6 +649,36 @@ func TestListenerReadsMaxMessagesPerSecPerSender(t *testing.T) {
 	}
 }
 
+// A datagram transport takes its receive buffer from the transport section.
+// Absent, it is 0 and the transport uses its own default; a size the transport
+// would refuse stops the feed from being built.
+func TestListenerReadsReceiveBufferBytes(t *testing.T) {
+	cases := []struct {
+		name, transport string
+		want            int
+		wantErr         bool
+	}{
+		{"udp, absent", `{"kind":"udp","address":"127.0.0.1:0"}`, 0, false},
+		{"udp, set", `{"kind":"udp","address":"127.0.0.1:0","receiveBufferBytes":262144}`, 262144, false},
+		{"udp, too big", `{"kind":"udp","address":"127.0.0.1:0","receiveBufferBytes":67108865}`, 0, true},
+		{"udp, negative", `{"kind":"udp","address":"127.0.0.1:0","receiveBufferBytes":-1}`, 0, true},
+	}
+	for _, tc := range cases {
+		cfg := `{"transport":` + tc.transport + `,"framing":"line","decoder":{"name":"sbs"}}`
+		d, err := New(driver.Spec{FeedID: "f", Config: json.RawMessage(cfg)}, driver.Deps{Logger: zap.NewNop()})
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%s: err = %v, want an error: %v", tc.name, err, tc.wantErr)
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		if got := d.(*Driver).tcfg.ReceiveBufferBytes; got != tc.want {
+			t.Errorf("%s: receiveBufferBytes = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
 // A client CA verifies only the certificates a listener asks for, so a stream
 // listener that holds the clientCa secret without requireClientCert is
 // refused, as the tcp driver refuses it, instead of accepting every sender

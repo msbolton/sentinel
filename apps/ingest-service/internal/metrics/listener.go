@@ -21,7 +21,9 @@ type ListenerSource interface {
 // under. A counter is exported by adding a row.
 //
 // malformed has no row: the stream driver counts it exactly when it
-// dead-letters a frame, which is what decode_errors_total counts.
+// dead-letters a frame, which is what decode_errors_total counts. Nor does
+// receiveBufferEffectiveBytes, a datagram listener's receive buffer: it is a
+// size, not a count of events.
 var listenerEvents = []struct{ key, event string }{
 	{"accepted", "accepted"},                     // frames taken in
 	{"rejected", "rejected"},                     // senders outside the allowlist
@@ -30,10 +32,13 @@ var listenerEvents = []struct{ key, event string }{
 	{"oversize", "oversize"},                     // frames or datagrams over maxMessageBytes
 	{"tlsFailed", "tls_failed"},                  // failed handshakes, and TLS clients on a plain listener
 	{"senderRateLimited", "sender_rate_limited"}, // frames over one sender's maxMessagesPerSecPerSender
+	{"kernelDropped", "kernel_dropped"},          // datagrams the OS dropped from a full receive buffer; a datagram listener on Linux only
 }
 
 // ListenerEventKeys lists the health detail keys the collector exports as
-// events, so a test can check that the drivers still report each of them.
+// events, so a test can check that the drivers still report each of them. A
+// key that only one kind of listener has (kernelDropped, a datagram listener's)
+// is for that test to ask of that kind alone.
 func ListenerEventKeys() []string {
 	keys := make([]string, len(listenerEvents))
 	for i, e := range listenerEvents {

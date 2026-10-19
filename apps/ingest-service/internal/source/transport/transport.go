@@ -128,6 +128,11 @@ type Config struct {
 	// TLS material from secret references; never part of the config JSON.
 	CertPEM, KeyPEM, ClientCAPEM, CAPEM []byte `json:"-"`
 
+	// ReceiveBufferBytes is the socket receive buffer a datagram listener (udp)
+	// asks the OS for; 0 = DefaultReceiveBufferBytes. The OS may grant another
+	// size, which the listener reports in its health.
+	ReceiveBufferBytes int `json:"receiveBufferBytes"`
+
 	// MaxFrameBytes bounds one frame for stream transports (default 1 MiB).
 	MaxFrameBytes int `json:"maxFrameBytes"`
 	// ReadTimeoutSec closes an idle stream connection (0 = none).
@@ -154,6 +159,25 @@ func (c Config) MaxFrame() int {
 		return c.MaxFrameBytes
 	}
 	return 1 << 20
+}
+
+const (
+	// DefaultReceiveBufferBytes is the receive buffer a datagram listener asks
+	// for when the config names none: well above the OS default (about 200 KiB
+	// on Linux), so that a burst waits in the buffer instead of being dropped.
+	// The driver schemas state it as the default.
+	DefaultReceiveBufferBytes = 4 << 20
+	// MaxReceiveBufferBytes is the largest receive buffer a config may ask for,
+	// which the driver schemas state as the maximum of receiveBufferBytes.
+	MaxReceiveBufferBytes = 64 << 20
+)
+
+// ReceiveBuffer returns the configured receive buffer size or the default.
+func (c Config) ReceiveBuffer() int {
+	if c.ReceiveBufferBytes > 0 {
+		return c.ReceiveBufferBytes
+	}
+	return DefaultReceiveBufferBytes
 }
 
 // Factory builds a transport from its config.

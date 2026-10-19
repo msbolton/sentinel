@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/sentinel/ingest-service/internal/source/transport"
@@ -42,6 +43,15 @@ type Listener struct {
 	perSender *transport.SenderLimiter // a bucket for each sender IP; nil when off
 	senders   *transport.Senders       // a row for each sender IP
 	counts    transport.ListenCounters
+
+	// receiveBuffer is the size of the socket's receive buffer as the OS reports
+	// it: 0 until the socket is open, and where the OS cannot say.
+	receiveBuffer atomic.Int64
+	// kernelDropped is how many datagrams the OS dropped from the socket's full
+	// receive buffer, as of the latest datagram it delivered. Only Linux reports
+	// it; elsewhere it stays 0.
+	kernelDropped atomic.Int64
+
 	transport.StateTracker
 }
 
@@ -58,6 +68,10 @@ func New(cfg transport.Config) (transport.Transport, error) {
 	// port the listener policy never sees, so only a number in range is accepted.
 	if p, err := strconv.Atoi(port); err != nil || p < 0 || p > 65535 {
 		return nil, fmt.Errorf("udp: address port must be a number from 0 to 65535, not %q", port)
+	}
+	// The schema holds a config to the same range; this is for one that skipped it.
+	if n := cfg.ReceiveBufferBytes; n < 0 || n > transport.MaxReceiveBufferBytes {
+		return nil, fmt.Errorf("udp: receiveBufferBytes must be from 0 to %d, not %d", transport.MaxReceiveBufferBytes, n)
 	}
 	allow, err := transport.ParseAllowlist(cfg.Allow)
 	if err != nil {
@@ -78,7 +92,10 @@ func New(cfg transport.Config) (transport.Transport, error) {
 // are dropped whole and counted; messages over a sender's rate or the
 // listener's are dropped and counted one by one. A sender is told apart by
 // its IP address, in the senders list and for its rate limit; the frame's
-// Remote is the exact ip:port.
+// Remote is the exact ip:port. Datagrams that arrive faster than the loop
+// reads them wait in the socket's receive buffer, which is sized from the
+// config; on Linux the datagrams the OS had to drop when it was full are
+// counted too.
 func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 	lc := net.ListenConfig{}
 	pc, err := lc.ListenPacket(ctx, "udp", l.cfg.Address)
@@ -88,13 +105,15 @@ func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 	defer pc.Close()
 	go func() { <-ctx.Done(); pc.Close() }()
 	conn := pc.(*net.UDPConn) // ListenPacket("udp") always returns one
+	l.sizeReceiveBuffer(conn)
+	reader := newDatagramReader(conn, &l.kernelDropped)
 	l.Set(func(s *transport.State) { s.Connected = true; s.LastError = "" })
 
 	// The buffer holds the largest possible datagram, so an oversize one is
 	// measured whole rather than truncated by the OS to look small enough.
 	buf := make([]byte, 65535)
 	for {
-		n, ap, err := conn.ReadFromUDPAddrPort(buf)
+		n, ap, err := reader.read(buf)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -108,8 +127,7 @@ func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 		// A socket bound to every interface reports an IPv4 sender as an
 		// IPv4-mapped IPv6 address; below it is the IPv4 address.
 		ap = netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
-		remote := ap.String()
-		if !l.allow.Allows(remote) {
+		if !l.allow.AllowsAddr(ap.Addr()) {
 			l.counts.Rejected.Add(1)
 			continue
 		}
@@ -122,7 +140,9 @@ func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 		// its UTC form, which has none (see SenderLimiter.Allow).
 		received := time.Now()
 		now := received.UTC()
-		sender := ap.Addr().String()
+		// The two forms of the address are built only for a datagram that is
+		// taken, so one that is turned away costs no text.
+		remote, sender := ap.String(), ap.Addr().String()
 		parts := split(buf[:n], l.cfg.Framing)
 		for i, part := range parts {
 			// The sender's own bucket is asked before the listener's, so a
@@ -147,6 +167,18 @@ func (l *Listener) Run(ctx context.Context, emit transport.Emit) error {
 				return nil
 			}
 		}
+	}
+}
+
+// sizeReceiveBuffer asks the OS for the socket's receive buffer and records the
+// size the OS says the socket has, which is not always the ask: Linux caps it
+// at net.core.rmem_max, and other systems have a cap of their own. The listener
+// runs with whatever it got, so the ask failing is not an error; the size
+// recorded is how an operator learns the buffer is smaller than configured.
+func (l *Listener) sizeReceiveBuffer(conn *net.UDPConn) {
+	_ = conn.SetReadBuffer(l.cfg.ReceiveBuffer())
+	if size, err := receiveBufferSize(conn); err == nil {
+		l.receiveBuffer.Store(int64(size))
 	}
 }
 
@@ -188,10 +220,14 @@ func (l *Listener) NoteMalformed(remote, reason, errText string) {
 }
 
 // State reports connectivity, counters and the sender IPs seen in the last 10
-// minutes: at most 50 are listed, distinctSenders counts them all.
+// minutes: at most 50 are listed, distinctSenders counts them all. It also
+// reports the receive buffer in bytes (receiveBufferEffectiveBytes) and the
+// datagrams the OS dropped (kernelDropped), which only a datagram listener has.
 func (l *Listener) State() transport.State {
 	st := l.Get()
 	st.Detail = l.counts.Detail()
+	st.Detail["receiveBufferEffectiveBytes"] = l.receiveBuffer.Load()
+	st.Detail["kernelDropped"] = l.kernelDropped.Load()
 	list, n := l.senders.Snapshot(time.Now().UTC(), sendersWindow)
 	if len(list) > maxSenders {
 		list = list[:maxSenders]

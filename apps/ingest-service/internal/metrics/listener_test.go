@@ -16,7 +16,9 @@ func (l listeners) ListenerStats() []ListenerStat { return l }
 // One TCP and one UDP listener as their drivers report them. The counters are
 // int64 and the connection and sender counts int, as the transports render
 // them; the UDP feed's values come in the other number types the collector
-// reads, and both feeds carry detail it must not export.
+// reads, and both feeds carry detail it must not export. Only a datagram
+// listener has kernelDropped, and it reports the size of its receive buffer,
+// a number that is not a count of anything and so exports no series.
 var exposedListeners = listeners{
 	{FeedID: "gate", Driver: "tcp", Detail: map[string]any{
 		"transport": "tcpserver", "connections": 2, "distinctSenders": 3,
@@ -30,7 +32,9 @@ var exposedListeners = listeners{
 	{FeedID: "pier", Driver: "udp", Detail: map[string]any{
 		"transport": "udp", "connections": 0, "distinctSenders": uint64(12),
 		"accepted": uint64(500), "rejected": int32(2), "refused": 0, "rateLimited": float64(9), "senderRateLimited": uint64(8),
-		"oversize": "many", // a number in the wrong type exports nothing
+		"kernelDropped":               int64(31),
+		"receiveBufferEffectiveBytes": int64(425984), // a size, not an event: no series
+		"oversize":                    "many",        // a number in the wrong type exports nothing
 		// tlsFailed is absent: no series rather than a zero.
 	}},
 	{FeedID: "quiet", Driver: "stream"}, // a driver with no detail yet
@@ -51,6 +55,7 @@ sentinel_ingest_listener_events_total{driver="tcp",event="rejected",feed_id="gat
 sentinel_ingest_listener_events_total{driver="tcp",event="sender_rate_limited",feed_id="gate"} 6
 sentinel_ingest_listener_events_total{driver="tcp",event="tls_failed",feed_id="gate"} 4
 sentinel_ingest_listener_events_total{driver="udp",event="accepted",feed_id="pier"} 500
+sentinel_ingest_listener_events_total{driver="udp",event="kernel_dropped",feed_id="pier"} 31
 sentinel_ingest_listener_events_total{driver="udp",event="rate_limited",feed_id="pier"} 9
 sentinel_ingest_listener_events_total{driver="udp",event="refused",feed_id="pier"} 0
 sentinel_ingest_listener_events_total{driver="udp",event="rejected",feed_id="pier"} 2

@@ -374,6 +374,27 @@ func TestPerSenderMessageRate(t *testing.T) {
 	}
 }
 
+// receiveBufferBytes reaches the socket: a connection that asks for less than
+// the default gets a smaller buffer, and its health says how big the socket's
+// is. The sizes are the OS's own (Linux keeps twice what it is asked for, up
+// to net.core.rmem_max), so they are compared with each other, not with a
+// number.
+func TestReceiveBufferBytes(t *testing.T) {
+	sizeOf := func(cfg map[string]any) int64 {
+		d, _, _ := start(t, cfg)
+		n, _ := d.Health().Detail["receiveBufferEffectiveBytes"].(int64)
+		return n
+	}
+	byDefault := sizeOf(map[string]any{})
+	small := sizeOf(map[string]any{"receiveBufferBytes": 64 << 10})
+	if byDefault == 0 && small == 0 {
+		t.Skip("this platform cannot say how big a socket's receive buffer is")
+	}
+	if small <= 0 || byDefault <= small {
+		t.Errorf("receive buffer: %d with receiveBufferBytes 65536, %d by default; want the first positive and the smaller", small, byDefault)
+	}
+}
+
 func TestListenHook(t *testing.T) {
 	for cfg, want := range map[string]struct {
 		port int
@@ -446,6 +467,8 @@ func TestNewRefusals(t *testing.T) {
 		"bad encoding":        {"port": 10110, "encoding": "yaml"},
 		"bad allowlist entry": {"port": 10110, "allow": []string{"not-an-ip"}},
 		"nmea-gps no id":      {"port": 10110, "format": "nmea-gps"},
+		"negative buffer":     {"port": 10110, "receiveBufferBytes": -1},
+		"buffer over 64 MiB":  {"port": 10110, "receiveBufferBytes": 64<<20 + 1},
 	} {
 		if d, err := newDriver(t, cfg); err == nil {
 			t.Errorf("%s: accepted, driver %v", name, d)
