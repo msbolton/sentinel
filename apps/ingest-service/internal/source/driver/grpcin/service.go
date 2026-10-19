@@ -14,6 +14,8 @@ type service struct {
 	sink driver.Sink
 	// run is the driver's run: when it ends, every call ends.
 	run context.Context
+	// calls is every open call, so a revoked token's can be ended.
+	calls calls
 }
 
 func newService(d *Driver, sink driver.Sink, run context.Context) *service {

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 
+	"github.com/sentinel/ingest-service/internal/ingesttoken"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 	"github.com/sentinel/ingest-service/internal/source/driver/stream"
 	"github.com/sentinel/ingest-service/internal/source/transport"
@@ -35,6 +36,8 @@ func (d *Driver) serverOptions(svc *service) []grpc.ServerOption {
 		grpc.MaxRecvMsgSize(d.maxMessageBytes),
 		grpc.MaxConcurrentStreams(4),
 		grpc.ConnectionTimeout(handshakeTimeout),
+		grpc.ChainUnaryInterceptor(svc.unary),
+		grpc.ChainStreamInterceptor(svc.stream),
 	}
 	if d.creds != nil {
 		opts = append(opts, grpc.Creds(d.creds))
@@ -63,6 +66,12 @@ func (d *Driver) Run(ctx context.Context, sink driver.Sink) error {
 	defer func() { stopTLS(); <-reloadDone }()
 
 	svc := newService(d, sink, ctx)
+	unsubscribe := d.tokens.OnRevoke(func(t ingesttoken.Token) {
+		if t.FeedID == d.feedID {
+			svc.calls.revoke(t.ID)
+		}
+	})
+	defer unsubscribe()
 	srv := grpc.NewServer(d.serverOptions(svc)...)
 	ingestv1.RegisterIngestServiceServer(srv, svc)
 	served := make(chan error, 1)
