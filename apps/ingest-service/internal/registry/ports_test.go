@@ -141,6 +141,10 @@ func TestCheckAllow(t *testing.T) {
 // reading the exact key only would let such a list reach a listener unchecked.
 func TestCheckAllowCaseInsensitiveKey(t *testing.T) {
 	const bad = `["10.0.0.0/8","10.0.0.0/33"]`
+	escapedAllow := string(rune(92)) + "u0061llow"
+	if !strings.Contains(escapedAllow, string(rune(92))) || len(escapedAllow) != 10 {
+		t.Fatalf("the escaped key %q holds no escape", escapedAllow)
+	}
 	cases := []struct {
 		name, driver, config string
 		path, msg            string // the one problem expected; no path when the list is acceptable
@@ -152,7 +156,10 @@ func TestCheckAllowCaseInsensitiveKey(t *testing.T) {
 		{"tcp ALLOW", "tcp", `{"mode":"listen","port":47000,"ALLOW":` + bad + `}`, "/config/allow", "10.0.0.0/33"},
 		{"mistyped under Allow", "udp", `{"port":47000,"Allow":"10.0.0.0/8"}`, "/config/allow", "array"},
 		{"mistyped under ALLOW on a stream", "stream", `{"transport":{"kind":"udp","address":":47000","ALLOW":{"ip":"10.0.0.1"}},"decoder":{"name":"nmea-ais"}}`, "/config/transport/allow", "array"},
-		{"an escaped spelling", "udp", `{"port":47000,"allow":` + bad + `}`, "/config/allow", "10.0.0.0/33"},
+		// The key is written as a JSON escape, \u0061llow, which spells "allow".
+		// The backslash is put in at run time: written into this file as a
+		// \u escape, the compiler would turn it into the letter first.
+		{"an escaped spelling", "udp", `{"port":47000,"` + escapedAllow + `":` + bad + `}`, "/config/allow", "10.0.0.0/33"},
 		{"a good list under Allow", "udp", `{"port":47000,"Allow":["192.168.1.20","2001:db8::/32"]}`, "", ""},
 		{"an empty list under ALLOW", "tcp", `{"mode":"listen","port":47000,"ALLOW":[]}`, "", ""},
 		{"null under Allow", "udp", `{"port":47000,"Allow":null}`, "", ""},
