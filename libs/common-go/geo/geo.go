@@ -107,6 +107,9 @@ func LLAToAER(origin, target LLA) (azDeg, elDeg, rangeM float64) {
 	if azDeg < 0 {
 		azDeg += 360
 	}
+	if azDeg >= 360 { // a tiny negative angle rounds up to exactly 360
+		azDeg -= 360
+	}
 	elDeg = deg(math.Atan2(v.U, math.Hypot(v.E, v.N)))
 	return azDeg, elDeg, rangeM
 }

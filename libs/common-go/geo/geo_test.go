@@ -102,3 +102,50 @@ func TestAERToLLAAtAltitude(t *testing.T) {
 		t.Errorf("zero range is the origin, got %+v %v", p, ok)
 	}
 }
+
+// Azimuth is documented as [0, 360): a due-north target must never come back as exactly 360.
+func TestLLAToAERAzimuthStaysBelow360(t *testing.T) {
+	origin := LLA{50.1, -4.2, 30}
+	for el := -5.0; el <= 30; el++ {
+		for _, r := range []float64{500, 21858.32, 60_000, 300_000} {
+			az, _, _ := LLAToAER(origin, AERToLLA(origin, 0, el, r))
+			if az < 0 || az >= 360 {
+				t.Errorf("el %v range %v: azimuth %.17g not in [0, 360)", el, r, az)
+			}
+			if math.Min(az, 360-az) > 1e-6 {
+				t.Errorf("el %v range %v: due north came back as azimuth %v", el, r, az)
+			}
+		}
+	}
+}
+
+// The round trips cannot see an error mirrored in both directions, so these
+// pin the compass in absolute terms away from the equator and the prime meridian.
+func TestAERPointsTheRightWayAwayFromTheEquator(t *testing.T) {
+	origin := LLA{50.1, -4.2, 30}
+
+	north := AERToLLA(origin, 0, 0, 10_000)
+	if north.Lat <= origin.Lat {
+		t.Errorf("north of the origin must have a higher latitude, got %v vs %v", north.Lat, origin.Lat)
+	}
+	near(t, "north lon", north.Lon, origin.Lon, 1e-9)
+
+	east := AERToLLA(origin, 90, 0, 10_000)
+	if east.Lon <= origin.Lon {
+		t.Errorf("east of the origin must have a higher longitude, got %v vs %v", east.Lon, origin.Lon)
+	}
+	near(t, "east lat", east.Lat, origin.Lat, 0.001)
+
+	if south := AERToLLA(origin, 180, 0, 10_000); south.Lat >= origin.Lat {
+		t.Errorf("south of the origin must have a lower latitude, got %v vs %v", south.Lat, origin.Lat)
+	}
+	if west := AERToLLA(origin, 270, 0, 10_000); west.Lon >= origin.Lon {
+		t.Errorf("west of the origin must have a lower longitude, got %v vs %v", west.Lon, origin.Lon)
+	}
+
+	v := ENUOf(origin, ToECEF(LLA{origin.Lat + 0.01, origin.Lon, origin.Alt}))
+	if v.N <= 0 {
+		t.Errorf("a point at a higher latitude must lie to the north, got N %v", v.N)
+	}
+	near(t, "e", v.E, 0, 1e-6)
+}
