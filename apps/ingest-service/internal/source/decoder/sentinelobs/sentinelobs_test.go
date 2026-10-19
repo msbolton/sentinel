@@ -600,3 +600,20 @@ func TestProtobufFramesAreNotReadAsArrays(t *testing.T) {
 		t.Errorf("out %v err %v, want an error", out, err)
 	}
 }
+
+func TestValidateIsTheDecodersCheck(t *testing.T) {
+	ok := &sentinelv1.Observation{Identities: []*sentinelv1.Identity{{Type: sentinelv1.IdentityType_IDENTITY_TYPE_MMSI, Value: "244123456"}},
+		Position: &sentinelv1.Coordinate{Latitude: 51, Longitude: 2}}
+	o, err := Validate(ok, "application/x-protobuf", "GPS")
+	if err != nil || o.SourceEntityID != "MMSI:244123456" || o.Source != "GPS" || o.Decoder != Name || o.RawContentType != "application/x-protobuf" {
+		t.Fatalf("validate ok = %+v, %v", o, err)
+	}
+
+	if _, err := Validate(&sentinelv1.Observation{}, "", ""); decoder.RejectReason(err) != "missing_identity" {
+		t.Fatalf("no identity: %v", err)
+	}
+	bad := &sentinelv1.Observation{SourceEntityId: "x", Position: &sentinelv1.Coordinate{Latitude: math.NaN(), Longitude: 0}}
+	if _, err := Validate(bad, "", ""); decoder.RejectReason(err) != "bad_position" {
+		t.Fatalf("NaN latitude: %v", err)
+	}
+}
