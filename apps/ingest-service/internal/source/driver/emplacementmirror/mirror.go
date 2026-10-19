@@ -42,6 +42,9 @@ func init() {
 		Description:  "Sentinel's own emplacements, reported as SENSOR entities. Runs the built-in emplacements feed.",
 		ConfigSchema: schema,
 		New:          New,
+		// An edit (a new name, a raised level) keeps the position, so
+		// suppressing repeats would drop it.
+		NoRepeatSuppression: true,
 	})
 }
 

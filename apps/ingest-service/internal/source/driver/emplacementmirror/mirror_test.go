@@ -10,6 +10,7 @@ import (
 
 	"github.com/sentinel/ingest-service/internal/emplacement"
 	"github.com/sentinel/ingest-service/internal/obs"
+	"github.com/sentinel/ingest-service/internal/source/driver"
 )
 
 type memSource struct {
@@ -100,6 +101,16 @@ func TestObservationOfAnEmplacement(t *testing.T) {
 	alt = 99
 	if *o.Altitude != 30 {
 		t.Error("the observation must not share the emplacement's altitude")
+	}
+}
+
+// The emplacement driver's reports are never suppressed as repeats: an edit
+// right after a create or another edit keeps its position and must still
+// reach the entity.
+func TestDefinitionTurnsRepeatSuppressionOff(t *testing.T) {
+	d, ok := driver.Lookup(ID)
+	if !ok || !d.NoRepeatSuppression {
+		t.Fatalf("definition found %v, NoRepeatSuppression %v; want both", ok, d.NoRepeatSuppression)
 	}
 }
 

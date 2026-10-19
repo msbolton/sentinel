@@ -231,6 +231,39 @@ func sameIdentities(a, b []obs.Identity) bool {
 	return true
 }
 
+// A feed whose driver turns repeat suppression off forwards a report that
+// repeats the last position within the window; an ordinary feed drops it.
+func TestRunnerRepeatSuppressionCanBeTurnedOff(t *testing.T) {
+	ts := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		off  bool
+		want int
+	}{{"ordinary feed", false, 1}, {"suppression off", true, 2}} {
+		t.Run(tc.name, func(t *testing.T) {
+			pub := &memPublisher{}
+			drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+				first := fix("e-1", 50, -4, ts)
+				first.EmplacementID = "e-1"
+				if err := sink.Emit(ctx, first); err != nil {
+					return err
+				}
+				second := fix("e-1", 50, -4, ts.Add(100*time.Millisecond))
+				second.EmplacementID = "e-1"
+				second.DisplayName = "renamed"
+				return sink.Emit(ctx, second)
+			}}
+			r := NewRunner("f", "emplacement", drv, pub, nil, nil, RunnerOptions{NoRepeatSuppression: tc.off})
+			if err := r.Run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(pub.observations()); got != tc.want {
+				t.Fatalf("%d observations forwarded, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunnerStampsClassification(t *testing.T) {
 	ts := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
@@ -360,5 +393,17 @@ func TestRunnerDoesNotWarnWhenThePublisherIsClosing(t *testing.T) {
 		if got := logs.FilterMessage("observation not published").Len() > 0; got != tc.warn {
 			t.Errorf("%s: warned = %v, want %v", name, got, tc.warn)
 		}
+	}
+}
+
+// The supervisor takes the flag from the driver's definition.
+func TestNoRepeatSuppressionComesFromTheDefinition(t *testing.T) {
+	driver.Register(driver.Definition{ID: "test-no-repeat-suppression", NoRepeatSuppression: true,
+		New: func(driver.Spec, driver.Deps) (driver.Driver, error) { return nil, nil }})
+	if !noRepeatSuppression("test-no-repeat-suppression") {
+		t.Error("a driver that sets NoRepeatSuppression keeps suppression on")
+	}
+	if noRepeatSuppression("stream") || noRepeatSuppression("no-such-driver") {
+		t.Error("suppression is off for a driver that did not ask")
 	}
 }

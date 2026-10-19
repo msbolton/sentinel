@@ -39,6 +39,9 @@ type RunnerOptions struct {
 	RawPolicy string // none|bounded|full (bounded)
 	RawMax    int    // bytes kept under bounded (4096)
 	Dedupe    *dedupe.Options
+	// NoRepeatSuppression forwards every report, repeated position or not
+	// (from the driver definition's flag of the same name).
+	NoRepeatSuppression bool
 	// FencingToken is the lease token stamped on every observation; 0
 	// when the feed runs without a lease.
 	FencingToken int64
@@ -192,7 +195,7 @@ func (r *Runner) Emit(ctx context.Context, o *obs.Observation) error {
 	dropForeignEmplacements(o)
 	o.EnsureIdentity()
 	r.boundRaw(o)
-	if !r.filter.Allow(o, time.Now()) {
+	if !r.opts.NoRepeatSuppression && !r.filter.Allow(o, time.Now()) {
 		if r.metrics != nil {
 			r.metrics.DuplicatesTotal.WithLabelValues(r.feedID).Inc()
 		}

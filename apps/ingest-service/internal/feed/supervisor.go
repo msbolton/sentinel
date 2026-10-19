@@ -266,6 +266,13 @@ func driverDirection(id string) driver.Direction {
 	return driver.DirectionIn
 }
 
+// noRepeatSuppression reports whether the registered driver turns the
+// runner's repeat suppression off (false for an unknown driver).
+func noRepeatSuppression(id string) bool {
+	d, ok := driver.Lookup(id)
+	return ok && d.NoRepeatSuppression
+}
+
 // outboundTuning mirrors config.outbound.
 type outboundTuning struct {
 	QueueMax           int     `json:"queueMax"`
@@ -719,7 +726,8 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 		fail(fmt.Errorf("building outbound pump: %w", err))
 		return
 	}
-	runner := NewRunner(spec.ID, spec.Driver, drv, s.pub, s.metrics, logger, RunnerOptions{RawPolicy: common.RawPayload, RawMax: s.opts.RawMax, FencingToken: inst.token, Classification: common.Classification, Pump: pump})
+	runner := NewRunner(spec.ID, spec.Driver, drv, s.pub, s.metrics, logger, RunnerOptions{RawPolicy: common.RawPayload, RawMax: s.opts.RawMax, FencingToken: inst.token, Classification: common.Classification, Pump: pump,
+		NoRepeatSuppression: noRepeatSuppression(spec.Driver)})
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})

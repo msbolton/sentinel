@@ -280,6 +280,12 @@ type Definition struct {
 	// mirror): nobody creates a feed with one, and the client's new-connection
 	// picker leaves them out.
 	Internal bool
+	// NoRepeatSuppression turns the runner's repeat suppression off for the
+	// driver's feeds. Suppression drops a report that repeats the last
+	// position within a second; a driver whose reports carry changes other
+	// than position (the emplacements mirror, after an edit) sets it so no
+	// change is lost.
+	NoRepeatSuppression bool
 }
 
 // HasCapability reports whether the definition advertises cap.
