@@ -52,6 +52,7 @@ func (v *Validator) Validate(f *Feed) error {
 		problems = append(problems, Problem{Path: "/driver", Message: fmt.Sprintf("unknown driver %q", f.Driver)})
 	} else {
 		problems = append(problems, v.Catalog.Validate(f.Driver, f.Config)...)
+		problems = append(problems, CheckKeyCase(f.Config)...)
 		problems = append(problems, checkSecrets(info, f)...)
 		problems = append(problems, checkDirection(info, f)...)
 	}
