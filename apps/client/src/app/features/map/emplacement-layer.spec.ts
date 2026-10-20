@@ -69,6 +69,9 @@ describe('EmplacementLayer', () => {
       NearFarScalar: function (...args: number[]) {
         return args;
       },
+      CallbackProperty: function (fn: () => unknown) {
+        return fn;
+      },
       HeightReference: { CLAMP_TO_GROUND: 'CLAMP_TO_GROUND' },
       LabelStyle: { FILL_AND_OUTLINE: 'FILL_AND_OUTLINE' },
       HorizontalOrigin: { LEFT: 'LEFT' },
@@ -113,9 +116,13 @@ describe('EmplacementLayer', () => {
     );
     expect(added[0].label.pixelOffset).toEqual({ x: 14, y: -6 });
 
-    // Selecting scales the billboard up to 0.85
+    // Selecting scales the billboard up to 0.9, and mobile uses a dashed outer ring
     added.length = 0;
     layer.sync([emp], 'emp-1', null, false, () => null);
-    expect(added[0].billboard.scale).toBe(0.85);
+    expect(added[0].billboard.scale).toBe(0.9);
+
+    added.length = 0;
+    layer.sync([{ ...emp, id: 'emp-2', mobility: 'MOBILE' }], null, null, false, () => null);
+    expect(added[0].billboard.image).toBe(locationDotDataUrl('#8b5cf6', { dashed: true }));
   });
 });

@@ -1,7 +1,7 @@
 import ms from 'milsymbol';
 import { Affiliation, EntityType, TrackEnvironment } from '../../shared/models/entity.model';
 import { Feed } from '../../shared/models/feed.model';
-import { isFromMilitaryFeed, sidcFor, symbolDataUrl } from './milstd2525';
+import { isFromMilitaryFeed, sidcFor, symbolDataUrl, symbolImage } from './milstd2525';
 
 describe('milstd2525', () => {
   describe('sidcFor', () => {
@@ -15,6 +15,26 @@ describe('milstd2525', () => {
         }),
       ).toBe(explicit);
       expect(new ms.Symbol(explicit).isValid()).toBe(true);
+    });
+
+    it('uses context 1 (Exercise) when entity.exercise is true and 0 (Reality) otherwise', () => {
+      const realSidc = sidcFor({
+        entityType: EntityType.SIGNAL,
+        affiliation: Affiliation.HOSTILE,
+        trackEnvironment: TrackEnvironment.SEA_SURFACE,
+        platformData: { rf: { emitterType: 'RADAR_SEARCH' } },
+      });
+      const exSidc = sidcFor({
+        entityType: EntityType.SIGNAL,
+        affiliation: Affiliation.HOSTILE,
+        trackEnvironment: TrackEnvironment.SEA_SURFACE,
+        exercise: true,
+        platformData: { rf: { emitterType: 'RADAR_SEARCH' } },
+      });
+      expect(realSidc).toBe('10065300001103000000');
+      expect(exSidc).toBe('10165300001103000000');
+      expect(new ms.Symbol(realSidc).isValid()).toBe(true);
+      expect(new ms.Symbol(exSidc).isValid()).toBe(true);
     });
 
     it('maps every affiliation to the MIL-STD-2525D standard identity digit', () => {
@@ -61,14 +81,17 @@ describe('milstd2525', () => {
 
       for (const [trackEnvironment, expectedSet] of envs) {
         for (const [emitterType, expectedCode] of emitters) {
-          const sidc = sidcFor({
-            entityType: EntityType.SIGNAL,
-            affiliation: Affiliation.HOSTILE,
-            trackEnvironment,
-            platformData: emitterType ? { rf: { emitterType } } : undefined,
-          });
-          expect(sidc).toBe(`1006${expectedSet}0000${expectedCode}0000`);
-          expect(new ms.Symbol(sidc).isValid()).toBe(true);
+          for (const exercise of [false, true]) {
+            const sidc = sidcFor({
+              entityType: EntityType.SIGNAL,
+              affiliation: Affiliation.HOSTILE,
+              trackEnvironment,
+              exercise,
+              platformData: emitterType ? { rf: { emitterType } } : undefined,
+            });
+            expect(sidc).toBe(`10${exercise ? '1' : '0'}6${expectedSet}0000${expectedCode}0000`);
+            expect(new ms.Symbol(sidc).isValid()).toBe(true);
+          }
         }
       }
     });
@@ -111,7 +134,7 @@ describe('milstd2525', () => {
     });
   });
 
-  describe('symbolDataUrl', () => {
+  describe('symbolImage', () => {
     it('renders a non-empty SVG data URL and caches by SIDC', () => {
       const sidc = sidcFor({
         entityType: EntityType.SIGNAL,
@@ -119,7 +142,7 @@ describe('milstd2525', () => {
         trackEnvironment: TrackEnvironment.SEA_SURFACE,
         platformData: { rf: { emitterType: 'RADAR_SEARCH' } },
       });
-      const url1 = symbolDataUrl(sidc);
+      const url1 = symbolImage(sidc);
       const url2 = symbolDataUrl(sidc);
       expect(url1.startsWith('data:image/svg+xml;base64,')).toBe(true);
       expect(atob(url1.slice('data:image/svg+xml;base64,'.length))).toContain('<svg');
@@ -133,10 +156,15 @@ describe('milstd2525', () => {
       { id: 'opensky-civ', config: {} },
     ] as unknown as Feed[];
 
-    it('returns true only when lastFeedId or feedId matches a military connection', () => {
+    it('returns true when feedId, lastFeedId, or any sources[].feedId is a military connection', () => {
       expect(isFromMilitaryFeed({ lastFeedId: 'ew-mil', feedId: 'opensky-civ' }, feeds)).toBe(true);
-      expect(isFromMilitaryFeed({ feedId: 'ew-mil' }, feeds)).toBe(true);
-      expect(isFromMilitaryFeed({ lastFeedId: 'opensky-civ', feedId: 'ew-mil' }, feeds)).toBe(false);
+      expect(isFromMilitaryFeed({ feedId: 'ew-mil', lastFeedId: 'opensky-civ' }, feeds)).toBe(true);
+      expect(
+        isFromMilitaryFeed(
+          { feedId: 'opensky-civ', sources: [{ feedId: 'ew-mil', source: 'SIGINT' }] },
+          feeds,
+        ),
+      ).toBe(true);
       expect(isFromMilitaryFeed({ feedId: 'opensky-civ' }, feeds)).toBe(false);
       expect(isFromMilitaryFeed({}, feeds)).toBe(false);
     });

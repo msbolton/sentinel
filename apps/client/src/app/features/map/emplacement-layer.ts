@@ -109,8 +109,8 @@ export class EmplacementLayer {
       position: dynamic(cartesian),
       show: mobile ? new C.CallbackProperty(() => place() !== null, false) : true,
       billboard: {
-        image: locationDotDataUrl(cssColor),
-        scale: selected ? 0.85 : 0.7,
+        image: locationDotDataUrl(cssColor, { dashed: mobile }),
+        scale: selected ? 0.9 : 0.7,
         heightReference: C.HeightReference.CLAMP_TO_GROUND,
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
         verticalOrigin: C.VerticalOrigin.CENTER,

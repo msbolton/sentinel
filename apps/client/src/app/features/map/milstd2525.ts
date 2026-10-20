@@ -1,5 +1,6 @@
 import ms from 'milsymbol';
 import { Affiliation, Entity, EntityType, TrackEnvironment } from '../../shared/models/entity.model';
+import { RFData } from '../../shared/models/platform-data.model';
 import { Feed } from '../../shared/models/feed.model';
 import { svgToDataUrl } from './cesium-config';
 
@@ -7,17 +8,28 @@ const TWENTY_DIGITS = /^\d{20}$/;
 const symbolCache = new Map<string, string>();
 
 /**
- * True when the connection that produced the entity's latest fix (or its
- * originating feed) is marked `config.military === true`.
+ * True when any feed in `feedId`, `lastFeedId` or `sources[].feedId` is a
+ * loaded feed with `config.military === true`.
  */
 export function isFromMilitaryFeed(
-  entity: Pick<Entity, 'feedId' | 'lastFeedId'>,
+  entity: Pick<Entity, 'feedId' | 'lastFeedId' | 'sources'>,
   feeds: readonly Feed[],
 ): boolean {
-  const feedId = entity.lastFeedId || entity.feedId;
-  if (!feedId) return false;
-  const feed = feeds.find((f) => f.id === feedId);
-  return feed?.config?.['military'] === true;
+  const candidates = new Set<string>();
+  if (entity.feedId) candidates.add(entity.feedId);
+  if (entity.lastFeedId) candidates.add(entity.lastFeedId);
+  if (Array.isArray(entity.sources)) {
+    for (const s of entity.sources) {
+      if (s?.feedId) candidates.add(s.feedId);
+    }
+  }
+  if (candidates.size === 0) return false;
+  for (const f of feeds) {
+    if (candidates.has(f.id) && f.config?.['military'] === true) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function standardIdentityDigit(affiliation?: Affiliation | string): string {
@@ -72,9 +84,13 @@ function sigintEntityCode(emitterType?: string): string {
   return '110000';
 }
 
-function setAndCodeFor(entity: Pick<Entity, 'entityType' | 'trackEnvironment' | 'platformData'>): [string, string] {
+function setAndCodeFor(
+  entity: Pick<Entity, 'entityType' | 'trackEnvironment' | 'platformData'>,
+  rf?: RFData,
+): [string, string] {
   if (entity.entityType === EntityType.SIGNAL) {
-    return [sigintSymbolSet(entity.trackEnvironment), sigintEntityCode(entity.platformData?.rf?.emitterType)];
+    const emitterType = rf?.emitterType ?? entity.platformData?.rf?.emitterType;
+    return [sigintSymbolSet(entity.trackEnvironment), sigintEntityCode(emitterType)];
   }
   switch (entity.entityType) {
     case EntityType.AIRCRAFT:
@@ -116,28 +132,34 @@ function setAndCodeFor(entity: Pick<Entity, 'entityType' | 'trackEnvironment' | 
 /**
  * Builds a 20-digit MIL-STD-2525D SIDC for `entity`, using `entity.milStd2525dSymbol`
  * directly when it is already a 20-digit numeric code.
+ * Context is exercise ('1') when `entity.exercise` is true, else reality ('0').
  */
 export function sidcFor(
-  entity: Pick<Entity, 'entityType' | 'affiliation' | 'trackEnvironment' | 'milStd2525dSymbol' | 'platformData'>,
+  entity: Pick<Entity, 'entityType' | 'affiliation' | 'trackEnvironment' | 'exercise' | 'milStd2525dSymbol' | 'platformData'>,
+  rf?: RFData,
 ): string {
   const explicit = entity.milStd2525dSymbol?.trim();
   if (explicit && TWENTY_DIGITS.test(explicit)) {
     return explicit;
   }
+  const ctx = entity.exercise ? '1' : '0';
   const si = standardIdentityDigit(entity.affiliation);
-  const [symbolSet, entityCode] = setAndCodeFor(entity);
-  return `100${si}${symbolSet}0000${entityCode}0000`;
+  const [symbolSet, entityCode] = setAndCodeFor(entity, rf);
+  return `10${ctx}${si}${symbolSet}0000${entityCode}0000`;
 }
 
 /**
- * Renders a MIL-STD-2525D SIDC with `milsymbol` at 32 px as a cached SVG data URL.
+ * Renders a MIL-STD-2525D SIDC with `milsymbol` as a cached SVG data URL.
  */
-export function symbolDataUrl(sidc: string): string {
-  let cached = symbolCache.get(sidc);
+export function symbolImage(sidc: string, size = 32): string {
+  const key = size === 32 ? sidc : `${sidc}@${size}`;
+  let cached = symbolCache.get(key);
   if (!cached) {
-    const svg = new ms.Symbol(sidc, { size: 32 }).asSVG();
+    const svg = new ms.Symbol(sidc, { size }).asSVG();
     cached = svgToDataUrl(svg);
-    symbolCache.set(sidc, cached);
+    symbolCache.set(key, cached);
   }
   return cached;
 }
+
+export const symbolDataUrl = symbolImage;
