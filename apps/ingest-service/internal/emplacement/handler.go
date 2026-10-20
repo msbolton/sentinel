@@ -145,8 +145,11 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 			return ErrVersionConflict
 		}
 		// A sender reports where its mobile emplacement is; a position set
-		// by hand would be overwritten at its next report, so it is ignored.
-		if e.Mobility == MobilityMobile && e.SenderManaged() {
+		// by hand would be overwritten at its next report, so it is ignored
+		// while the emplacement stays mobile. A person making it fixed is
+		// choosing where it is, and that position applies.
+		if e.Mobility == MobilityMobile && e.SenderManaged() &&
+			(in.Mobility == nil || strings.ToUpper(strings.TrimSpace(*in.Mobility)) == MobilityMobile) {
 			in.Position, in.Altitude = nil, nil
 		}
 		in.Apply(e)

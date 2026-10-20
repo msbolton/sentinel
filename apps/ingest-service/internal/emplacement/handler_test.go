@@ -250,18 +250,52 @@ func TestCheckWriteHoldsToTheCeiling(t *testing.T) {
 // A sender reports a mobile emplacement's position; a PATCH that sets one
 // is ignored for it, and the rest of the PATCH still applies.
 func TestPatchIgnoresPositionOfASendersMobileEmplacement(t *testing.T) {
-	feed := "grpc-1"
-	e := New()
-	e.ID, e.Name, e.Mobility, e.SensorType, e.FeedID, e.CreatedBy, e.Version = "11111111-1111-1111-1111-111111111111", "Ship ESM", MobilityMobile, "RF", &feed, SenderPrefix+"t1", 1
-	e.Position = &Point{Lat: 50, Lon: -4}
+	e := senderEmplacement(MobilityMobile, SenderPrefix+"t1")
 	store := newMemStore(e)
 	res := serve(t, store, http.MethodPatch, "/emplacements/"+e.ID, "SECRET",
-		`{"position":{"lat":10,"lon":10},"description":"moved by hand"}`)
+		`{"position":{"lat":10,"lon":10},"altitude":999,"description":"moved by hand"}`)
 	if res.Code != http.StatusOK {
 		t.Fatalf("PATCH = %d %s", res.Code, res.Body)
 	}
 	got, _ := store.Get(context.Background(), e.ID)
-	if got.Position.Lat != 50 || got.Description != "moved by hand" {
-		t.Errorf("after PATCH: position %v, description %q", got.Position, got.Description)
+	if got.Position.Lat != 50 || got.Altitude == nil || *got.Altitude != 100 || got.Description != "moved by hand" {
+		t.Errorf("after PATCH: position %v, altitude %v, description %q", got.Position, got.Altitude, got.Description)
 	}
+}
+
+// A person's own mobile emplacement, and a sender's fixed one, are moved by
+// a PATCH; so is a sender's mobile one that the PATCH makes fixed.
+func TestPatchPositionAppliesExceptWhileASendersEmplacementStaysMobile(t *testing.T) {
+	cases := []struct {
+		name, mobility, createdBy, body, wantMobility string
+	}{
+		{"person-made mobile", MobilityMobile, "u1", `{"position":{"lat":10,"lon":10}}`, MobilityMobile},
+		{"sender-made fixed", MobilityFixed, SenderPrefix + "t1", `{"position":{"lat":10,"lon":10}}`, MobilityFixed},
+		{"sender-made mobile made fixed", MobilityMobile, SenderPrefix + "t1", `{"mobility":"FIXED","position":{"lat":10,"lon":10}}`, MobilityFixed},
+		{"sender-made mobile made fixed, lower case", MobilityMobile, SenderPrefix + "t1", `{"mobility":" fixed ","position":{"lat":10,"lon":10}}`, MobilityFixed},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := senderEmplacement(c.mobility, c.createdBy)
+			store := newMemStore(e)
+			res := serve(t, store, http.MethodPatch, "/emplacements/"+e.ID, "SECRET", c.body)
+			if res.Code != http.StatusOK {
+				t.Fatalf("PATCH = %d %s", res.Code, res.Body)
+			}
+			got, _ := store.Get(context.Background(), e.ID)
+			if got.Position.Lat != 10 || got.Position.Lon != 10 || got.Mobility != c.wantMobility {
+				t.Errorf("after PATCH: position %v, mobility %s", got.Position, got.Mobility)
+			}
+		})
+	}
+}
+
+func senderEmplacement(mobility, createdBy string) Emplacement {
+	feed := "grpc-1"
+	alt := 100.0
+	e := New()
+	e.ID, e.Name, e.Mobility, e.SensorType, e.FeedID, e.CreatedBy, e.Version = "11111111-1111-1111-1111-111111111111", "Ship ESM", mobility, "RF", &feed, createdBy, 1
+	e.Position = &Point{Lat: 50, Lon: -4}
+	e.Altitude = &alt
+	return e
 }
