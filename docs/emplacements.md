@@ -1,13 +1,13 @@
 # Emplacements
 
-An emplacement is a place observations come from: a radar site, a mast, a ship's radar, a field observer. Sentinel keeps them as records of their own, apart from the entities they observe, so that a report can later say which emplacement made it and where the observer stood. This page covers what an emplacement is, its fields and limits, the management API, the built-in `emplacements` feed that puts each one on the map and in search, the client, and what is still to come.
+An emplacement is a place observations come from: a radar site, a mast, a ship's radar, a field observer. Sentinel keeps them as records of their own, apart from the entities they observe, so that a report can later say which emplacement made it and where the observer stood. This page covers what an emplacement is, its fields and limits, the management API, the built-in `emplacements` feed that puts each one on the map and in search, the client, and how senders of a `grpc` connection use emplacements: reports bound to one, polar measurements placed from it, a mobile one's own position, and emplacements the senders manage themselves.
 
 ## Fixed and mobile
 
 | Mobility | Position | Reported |
 |----------|----------|----------|
 | `FIXED` | Required. A radar site, a mast. | On every heartbeat of the `emplacements` feed, and on every change. |
-| `MOBILE` | Optional. A ship's radar, a vehicle, a person. A mobile emplacement with no position is stored but not reported. | On every change (its position is edited, or later reported by its platform), not on the heartbeat. |
+| `MOBILE` | Optional. A ship's radar, a vehicle, a person. A mobile emplacement with no position is stored but not reported. | On every change (its position is edited), not on the heartbeat. A mobile emplacement bound to a connection is not reported by this feed at all: see "The built-in `emplacements` feed". |
 
 ## Fields
 
@@ -24,12 +24,12 @@ An emplacement is a place observations come from: a radar site, a mast, a ship's
 | `azimuthReference` | `TRUE_NORTH` (default) or `PLATFORM` (relative to the platform's heading: the client adds the live heading of a mobile emplacement's entity to the boresight when it draws the sector). |
 | `coverage` | `{minRangeM, maxRangeM, azimuthWidthDeg, elevationMinDeg?, elevationMaxDeg?}`. See the coverage rule below. |
 | `defaultSigma` | `{rangeM?, azimuthDeg?, elevationDeg?}`: one standard deviation of each polar measurement, used by reports that carry none of their own. Each is more than 0 when set. |
-| `feedId` | Optional binding to a connection (a feed that takes data in). `""` in a PATCH unbinds it. A bound feed that is deleted leaves the emplacement unbound. |
+| `feedId` | Optional binding to a connection (a feed that takes data in). `""` in a PATCH unbinds it. Deleting the connection soft-deletes the emplacements its senders made over gRPC and unbinds the others (see "Deleting a connection"). |
 | `classification` | `UNCLASSIFIED` (default), `CONFIDENTIAL`, `SECRET` or `TOP_SECRET`. |
-| `exercise` | Marks the emplacement as part of an exercise. Stored now; used by the gRPC reporting work (see What comes next). |
+| `exercise` | Marks the emplacement as part of an exercise. A report bound to the emplacement over gRPC takes the flag, and so does the emplacement's own SENSOR observation. |
 | `active` | Default true. An inactive emplacement is kept but not reported. |
-| `lastReportAt` | Reserved for the gRPC reporting path (see What comes next); nothing sets it yet. Read-only. |
-| `createdBy`, `createdAt`, `updatedAt` | Read-only. |
+| `lastReportAt` | When the emplacement last reported over its `grpc` connection (see "Reporting over gRPC"); empty until it has. Written at most every 10 s, without a version change or a notice. Read-only. |
+| `createdBy`, `createdAt`, `updatedAt` | Read-only. `createdBy` is `ingest-token:<token id>` for an emplacement a sender made over gRPC. |
 | `version` | Starts at 1 and rises on every write. It is the ETag (see below). |
 
 **Coverage rule.** All zeros (or no `coverage`) means no coverage is known: nothing is drawn or checked. Otherwise `0 <= minRangeM < maxRangeM <= 2,000,000` (2000 km), `0 < azimuthWidthDeg <= 360` (360 is omnidirectional), each elevation between -90 and 90, and `elevationMinDeg` below `elevationMaxDeg` when both are given. A PATCH is validated as the whole emplacement it would leave, so a change that is valid field by field but leaves the emplacement invalid is refused.
@@ -66,7 +66,7 @@ Served by the ingest service on `HTTP_ADDR` (`/emplacements`) and proxied by the
 
 ## The built-in `emplacements` feed
 
-The `emplacements` feed (driver `emplacement`) reports each emplacement as an entity, so it is in search and can anchor a geofence ring. A mobile emplacement's entity does not yet follow a live position: see the age-out note below. It is built in and enabled by default, because it needs no credentials. The driver is internal: no connection can be created on it, and the new-connection picker hides it. The Connections page still shows its row, where it can be disabled and its heartbeat changed.
+The `emplacements` feed (driver `emplacement`) reports each emplacement as an entity, so it is in search and can anchor a geofence ring. A mobile emplacement bound to a connection is left to that connection's reports, which move its entity (see "Reporting over gRPC"). It is built in and enabled by default, because it needs no credentials. The driver is internal: no connection can be created on it, and the new-connection picker hides it. The Connections page still shows its row, where it can be disabled and its heartbeat changed.
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
@@ -75,7 +75,8 @@ The `emplacements` feed (driver `emplacement`) reports each emplacement as an en
 What it reports:
 
 - Every active emplacement that has a position, once at start and again on every change.
-- Fixed emplacements again on every heartbeat. Mobile ones are reported only when the feed starts and when they change, never on the heartbeat, so until their own position reports arrive over gRPC (see What comes next) a mobile emplacement's entity goes stale and ages out unless it is edited (see Age-out).
+- Fixed emplacements again on every heartbeat. Mobile ones are reported only when the feed starts and when they change, never on the heartbeat.
+- **Not a mobile emplacement bound to any connection.** The mirror skips it, at start and on every change. Only a `grpc` connection reports positions today (its `EmplacementState` reports, below), so a mobile emplacement bound to a connection of another driver is off the map until something reports it: its entity is not refreshed, goes stale and ages out (see Age-out). Unbind it (`feedId` `""`) and the mirror reports its stored position again.
 - Each as an entity of type `SENSOR`, with a source entity id equal to the emplacement id, the emplacement's name, classification and exercise flag, and, when the boresight is measured from `TRUE_NORTH`, the boresight as the heading. A `PLATFORM` boresight is relative to the platform's own heading, so it is not reported as one. A fixed emplacement is a ground entity.
 - Under the canonical `EMPLACEMENT` identity, so the entity service always fuses an emplacement's reports into the same entity. Only the service gives a report that identity: the feed runner drops every `EMPLACEMENT` identity a sender supplies, so no other report can join an emplacement's entity or hide behind one.
 - Never suppressed as a repeat. The runner's repeat suppression drops a fix that repeats the last position within a second; the `emplacement` driver turns it off, so an edit that keeps the position (a new name, a raised classification) always reaches the entity.
@@ -91,7 +92,7 @@ The sensor type picks the source label:
 | `RF` | `SIGINT` |
 | anything else | `MASINT` |
 
-**Age-out.** `db/schema/72_emplacements.sql` seeds a stale and age-out row for each of these sources on the `emplacements` feed: an entity goes stale after 3 minutes without a report and ages out after 10, which is three and ten missed heartbeats at the default for a fixed emplacement. The thresholds make no exception for mobility: because a mobile emplacement is reported only at start and on change, its SENSOR entity goes stale after 3 minutes and ages out after 10 unless it is edited, until its own position reports over gRPC arrive (sub-project 2). **Deactivating or deleting** an emplacement stops its reports, so its entity goes stale and then ages out on that schedule; it does not disappear at once. Editing it again, or setting it active, reports it at once.
+**Age-out.** `db/schema/72_emplacements.sql` seeds a stale and age-out row for each of these sources on the `emplacements` feed: an entity goes stale after 3 minutes without a report and ages out after 10, which is three and ten missed heartbeats at the default for a fixed emplacement. The thresholds make no exception for mobility: because a mobile emplacement is reported only at start and on change, an unbound one's SENSOR entity goes stale after 3 minutes and ages out after 10 unless it is edited. A bound one's entity is refreshed by its own position reports over gRPC, and goes stale and ages out on the same schedule when they stop. **Deactivating or deleting** an emplacement stops its reports, so its entity goes stale and then ages out on that schedule; it does not disappear at once. Editing it again, or setting it active, reports it at once.
 
 ## The client
 
@@ -100,6 +101,47 @@ The sensor type picks the source label:
 - **Layer.** The built-in feed's row in the layers pill shows or hides the whole layer (markers and footprints). A layer that was hidden stays hidden when the map loads.
 - **Entity detail.** The detail panel of a sensor entity that comes from an emplacement shows **Emplacement: <name>**, which opens the panel with it selected.
 
+## Reporting over gRPC
+
+An emplacement bound to a `grpc` connection (`feedId`) is what that connection's senders report as. The driver's settings and the ack reasons are in `docs/feeds.md`; this section is what the emplacement does to a report. "The connection's level" below is the connection's classification, and a token's ceiling is the classification it was issued with.
+
+**Binding.** A report names its emplacement in `Report.emplacement_id`. An empty one means the connection's only emplacement (active, bound to this connection and not above the token's ceiling). A connection that has none takes unbound reports as before: positional ones, with no emplacement. Every other miss is `unknown_emplacement`: an id that does not exist, one bound to another connection, an inactive or higher-classified emplacement, or an empty id on a connection with several. The answer is the same for all of them, so a sender learns nothing about emplacements it cannot use.
+
+A bound report:
+
+- carries the emplacement as its sensor (its `sensor_id` and `emplacement_id` are the emplacement's id);
+- takes its source from the sensor type (the table above) when it sets none;
+- takes the emplacement's classification when that is above the report's own, and the emplacement's `exercise` flag.
+
+A target never carries the `EMPLACEMENT` identity: only an emplacement's own report is its entity, and a target that carried one would fuse into the sensor that saw it. Sentinel removes every `EMPLACEMENT` identity a target is sent before it is keyed, so a target whose only identity is `EMPLACEMENT` is `missing_identity`. A bound target whose `source_entity_id` is the emplacement's own id is `REJECTED` `bad_identity`: the emplacement's own SENSOR observation is keyed on that id, and the two would share a repeat key. An observation body that is empty, on a report that claims an emplacement above the connection's level, is `REJECTED` `empty_report` (not dead-lettered, as dead letters are visible at the connection's level only).
+
+**Polar measurements.** A bound report with a `polar` measurement and no position is placed from the emplacement: from a fixed one's stored place, and from a mobile one's track at the report's time (`source_timestamp`, else arrival). An unbound report with `polar` and no position is `unknown_emplacement`, as there is nothing to place it from. A report that has both a position and a `polar` keeps its position (the altitude-only form below excepted).
+
+- **Azimuth.** The measurement's `azimuth_reference` is used, else the emplacement's. A `PLATFORM` azimuth adds the platform heading, which only a mobile emplacement's track has; on a fixed one it is `bad_polar`.
+- **Elevation.** With an elevation, the target lies along it from the emplacement. Without one, the target is at the report's altitude when it has one, else the emplacement's (0 when a fixed one has none).
+- **Altitude-only position.** A `position` of latitude 0 and longitude 0 with `altitude_meters` set carries only the target's altitude: it is no fix. A bound polar report in this form is converted at that altitude; an unbound one is `unknown_emplacement`.
+- **Covariance.** The position's covariance comes from the measurement's sigmas, each falling back to the emplacement's `defaultSigma`. A covariance with a non-finite term is dropped and the report goes on without one.
+- **Reasons.** `bad_polar` is a range below 0 or above 2e7 m (20,000 km), an elevation outside -90 to 90, a non-finite value, a sigma that is not above 0, a `PLATFORM` azimuth with no heading, an altitude the ray never reaches, or a converted position that is not finite. `stale_ownship` is a mobile emplacement with no position for the time of the report: before the first fix its track holds, or more than `ownshipToleranceMs` (default 2000, at most 60000) past the newest. `outside_coverage` applies only with `enforceCoverage`: a bound report with a position (given or converted) is held to the emplacement's coverage as seen from where it stood (range, half the azimuth width either side of the boresight, elevation); an emplacement with no coverage holds everything.
+
+**Position reports (`EmplacementState`).** A mobile emplacement tells Sentinel where it is with a report whose body is an `emplacement_state` (`position`, optional `heading`, `velocity` as north, east and up in m/s, and `time`, the server's clock when unset). It is taken only for a bound MOBILE emplacement; a fixed or unbound one is `unknown_emplacement`, and so is a body whose `emplacement_id` differs from the report's.
+
+- **Malformed.** A position outside WGS84 bounds, a non-finite altitude, heading or velocity, an invalid `time`, or a `time` more than 5 s ahead of the server's clock is `bad_state`. It is dead-lettered, or `REJECTED` when the emplacement is above the connection's level.
+- **Track.** The fix extends the emplacement's track, which is where its polar measurements are measured from. The track keeps the last 60 s behind its newest fix, and between 1200 and 2400 fixes: at 2400 it is cut to the newest 1200. A fix at a time the track already holds replaces it. A measurement is placed by interpolating between the fixes around its time, or, up to `ownshipToleranceMs` after the newest, by carrying the newest on along its velocity. The track lives in the memory of the replica that runs the connection; after a restart measurements are `stale_ownship` until the next fix.
+- **The row.** `lastReportAt` and the stored position are written at most every 10 s for each emplacement, throttled on the server's clock and without a version change or a notice. They record the earlier of the fix time and the server's time, so a sender with a fast clock can neither stall nor flood the writes. The position is written only when the emplacement is at or above the connection's level; below it, only `lastReportAt` is written, so a position reported over a more highly classified connection never lands in the row. An accepted observation from a bound emplacement, fixed or mobile, also sets `lastReportAt` (same throttle).
+- **The entity.** The emplacement's SENSOR entity moves at most once a second, to the fix's position, with its heading and velocity, at the earlier of the fix time and the server's time. This is why the built-in feed does not report a bound mobile emplacement.
+
+**Sender-managed emplacements (`UpsertEmplacement`).** With `senderManagedEmplacements` on, a token may create and update emplacements on its connection. Without it the call is `PermissionDenied`, and so is a token below the connection's level; a replica that cannot write answers `Unavailable` (retry).
+
+- **Which.** An `id` names one to update: it must be bound to this connection, made by one of its senders and not above the token's ceiling, else `NotFound` (the same answer for each). An empty id, or one that names nothing, creates one with an id Sentinel assigns, up to `maxEmplacements` (default 16, at most 256) for the connection, else `ResourceExhausted`. A name that is taken is `AlreadyExists`; an invalid emplacement, a missing one or a classification above the token's ceiling is `InvalidArgument`.
+- **Sentinel's to set.** The emplacement is bound to the connection, and `active` and `createdBy` (`ingest-token:<token id>`) are Sentinel's, never the sender's: a create is active, an update keeps `active`. The classification is raised to the connection's level when below it.
+- **What an upsert replaces.** On every upsert the name, description, boresight and `exercise` flag are replaced, so a zero value clears the stored one. An enum left unset (mobility, sensor type, azimuth reference, classification) and a sub-message left out (position, coverage, default sigma) keep what is stored, or take the defaults on a create. A position sent without an altitude clears the stored altitude.
+- **Cache.** The call waits up to 2 s for the emplacement cache to hold the write, so that the next report can claim the emplacement.
+- **A person editing one.** A PATCH on a sender's MOBILE emplacement ignores `position` and `altitude` while it stays mobile, as its sender reports where it is and a position set by hand would be overwritten at the next report. A PATCH that makes it `FIXED` is a person choosing where it is, and that position applies. Its other fields apply, until the sender's next upsert replaces the name, description, boresight and `exercise` flag again.
+
+**Deleting a connection.** Deleting a `grpc` connection soft-deletes the emplacements its senders made, and unbinds the others (`feedId` null, version raised). Each change sends a notice, so every replica's cache follows.
+
+**Known differences.** The altitudes Sentinel stores and converts with, including a polar measurement's, are metres above the WGS84 ellipsoid, as in `altitude` above. The proto comment on `Coordinate.altitude_meters` says mean sea level, but Sentinel takes a sender's `altitude_meters` as an ellipsoidal height and applies no geoid correction, so a sender that measures above mean sea level is off by the geoid height (up to about 100 m).
+
 ## What comes next
 
-Sub-project 2 of this work, with the gRPC connection: a sender reporting as an emplacement over gRPC (the `IngestService` in `proto/`), conversion of polar measurements (range, azimuth, elevation from the emplacement) to positions using the boresight, reference and default sigma above, reports from a platform's own position (ownship) that move a mobile emplacement, and the `exercise` flag keeping exercise data apart. The proto contract (`Observation` emplacement fields, the `EMPLACEMENT` identity) and the fields above are already in place for it.
+Not yet built: the `exercise` flag only travels with the observations, and nothing downstream of ingest yet keeps exercise data apart from live data. Only a `grpc` connection reports a mobile emplacement's position; other drivers do not, so a mobile emplacement bound to one stays off the map (see the built-in feed above).

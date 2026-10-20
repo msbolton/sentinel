@@ -99,18 +99,18 @@ The places observations come from (see `docs/emplacements.md`). One row per empl
 | `description` | Free text, default empty |
 | `mobility` | `FIXED` or `MOBILE`; a CHECK requires a `position` when `FIXED` |
 | `"sensorType"` | `RADAR`, `EO_IR`, `RF`, `ACOUSTIC`, `AIS_RECEIVER`, `ADSB_RECEIVER`, `HUMAN` or `OTHER` |
-| `position` | `geometry(Point, 4326)`, null for a mobile emplacement with no fix |
+| `position` | `geometry(Point, 4326)`, null for a mobile emplacement with no fix. A mobile emplacement's reports over a `grpc` connection write it, at most every 10 s, with no version change |
 | `altitude` | Metres above the WGS84 ellipsoid |
 | `"boresightDeg"` | Centre of the coverage sector in [0, 360), measured from `"azimuthReference"` |
 | `"azimuthReference"` | `TRUE_NORTH` (default) or `PLATFORM` |
 | `coverage` | JSONB `{minRangeM, maxRangeM, azimuthWidthDeg, elevationMinDeg?, elevationMaxDeg?}`; `{}` when unknown |
 | `"defaultSigma"` | JSONB `{rangeM?, azimuthDeg?, elevationDeg?}`, the standard deviations used for reports that carry none |
-| `"feedId"` | The connection (`feeds.id`) the emplacement is bound to; `ON DELETE SET NULL` |
+| `"feedId"` | The connection (`feeds.id`) the emplacement is bound to; `ON DELETE SET NULL`. Deleting the connection first soft-deletes the emplacements its senders made (`"createdBy"` starts `ingest-token:`) and unbinds the others, in the same transaction, raising `version` and sending a NOTIFY for each |
 | `classification` | `UNCLASSIFIED` (default) to `TOP_SECRET`; callers above it neither see nor edit the row |
 | `exercise` | Whether the emplacement belongs to an exercise, default false |
 | `active` | Whether it is reported, default true |
-| `"lastReportAt"` | When it last reported (reserved for gRPC reporting) |
-| `"createdBy"`, `"createdAt"`, `"updatedAt"` | Provenance and timestamps |
+| `"lastReportAt"` | When it last reported over its `grpc` connection (the earlier of the report's time and the server's), written at most every 10 s with no version change and no NOTIFY; null until it has |
+| `"createdBy"`, `"createdAt"`, `"updatedAt"` | Provenance and timestamps; `"createdBy"` is `ingest-token:<token id>` for an emplacement a sender made over gRPC |
 | `"deletedAt"` | Set by a delete |
 | `version` | Starts at 1 and rises on every write; the API's ETag and `If-Match` |
 
