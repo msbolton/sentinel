@@ -85,11 +85,12 @@ type Entity struct {
 	PlatformData      map[string]interface{} `json:"platformData,omitempty"`
 	OperationalStatus string                 `json:"operationalStatus,omitempty"`
 	CircularError     *float64               `json:"circularError,omitempty"`
-	// Kinematics carries {"velocity": {north, east, up}} in m/s when known,
-	// matching the client's KinematicState shape.
+	// Kinematics carries {"velocity": {north, east, up}, "positionCovariance": {...}}
+	// when known, matching the client's KinematicState shape.
 	Kinematics map[string]interface{} `json:"kinematics,omitempty"`
 	// Provenance and liveness from the fused entity.
 	FeedID         string           `json:"feedId,omitempty"`
+	LastFeedID     string           `json:"lastFeedId,omitempty"`
 	AgeoutState    string           `json:"ageoutState,omitempty"`
 	Identities     []EntityIdentity `json:"identities,omitempty"`
 	LastObservedAt string           `json:"lastObservedAt,omitempty"`

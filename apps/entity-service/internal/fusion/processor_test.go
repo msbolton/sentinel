@@ -2,6 +2,7 @@ package fusion
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -415,5 +416,37 @@ func TestExerciseStaticReportMarksPositionEvent(t *testing.T) {
 	pos := sink2.events[len(sink2.events)-1]
 	if pos.kind != "position" || !pos.entity.Exercise {
 		t.Fatalf("position event lacks the mark: %+v", sink2.events)
+	}
+}
+
+func TestKinematicsJSONCarriesCovarianceAndClearsOnFixWithoutCovariance(t *testing.T) {
+	// Observation with position covariance serialises positionCovariance.
+	withCov := &sentinelv1.Observation{
+		Position:           &sentinelv1.Coordinate{Latitude: 50, Longitude: -4},
+		PositionCovariance: &sentinelv1.PositionCovariance{PnPn: 400, PnPe: 50, PePe: 100},
+	}
+	raw := kinematicsJSON(withCov)
+	var parsed map[string]map[string]float64
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	cov := parsed["positionCovariance"]
+	if cov == nil || cov["pnPn"] != 400 || cov["pnPe"] != 50 || cov["pePe"] != 100 {
+		t.Fatalf("positionCovariance = %v", cov)
+	}
+
+	// A position fix with no velocity, acceleration or covariance writes "{}"
+	// so COALESCE(b.kinematics, e.kinematics) clears any prior covariance.
+	plainPos := &sentinelv1.Observation{
+		Position: &sentinelv1.Coordinate{Latitude: 50.1, Longitude: -4.1},
+	}
+	if got := string(kinematicsJSON(plainPos)); got != "{}" {
+		t.Fatalf("kinematicsJSON with position only = %q, want \"{}\"", got)
+	}
+
+	// An observation without a position and without kinematics returns nil.
+	noPos := &sentinelv1.Observation{}
+	if got := kinematicsJSON(noPos); got != nil {
+		t.Fatalf("kinematicsJSON without position = %s, want nil", got)
 	}
 }

@@ -385,7 +385,10 @@ func platformJSON(o *sentinelv1.Observation) json.RawMessage {
 }
 
 func kinematicsJSON(o *sentinelv1.Observation) json.RawMessage {
-	if o.Velocity == nil && o.Acceleration == nil {
+	if o.Velocity == nil && o.Acceleration == nil && o.PositionCovariance == nil {
+		if o.Position != nil {
+			return json.RawMessage(`{}`)
+		}
 		return nil
 	}
 	k := map[string]interface{}{}
@@ -394,6 +397,12 @@ func kinematicsJSON(o *sentinelv1.Observation) json.RawMessage {
 	}
 	if a := o.Acceleration; a != nil {
 		k["acceleration"] = map[string]float64{"north": a.North, "east": a.East, "up": a.Up}
+	}
+	if c := o.PositionCovariance; c != nil {
+		k["positionCovariance"] = map[string]float64{
+			"pnPn": c.PnPn, "pnPe": c.PnPe, "pnPu": c.PnPu,
+			"pePe": c.PePe, "pePu": c.PePu, "puPu": c.PuPu,
+		}
 	}
 	b, _ := json.Marshal(k)
 	return b
