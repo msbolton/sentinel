@@ -288,3 +288,150 @@ func TestLeavingTheBoundMobileStateIsReported(t *testing.T) {
 	src.change(fixed)
 	waitFor(t, func() bool { return count(sink.ids(), "fixes") == 1 })
 }
+
+// memFeeds is a FeedSource whose exercise flags a test sets.
+type memFeeds struct {
+	mu    sync.Mutex
+	flags map[string]bool
+	fns   []func(string)
+}
+
+func (m *memFeeds) Exercise(id string) (bool, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.flags[id]
+	return v, ok
+}
+func (m *memFeeds) OnExerciseChange(fn func(string)) func() {
+	m.mu.Lock()
+	m.fns = append(m.fns, fn)
+	m.mu.Unlock()
+	return func() {}
+}
+func (m *memFeeds) set(id string, exercise bool) {
+	m.mu.Lock()
+	if m.flags == nil {
+		m.flags = map[string]bool{}
+	}
+	m.flags[id] = exercise
+	fns := append([]func(string){}, m.fns...)
+	m.mu.Unlock()
+	for _, fn := range fns {
+		fn(id)
+	}
+}
+
+func (s *memSink) last(id string) *obs.Observation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.got) - 1; i >= 0; i-- {
+		if s.got[i].EmplacementID == id {
+			return s.got[i]
+		}
+	}
+	return nil
+}
+
+func bound(id string, feed string, exercise bool) emplacement.Emplacement {
+	e := place(id, emplacement.MobilityFixed, true, true)
+	e.Exercise = exercise
+	if feed != "" {
+		e.FeedID = &feed
+	}
+	return e
+}
+
+// An exercise connection marks the sensor entities of the emplacements bound to
+// it, whatever the row says: nothing of an exercise reaches an outbound
+// connection as real. A real connection, no connection and an unknown one leave
+// the row's own flag.
+func TestExerciseConnectionMarksItsEmplacements(t *testing.T) {
+	feeds := &memFeeds{}
+	feeds.set("ex", true)
+	feeds.set("real", false)
+	src := &memSource{rows: map[string]emplacement.Emplacement{
+		"on-ex":      bound("on-ex", "ex", false),
+		"on-real":    bound("on-real", "real", false),
+		"free":       bound("free", "", false),
+		"unknown":    bound("unknown", "gone", false),
+		"row-ex":     bound("row-ex", "real", true),
+		"free-row":   bound("free-row", "", true),
+		"unknown-ex": bound("unknown-ex", "gone", true),
+	}}
+	sink := &memSink{}
+	d := &Driver{src: src, feeds: feeds, heartbeat: time.Hour, logger: zap.NewNop(), now: time.Now}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.Run(ctx, sink) }()
+	waitFor(t, func() bool { return len(sink.ids()) >= len(src.rows) })
+	cancel()
+	<-done
+	for id, want := range map[string]bool{"on-ex": true, "on-real": false, "free": false, "unknown": false, "row-ex": true, "free-row": true, "unknown-ex": true} {
+		if got := sink.last(id).Exercise; got != want {
+			t.Errorf("%s: exercise %v, want %v", id, got, want)
+		}
+	}
+}
+
+// A driver built without a connection source (tests, replicas without one)
+// keeps every row's own flag.
+func TestNoFeedSourceKeepsTheRowsFlag(t *testing.T) {
+	src := &memSource{rows: map[string]emplacement.Emplacement{"a": bound("a", "ex", false)}}
+	sink := &memSink{}
+	d := &Driver{src: src, heartbeat: time.Hour, logger: zap.NewNop(), now: time.Now}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.Run(ctx, sink) }()
+	waitFor(t, func() bool { return len(sink.ids()) >= 1 })
+	cancel()
+	<-done
+	if sink.last("a").Exercise {
+		t.Error("exercise set with no feed source")
+	}
+}
+
+// Marking a connection exercise, or unmarking it, shows on its emplacements'
+// entities at once, not at the next heartbeat. Only the connection's own
+// reportable emplacements are re-reported.
+func TestConnectionExerciseChangeIsReported(t *testing.T) {
+	feeds := &memFeeds{}
+	feeds.set("c", false)
+	feeds.set("other", false)
+	mobile := place("mobile", emplacement.MobilityMobile, true, true)
+	mobile.Exercise = false
+	c := "c"
+	mobile.FeedID = &c
+	inactive := bound("inactive", "c", false)
+	inactive.Active = false
+	src := &memSource{rows: map[string]emplacement.Emplacement{
+		"mine": bound("mine", "c", false), "elsewhere": bound("elsewhere", "other", false),
+		"mobile": mobile, "inactive": inactive,
+	}}
+	sink := &memSink{}
+	d := &Driver{src: src, feeds: feeds, heartbeat: time.Hour, logger: zap.NewNop(), now: time.Now}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.Run(ctx, sink) }()
+	defer func() { cancel(); <-done }()
+	waitFor(t, func() bool { return len(sink.ids()) >= 2 })
+	if sink.last("mine").Exercise {
+		t.Fatal("exercise before the connection was marked")
+	}
+
+	feeds.set("c", true)
+	waitFor(t, func() bool { return count(sink.ids(), "mine") == 2 })
+	if !sink.last("mine").Exercise {
+		t.Error("the connection was marked exercise but its emplacement was reported real")
+	}
+	feeds.set("c", false)
+	waitFor(t, func() bool { return count(sink.ids(), "mine") == 3 })
+	if sink.last("mine").Exercise {
+		t.Error("the connection was unmarked but its emplacement is still reported exercise")
+	}
+	if n := count(sink.ids(), "elsewhere"); n != 1 {
+		t.Errorf("another connection's emplacement was reported %d times, want 1", n)
+	}
+	if n := count(sink.ids(), "mobile") + count(sink.ids(), "inactive"); n != 0 {
+		t.Errorf("a bound mobile or inactive emplacement was reported %d times, want 0", n)
+	}
+}

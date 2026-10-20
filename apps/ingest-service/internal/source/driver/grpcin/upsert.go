@@ -61,6 +61,12 @@ func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmp
 		return nil, status.Error(codes.InvalidArgument, "send an emplacement")
 	}
 	in := inputOf(m)
+	if s.d.cfg.Exercise {
+		// An exercise connection's emplacements are exercise: the row matches
+		// the sensor entity the mirror reports for it.
+		on := true
+		in.Exercise = &on
+	}
 	own := func(context.Context, string) (bool, bool, error) { return true, true, nil } // the connection itself
 	check := func(e *emplacement.Emplacement) error {
 		e.FeedID = &feed

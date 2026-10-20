@@ -341,3 +341,29 @@ func TestEmptyBodiesOnTheWire(t *testing.T) {
 		t.Errorf("%d dead letters, want 3", n)
 	}
 }
+
+// An exercise connection's emplacements are exercise: an upsert that asks for
+// exercise=false, on create or on update, stores true, so the row matches the
+// sensor entity the mirror reports. A connection that is not exercise takes
+// the flag as sent.
+func TestUpsertOnAnExerciseConnectionStoresExercise(t *testing.T) {
+	r, w, _ := consentRig(t, map[string]any{"exercise": true}, ingesttoken.Token{}, senderRow("mine-1"))
+	ctx, cancel := withToken(secretA)
+	defer cancel()
+	c := r.client(t)
+
+	res, err := c.UpsertEmplacement(ctx, upsertReq("mine-1", "mine-1")) // update, exercise=false
+	if err != nil || !res.GetEmplacement().GetExercise() {
+		t.Fatalf("update: %v %v", res, err)
+	}
+	if e, _ := w.Get(context.Background(), "mine-1"); !e.Exercise {
+		t.Error("an update without the flag, on an exercise connection, stored false")
+	}
+	res, err = c.UpsertEmplacement(ctx, upsertReq("", "New")) // create, exercise=false
+	if err != nil || !res.GetEmplacement().GetExercise() {
+		t.Fatalf("create: %v %v", res, err)
+	}
+	if e, _ := w.Get(context.Background(), res.GetEmplacement().GetId()); !e.Exercise {
+		t.Error("a create without the flag, on an exercise connection, stored false")
+	}
+}
