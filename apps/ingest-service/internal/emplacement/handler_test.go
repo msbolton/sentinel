@@ -231,3 +231,37 @@ func TestHandlerDeleteTakesAnUpperCaseID(t *testing.T) {
 		t.Fatalf("store deleted %v, want [%s]", store.deleted, id)
 	}
 }
+
+func TestCheckWriteHoldsToTheCeiling(t *testing.T) {
+	e := New()
+	e.Name, e.Mobility, e.SensorType = "x", MobilityMobile, "RF"
+	e.Classification = "SECRET"
+	err := CheckWrite(context.Background(), &e, 1, feeds) // CONFIDENTIAL ceiling
+	var ve *ValidationError
+	if !errors.As(err, &ve) || len(ve.Problems) != 1 || ve.Problems[0].Path != "/classification" {
+		t.Fatalf("CheckWrite = %v, want one /classification problem", err)
+	}
+	e.Classification = "CONFIDENTIAL"
+	if err := CheckWrite(context.Background(), &e, 1, feeds); err != nil {
+		t.Fatalf("CheckWrite at the ceiling = %v", err)
+	}
+}
+
+// A sender reports a mobile emplacement's position; a PATCH that sets one
+// is ignored for it, and the rest of the PATCH still applies.
+func TestPatchIgnoresPositionOfASendersMobileEmplacement(t *testing.T) {
+	feed := "grpc-1"
+	e := New()
+	e.ID, e.Name, e.Mobility, e.SensorType, e.FeedID, e.CreatedBy, e.Version = "11111111-1111-1111-1111-111111111111", "Ship ESM", MobilityMobile, "RF", &feed, SenderPrefix+"t1", 1
+	e.Position = &Point{Lat: 50, Lon: -4}
+	store := newMemStore(e)
+	res := serve(t, store, http.MethodPatch, "/emplacements/"+e.ID, "SECRET",
+		`{"position":{"lat":10,"lon":10},"description":"moved by hand"}`)
+	if res.Code != http.StatusOK {
+		t.Fatalf("PATCH = %d %s", res.Code, res.Body)
+	}
+	got, _ := store.Get(context.Background(), e.ID)
+	if got.Position.Lat != 50 || got.Description != "moved by hand" {
+		t.Errorf("after PATCH: position %v, description %q", got.Position, got.Description)
+	}
+}

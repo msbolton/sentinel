@@ -144,6 +144,11 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 		if ifVersion > 0 && e.Version != ifVersion {
 			return ErrVersionConflict
 		}
+		// A sender reports where its mobile emplacement is; a position set
+		// by hand would be overwritten at its next report, so it is ignored.
+		if e.Mobility == MobilityMobile && e.SenderManaged() {
+			in.Position, in.Altitude = nil, nil
+		}
 		in.Apply(e)
 		return h.check(r, e)
 	})
@@ -173,21 +178,22 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// check validates e as it would be stored and holds it to what the caller
-// may write: no classification above their clearance, and a binding only to
-// a connection that takes data in.
-func (h *Handler) check(r *http.Request, e *Emplacement) error {
+// CheckWrite validates e as it would be stored and holds it to what the
+// writer may write: no classification above ceilingRank, and a binding only
+// to a connection that takes data in. The HTTP API passes the caller's
+// clearance; the grpc driver passes the sender's token ceiling.
+func CheckWrite(ctx context.Context, e *Emplacement, ceilingRank int, feeds FeedCheck) error {
 	ve := &ValidationError{}
 	if err := Validate(e); err != nil {
 		if !errors.As(err, &ve) {
 			return err
 		}
 	}
-	if classification.Valid(e.Classification) && classification.Rank(e.Classification) > clearance(r) {
+	if classification.Valid(e.Classification) && classification.Rank(e.Classification) > ceilingRank {
 		ve.Problems = append(ve.Problems, Problem{Path: "/classification", Message: "is above your clearance"})
 	}
 	if e.FeedID != nil {
-		exists, inbound, err := h.feeds(r.Context(), *e.FeedID)
+		exists, inbound, err := feeds(ctx, *e.FeedID)
 		switch {
 		case err != nil:
 			return err
@@ -201,6 +207,10 @@ func (h *Handler) check(r *http.Request, e *Emplacement) error {
 		return ve
 	}
 	return nil
+}
+
+func (h *Handler) check(r *http.Request, e *Emplacement) error {
+	return CheckWrite(r.Context(), e, clearance(r), h.feeds)
 }
 
 func pathID(w http.ResponseWriter, r *http.Request) (string, bool) {
