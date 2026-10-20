@@ -73,6 +73,7 @@ func EntityProto(rec *store.EntityRecord, identities []*sentinelv1.Identity, sou
 		Description:           str(rec.Description),
 		Source:                parseEnum[sentinelv1.EntitySource](rec.Source),
 		Classification:        parseEnum[sentinelv1.Classification](rec.Classification),
+		Exercise:              rec.Exercise,
 		Heading:               rec.Heading,
 		SpeedKnots:            rec.SpeedKnots,
 		Course:                rec.Course,

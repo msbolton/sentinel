@@ -228,7 +228,7 @@ func fusedUpdate(id string, r *Report) store.FusedUpdate {
 		Heading: o.Heading, SpeedKnots: o.SpeedKnots, Course: o.Course,
 		TrackEnvironment: enumOrEmpty(o.TrackEnvironment), CountryOfOrigin: o.CountryOfOrigin,
 		Platform: platformJSON(o), Kinematics: kinematicsJSON(o),
-		Classification: enumOrEmpty(o.Classification),
+		Classification: enumOrEmpty(o.Classification), Exercise: o.GetExercise(),
 	}
 	if o.Uncertainty != nil && o.Uncertainty.CircularError != 0 {
 		ce := o.Uncertainty.CircularError
@@ -239,7 +239,7 @@ func fusedUpdate(id string, r *Report) store.FusedUpdate {
 
 func staticUpdate(id string, r *Report) store.StaticUpdate {
 	o := r.Obs
-	return store.StaticUpdate{EntityID: id, FeedID: o.FeedId, Source: pbjson.EnumName(o.Source), SourceEntityID: o.SourceEntityId, Name: o.DisplayName, CountryOfOrigin: o.CountryOfOrigin, Platform: platformJSON(o), Classification: enumOrEmpty(o.Classification)}
+	return store.StaticUpdate{EntityID: id, FeedID: o.FeedId, Source: pbjson.EnumName(o.Source), SourceEntityID: o.SourceEntityId, Name: o.DisplayName, CountryOfOrigin: o.CountryOfOrigin, Platform: platformJSON(o), Classification: enumOrEmpty(o.Classification), Exercise: o.GetExercise()}
 }
 
 func observationRow(id string, r *Report) store.ObservationRow {

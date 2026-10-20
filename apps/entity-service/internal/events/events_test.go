@@ -33,6 +33,7 @@ func TestEntityProtoMapsRow(t *testing.T) {
 		Kinematics:   map[string]interface{}{"velocity": map[string]interface{}{"north": 1.5, "east": -2.0, "up": 0.0}},
 		PlatformData: map[string]interface{}{"adsb": map[string]interface{}{"icao_hex": "A1B2C3", "squawk": "1200"}, "ais": map[string]interface{}{"mmsi": "123", "navStatus": "MOORED"}},
 		AgeoutState:  "LIVE", CreatedAt: "2026-10-15 12:00:00+00", UpdatedAt: "2026-10-15 12:00:01+00", LastSeenAt: &last, LastObservedAt: &last,
+		Exercise: true,
 	}
 	e := EntityProto(rec, []*sentinelv1.Identity{{Type: sentinelv1.IdentityType_IDENTITY_TYPE_ICAO24, Value: "A1B2C3"}}, nil)
 	if e.EntityType != sentinelv1.EntityType_ENTITY_TYPE_AIRCRAFT || e.Source != sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY || e.AgeoutState != sentinelv1.AgeoutState_AGEOUT_STATE_LIVE || e.TrackEnvironment != sentinelv1.TrackEnvironment_TRACK_ENVIRONMENT_AIR {
@@ -49,6 +50,9 @@ func TestEntityProtoMapsRow(t *testing.T) {
 	}
 	if e.Platforms["adsb"].GetAdsb().IcaoHex != "A1B2C3" || e.Platforms["ais"].GetAis().NavStatus != sentinelv1.NavigationalStatus_NAVIGATIONAL_STATUS_MOORED {
 		t.Errorf("platforms = %v", e.Platforms)
+	}
+	if !e.Exercise {
+		t.Error("exercise not mapped")
 	}
 	if e.CreatedAt == nil || e.LastSeenAt == nil || e.LastObservedAt == nil || len(e.Identities) != 1 {
 		t.Errorf("timestamps/identities = %v %v %v %v", e.CreatedAt, e.LastSeenAt, e.LastObservedAt, e.Identities)

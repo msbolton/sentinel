@@ -74,7 +74,8 @@ ALTER TABLE sentinel.entities
   ADD COLUMN IF NOT EXISTS "lastObservedAt"       TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS "lastFeedId"           VARCHAR(64),
   ADD COLUMN IF NOT EXISTS "primaryIdentityType"  VARCHAR(30),
-  ADD COLUMN IF NOT EXISTS "primaryIdentityValue" VARCHAR(255);
+  ADD COLUMN IF NOT EXISTS "primaryIdentityValue" VARCHAR(255),
+  ADD COLUMN IF NOT EXISTS exercise               BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Legacy repair: TypeORM created several columns as enum types whose value
 -- sets drifted from what the feeds and client emit. Convert them to VARCHAR so

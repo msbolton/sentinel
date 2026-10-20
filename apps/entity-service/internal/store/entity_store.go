@@ -56,6 +56,7 @@ type EntityRecord struct {
 	LastFeedID            *string                `json:"lastFeedId,omitempty"`
 	PrimaryIdentityType   *string                `json:"primaryIdentityType,omitempty"`
 	PrimaryIdentityValue  *string                `json:"primaryIdentityValue,omitempty"`
+	Exercise              bool                   `json:"exercise"`
 }
 
 // GeoPoint represents a geographic point.
@@ -129,7 +130,8 @@ const entitySelectColumns = `
 	"countryOfOrigin", "circularError",
 	kinematics, "platformData", "lastObservationSource", "sourceEntityId",
 	"ageoutState", "createdAt"::text, "updatedAt"::text, "lastSeenAt"::text, deleted,
-	"lastObservedAt"::text, "lastFeedId", "primaryIdentityType", "primaryIdentityValue"
+	"lastObservedAt"::text, "lastFeedId", "primaryIdentityType", "primaryIdentityValue",
+	exercise
 `
 
 // FindByID returns an entity by ID.
@@ -277,7 +279,7 @@ func (s *EntityStore) FindNearby(ctx context.Context, lat, lng, radiusMeters flo
 			&rec.CountryOfOrigin, &rec.CircularError,
 			&rec.Kinematics, &rec.PlatformData, &rec.LastObservationSource, &rec.SourceEntityID,
 			&rec.AgeoutState, &rec.CreatedAt, &rec.UpdatedAt, &rec.LastSeenAt, &rec.Deleted,
-			&rec.LastObservedAt, &rec.LastFeedID, &rec.PrimaryIdentityType, &rec.PrimaryIdentityValue,
+			&rec.LastObservedAt, &rec.LastFeedID, &rec.PrimaryIdentityType, &rec.PrimaryIdentityValue, &rec.Exercise,
 			&distance,
 		)
 		if err != nil {
@@ -496,7 +498,7 @@ func scanEntity(row pgx.Row) (*EntityRecord, error) {
 		&rec.CountryOfOrigin, &rec.CircularError,
 		&rec.Kinematics, &rec.PlatformData, &rec.LastObservationSource, &rec.SourceEntityID,
 		&rec.AgeoutState, &rec.CreatedAt, &rec.UpdatedAt, &rec.LastSeenAt, &rec.Deleted,
-		&rec.LastObservedAt, &rec.LastFeedID, &rec.PrimaryIdentityType, &rec.PrimaryIdentityValue,
+		&rec.LastObservedAt, &rec.LastFeedID, &rec.PrimaryIdentityType, &rec.PrimaryIdentityValue, &rec.Exercise,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan entity: %w", err)
@@ -524,7 +526,7 @@ func scanEntities(rows pgx.Rows) ([]EntityRecord, error) {
 			&rec.CountryOfOrigin, &rec.CircularError,
 			&rec.Kinematics, &rec.PlatformData, &rec.LastObservationSource, &rec.SourceEntityID,
 			&rec.AgeoutState, &rec.CreatedAt, &rec.UpdatedAt, &rec.LastSeenAt, &rec.Deleted,
-			&rec.LastObservedAt, &rec.LastFeedID, &rec.PrimaryIdentityType, &rec.PrimaryIdentityValue,
+			&rec.LastObservedAt, &rec.LastFeedID, &rec.PrimaryIdentityType, &rec.PrimaryIdentityValue, &rec.Exercise,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan entity row: %w", err)

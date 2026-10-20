@@ -19,10 +19,11 @@ type memEntities struct {
 	fused        [][]store.FusedUpdate
 	static       [][]store.StaticUpdate
 	class        map[string]string
+	exercise     map[string]bool
 }
 
 func newMemEntities() *memEntities {
-	return &memEntities{lastObserved: map[string]time.Time{}, state: map[string]string{}, class: map[string]string{}}
+	return &memEntities{lastObserved: map[string]time.Time{}, state: map[string]string{}, class: map[string]string{}, exercise: map[string]bool{}}
 }
 
 // raise mirrors sentinel.classification_max: the entity keeps the higher of
@@ -53,7 +54,8 @@ func (m *memEntities) ApplyFused(_ context.Context, updates []store.FusedUpdate)
 		m.state[u.EntityID] = "LIVE"
 		feed := u.FeedID
 		prevClass, class := m.raise(u.EntityID, u.Classification)
-		out = append(out, store.FusedResult{EntityID: u.EntityID, PreviousState: prev, PreviousClassification: prevClass, Record: &store.EntityRecord{ID: u.EntityID, EntityType: "AIRCRAFT", Name: u.Name, Source: u.Source, FeedID: &feed, Classification: class, Position: &store.GeoPoint{Lat: u.Lat, Lon: u.Lon}, AgeoutState: "LIVE", CreatedAt: "2026-10-15 12:00:00+00", UpdatedAt: "2026-10-15 12:00:00+00"}})
+		m.exercise[u.EntityID] = m.exercise[u.EntityID] || u.Exercise
+		out = append(out, store.FusedResult{EntityID: u.EntityID, PreviousState: prev, PreviousClassification: prevClass, Record: &store.EntityRecord{ID: u.EntityID, EntityType: "AIRCRAFT", Name: u.Name, Source: u.Source, FeedID: &feed, Classification: class, Exercise: m.exercise[u.EntityID], Position: &store.GeoPoint{Lat: u.Lat, Lon: u.Lon}, AgeoutState: "LIVE", CreatedAt: "2026-10-15 12:00:00+00", UpdatedAt: "2026-10-15 12:00:00+00"}})
 	}
 	return out, nil
 }
@@ -63,7 +65,8 @@ func (m *memEntities) ApplyStatic(_ context.Context, updates []store.StaticUpdat
 	var out []store.FusedResult
 	for _, u := range updates {
 		prevClass, class := m.raise(u.EntityID, u.Classification)
-		out = append(out, store.FusedResult{EntityID: u.EntityID, PreviousState: m.state[u.EntityID], PreviousClassification: prevClass, Record: &store.EntityRecord{ID: u.EntityID, Name: u.Name, Classification: class, AgeoutState: "LIVE", CreatedAt: "2026-10-15 12:00:00+00", UpdatedAt: "2026-10-15 12:00:00+00"}})
+		m.exercise[u.EntityID] = m.exercise[u.EntityID] || u.Exercise
+		out = append(out, store.FusedResult{EntityID: u.EntityID, PreviousState: m.state[u.EntityID], PreviousClassification: prevClass, Record: &store.EntityRecord{ID: u.EntityID, Name: u.Name, Classification: class, Exercise: m.exercise[u.EntityID], AgeoutState: "LIVE", CreatedAt: "2026-10-15 12:00:00+00", UpdatedAt: "2026-10-15 12:00:00+00"}})
 	}
 	return out, nil
 }
@@ -252,5 +255,38 @@ func TestClassificationRaiseIsAnnounced(t *testing.T) {
 	}
 	if sink.events[3].entity.Classification != sentinelv1.Classification_CLASSIFICATION_SECRET {
 		t.Errorf("position snapshot classification = %v", sink.events[3].entity.Classification)
+	}
+}
+
+// An exercise report marks the entity, and the mark is never lowered by a
+// later live report.
+func TestExerciseObservationMarksEntity(t *testing.T) {
+	p, _, _, _, _, sink := newTestProcessor()
+	t0 := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	live := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t0, 40, -80), "o1")
+	if _, err := p.ProcessBatch(context.Background(), []*sentinelv1.Observation{live}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.events) != 1 || sink.events[0].entity.Exercise {
+		t.Fatalf("live first report = %+v", sink.events)
+	}
+
+	ex := withID(obs("sim", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t0.Add(time.Second), 40.1, -80), "o2")
+	ex.Exercise = true
+	if _, err := p.ProcessBatch(context.Background(), []*sentinelv1.Observation{ex}); err != nil {
+		t.Fatal(err)
+	}
+	last := sink.events[len(sink.events)-1]
+	if last.kind != "position" || !last.entity.Exercise {
+		t.Fatalf("exercise report event = %+v", last)
+	}
+
+	later := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t0.Add(2*time.Second), 40.2, -80), "o3")
+	if _, err := p.ProcessBatch(context.Background(), []*sentinelv1.Observation{later}); err != nil {
+		t.Fatal(err)
+	}
+	last = sink.events[len(sink.events)-1]
+	if last.kind != "position" || !last.entity.Exercise {
+		t.Fatalf("live report after exercise = %+v", last)
 	}
 }
