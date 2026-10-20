@@ -255,6 +255,10 @@ describe('PolicyEditorComponent', () => {
         alerts: { enabled: true, minSeverity: 'MEDIUM', types: ['GEOFENCE'] },
       },
     });
+
+    el.querySelector<HTMLInputElement>('input[name="allowExercise"]')!.click();
+    fixture.detectChanges();
+    expect(last().value).not.toHaveProperty('allowExercise');
   });
 
   it('routes server problems to the box field, the section, or the top of the editor', () => {
