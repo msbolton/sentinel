@@ -63,11 +63,19 @@ docker compose -p sentinel --profile inbound --profile sim run --rm ew-sensor \
 
 `--insecure` is plaintext HTTP/2, which is what the listener speaks unless you enabled `tls` on the connection. `examples/coastal-esm.yaml` is a fixed coastal site looking west to sea with five emitters. The image keeps the examples in `/app/examples`, and the working directory is `/app`, so the path resolves as written. Stop it with Ctrl-C.
 
-A ship-borne sensor that moves and reports its own position, from the mobile example (this one asks for TLS, so point it at a TLS connection, or add `--insecure` to override):
+A ship-borne sensor that moves and reports its own position, from the mobile example. The file says `tls: true`; the `--insecure` on this command line overrides it, which suits a local plaintext listener:
 
 ```
 docker compose -p sentinel --profile inbound --profile sim run --rm ew-sensor \
   --addr localhost:6200 --insecure --config examples/mobile-esm.yaml
+```
+
+For a connection with `tls` enabled, drop `--insecure` (or pass `--tls`) and add `--ca` for a private CA. Mount the CA file into the container, for example with `-v "$PWD/secrets/ca.pem:/ca.pem:ro"`:
+
+```
+docker compose -p sentinel --profile inbound --profile sim run --rm \
+  -v "$PWD/secrets/ca.pem:/ca.pem:ro" ew-sensor \
+  --addr localhost:6200 --tls --ca /ca.pem --config examples/mobile-esm.yaml
 ```
 
 You can also turn any configuration into a mobile one with flags: `--mobile --path circle --speed-kts 12` (a circle of 5 km radius around `--lat`/`--lon`) or `--path waypoints` with waypoints in the YAML.
@@ -84,7 +92,7 @@ or `nx build ew-sensor` for a binary in `dist/apps/ew-sensor/`. Without a `--con
 
 ## Flags and configuration
 
-Flags override the configuration file, which overrides the defaults. Anything the YAML sets can also be set by a flag, except the emitter list and the ownship waypoints. The connection address and token also come from the environment.
+Flags override the configuration file, which overrides the defaults. Most YAML keys have a flag of the same name in kebab case (`rangeKm` is `--range-km`, `sigmaM` is `--sigma-m`). These do not, and are set in the YAML only: `emplacement.azimuthReference`, `sensor.classification`, `ownship.radiusKm`, `ownship.waypoints`, and every per-emitter field under `emitters` (`--emitters N` sets only how many). `emplacement.mobility` has just `--mobile` (`--mobile=false` forces `FIXED`). The connection address and token also come from the environment.
 
 | Flag | Default | Meaning |
 |------|---------|---------|
@@ -142,7 +150,7 @@ For an emplacement that already exists on the server (cases 1 and 3), the server
 
 **Mobile sensors.** A mobile sensor sends an `EmplacementState` (its position, heading and velocity) once a second, and always one first on every new stream, before any observation, so the server can place the measurements. The server refuses the others as `stale_ownship` until it has a position.
 
-**Reconnecting.** If the stream ends with anything but an authentication refusal, the CLI logs the status code and message (for example `Unavailable: connection moving: reconnect`) and reconnects after a jittered exponential backoff from 0.5 s to 30 s. The backoff starts again once a stream has had an accepted report or has stayed open for 30 s. While disconnected the simulation keeps its time, and fixes made with no stream are dropped and counted (`dropped_offline`). Reports that were sent but not acknowledged when a stream ended are not sent again: they are lost, not replayed.
+**Reconnecting.** `Unauthenticated` and `PermissionDenied` end the run with exit code 2, and `Unimplemented` (the address is not a Sentinel ingest service) with exit code 1. Any other end of the stream (`Unavailable`, a transport error, a clean close by the server, `ResourceExhausted`) is logged as a warning and the CLI reconnects after a jittered exponential backoff from 0.5 s to 30 s. The line carries the cause, for example `msg="stream ended; reconnecting" stream=1 code=Unavailable message="connection moving: reconnect" backoff=612ms`. The backoff starts again once a stream has had an accepted report or has stayed open for 30 s. While disconnected the simulation keeps running, and the fixes it produces with no open stream are dropped and counted in `dropped_offline`, so the sequence of fixes for a seed does not depend on the connection. Reports that were sent but not acknowledged when a stream ended are not sent again: they are lost, not replayed.
 
 **Backpressure and limits.**
 - A `rate_limited` rejection halves the tick rate for 10 s (further ones extend the hold, they do not compound), then restores it. The CLI warns at the start when `rate * (emitters + 1 if mobile)` exceeds the connection's `maxMessagesPerSec`.
