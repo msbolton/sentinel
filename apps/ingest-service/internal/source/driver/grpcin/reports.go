@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -134,17 +135,24 @@ func (s *service) handle(ctx context.Context, a authed, from string, r *ingestv1
 }
 
 func (s *service) observation(ctx context.Context, a authed, from string, r *ingestv1.Report, m *sentinelv1.Observation, ack *ingestv1.Ack) (*ingestv1.Ack, error) {
-	if m == nil {
-		return s.deadLetter(ack, from, r, "empty_report", errors.New("the report's observation is empty")), nil
-	}
 	e, bound, reason := s.resolve(a, r.GetEmplacementId())
 	if reason != "" {
 		return s.reject(ack, reason), nil
 	}
+	if m == nil {
+		// Dead letters are visible at the connection's level only: an empty
+		// report that claims an emplacement above it is refused, not stored.
+		if bound && classification.Rank(e.Classification) > classification.Rank(s.d.floor) {
+			return s.reject(ack, "empty_report"), nil
+		}
+		return s.deadLetter(ack, from, r, "empty_report", errors.New("the report's observation is empty")), nil
+	}
 	// The level the runner will stamp: the highest of the feed's, the
 	// emplacement's and the report's own. A token may not send above its
 	// ceiling. This is decided before Validate, so a report above the token
-	// never reaches a dead letter.
+	// never reaches a dead letter. The emplacement's level can never trigger
+	// above_ceiling itself, because resolve already hides emplacements above
+	// the token; it is counted here for the dead-letter rule below.
 	declared := declaredLevel(m)
 	content := classification.Rank(declared)
 	if bound {
@@ -153,7 +161,15 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 	if max(classification.Rank(s.d.floor), content) > classification.Rank(a.tok.Classification) {
 		return s.reject(ack, "above_ceiling"), nil
 	}
-	o, err := sentinelobs.Validate(m, contentType, "")
+	// Validate a copy without the EMPLACEMENT identities: only an
+	// emplacement's own report carries one, and Validate would otherwise key
+	// an identity-only target on it (a shared repeat key and observation id).
+	// The sender's original bytes stay in Raw.
+	mv := proto.Clone(m).(*sentinelv1.Observation)
+	mv.Identities = slices.DeleteFunc(mv.Identities, func(id *sentinelv1.Identity) bool {
+		return id.GetType() == sentinelv1.IdentityType_IDENTITY_TYPE_EMPLACEMENT
+	})
+	o, err := sentinelobs.Validate(mv, contentType, "")
 	if err != nil {
 		reason := decoder.RejectReason(err)
 		if reason == "" {
@@ -168,7 +184,12 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 		return s.deadLetter(ack, from, r, reason, err), nil
 	}
 	o.Decoder = Decoder
-	stripEmplacementIdentities(o)
+	stripEmplacementIdentities(o) // a backstop: mv carries none
+	// An ownship SENSOR observation is keyed on the emplacement's id, so a
+	// target with that key would share its repeat key and observation ids.
+	if bound && o.SourceEntityID == e.ID {
+		return s.reject(ack, "bad_identity"), nil
+	}
 	o.ReceivedAt = time.Now().UTC()
 	if bound {
 		o.EmplacementID, o.SensorID = e.ID, e.ID
