@@ -101,10 +101,10 @@ func (s *EntityStore) ApplyFused(ctx context.Context, updates []FusedUpdate) ([]
 		       course = COALESCE(b.course, e.course),
 		       "trackEnvironment" = COALESCE(NULLIF(b.track_env, ''), e."trackEnvironment"),
 		       "countryOfOrigin" = COALESCE(NULLIF(b.country, ''), e."countryOfOrigin"),
-		       affiliation = COALESCE(NULLIF(b.affiliation, ''), e.affiliation),
+		       affiliation = COALESCE(e.affiliation, NULLIF(b.affiliation, '')),
 		       "circularError" = CASE
 		           WHEN b.circular_err IS NOT NULL THEN b.circular_err
-		           WHEN e.kinematics ? 'positionCovariance' OR e."lastFeedId" = b.feed_id THEN NULL
+		           WHEN (e.kinematics ? 'positionCovariance') AND NOT (COALESCE(b.kinematics, '{}'::jsonb) ? 'positionCovariance') THEN NULL
 		           ELSE e."circularError"
 		       END,
 		       "platformData" = COALESCE(e."platformData", '{}'::jsonb) || COALESCE(b.platform, '{}'::jsonb),

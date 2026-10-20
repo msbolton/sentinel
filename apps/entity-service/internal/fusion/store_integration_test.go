@@ -385,3 +385,86 @@ func TestCeilingOnReads(t *testing.T) {
 		}
 	}
 }
+
+func TestAffiliationStickyAndCovarianceCEPClears(t *testing.T) {
+	pool, ctx := testPool(t)
+	ids := store.NewIdentityStore(pool, nil)
+	ents := store.NewEntityStore(pool, nil)
+	t0 := time.Now().UTC().Truncate(time.Millisecond)
+	icao := "TSA" + t0.Format("150405")
+
+	// 1. Affiliation: NULL takes the reported value; once set (e.g. HOSTILE),
+	// a later fused update carrying FRIEND / FRIENDLY does not overwrite it.
+	r1 := report("test-ew", icao, t0, 50.0, -1.0)
+	spec := fusion.SpecFor(r1)
+	spec.Affiliation = ""
+	created, _, err := ids.CreateEntities(ctx, []identity.NewEntity{spec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entityID := created[r1.Key]
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM sentinel.entities WHERE id = $1`, entityID) })
+
+	res, err := ents.ApplyFused(ctx, []store.FusedUpdate{{
+		EntityID: entityID, ObservedAt: t0, FeedID: "test-ew", Source: "SIGINT", SourceEntityID: r1.Obs.SourceEntityId,
+		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.0, Lon: -1.0, Affiliation: "HOSTILE",
+		Kinematics: json.RawMessage(`{}`),
+	}})
+	if err != nil || len(res) != 1 || res[0].Record.Affiliation == nil || *res[0].Record.Affiliation != "HOSTILE" {
+		t.Fatalf("expected NULL affiliation to take HOSTILE, got %+v (err=%v)", res, err)
+	}
+
+	res, err = ents.ApplyFused(ctx, []store.FusedUpdate{{
+		EntityID: entityID, ObservedAt: t0.Add(time.Second), FeedID: "test-ew", Source: "SIGINT", SourceEntityID: r1.Obs.SourceEntityId,
+		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.01, Lon: -1.01, Affiliation: "FRIEND",
+		Kinematics: json.RawMessage(`{}`),
+	}})
+	if err != nil || len(res) != 1 || res[0].Record.Affiliation == nil || *res[0].Record.Affiliation != "HOSTILE" {
+		t.Fatalf("expected HOSTILE affiliation to survive FRIEND update, got %+v (err=%v)", res, err)
+	}
+
+	// 2. circularError: an AIS/CoT-style track without positionCovariance keeps
+	// its scalar CE across a report with no CE; a covariance-derived CE clears
+	// when a later report has neither CE nor positionCovariance.
+	ce50 := 50.0
+	res, err = ents.ApplyFused(ctx, []store.FusedUpdate{{
+		EntityID: entityID, ObservedAt: t0.Add(2 * time.Second), FeedID: "test-ew", Source: "COT", SourceEntityID: r1.Obs.SourceEntityId,
+		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.02, Lon: -1.02,
+		CircularError: &ce50, Kinematics: json.RawMessage(`{}`),
+	}})
+	if err != nil || len(res) != 1 || res[0].Record.CircularError == nil || *res[0].Record.CircularError != 50.0 {
+		t.Fatalf("expected scalar CE 50, got %+v (err=%v)", res, err)
+	}
+
+	// Next report on same feed with no CE and no covariance preserves scalar CE 50.
+	res, err = ents.ApplyFused(ctx, []store.FusedUpdate{{
+		EntityID: entityID, ObservedAt: t0.Add(3 * time.Second), FeedID: "test-ew", Source: "COT", SourceEntityID: r1.Obs.SourceEntityId,
+		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.03, Lon: -1.03,
+		CircularError: nil, Kinematics: json.RawMessage(`{}`),
+	}})
+	if err != nil || len(res) != 1 || res[0].Record.CircularError == nil || *res[0].Record.CircularError != 50.0 {
+		t.Fatalf("expected scalar CE 50 to survive report without CE, got %+v (err=%v)", res, err)
+	}
+
+	// Report carrying positionCovariance and covariance-derived CE sets both.
+	ce1474 := 1474.0
+	res, err = ents.ApplyFused(ctx, []store.FusedUpdate{{
+		EntityID: entityID, ObservedAt: t0.Add(4 * time.Second), FeedID: "test-ew", Source: "SIGINT", SourceEntityID: r1.Obs.SourceEntityId,
+		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.04, Lon: -1.04,
+		CircularError: &ce1474,
+		Kinematics:    json.RawMessage(`{"positionCovariance":{"pnPn":500,"pnPe":25,"pePe":200}}`),
+	}})
+	if err != nil || len(res) != 1 || res[0].Record.CircularError == nil || *res[0].Record.CircularError != 1474.0 {
+		t.Fatalf("expected covariance CE 1474, got %+v (err=%v)", res, err)
+	}
+
+	// Subsequent report with neither CE nor positionCovariance clears circularError to nil.
+	res, err = ents.ApplyFused(ctx, []store.FusedUpdate{{
+		EntityID: entityID, ObservedAt: t0.Add(5 * time.Second), FeedID: "test-ew", Source: "SIGINT", SourceEntityID: r1.Obs.SourceEntityId,
+		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.05, Lon: -1.05,
+		CircularError: nil, Kinematics: json.RawMessage(`{}`),
+	}})
+	if err != nil || len(res) != 1 || res[0].Record.CircularError != nil {
+		t.Fatalf("expected covariance-derived CE to clear when covariance clears, got %v (err=%v)", res[0].Record.CircularError, err)
+	}
+}
