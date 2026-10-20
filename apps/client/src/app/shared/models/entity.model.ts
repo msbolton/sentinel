@@ -33,6 +33,9 @@ export interface Entity {
   updatedAt: string;
   lastSeenAt?: string;
 
+  /** Synthetic (exercise) data; absent on live entities. */
+  exercise?: boolean;
+
   // Identity
   affiliation?: Affiliation;
   sourceEntityId?: string;

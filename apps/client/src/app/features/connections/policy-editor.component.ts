@@ -102,6 +102,7 @@ export class PolicyEditorComponent {
     boxes: new FormArray<BoxGroup>([], { validators: [Validators.maxLength(POLICY_MAX_BOXES)] }),
     classificationCeiling: new FormControl<string>('', { nonNullable: true }),
     reexport: new FormControl<boolean>(false, { nonNullable: true }),
+    allowExercise: new FormControl<boolean>(false, { nonNullable: true }),
     alertsEnabled: new FormControl<boolean>(false, { nonNullable: true }),
     alertsMinSeverity: new FormControl<string>('', { nonNullable: true }),
   });
@@ -337,6 +338,7 @@ export class PolicyEditorComponent {
         feeds: [...(value.feeds ?? [])],
         classificationCeiling: value.classificationCeiling ?? '',
         reexport: value.reexport === true,
+        allowExercise: value.allowExercise === true,
         alertsEnabled: value.alerts?.enabled === true,
         alertsMinSeverity: value.alerts?.minSeverity ?? '',
       },
@@ -379,6 +381,9 @@ export class PolicyEditorComponent {
     if (v.reexport) {
       out.reexport = true;
     }
+    if (v.allowExercise) {
+      out.allowExercise = true;
+    }
     if (v.alertsEnabled || v.alertsMinSeverity !== '' || this.alertTypes) {
       out.alerts = { enabled: v.alertsEnabled };
       if (v.alertsMinSeverity !== '') {
@@ -396,7 +401,7 @@ export class PolicyEditorComponent {
 function sectionOf(path: string): string | null {
   const rest = path.slice(POLICY_POINTER.length + 1);
   const head = rest.split('/')[0];
-  return head && ['entityTypes', 'feeds', 'boxes', 'classificationCeiling', 'reexport', 'alerts'].includes(head)
+  return head && ['entityTypes', 'feeds', 'boxes', 'classificationCeiling', 'reexport', 'allowExercise', 'alerts'].includes(head)
     ? head
     : null;
 }

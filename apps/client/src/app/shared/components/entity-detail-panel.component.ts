@@ -70,6 +70,9 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
           <div class="header-chips">
             <span class="chips">
               <span class="chip chip-entity-type" [ngClass]="e.entityType">{{ e.entityType }}</span>
+              @if (e.exercise) {
+                <span class="chip chip-exercise" title="Exercise data: synthetic, not a live track">EXERCISE</span>
+              }
               @if (e.affiliation) {
                 <span class="chip chip-affiliation-id" [ngClass]="affiliationColor()">{{ e.affiliation }}</span>
               }
@@ -1278,6 +1281,15 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       font-size: 0.8rem;
       color: var(--text-secondary);
       line-height: 1.5;
+    }
+
+    .chip-exercise {
+      background: color-mix(in srgb, var(--accent-yellow) 20%, transparent);
+      color: var(--accent-yellow);
+      border-color: color-mix(in srgb, var(--accent-yellow) 40%, transparent);
+      font-family: var(--font-mono);
+      font-weight: 700;
+      text-transform: uppercase;
     }
 
     .chip-country {

@@ -441,6 +441,48 @@ describe('ConnectionFormComponent', () => {
     expect(closed).toBe(1);
   });
 
+  describe('exercise data', () => {
+    const box = () => el.querySelector<HTMLInputElement>('#feed-exercise')!;
+
+    it('sends no exercise key while the box is unchecked', () => {
+      open('create');
+      component.selectDriver('opensky');
+      fixture.detectChanges();
+      expect(box().checked).toBe(false);
+      type('#feed-name', 'Plain');
+      component.submit();
+      expect(httpMock.expectOne('/api/v1/feeds').request.body.config).not.toHaveProperty('exercise');
+    });
+
+    it('sends exercise: true once it is checked', () => {
+      open('create');
+      component.selectDriver('opensky');
+      fixture.detectChanges();
+      type('#feed-name', 'Synthetic');
+      box().click();
+      fixture.detectChanges();
+      component.submit();
+      expect(httpMock.expectOne('/api/v1/feeds').request.body.config).toEqual(expect.objectContaining({ exercise: true }));
+    });
+
+    it('edit: a stored true checks the box, and unchecking drops the key', () => {
+      open('edit', { ...existing, config: { ...existing.config, exercise: true } });
+      expect(box().checked).toBe(true);
+      box().click();
+      fixture.detectChanges();
+      component.submit();
+      expect(httpMock.expectOne('/api/v1/feeds/opensky-eu').request.body.config).not.toHaveProperty('exercise');
+    });
+
+    it('shows a server problem under its own field, not in the schema form', () => {
+      open('edit', existing);
+      component.problems.set([{ path: '/config/exercise', message: 'must be a boolean' }]);
+      fixture.detectChanges();
+      expect(el.querySelector('[data-pointer="/config/exercise"] .error')?.textContent).toContain('must be a boolean');
+      expect(component.schemaProblems()).toEqual([]);
+    });
+  });
+
   it('offers classifications up to the clearance and keeps a stored level above it', () => {
     open('create');
     component.selectDriver('opensky');
@@ -472,7 +514,7 @@ describe('ConnectionFormComponent', () => {
     expect(editor).toBeTruthy();
     expect(el.querySelector('#feed-direction')).toBeNull();
     // a sink keeps delivery tuning in Advanced; a source never sees it
-    expect(component.externalKeys()).toEqual(['classification', 'direction', 'policy']);
+    expect(component.externalKeys()).toEqual(['classification', 'exercise', 'direction', 'policy']);
 
     type('#feed-name', 'KML to the ops room');
     editor!.querySelector<HTMLInputElement>('input[name="entityType"][value="AIRCRAFT"]')!.click();

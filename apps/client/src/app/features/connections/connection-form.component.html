@@ -129,6 +129,17 @@
             }
           </div>
 
+          <div class="field" data-pointer="/config/exercise">
+            <label class="check" for="feed-exercise">
+              <input id="feed-exercise" type="checkbox" formControlName="exercise" />
+              <span>Exercise data</span>
+            </label>
+            <p class="help">Everything this connection brings in is synthetic; its entities are marked EXERCISE.</p>
+            @for (msg of configProblemsFor('exercise'); track msg) {
+              <p class="error">Server: {{ msg }}</p>
+            }
+          </div>
+
           @if (driverCanNarrow()) {
             <div class="field" data-pointer="/config/direction">
               <label for="feed-direction">Direction</label>
