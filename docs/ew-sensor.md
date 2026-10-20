@@ -121,6 +121,7 @@ Flags override the configuration file, which overrides the defaults. Most YAML k
 | `--path` | `circle` | Ownship path: `circle` or `waypoints`. |
 | `--speed-kts` | 12 | Ownship speed. |
 | `--send-timestamps` | off | Set source timestamps (see the limits below). |
+| `--heartbeat-interval` | `5s` | How often the emplacement sends its `EmplacementState` heartbeat; whole seconds from 1s to 300s. The server calls the site offline after three missed. |
 
 **Precedence.** A flag set on the command line beats the environment, which beats the YAML, which beats the default; an explicit `--rate 1` beats a YAML `rate: 5`. The token is `--token`, then `EW_SENSOR_TOKEN`, then `SENTINEL_INGEST_TOKEN`, then the YAML. The address is `--addr`, then `EW_SENSOR_ADDR`, then the YAML. A YAML file with a token is convenient but easy to commit by mistake: prefer the environment.
 
@@ -184,7 +185,7 @@ msg=stats sent=412 ok=410 rejected=map[rate_limited:2] dead_lettered=0 retried=0
 
 ## Limits and gotchas
 
-- **Timestamps.** Source timestamps are not set unless you pass `--send-timestamps`. The server refuses an `emplacement_state` whose time is more than 5 s ahead of or 60 s behind its clock (`clock_skew`), and the simulation clock can fall behind the wall clock when a slow server pushes back on the stream. Without timestamps the server uses its own arrival time, which is right for a live simulation. Turn them on only for a host with a disciplined clock, and a run that keeps up.
+- **Timestamps.** Source timestamps are not set unless you pass `--send-timestamps`. The server refuses an `emplacement_state` whose time is more than 5 s ahead of or 60 s behind its clock (`clock_skew`), and the simulation clock can fall behind the wall clock when a slow server pushes back on the stream. Without timestamps the server uses its own arrival time, which is right for a live simulation. Turn them on only for a host with a disciplined clock, and a run that keeps up. With `--send-timestamps` a fixed site's heartbeats carry simulation time too, but the server does not read the time of a fixed site's heartbeat, so only a mobile sensor's states face the `clock_skew` window.
 - **The session is read once.** `GetSession` is not repeated on reconnect. If you change the connection's emplacements (rebind, deactivate, edit the geometry of a bound one), restart the CLI.
 - **`--insecure` sends the token in clear.** It exists for a local stack and logs a warning. Use `--tls` (with `--ca` for a private CA, and `--cert`/`--key` where the connection requires a client certificate) anywhere else.
 - **Host networking.** The Compose service and the listener both use the host's network. On Docker Desktop (Mac and Windows) the listener's ports are on the Docker VM's network, so either turn on *Enable host networking* (Settings, Resources, Network, 4.34 and later), after which `localhost:<port>` works from your shell too, or run the CLI inside the VM as the Compose service does. `localhost` in the `--addr` of the Compose service is the VM's, not your Mac's. Linux needs nothing.
