@@ -7,7 +7,9 @@
 // and whenever it changes. Fixed ones are reported again every heartbeat so
 // their entities stay live. A mobile one is not, because its position comes
 // from its own reports. A mobile one bound to a connection is never reported
-// here: that connection's position reports report it. Deactivating or
+// here: that connection's position reports report it. An emplacement bound to
+// an exercise connection is reported as exercise, and again when that
+// connection is marked or unmarked. Deactivating or
 // deleting an emplacement stops its reports, and the entity ages out.
 package emplacementmirror
 
@@ -57,6 +59,7 @@ type Config struct {
 // Driver reports emplacements.
 type Driver struct {
 	src       driver.EmplacementSource
+	feeds     driver.FeedSource // nil: emplacements keep their own flag
 	heartbeat time.Duration
 	logger    *zap.Logger
 	now       func() time.Time
@@ -75,7 +78,7 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if deps.Emplacements == nil {
 		return nil, fmt.Errorf("feed %s: the emplacement driver needs the emplacement cache", spec.FeedID)
 	}
-	return &Driver{src: deps.Emplacements, heartbeat: driver.Seconds(cfg.HeartbeatSec, defaultHeartbeat), logger: deps.Logger, now: time.Now}, nil
+	return &Driver{src: deps.Emplacements, feeds: deps.Feeds, heartbeat: driver.Seconds(cfg.HeartbeatSec, defaultHeartbeat), logger: deps.Logger, now: time.Now}, nil
 }
 
 // Run reports until ctx ends.
@@ -88,6 +91,18 @@ func (d *Driver) Run(ctx context.Context, sink driver.Sink) error {
 		}
 	})
 	defer cancel()
+	// A connection marked or unmarked exercise changes its emplacements'
+	// entities, whose rows did not change: report them again.
+	feedChanges := make(chan string, 64)
+	if d.feeds != nil {
+		cancelFeeds := d.feeds.OnExerciseChange(func(id string) {
+			select {
+			case feedChanges <- id:
+			default: // full: the next heartbeat catches fixed ones up
+			}
+		})
+		defer cancelFeeds()
+	}
 
 	if err := d.report(ctx, sink, true); err != nil {
 		return quiet(ctx, err)
@@ -102,6 +117,14 @@ func (d *Driver) Run(ctx context.Context, sink driver.Sink) error {
 			if e, ok := d.src.Get(id); ok && e.Active && e.Position != nil && !boundMobile(e) {
 				if err := d.emit(ctx, sink, e); err != nil {
 					return quiet(ctx, err)
+				}
+			}
+		case feedID := <-feedChanges:
+			for _, e := range d.src.ByFeed(feedID) {
+				if e.Active && e.Position != nil && !boundMobile(e) {
+					if err := d.emit(ctx, sink, e); err != nil {
+						return quiet(ctx, err)
+					}
 				}
 			}
 		case <-ticker.C:
@@ -138,7 +161,15 @@ func boundMobile(e emplacement.Emplacement) bool {
 
 func (d *Driver) emit(ctx context.Context, sink driver.Sink, e emplacement.Emplacement) error {
 	now := d.now().UTC()
-	if err := sink.Emit(ctx, Observation(e, now)); err != nil {
+	o := Observation(e, now)
+	// An emplacement bound to an exercise connection is part of the exercise,
+	// whatever its row says; an unbound or unknown connection leaves the row's flag.
+	if e.FeedID != nil && d.feeds != nil {
+		if exercise, known := d.feeds.Exercise(*e.FeedID); known && exercise {
+			o.Exercise = true
+		}
+	}
+	if err := sink.Emit(ctx, o); err != nil {
 		return err
 	}
 	d.mu.Lock()

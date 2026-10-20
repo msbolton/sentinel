@@ -78,6 +78,9 @@ type Deps struct {
 	// Tokens authenticates senders for the drivers that take ingest tokens
 	// (nil when there is none).
 	Tokens TokenSource
+	// Feeds tells a driver what the other connections are configured as, for
+	// the drivers that report on a connection's behalf (nil when there is none).
+	Feeds FeedSource
 	// EmplacementWriter writes emplacements for the drivers whose senders
 	// manage or move their own (nil when there is none).
 	EmplacementWriter EmplacementWriter
@@ -127,6 +130,18 @@ type EmplacementSource interface {
 	// Ready is closed after the first load. Until then the view is empty, so
 	// a caller that serves senders answers Unavailable.
 	Ready() <-chan struct{}
+}
+
+// FeedSource is what a driver may ask about the connections the supervisor
+// lists (feed.Supervisor).
+type FeedSource interface {
+	// Exercise reports whether the connection feedID is marked exercise.
+	// known is false for a connection the supervisor does not list.
+	Exercise(feedID string) (exercise, known bool)
+	// OnExerciseChange calls fn with the id of every connection whose
+	// exercise marking changed (including one that was added or removed
+	// while marked). fn must not block. The returned func unregisters it.
+	OnExerciseChange(fn func(feedID string)) (cancel func())
 }
 
 // TokenSource authenticates the senders of the drivers that take ingest

@@ -242,6 +242,9 @@ type Supervisor struct {
 	logger  *zap.Logger
 	metrics *metrics.Metrics
 	opts    Options
+	// exercise is the exercise marking of every listed connection, handed to
+	// the drivers as their driver.FeedSource.
+	exercise *exerciseFlags
 
 	mu      sync.Mutex
 	running map[string]*instance
@@ -343,7 +346,7 @@ func New(reg Registry, pub Publisher, logger *zap.Logger, m *metrics.Metrics, op
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Supervisor{reg: reg, pub: pub, logger: logger, metrics: m, opts: opts.withDefaults(), running: map[string]*instance{}, waitingSince: map[string]time.Time{}, unplaced: map[string]int{}}
+	return &Supervisor{reg: reg, pub: pub, logger: logger, metrics: m, opts: opts.withDefaults(), exercise: newExerciseFlags(), running: map[string]*instance{}, waitingSince: map[string]time.Time{}, unplaced: map[string]int{}}
 }
 
 // ReplicaID returns this replica's id.
@@ -508,6 +511,8 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 		s.logger.Warn("reconcile: listing feeds failed", zap.Error(err))
 		return
 	}
+	// Before anything starts, so a driver that reads it finds its feeds listed.
+	s.exercise.set(feeds)
 	desired := map[string]registry.Feed{}
 	connections := map[string]bool{}
 	for _, f := range feeds {
@@ -717,7 +722,7 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 	common := spec.Common()
 	logger := s.logger.With(zap.String("feed", spec.ID), zap.String("driver", spec.Driver))
 	deps := driver.Deps{Logger: logger, Shapes: s.opts.Shapes, ListenerHost: s.opts.ListenerHost,
-		ReloadSecrets: s.secretReloader(spec), SecretReloadEvery: s.opts.SecretReloadEvery, Emplacements: s.opts.Emplacements, Tokens: s.opts.Tokens,
+		ReloadSecrets: s.secretReloader(spec), SecretReloadEvery: s.opts.SecretReloadEvery, Emplacements: s.opts.Emplacements, Tokens: s.opts.Tokens, Feeds: s.exercise,
 		EmplacementWriter: s.opts.EmplacementWriter}
 	if s.opts.Density != nil {
 		deps.Density = s.opts.Density(spec.ID, common.Classification)
