@@ -243,22 +243,22 @@ func TestTouchThrottlesEachEmplacementOnItsOwn(t *testing.T) {
 		}
 		return out
 	}
-	r.d.touch(ctx, "a", nil, nil, t0)
-	r.d.touch(ctx, "a", nil, nil, t0.Add(touchEvery-time.Second)) // throttled
-	r.d.touch(ctx, "b", nil, nil, t0.Add(time.Second))            // its own clock
-	r.d.touch(ctx, "b", nil, nil, t0.Add(2*time.Second))          // throttled
+	r.d.touch(ctx, "a", nil, nil, t0, t0)
+	r.d.touch(ctx, "a", nil, nil, t0.Add(touchEvery-time.Second), t0.Add(touchEvery-time.Second)) // throttled
+	r.d.touch(ctx, "b", nil, nil, t0.Add(time.Second), t0.Add(time.Second))                       // its own clock
+	r.d.touch(ctx, "b", nil, nil, t0.Add(2*time.Second), t0.Add(2*time.Second))                   // throttled
 	if got := ids(); len(got) != 2 || got[0] != "a" || got[1] != "b" {
 		t.Fatalf("touches = %v, want [a b]", got)
 	}
-	r.d.touch(ctx, "a", nil, nil, t0.Add(touchEvery)) // due again
+	r.d.touch(ctx, "a", nil, nil, t0.Add(touchEvery), t0.Add(touchEvery)) // due again
 	if got := ids(); len(got) != 3 || got[2] != "a" {
 		t.Fatalf("touches = %v, want [a b a]", got)
 	}
-	r.d.touch(ctx, "b", nil, nil, t0.Add(touchEvery)) // 9 s after its last
+	r.d.touch(ctx, "b", nil, nil, t0.Add(touchEvery), t0.Add(touchEvery)) // 9 s after its last
 	if n := len(w.touches()); n != 3 {
 		t.Errorf("b was touched again after %v, touches = %d", touchEvery-time.Second, n)
 	}
-	r.d.touch(ctx, "b", nil, nil, t0.Add(touchEvery+time.Second))
+	r.d.touch(ctx, "b", nil, nil, t0.Add(touchEvery+time.Second), t0.Add(touchEvery+time.Second))
 	if n := len(w.touches()); n != 4 {
 		t.Errorf("touches = %d, want 4 once b's interval has passed", n)
 	}

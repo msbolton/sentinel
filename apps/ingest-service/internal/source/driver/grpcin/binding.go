@@ -62,22 +62,24 @@ func stripEmplacementIdentities(o *obs.Observation) {
 
 // touch records that an emplacement reported, at most once per touchEvery
 // for each one, with the position when it is a mobile one's own report.
+// The throttle runs on now, the server's clock, and the row records reportAt:
+// a sender's clock may be far off, and must not stall or flood the writes.
 // A failed write is logged, never the report's failure.
-func (d *Driver) touch(ctx context.Context, id string, pos *emplacement.Point, alt *float64, at time.Time) {
+func (d *Driver) touch(ctx context.Context, id string, pos *emplacement.Point, alt *float64, now, reportAt time.Time) {
 	if d.writer == nil {
 		return
 	}
 	d.touchMu.Lock()
 	last, seen := d.touched[id]
-	if seen && at.Sub(last) < touchEvery && last.Sub(at) < touchEvery {
+	if seen && now.Sub(last) < touchEvery && last.Sub(now) < touchEvery {
 		d.touchMu.Unlock()
 		return
 	}
-	d.touched[id] = at
+	d.touched[id] = now
 	d.touchMu.Unlock()
 	tctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	if err := d.writer.Touch(tctx, id, pos, alt, at); err != nil {
+	if err := d.writer.Touch(tctx, id, pos, alt, reportAt); err != nil {
 		d.logger.Warn("recording an emplacement's report failed", zap.String("emplacement", id), zap.Error(err))
 	}
 }

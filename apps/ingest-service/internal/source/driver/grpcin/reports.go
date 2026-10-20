@@ -128,8 +128,7 @@ func (s *service) handle(ctx context.Context, a authed, from string, r *ingestv1
 	case *ingestv1.Report_Observation:
 		return s.observation(ctx, a, from, r, body.Observation, ack)
 	case *ingestv1.Report_EmplacementState:
-		// An emplacement's own position: C2 handles it.
-		return s.reject(ack, "unsupported"), nil
+		return s.state(ctx, a, from, r, body.EmplacementState, ack)
 	default:
 		return s.deadLetter(ack, from, r, "empty_report", errors.New("the report has neither an observation nor an emplacement_state")), nil
 	}
@@ -254,7 +253,7 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 	}
 	// Only an accepted report counts as its emplacement reporting.
 	if bound {
-		s.d.touch(ctx, e.ID, nil, nil, o.ReceivedAt)
+		s.d.touch(ctx, e.ID, nil, nil, o.ReceivedAt, o.ReceivedAt)
 	}
 	s.d.reportsOK.Add(1)
 	s.sink.Succeeded(1)

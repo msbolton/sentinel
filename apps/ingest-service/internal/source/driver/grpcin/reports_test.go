@@ -57,7 +57,7 @@ func TestStreamAcksEachReport(t *testing.T) {
 		{&ingestv1.Report{ClientRef: "no-id", Body: &ingestv1.Report_Observation{Observation: &sentinelv1.Observation{}}}, ingestv1.AckStatus_ACK_STATUS_DEAD_LETTERED, "missing_identity"},
 		{observation("far", 95, 0), ingestv1.AckStatus_ACK_STATUS_DEAD_LETTERED, "bad_position"},
 		{observation("nan", math.NaN(), 0), ingestv1.AckStatus_ACK_STATUS_DEAD_LETTERED, "bad_position"},
-		{&ingestv1.Report{ClientRef: "own", Body: &ingestv1.Report_EmplacementState{EmplacementState: &sentinelv1.EmplacementState{}}}, ingestv1.AckStatus_ACK_STATUS_REJECTED, "unsupported"},
+		{&ingestv1.Report{ClientRef: "own", Body: &ingestv1.Report_EmplacementState{EmplacementState: &sentinelv1.EmplacementState{}}}, ingestv1.AckStatus_ACK_STATUS_REJECTED, "unknown_emplacement"},
 		{&ingestv1.Report{ClientRef: "empty"}, ingestv1.AckStatus_ACK_STATUS_DEAD_LETTERED, "empty_report"},
 		{observation("EMITTER-0002", 50.2, -4.3), ingestv1.AckStatus_ACK_STATUS_OK, ""},
 	} {
@@ -82,7 +82,7 @@ func TestStreamAcksEachReport(t *testing.T) {
 		t.Errorf("dead letter = %+v", letters[0])
 	}
 	h := r.d.Health().Detail
-	if h["reportsOk"] != int64(2) || h["deadLettered"] != int64(4) || h["reportsRejected"].(map[string]int64)["unsupported"] != 1 || h["accepted"] != int64(7) {
+	if h["reportsOk"] != int64(2) || h["deadLettered"] != int64(4) || h["reportsRejected"].(map[string]int64)["unknown_emplacement"] != 1 || h["accepted"] != int64(7) {
 		t.Errorf("health = ok %v dead %v rejected %v accepted %v", h["reportsOk"], h["deadLettered"], h["reportsRejected"], h["accepted"])
 	}
 }

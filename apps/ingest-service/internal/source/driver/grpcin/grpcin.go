@@ -37,6 +37,9 @@ const (
 	defaultPublishBatch    = 100
 	maxPublishBatch        = 1000
 	maxSenders             = 50
+
+	defaultOwnshipToleranceMs = 2000
+	maxOwnshipToleranceMs     = 60000
 )
 
 //go:embed schema.json
@@ -68,8 +71,11 @@ type Config struct {
 	SenderManagedEmplacements  bool     `json:"senderManagedEmplacements"`
 	// EnforceCoverage refuses a report whose position lies outside its
 	// emplacement's coverage.
-	EnforceCoverage bool        `json:"enforceCoverage"`
-	TLS             *TLSOptions `json:"tls"`
+	EnforceCoverage bool `json:"enforceCoverage"`
+	// OwnshipToleranceMs is how far past a mobile emplacement's newest
+	// position report its measurements may be placed (default 2000).
+	OwnshipToleranceMs *int        `json:"ownshipToleranceMs"`
+	TLS                *TLSOptions `json:"tls"`
 	// Classification is the common key: the feed's level, the floor every
 	// report is raised to.
 	Classification string `json:"classification"`
@@ -127,6 +133,13 @@ type Driver struct {
 	touchMu sync.Mutex
 	touched map[string]time.Time
 
+	// tracks are the mobile emplacements' recent fixes, and emittedAt when
+	// each one's own observation last went out.
+	tracksMu  sync.Mutex
+	tracks    map[string]*track
+	emittedAt map[string]time.Time
+	tolerance time.Duration
+
 	// idleTimeout is how long a connection may have no RPCs (tests shorten it).
 	idleTimeout time.Duration
 
@@ -175,6 +188,9 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if c.MaxMessagesPerSecPerSender < 0 {
 		return nil, fmt.Errorf("feed %s: maxMessagesPerSecPerSender must not be negative", spec.FeedID)
 	}
+	if tol := intOr(c.OwnshipToleranceMs, defaultOwnshipToleranceMs); tol < 0 || tol > maxOwnshipToleranceMs {
+		return nil, fmt.Errorf("feed %s: ownshipToleranceMs must be 0 to %d", spec.FeedID, maxOwnshipToleranceMs)
+	}
 	batch := c.MaxPublishBatch
 	if batch == 0 {
 		batch = defaultPublishBatch
@@ -206,8 +222,11 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 		senders:         transport.NewSenders(maxSenders),
 		perSender:       transport.NewSenderLimiter(c.MaxMessagesPerSecPerSender, transport.SenderLimiterKeys),
 		tokens:          deps.Tokens, emps: deps.Emplacements, writer: deps.EmplacementWriter, logger: deps.Logger,
-		touched:  map[string]time.Time{},
-		rejected: map[string]int64{}, idleTimeout: idleTimeout,
+		touched:   map[string]time.Time{},
+		tracks:    map[string]*track{},
+		emittedAt: map[string]time.Time{},
+		tolerance: time.Duration(intOr(c.OwnshipToleranceMs, defaultOwnshipToleranceMs)) * time.Millisecond,
+		rejected:  map[string]int64{}, idleTimeout: idleTimeout,
 	}
 	if d.logger == nil {
 		d.logger = zap.NewNop()
@@ -222,3 +241,27 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 }
 
 var errNoTokens = errors.New("the grpc driver needs the ingest token cache and the emplacements")
+
+// trackOf runs fn on the emplacement's track, under the lock.
+func (d *Driver) trackOf(id string, fn func(*track)) {
+	d.tracksMu.Lock()
+	defer d.tracksMu.Unlock()
+	t := d.tracks[id]
+	if t == nil {
+		t = &track{}
+		d.tracks[id] = t
+	}
+	fn(t)
+}
+
+// sensorDue reports whether an emplacement's own observation is due, and
+// marks it emitted when it is.
+func (d *Driver) sensorDue(id string, now time.Time) bool {
+	d.tracksMu.Lock()
+	defer d.tracksMu.Unlock()
+	if last, ok := d.emittedAt[id]; ok && now.Sub(last) < sensorEvery {
+		return false
+	}
+	d.emittedAt[id] = now
+	return true
+}

@@ -76,6 +76,14 @@ func (s *service) originOf(e emplacement.Emplacement, at time.Time) (origin, str
 	if e.Mobility == emplacement.MobilityFixed && e.Position != nil {
 		return fixedOrigin(e), ""
 	}
+	if e.Mobility == emplacement.MobilityMobile {
+		var org origin
+		var ok bool
+		s.d.trackOf(e.ID, func(t *track) { org, ok = t.at(at, s.d.tolerance) })
+		if ok {
+			return org, ""
+		}
+	}
 	return origin{}, "stale_ownship"
 }
 

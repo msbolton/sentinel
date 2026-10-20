@@ -228,7 +228,7 @@ func TestCoverageAcrossTheNorthSeam(t *testing.T) {
 	for _, tc := range []struct {
 		az   float64
 		want string
-	}{{10, ""}, {335, ""}, {30, "outside_coverage"}, {320, "outside_coverage"}} {
+	}{{5, ""}, {335, ""}, {30, "outside_coverage"}, {320, "outside_coverage"}} {
 		if ack := send(t, st, polarReport("az", tc.az, 10000, ptr(0.0))); ack.GetReason() != tc.want {
 			t.Errorf("azimuth %v: %v, want %q", tc.az, ack, tc.want)
 		}
