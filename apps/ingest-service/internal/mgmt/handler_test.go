@@ -1159,3 +1159,54 @@ func TestCreateRefusesInternalDrivers(t *testing.T) {
 		t.Fatalf("a feed was stored: %d feeds, want the %d builtins", len(feeds), len(registry.Builtins))
 	}
 }
+
+// Review focus 2: a stale row's heartbeats belong to a replica that went
+// silent, so it renders unassigned without them; a fresh row keeps them.
+func TestStaleStatusDropsTheEmplacements(t *testing.T) {
+	srv, store, _ := newServer(t, "")
+	now := time.Now().UTC()
+	old := now.Add(-time.Minute)
+	detail := json.RawMessage(`{"reportsOk":2,"heartbeat":"pending","emplacements":[{"id":"e-1","name":"A","classification":"UNCLASSIFIED","state":"online","intervalSec":5}]}`)
+	for id, at := range map[string]*time.Time{"celestrak": &old, "opensky": &now} {
+		f := store.feeds[id]
+		f.Status = &registry.Status{Owner: "other-replica", State: registry.StateRunning, Health: registry.HealthHealthy, UpdatedAt: at, Detail: detail}
+		store.feeds[id] = f
+	}
+	keys := func(id string) (registry.Status, map[string]json.RawMessage) {
+		_, body := do(t, srv, "GET", "/feeds/"+id+"/status", "", reqOpts{})
+		var st registry.Status
+		if err := json.Unmarshal(body, &st); err != nil {
+			t.Fatalf("%s: %v %s", id, err, body)
+		}
+		var d map[string]json.RawMessage
+		_ = json.Unmarshal(st.Detail, &d)
+		return st, d
+	}
+	st, d := keys("celestrak")
+	if st.State != registry.StateUnassigned {
+		t.Errorf("stale state = %s", st.State)
+	}
+	if _, ok := d["emplacements"]; ok {
+		t.Errorf("a stale row carries emplacements: %s", st.Detail)
+	}
+	if _, ok := d["heartbeat"]; ok {
+		t.Errorf("a stale row carries heartbeat: %s", st.Detail)
+	}
+	if string(d["reportsOk"]) != "2" {
+		t.Errorf("the rest of a stale detail was lost: %s", st.Detail)
+	}
+	st, d = keys("opensky")
+	if _, ok := d["emplacements"]; !ok || string(d["heartbeat"]) != `"pending"` {
+		t.Errorf("a fresh row lost its heartbeats: %s %s", st.State, st.Detail)
+	}
+	_, body := do(t, srv, "GET", "/feeds", "", reqOpts{})
+	var feeds []feedDTO
+	if err := json.Unmarshal(body, &feeds); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range feeds {
+		if f.ID == "celestrak" && strings.Contains(string(f.Status.Detail), "emplacements") {
+			t.Errorf("list: a stale row carries emplacements: %s", f.Status.Detail)
+		}
+	}
+}
