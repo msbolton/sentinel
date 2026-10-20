@@ -407,7 +407,7 @@ func TestStopIsBoundedWithAStalledConnection(t *testing.T) {
 // A client that connects and then does nothing cannot hold a place forever.
 func TestIdleConnectionsAreClosed(t *testing.T) {
 	f := tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1"})
-	r := startWith(t, map[string]any{}, nil, f, nil, nil, func(d *Driver) { d.idleTimeout = 200 * time.Millisecond })
+	r := startWith(t, map[string]any{}, nil, f, nil, nil, nil, func(d *Driver) { d.idleTimeout = 200 * time.Millisecond })
 	gl := r.d.gl.Load()
 	ctx, cancel := withToken(secretA)
 	defer cancel()

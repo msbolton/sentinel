@@ -3,8 +3,10 @@ package grpcin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -109,8 +111,9 @@ func (f *fakeTokens) revoke(secret string) {
 	}
 }
 
-// fakeEmplacements is an EmplacementSource over a fixed list.
+// fakeEmplacements is an EmplacementSource over a list the test controls.
 type fakeEmplacements struct {
+	mu   sync.Mutex
 	rows []emplacement.Emplacement
 	// notReady, when set, leaves Ready open (the cache has not loaded).
 	notReady bool
@@ -124,8 +127,27 @@ func (f *fakeEmplacements) Ready() <-chan struct{} {
 	return r
 }
 
-func (f *fakeEmplacements) All() []emplacement.Emplacement { return f.rows }
+// put replaces the row with e's ID, or appends e.
+func (f *fakeEmplacements) put(e emplacement.Emplacement) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.rows {
+		if f.rows[i].ID == e.ID {
+			f.rows[i] = e
+			return
+		}
+	}
+	f.rows = append(f.rows, e)
+}
+
+func (f *fakeEmplacements) All() []emplacement.Emplacement {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]emplacement.Emplacement(nil), f.rows...)
+}
 func (f *fakeEmplacements) Get(id string) (emplacement.Emplacement, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for _, e := range f.rows {
 		if e.ID == id {
 			return e, true
@@ -134,6 +156,8 @@ func (f *fakeEmplacements) Get(id string) (emplacement.Emplacement, bool) {
 	return emplacement.Emplacement{}, false
 }
 func (f *fakeEmplacements) ByFeed(feedID string) []emplacement.Emplacement {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var out []emplacement.Emplacement
 	for _, e := range f.rows {
 		if e.FeedID != nil && *e.FeedID == feedID {
@@ -143,6 +167,113 @@ func (f *fakeEmplacements) ByFeed(feedID string) []emplacement.Emplacement {
 	return out
 }
 func (f *fakeEmplacements) OnChange(func(string)) (cancel func()) { return func() {} }
+
+// touchCall is one Touch the writer recorded.
+type touchCall struct {
+	id  string
+	pos *emplacement.Point
+	at  time.Time
+}
+
+// fakeWriter is a driver.EmplacementWriter over a fakeEmplacements, so a
+// write is visible to the driver's cache view at once.
+type fakeWriter struct {
+	emps *fakeEmplacements
+
+	mu      sync.Mutex
+	n       int
+	touched []touchCall
+}
+
+func (w *fakeWriter) Create(_ context.Context, e emplacement.Emplacement) (emplacement.Emplacement, error) {
+	for _, r := range w.emps.All() {
+		if strings.EqualFold(r.Name, e.Name) {
+			return emplacement.Emplacement{}, emplacement.ErrNameTaken
+		}
+	}
+	w.mu.Lock()
+	w.n++
+	e.ID = fmt.Sprintf("e-%d", w.n)
+	w.mu.Unlock()
+	e.Version = 1
+	w.emps.put(e)
+	return e, nil
+}
+
+func (w *fakeWriter) Update(_ context.Context, id string, ifVersion int, fn func(*emplacement.Emplacement) error) (emplacement.Emplacement, error) {
+	e, ok := w.emps.Get(id)
+	if !ok {
+		return emplacement.Emplacement{}, emplacement.ErrNotFound
+	}
+	if ifVersion > 0 && e.Version != ifVersion {
+		return emplacement.Emplacement{}, emplacement.ErrVersionConflict
+	}
+	if err := fn(&e); err != nil {
+		return emplacement.Emplacement{}, err
+	}
+	e.Version++
+	w.emps.put(e)
+	return e, nil
+}
+
+func (w *fakeWriter) Get(_ context.Context, id string) (emplacement.Emplacement, error) {
+	if e, ok := w.emps.Get(id); ok {
+		return e, nil
+	}
+	return emplacement.Emplacement{}, emplacement.ErrNotFound
+}
+
+func (w *fakeWriter) List(_ context.Context, f emplacement.Filter) ([]emplacement.Emplacement, error) {
+	if f.FeedID != "" {
+		return w.emps.ByFeed(f.FeedID), nil
+	}
+	return w.emps.All(), nil
+}
+
+func (w *fakeWriter) Delete(_ context.Context, id string) error {
+	w.emps.mu.Lock()
+	defer w.emps.mu.Unlock()
+	for i := range w.emps.rows {
+		if w.emps.rows[i].ID == id {
+			w.emps.rows = append(w.emps.rows[:i], w.emps.rows[i+1:]...)
+			return nil
+		}
+	}
+	return emplacement.ErrNotFound
+}
+
+func (w *fakeWriter) Touch(_ context.Context, id string, pos *emplacement.Point, _ *float64, at time.Time) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.touched = append(w.touched, touchCall{id: id, pos: pos, at: at})
+	return nil
+}
+
+func (w *fakeWriter) touches() []touchCall {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]touchCall(nil), w.touched...)
+}
+
+// emp is a live emplacement fixture; a fixed one gets a position.
+func emp(id, feed, mobility, sensor, class string) emplacement.Emplacement {
+	e := emplacement.Emplacement{ID: id, Name: id, Mobility: mobility, SensorType: sensor, Classification: class,
+		Active: true, AzimuthReference: emplacement.AzimuthTrueNorth, Version: 1}
+	if feed != "" {
+		f := feed
+		e.FeedID = &f
+	}
+	if mobility == emplacement.MobilityFixed {
+		e.Position, e.Altitude = &emplacement.Point{Lat: 50.1, Lon: -4.2}, ptr(0.0)
+	}
+	return e
+}
+
+// claiming makes a report claim an emplacement.
+func claiming(r *ingestv1.Report, id string) *ingestv1.Report {
+	r.EmplacementId = id
+	return r
+}
 
 type deadLetter struct {
 	reason string
@@ -209,11 +340,11 @@ func spec(cfg map[string]any, secrets map[string]string) driver.Spec {
 // leave out port and address.
 func start(t *testing.T, cfg map[string]any, secrets map[string]string, tokens *fakeTokens, emps *fakeEmplacements, sink *memSink) *rig {
 	t.Helper()
-	return startWith(t, cfg, secrets, tokens, emps, sink, nil)
+	return startWith(t, cfg, secrets, tokens, emps, nil, sink, nil)
 }
 
 // startWith is start, after tweak changed the driver (unexported knobs).
-func startWith(t *testing.T, cfg map[string]any, secrets map[string]string, tokens *fakeTokens, emps *fakeEmplacements, sink *memSink, tweak func(*Driver)) *rig {
+func startWith(t *testing.T, cfg map[string]any, secrets map[string]string, tokens *fakeTokens, emps *fakeEmplacements, writer *fakeWriter, sink *memSink, tweak func(*Driver)) *rig {
 	t.Helper()
 	if cfg == nil {
 		cfg = map[string]any{}
@@ -231,7 +362,11 @@ func startWith(t *testing.T, cfg map[string]any, secrets map[string]string, toke
 	if sink == nil {
 		sink = &memSink{}
 	}
-	dv, err := New(spec(cfg, secrets), driver.Deps{Logger: zap.NewNop(), ListenerHost: "sentinel.example", Tokens: tokens, Emplacements: emps})
+	deps := driver.Deps{Logger: zap.NewNop(), ListenerHost: "sentinel.example", Tokens: tokens, Emplacements: emps}
+	if writer != nil { // a nil *fakeWriter must not become a non-nil interface
+		deps.EmplacementWriter = writer
+	}
+	dv, err := New(spec(cfg, secrets), deps)
 	if err != nil {
 		t.Fatal(err)
 	}

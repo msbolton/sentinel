@@ -16,6 +16,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/source/decoder"
 	"github.com/sentinel/ingest-service/internal/source/decoder/sentinelobs"
 	"github.com/sentinel/ingest-service/internal/source/driver"
+	"github.com/sentinel/ingest-service/internal/source/driver/emplacementmirror"
 	"github.com/sentinel/ingest-service/internal/source/transport"
 	ingestv1 "github.com/sentinel/proto-gen/sentinel/ingest/v1"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
@@ -136,12 +137,20 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 	if m == nil {
 		return s.deadLetter(ack, from, r, "empty_report", errors.New("the report's observation is empty")), nil
 	}
-	// The level the runner will stamp: the feed's, or the report's when it is
-	// higher. A token may not send above its ceiling. This is decided before
-	// Validate, so a report above the token never reaches a dead letter.
+	e, bound, reason := s.resolve(a, r.GetEmplacementId())
+	if reason != "" {
+		return s.reject(ack, reason), nil
+	}
+	// The level the runner will stamp: the highest of the feed's, the
+	// emplacement's and the report's own. A token may not send above its
+	// ceiling. This is decided before Validate, so a report above the token
+	// never reaches a dead letter.
 	declared := declaredLevel(m)
-	level := max(classification.Rank(s.d.floor), classification.Rank(declared))
-	if level > classification.Rank(a.tok.Classification) {
+	content := classification.Rank(declared)
+	if bound {
+		content = max(content, classification.Rank(e.Classification))
+	}
+	if max(classification.Rank(s.d.floor), content) > classification.Rank(a.tok.Classification) {
 		return s.reject(ack, "above_ceiling"), nil
 	}
 	o, err := sentinelobs.Validate(m, contentType, "")
@@ -153,16 +162,27 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 		// Dead letters and their cause texts (which can carry the position)
 		// are visible at the connection's level only: a report marked above
 		// it is refused, not stored.
-		if classification.Rank(declared) > classification.Rank(s.d.floor) {
+		if content > classification.Rank(s.d.floor) {
 			return s.reject(ack, reason), nil
 		}
 		return s.deadLetter(ack, from, r, reason, err), nil
 	}
 	o.Decoder = Decoder
-	if o.SensorID == "" {
+	stripEmplacementIdentities(o)
+	o.ReceivedAt = time.Now().UTC()
+	if bound {
+		o.EmplacementID, o.SensorID = e.ID, e.ID
+		if o.Source == "" {
+			o.Source = emplacementmirror.SourceFor(e.SensorType)
+		}
+		o.Exercise = e.Exercise
+		if classification.Rank(e.Classification) > classification.Rank(o.Classification) {
+			o.Classification = classification.Normalize(e.Classification)
+		}
+		s.d.touch(ctx, e.ID, nil, nil, o.ReceivedAt)
+	} else if o.SensorID == "" {
 		o.SensorID = transport.SenderIP(from)
 	}
-	o.ReceivedAt = time.Now().UTC()
 	if raw, err := proto.Marshal(m); err == nil {
 		o.Raw = raw
 	}

@@ -116,7 +116,13 @@ type Driver struct {
 
 	tokens driver.TokenSource
 	emps   driver.EmplacementSource
+	writer driver.EmplacementWriter // nil when the host has none
 	logger *zap.Logger
+
+	// touched is when each emplacement's last report was recorded, so Touch
+	// runs at most once per touchEvery for each.
+	touchMu sync.Mutex
+	touched map[string]time.Time
 
 	// idleTimeout is how long a connection may have no RPCs (tests shorten it).
 	idleTimeout time.Duration
@@ -196,8 +202,12 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 		allow:           allow,
 		senders:         transport.NewSenders(maxSenders),
 		perSender:       transport.NewSenderLimiter(c.MaxMessagesPerSecPerSender, transport.SenderLimiterKeys),
-		tokens:          deps.Tokens, emps: deps.Emplacements, logger: deps.Logger,
+		tokens:          deps.Tokens, emps: deps.Emplacements, writer: deps.EmplacementWriter, logger: deps.Logger,
+		touched:  map[string]time.Time{},
 		rejected: map[string]int64{}, idleTimeout: idleTimeout,
+	}
+	if d.logger == nil {
+		d.logger = zap.NewNop()
 	}
 	d.limit = transport.NewLimiter(d.maxPerSec)
 	if tlsOn {
