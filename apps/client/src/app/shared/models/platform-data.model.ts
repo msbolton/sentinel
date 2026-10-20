@@ -183,6 +183,11 @@ export interface RFData {
   scanRateRpm?: number;
 }
 
+/** Output with no typed block, as flat strings: a site's heartbeat among them. */
+export interface GenericData {
+  fields?: Record<string, string>;
+}
+
 export interface PlatformData {
   ais?: AISData;
   adsb?: ADSBData;
@@ -191,6 +196,7 @@ export interface PlatformData {
   cot?: CoTData;
   uav?: UAVData;
   rf?: RFData;
+  generic?: GenericData;
 }
 
 // --- Kinematics ---

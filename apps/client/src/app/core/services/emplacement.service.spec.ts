@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { EmplacementService, errorMessage } from './emplacement.service';
+import { EMPLACEMENT_WRITER_ROLES, EmplacementService, errorMessage } from './emplacement.service';
 import { AuthService } from './auth.service';
 import { Emplacement, newDraft } from '../../shared/models/emplacement.model';
 
@@ -62,5 +62,15 @@ describe('EmplacementService', () => {
     service.pickAt(51.5, -0.1);
     expect(service.draft()?.position).toEqual({ lat: 51.5, lon: -0.1 });
     expect(service.picking()).toBe(false);
+  });
+
+  it('leaves writing to operators and admins, as the gateway does', () => {
+    expect(EMPLACEMENT_WRITER_ROLES).toEqual(['sentinel-operator', 'sentinel-admin']);
+  });
+
+  it('holds a place for the map to fly to', () => {
+    expect(service.focus()).toBeNull();
+    service.focus.set({ lat: 50, lon: -4 });
+    expect(service.focus()).toEqual({ lat: 50, lon: -4 });
   });
 });
