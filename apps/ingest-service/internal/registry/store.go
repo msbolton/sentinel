@@ -265,6 +265,17 @@ const emplacementsChannel = "sentinel_emplacements"
 // to a new feed that takes its id.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
+		// Lock the feed row first: an emplacement insert or update that binds
+		// to the feed takes a KEY SHARE lock on it through the foreign key,
+		// so it either committed before this point (the UPDATE below sees it)
+		// or waits for this transaction and then fails the key.
+		var locked string
+		if err := tx.QueryRow(ctx, `SELECT id FROM sentinel.feeds WHERE id = $1 FOR UPDATE`, id).Scan(&locked); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("locking feed %s: %w", id, err)
+		}
 		rows, err := tx.Query(ctx, `UPDATE sentinel.emplacements SET
 				"deletedAt" = CASE WHEN "createdBy" LIKE $2 THEN NOW() ELSE "deletedAt" END,
 				"feedId" = NULL, version = version + 1, "updatedAt" = NOW()

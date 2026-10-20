@@ -48,6 +48,7 @@ func TestDeleteLetsGoOfTheFeedsEmplacements(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Release()
+	defer func() { _, _ = conn.Exec(context.Background(), "UNLISTEN *") }()
 	if _, err := conn.Exec(ctx, "LISTEN "+emplacement.Channel); err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +57,7 @@ func TestDeleteLetsGoOfTheFeedsEmplacements(t *testing.T) {
 	}
 	got := map[string]string{}
 	for len(got) < 2 {
+		// Other packages' tests write to the same channel; only these two count.
 		wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		n, err := conn.Conn().WaitForNotification(wctx)
 		cancel()
@@ -66,7 +68,9 @@ func TestDeleteLetsGoOfTheFeedsEmplacements(t *testing.T) {
 		if err := json.Unmarshal([]byte(n.Payload), &p); err != nil {
 			t.Fatal(err)
 		}
-		got[p.ID] = p.Op
+		if p.ID == m.ID || p.ID == o.ID {
+			got[p.ID] = p.Op
+		}
 	}
 	if got[m.ID] != "delete" || got[o.ID] != "upsert" {
 		t.Errorf("notices = %v, want %s delete and %s upsert", got, m.ID, o.ID)
