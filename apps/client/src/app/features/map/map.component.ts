@@ -553,8 +553,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         this.viewer.selectedEntity = undefined;
         if (id !== EMPLACEMENT_DRAFT_ID) {
           this.ngZone.run(() => {
-            this.emplacements.select(id);
-            this.router.navigateByUrl('/emplacements');
+            const feedId = this.emplacements.emplacements().find((e) => e.id === id)?.feedId;
+            void this.router.navigate(['/connections'], feedId ? { queryParams: { open: feedId } } : {});
           });
         }
         return;

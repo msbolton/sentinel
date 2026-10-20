@@ -38,10 +38,9 @@ export const routes: Routes = [
       import('./features/geofences/geofences.component').then((m) => m.GeofencesComponent),
   },
   {
+    // Emplacements are managed inside their connections (Connections page).
     path: 'emplacements',
-    canActivate: [authGuard],
-    loadComponent: () =>
-      import('./features/emplacements/emplacements.component').then((m) => m.EmplacementsComponent),
+    redirectTo: 'map',
   },
   {
     path: 'link-graph',

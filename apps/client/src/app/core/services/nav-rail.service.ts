@@ -27,7 +27,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/alerts', label: 'Alerts', icon: 'bell', key: 'a', badge: 'alerts' },
       { path: '/findings', label: 'Findings', icon: 'activity', key: 'f', badge: 'findings' },
       { path: '/geofences', label: 'Geofences', icon: 'hexagon', key: 'g' },
-      { path: '/emplacements', label: 'Emplacements', icon: 'radar', key: 'e' },
     ],
   },
   {

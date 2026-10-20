@@ -253,7 +253,7 @@ export interface FeedDriver {
   configSchema: JsonSchema;
   /** secretRefs keys the driver expects (clientId, clientSecret, password…). */
   secretFields: string[];
-  /** Runs a built-in feed only (the emplacements mirror): never offered for a new connection. */
+  /** Runs a built-in feed only (the retired emplacements mirror): never offered for a new connection. */
   internal?: boolean;
 }
 

@@ -1,0 +1,28 @@
+@if (rows().length > 0) {
+  <section class="unassigned banner banner-warn" aria-labelledby="unassigned-h">
+    <h2 id="unassigned-h">Unassigned emplacements</h2>
+    <p>These emplacements have no connection, so nothing reports them and they are inactive. Assign each to a gRPC connection, which activates it, or delete it.</p>
+    @if (error(); as message) {
+      <p class="form-error" role="alert">{{ message }}</p>
+    }
+    <ul>
+      @for (e of rows(); track e.id) {
+        <li class="unassigned-row">
+          <span class="emp-name">{{ e.name }}</span>
+          @if (canWrite()) {
+            <select name="assign-to" [attr.aria-label]="'Connection for ' + e.name" (change)="choose(e.id, $event)">
+              <option value="" [selected]="!chosen()[e.id]">Choose a gRPC connection…</option>
+              @for (f of targets(); track f.id) {
+                <option [value]="f.id" [selected]="chosen()[e.id] === f.id">{{ f.name }}</option>
+              }
+            </select>
+            <button type="button" class="btn btn-secondary btn-sm assign" [disabled]="!chosen()[e.id]" (click)="assign(e)">Assign</button>
+          }
+          @if (canDelete()) {
+            <button type="button" class="btn btn-ghost btn-sm btn-delete" (click)="remove(e)">Delete</button>
+          }
+        </li>
+      }
+    </ul>
+  </section>
+}
