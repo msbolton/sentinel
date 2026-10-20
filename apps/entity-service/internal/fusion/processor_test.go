@@ -376,3 +376,44 @@ func TestExerciseStaleFixMarksEntity(t *testing.T) {
 		t.Fatalf("second stale exercise report re-announced: %+v marked=%v", sink.events[n:], ents.marked)
 	}
 }
+
+// A no-position exercise report marks the row after the batch's fused
+// winner was applied; the winner's Position event still carries the mark.
+func TestExerciseStaticReportMarksPositionEvent(t *testing.T) {
+	p, _, ents, obsw, _, sink := newTestProcessor()
+	t1 := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	live := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t1, 40, -80), "o1")
+	static := withID(obs("sim", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t1.Add(time.Second), 0, 0), "o2")
+	static.Exercise = true
+	stats, err := p.ProcessBatch(context.Background(), []*sentinelv1.Observation{live, static})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Rejected[RejectNoPosition] != 1 || len(ents.static) != 1 {
+		t.Fatalf("stats = %+v static = %v", stats, ents.static)
+	}
+	id := obsw.rows[0].EntityID
+	if !ents.exercise[id] {
+		t.Fatalf("entity not marked: %v", ents.exercise)
+	}
+	// The entity is new, so the fix is announced as its created snapshot.
+	if len(sink.events) != 1 || sink.events[0].kind != "created" || !sink.events[0].entity.Exercise {
+		t.Fatalf("fix event lacks the mark: %+v", sink.events)
+	}
+
+	// An existing entity gets a position event; same mark, new batch.
+	p2, _, _, _, _, sink2 := newTestProcessor()
+	if _, err := p2.ProcessBatch(context.Background(), []*sentinelv1.Observation{withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t1, 40, -80), "o3")}); err != nil {
+		t.Fatal(err)
+	}
+	live2 := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t1.Add(time.Minute), 40.1, -80), "o4")
+	static2 := withID(obs("sim", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t1.Add(time.Minute), 0, 0), "o5")
+	static2.Exercise = true
+	if _, err := p2.ProcessBatch(context.Background(), []*sentinelv1.Observation{live2, static2}); err != nil {
+		t.Fatal(err)
+	}
+	pos := sink2.events[len(sink2.events)-1]
+	if pos.kind != "position" || !pos.entity.Exercise {
+		t.Fatalf("position event lacks the mark: %+v", sink2.events)
+	}
+}

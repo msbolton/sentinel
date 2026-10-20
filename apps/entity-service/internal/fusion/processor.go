@@ -236,6 +236,13 @@ func (p *Processor) ProcessBatch(ctx context.Context, observations []*sentinelv1
 // already carry the mark. It patches the applied results so the events of
 // this batch show the mark, and returns the rows it changed.
 func (p *Processor) markExercise(ctx context.Context, reports []*Report, ids map[Key]string, applied, staticApplied map[string]store.FusedResult) ([]store.EntityRecord, error) {
+	// ApplyStatic runs after ApplyFused, so a mark its row carries may be
+	// newer than the fused result's snapshot of the same entity.
+	for id, s := range staticApplied {
+		if a, ok := applied[id]; ok && s.Record.Exercise {
+			a.Record.Exercise = true
+		}
+	}
 	var todo []string
 	seen := map[string]bool{}
 	for _, r := range reports {
