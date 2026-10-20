@@ -401,3 +401,72 @@ func TestPumpPausesWhileNotConnected(t *testing.T) {
 		t.Fatalf("last error = %+v", st)
 	}
 }
+
+// An alert is stamped exercise where it is made, so a pump that has never seen
+// the entity (after a restart, a lease move or an age-out) still refuses it.
+func TestPumpDeniesAlertsStampedExercise(t *testing.T) {
+	boxes := []policy.Box{{North: 10, South: -10, East: 10, West: -10}}
+	stamped := func(a *sentinelv1.Alert) {
+		a.Position = &sentinelv1.Coordinate{Latitude: 1, Longitude: 0}
+		a.Exercise = true
+	}
+	now := time.Now()
+
+	t.Run("denied by default", func(t *testing.T) {
+		rec := newRecorder()
+		m := metrics.New(prometheus.NewRegistry())
+		p, fc, _ := startPumpWith(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{Boxes: boxes}, Context: policy.Context{SelfFeedID: "tak"}}, rec, m)
+		fc.deliver(t, alertMsg(t, "never-seen", now, stamped))
+		fc.deliver(t, alertMsg(t, "live", now, func(a *sentinelv1.Alert) { a.Position = &sentinelv1.Coordinate{Latitude: 1, Longitude: 0} }))
+		rec.wait(t, 1)
+		rec.mu.Lock()
+		alerts := append([]*sentinelv1.AlertEvent(nil), rec.alerts...)
+		rec.mu.Unlock()
+		if len(alerts) != 1 || alerts[0].Alert.EntityId != "live" || p.Stats().Denied != 1 {
+			t.Fatalf("alerts=%v stats=%+v", alerts, p.Stats())
+		}
+		if got := testutil.ToFloat64(m.OutboundDeniedTotal.WithLabelValues("tak", policy.ReasonExercise)); got != 1 {
+			t.Fatalf("denied{exercise} = %v, want 1", got)
+		}
+	})
+
+	t.Run("sent when allowed", func(t *testing.T) {
+		rec := newRecorder()
+		p, fc, _ := startPump(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{Boxes: boxes, AllowExercise: true}, Context: policy.Context{SelfFeedID: "tak"}}, rec)
+		fc.deliver(t, alertMsg(t, "never-seen", now, stamped))
+		rec.wait(t, 1)
+		rec.mu.Lock()
+		alerts := len(rec.alerts)
+		rec.mu.Unlock()
+		if alerts != 1 || p.Stats().Denied != 0 {
+			t.Fatalf("alerts=%d stats=%+v", alerts, p.Stats())
+		}
+	})
+}
+
+// An event without the flag (a REST update path, an older producer) must not
+// let an entity out that the pump has already seen as exercise.
+func TestPumpKeepsAKnownExerciseEntityHomeWhenALaterEventLacksTheFlag(t *testing.T) {
+	rec := newRecorder()
+	m := metrics.New(prometheus.NewRegistry())
+	box := []policy.Box{{North: 10, South: -10, East: 10, West: -10}}
+	p, fc, _ := startPumpWith(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{Boxes: box}, Context: policy.Context{SelfFeedID: "tak"}}, rec, m)
+	now := time.Now()
+	fc.deliver(t, entityMsg(t, "created", "e1", "sim", 1, now, exercise))
+	// A position event for it with no flag, then a live entity as a marker.
+	fc.deliver(t, entityMsg(t, "position", "e1", "sim", 1, now), entityMsg(t, "created", "live", "opensky", 1, now))
+	rec.wait(t, 1)
+	time.Sleep(100 * time.Millisecond)
+	rec.mu.Lock()
+	updates := append([]driver.EntityUpdate(nil), rec.updates...)
+	rec.mu.Unlock()
+	if len(updates) != 1 || updates[0].EntityID != "live" {
+		t.Fatalf("updates = %+v", updates)
+	}
+	if st := p.Stats(); st.Denied != 2 || st.Tracked != 1 {
+		t.Fatalf("stats = %+v", st)
+	}
+	if got := testutil.ToFloat64(m.OutboundDeniedTotal.WithLabelValues("tak", policy.ReasonExercise)); got != 2 {
+		t.Fatalf("denied{exercise} = %v, want 2", got)
+	}
+}

@@ -224,12 +224,20 @@ func (p *Pump) handleEntity(m *ckafka.Message, now time.Time) {
 	if entity == nil || entity.Id == "" {
 		return
 	}
-	d := policy.Evaluate(p.opts.Policy, p.opts.Context, entity)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if entity.GetExercise() {
 		p.exercise[entity.Id] = true
 	}
+	// An entity the pump has seen as exercise stays exercise for the pump, so
+	// a later event without the flag (a REST update, an older producer) cannot
+	// let it out. The shared message is not changed; the policy sees a copy.
+	judged := entity
+	if p.exercise[entity.Id] && !entity.GetExercise() {
+		judged = proto.Clone(entity).(*sentinelv1.Entity)
+		judged.Exercise = true
+	}
+	d := policy.Evaluate(p.opts.Policy, p.opts.Context, judged)
 	if !d.Allow {
 		p.counters.Denied++
 		if p.metrics != nil {
@@ -270,9 +278,10 @@ func (p *Pump) handleAlert(m *ckafka.Message, now time.Time) {
 	}
 	p.mu.Lock()
 	tracked := p.tracked[ev.Alert.EntityId]
-	// An alert about an exercise entity is exercise data too: the primary
-	// entity or any related one.
-	exercise := p.exercise[ev.Alert.EntityId]
+	// An alert about an exercise entity is exercise data too: it says so
+	// itself (stamped where it was made), or the primary entity or any related
+	// one is known to the pump as exercise.
+	exercise := ev.Alert.GetExercise() || p.exercise[ev.Alert.EntityId]
 	for _, id := range ev.Alert.RelatedEntityIds {
 		exercise = exercise || p.exercise[id]
 	}

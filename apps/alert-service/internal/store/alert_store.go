@@ -30,6 +30,7 @@ type AlertRecord struct {
 	AcknowledgedBy   *string           `json:"acknowledgedBy,omitempty"`
 	ResolvedAt       *string           `json:"resolvedAt,omitempty"`
 	Classification   string            `json:"classification"`
+	Exercise         bool              `json:"exercise"`
 }
 
 // GeoPoint represents a geographic point.
@@ -66,6 +67,7 @@ type CreateAlertParams struct {
 	RuleID           *string
 	Metadata         map[string]string
 	Classification   string // bare Classification name; "" = UNCLASSIFIED
+	Exercise         bool   // about an exercise entity; outbound connections refuse it
 }
 
 // CreateRuleParams holds parameters for creating a rule.
@@ -132,11 +134,11 @@ func (s *AlertStore) CreateAlert(ctx context.Context, p CreateAlertParams) (*Ale
 	var positionExpr string
 	args := []interface{}{
 		p.AlertType, p.Severity, p.Title, p.Description, p.EntityID,
-		relatedIDs, p.RuleID, metadata, p.Classification,
+		relatedIDs, p.RuleID, metadata, p.Classification, p.Exercise,
 	}
 
 	if p.Lat != nil && p.Lng != nil {
-		positionExpr = `ST_SetSRID(ST_MakePoint($10, $11), 4326)`
+		positionExpr = `ST_SetSRID(ST_MakePoint($11, $12), 4326)`
 		args = append(args, *p.Lng, *p.Lat)
 	} else {
 		positionExpr = "NULL"
@@ -152,13 +154,13 @@ func (s *AlertStore) CreateAlert(ctx context.Context, p CreateAlertParams) (*Ale
 
 	query := fmt.Sprintf(`
 		INSERT INTO sentinel.alerts
-			("alertType", severity, title, description, "entityId", "relatedEntityIds", position, "ruleId", metadata, classification%s)
-		VALUES ($1, $2, $3, $4, $5, $6, %s, $7, $8, COALESCE(NULLIF(upper($9), ''), 'UNCLASSIFIED')%s)
+			("alertType", severity, title, description, "entityId", "relatedEntityIds", position, "ruleId", metadata, classification, exercise%s)
+		VALUES ($1, $2, $3, $4, $5, $6, %s, $7, $8, COALESCE(NULLIF(upper($9), ''), 'UNCLASSIFIED'), $10%s)
 		%s
 		RETURNING id, "alertType", severity, title, description, "entityId", "relatedEntityIds",
 			ST_Y(position::geometry) as lat, ST_X(position::geometry) as lng,
 			"ruleId", metadata, "createdAt"::text,
-			"acknowledgedAt"::text, "acknowledgedBy", "resolvedAt"::text, classification
+			"acknowledgedAt"::text, "acknowledgedBy", "resolvedAt"::text, classification, exercise
 	`, idColumn, positionExpr, idValue, conflict)
 
 	row := s.pool.QueryRow(ctx, query, args...)
@@ -178,6 +180,18 @@ func (s *AlertStore) EntityClassification(ctx context.Context, entityID string) 
 		return "", fmt.Errorf("entity classification: %w", err)
 	}
 	return level, nil
+}
+
+// EntitiesExercise reports whether any of the entities carries the exercise
+// mark. Unknown ids count as not exercise; an empty list is false.
+func (s *AlertStore) EntitiesExercise(ctx context.Context, ids []string) (bool, error) {
+	var exercise bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(bool_or(exercise), false) FROM sentinel.entities WHERE id = ANY($1::uuid[])`, ids).Scan(&exercise)
+	if err != nil {
+		return false, fmt.Errorf("entities exercise: %w", err)
+	}
+	return exercise, nil
 }
 
 // GetAlerts queries alerts with filters and pagination.
@@ -249,7 +263,7 @@ func (s *AlertStore) GetAlerts(ctx context.Context, p AlertQueryParams) (*AlertQ
 		SELECT id, "alertType", severity, title, description, "entityId", "relatedEntityIds",
 			ST_Y(position::geometry) as lat, ST_X(position::geometry) as lng,
 			"ruleId", metadata, "createdAt"::text,
-			"acknowledgedAt"::text, "acknowledgedBy", "resolvedAt"::text, classification
+			"acknowledgedAt"::text, "acknowledgedBy", "resolvedAt"::text, classification, exercise
 		FROM sentinel.alerts
 		%s
 		ORDER BY "createdAt" DESC
@@ -286,7 +300,7 @@ func (s *AlertStore) GetAlert(ctx context.Context, id string) (*AlertRecord, err
 		SELECT id, "alertType", severity, title, description, "entityId", "relatedEntityIds",
 			ST_Y(position::geometry) as lat, ST_X(position::geometry) as lng,
 			"ruleId", metadata, "createdAt"::text,
-			"acknowledgedAt"::text, "acknowledgedBy", "resolvedAt"::text, classification
+			"acknowledgedAt"::text, "acknowledgedBy", "resolvedAt"::text, classification, exercise
 		FROM sentinel.alerts
 		WHERE id = $1
 	`, id)
@@ -510,7 +524,7 @@ func scanAlert(row pgx.Row) (*AlertRecord, error) {
 		&rec.EntityID, &rec.RelatedEntityIDs,
 		&lat, &lng,
 		&rec.RuleID, &rec.Metadata, &rec.CreatedAt,
-		&rec.AcknowledgedAt, &rec.AcknowledgedBy, &rec.ResolvedAt, &rec.Classification,
+		&rec.AcknowledgedAt, &rec.AcknowledgedBy, &rec.ResolvedAt, &rec.Classification, &rec.Exercise,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan alert: %w", err)
@@ -529,7 +543,7 @@ func scanAlertRow(rows pgx.Rows) (*AlertRecord, error) {
 		&rec.EntityID, &rec.RelatedEntityIDs,
 		&lat, &lng,
 		&rec.RuleID, &rec.Metadata, &rec.CreatedAt,
-		&rec.AcknowledgedAt, &rec.AcknowledgedBy, &rec.ResolvedAt, &rec.Classification,
+		&rec.AcknowledgedAt, &rec.AcknowledgedBy, &rec.ResolvedAt, &rec.Classification, &rec.Exercise,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan alert row: %w", err)
