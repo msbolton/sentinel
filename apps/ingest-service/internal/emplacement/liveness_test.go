@@ -1,6 +1,7 @@
 package emplacement
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -140,4 +141,28 @@ func TestTrackerIsSafeForConcurrentUse(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestLivenessFromDetail(t *testing.T) {
+	list, ok := LivenessFromDetail(json.RawMessage(`{"reportsOk":1,"emplacements":[{"id":"a","name":"A","classification":"UNCLASSIFIED","state":"offline","lastHeartbeatAt":"2026-10-20T12:00:00Z","intervalSec":5}]}`))
+	if !ok || len(list) != 1 || list[0].State != HeartbeatOffline || list[0].LastHeartbeatAt == nil || !list[0].LastHeartbeatAt.Equal(t0) {
+		t.Fatalf("list = %+v %v", list, ok)
+	}
+	if _, ok := LivenessFromDetail(json.RawMessage(`{"reportsOk":1}`)); ok {
+		t.Fatal("a detail without emplacements read as some")
+	}
+}
+
+func TestRowState(t *testing.T) {
+	sec := 5
+	recent, old := t0.Add(-10*time.Second), t0.Add(-15*time.Second)
+	if s := RowState(Emplacement{LastHeartbeatAt: &recent, HeartbeatIntervalSec: &sec}, t0); s != HeartbeatOnline {
+		t.Errorf("recent: %s", s)
+	}
+	if s := RowState(Emplacement{LastHeartbeatAt: &old, HeartbeatIntervalSec: &sec}, t0); s != HeartbeatOffline {
+		t.Errorf("three intervals old: %s", s)
+	}
+	if s := RowState(Emplacement{}, t0); s != HeartbeatNever {
+		t.Errorf("none: %s", s)
+	}
 }

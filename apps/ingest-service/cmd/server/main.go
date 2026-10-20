@@ -203,8 +203,9 @@ func main() {
 	mgmtHandler.Tokens = tokStore
 	mgmtHandler.UseSecretPolicy(secretPolicy)
 	mgmtHandler.RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
-	emplacement.NewHandler(empStore, feedCheck(reg, catalog), logger).
-		RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
+	empHandler := emplacement.NewHandler(empStore, feedCheck(reg, catalog), logger)
+	empHandler.Liveness = livenessSource(reg, mgmtHandler.StaleAfter, time.Now)
+	empHandler.RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
 
 	httpServer := &http.Server{
 		Addr:         cfg.HTTPAddr,
@@ -374,5 +375,34 @@ func feedCheck(reg *registry.Store, catalog *drivers.Catalog) emplacement.FeedCh
 			return emplacement.FeedInfo{Exists: true, Driver: f.Driver}, nil
 		}
 		return emplacement.FeedInfo{Exists: true, Inbound: f.Direction(info.Dir()).Inbound(), Driver: f.Driver}, nil
+	}
+}
+
+// feedLister is the part of the registry livenessSource reads.
+type feedLister interface {
+	List(ctx context.Context) ([]registry.Feed, error)
+}
+
+// livenessSource reads each connection's emplacement heartbeats from its
+// status row, which the replica that runs it rewrites every few seconds. A
+// row older than staleAfter belongs to a replica that went silent and is not
+// believed, so the emplacements' own rows are read instead.
+func livenessSource(reg feedLister, staleAfter time.Duration, now func() time.Time) emplacement.LivenessSource {
+	return func(ctx context.Context) (map[string]emplacement.FeedLiveness, error) {
+		feeds, err := reg.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[string]emplacement.FeedLiveness, len(feeds))
+		for _, f := range feeds {
+			fl := emplacement.FeedLiveness{Driver: f.Driver}
+			if st := f.Status; st != nil && st.Owner != "" && st.UpdatedAt != nil && now().Sub(*st.UpdatedAt) <= staleAfter {
+				if list, ok := emplacement.LivenessFromDetail(st.Detail); ok {
+					fl.Emplacements = list
+				}
+			}
+			out[f.ID] = fl
+		}
+		return out, nil
 	}
 }

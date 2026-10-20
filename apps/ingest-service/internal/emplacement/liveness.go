@@ -1,6 +1,7 @@
 package emplacement
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 )
@@ -179,4 +180,30 @@ func (t *Tracker) Snapshot(rows []Emplacement, now time.Time) []Liveness {
 		out = append(out, l)
 	}
 	return out
+}
+
+// LivenessFromDetail reads detail.emplacements from a connection's status,
+// as Supervisor.statusOf writes it. ok is false when the detail has none.
+func LivenessFromDetail(detail json.RawMessage) ([]Liveness, bool) {
+	var d struct {
+		Emplacements *[]Liveness `json:"emplacements"`
+	}
+	if json.Unmarshal(detail, &d) != nil || d.Emplacements == nil {
+		return nil, false
+	}
+	return *d.Emplacements, true
+}
+
+// RowState is an emplacement's heartbeat state from its row alone, for when
+// no replica reports its connection: online within three intervals of the
+// last heartbeat the row recorded, offline after, never without one. The row
+// is written at most every interval and every 10 s, so it lags by up to that.
+func RowState(e Emplacement, now time.Time) HeartbeatState {
+	if e.LastHeartbeatAt == nil {
+		return HeartbeatNever
+	}
+	if now.Before(e.LastHeartbeatAt.Add(Lapse(RowIntervalSec(e)))) {
+		return HeartbeatOnline
+	}
+	return HeartbeatOffline
 }

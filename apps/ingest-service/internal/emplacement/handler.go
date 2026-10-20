@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -33,11 +34,27 @@ type FeedCheck func(ctx context.Context, feedID string) (FeedInfo, error)
 // reports its emplacements' heartbeats.
 const BindableDriver = "grpc"
 
+// FeedLiveness is what the owning replica last reported of a connection's
+// emplacements.
+type FeedLiveness struct {
+	Driver string
+	// Emplacements is detail.emplacements of the connection's status. It is
+	// nil when the connection has no fresh status (it never ran, it is
+	// stopped, or its replica went silent); then the rows' own heartbeat
+	// times are read instead.
+	Emplacements []Liveness
+}
+
+// LivenessSource lists every connection's FeedLiveness by connection id.
+type LivenessSource func(ctx context.Context) (map[string]FeedLiveness, error)
+
 // Handler serves the emplacement routes of the management API.
 type Handler struct {
-	store  Store
-	feeds  FeedCheck
-	logger *zap.Logger
+	store Store
+	feeds FeedCheck
+	// Liveness fills the computed heartbeat and silentSince; nil leaves them out.
+	Liveness LivenessSource
+	logger   *zap.Logger
 }
 
 // NewHandler wires the handler; logger may be nil.
@@ -89,6 +106,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			out = append(out, e)
 		}
 	}
+	h.annotate(r.Context(), out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -105,7 +123,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	writeEmplacement(w, http.StatusOK, e)
+	h.writeAnnotated(w, r, http.StatusOK, e)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +145,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.logger.Info("emplacement created", zap.String("id", out.ID), zap.String("name", out.Name))
-	writeEmplacement(w, http.StatusCreated, out)
+	h.writeAnnotated(w, r, http.StatusCreated, out)
 }
 
 func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +194,7 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	writeEmplacement(w, http.StatusOK, out)
+	h.writeAnnotated(w, r, http.StatusOK, out)
 }
 
 func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
@@ -196,6 +214,53 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// annotate fills the computed heartbeat and silentSince of the active
+// emplacements bound to a grpc connection; the others carry neither. A
+// failure to read the statuses leaves them out and is logged.
+func (h *Handler) annotate(ctx context.Context, list []Emplacement) {
+	if h.Liveness == nil || len(list) == 0 {
+		return
+	}
+	feeds, err := h.Liveness(ctx)
+	if err != nil {
+		h.logger.Warn("reading the connections' heartbeats failed", zap.Error(err))
+		return
+	}
+	now := time.Now()
+	for i := range list {
+		annotate(&list[i], feeds, now)
+	}
+}
+
+func annotate(e *Emplacement, feeds map[string]FeedLiveness, now time.Time) {
+	if !e.Active || e.FeedID == nil {
+		return
+	}
+	f, ok := feeds[*e.FeedID]
+	if !ok || f.Driver != BindableDriver {
+		return
+	}
+	state, last := RowState(*e, now), e.LastHeartbeatAt
+	for _, l := range f.Emplacements {
+		if l.ID == e.ID {
+			state, last = l.State, l.LastHeartbeatAt
+			break
+		}
+	}
+	e.Heartbeat = state
+	if state == HeartbeatOffline && last != nil {
+		at := *last
+		e.SilentSince = &at
+	}
+}
+
+// writeAnnotated writes one emplacement with its computed heartbeat.
+func (h *Handler) writeAnnotated(w http.ResponseWriter, r *http.Request, status int, e Emplacement) {
+	one := []Emplacement{e}
+	h.annotate(r.Context(), one)
+	writeEmplacement(w, status, one[0])
 }
 
 // CheckWrite validates e as it would be stored and holds it to what the

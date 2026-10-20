@@ -92,10 +92,16 @@ type Emplacement struct {
 	// after a change of connection.
 	HeartbeatIntervalSec *int       `json:"heartbeatIntervalSec"`
 	LastHeartbeatAt      *time.Time `json:"lastHeartbeatAt"`
-	CreatedBy            string     `json:"createdBy"`
-	CreatedAt            time.Time  `json:"createdAt"`
-	UpdatedAt            time.Time  `json:"updatedAt"`
-	Version              int        `json:"version"`
+	// Heartbeat and SilentSince are computed for the API from the owning
+	// replica's status (Handler.Liveness), and never stored. Heartbeat is
+	// empty for an emplacement whose connection does not heartbeat it, or
+	// that has no connection; SilentSince is set while it is offline.
+	Heartbeat   HeartbeatState `json:"heartbeat,omitempty"`
+	SilentSince *time.Time     `json:"silentSince,omitempty"`
+	CreatedBy   string         `json:"createdBy"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	UpdatedAt   time.Time      `json:"updatedAt"`
+	Version     int            `json:"version"`
 }
 
 // Input is a create or PATCH body. A nil field is left as it is; FeedID ""
