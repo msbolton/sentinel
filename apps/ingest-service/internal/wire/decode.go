@@ -63,24 +63,20 @@ func FromProto(m *sentinelv1.Observation) *obs.Observation {
 		if o.PosCovariance == nil && u.GetSemiMajor() > 0 && u.GetSemiMinor() > 0 &&
 			!math.IsInf(u.GetSemiMajor(), 0) && !math.IsInf(u.GetSemiMinor(), 0) &&
 			!math.IsNaN(u.GetOrientation()) && !math.IsInf(u.GetOrientation(), 0) {
-			maj, min := u.GetSemiMajor(), u.GetSemiMinor()
-			if maj < min {
-				maj, min = min, maj
-			}
-			if cNN, cNE, cEE := geo.Cov2FromEllipse(maj, min, u.GetOrientation()); !math.IsNaN(cNN) && !math.IsNaN(cNE) && !math.IsNaN(cEE) &&
+			if cNN, cNE, cEE := geo.Cov2FromEllipse(u.GetSemiMajor(), u.GetSemiMinor(), u.GetOrientation()); !math.IsNaN(cNN) && !math.IsNaN(cNE) && !math.IsNaN(cEE) &&
 				!math.IsInf(cNN, 0) && !math.IsInf(cNE, 0) && !math.IsInf(cEE, 0) {
 				o.PosCovariance = &[6]float64{cNN, cNE, 0, cEE, 0, 0}
 			}
 		}
 		ce := u.GetCircularError()
 		if ce == 0 && o.PosCovariance != nil {
-			if derived := geo.CEP95(o.PosCovariance[0], o.PosCovariance[1], o.PosCovariance[3]); derived > 0 && !math.IsNaN(derived) && !math.IsInf(derived, 0) {
+			if derived, ok := derivedCEP95(*o.PosCovariance); ok {
 				ce = derived
 			}
 		}
 		o.CircularError = &ce
-	} else if o.PosCovariance != nil && finiteCov(*o.PosCovariance) && o.PosCovariance[0] >= 0 && o.PosCovariance[3] >= 0 && o.PosCovariance[5] >= 0 && (o.PosCovariance[0] > 0 || o.PosCovariance[3] > 0) {
-		if ce := geo.CEP95(o.PosCovariance[0], o.PosCovariance[1], o.PosCovariance[3]); ce > 0 && !math.IsNaN(ce) && !math.IsInf(ce, 0) {
+	} else if o.PosCovariance != nil {
+		if ce, ok := derivedCEP95(*o.PosCovariance); ok {
 			o.CircularError = &ce
 		}
 	}
@@ -179,6 +175,22 @@ func finiteCov(c [6]float64) bool {
 		}
 	}
 	return true
+}
+
+func derivedCEP95(c [6]float64) (float64, bool) {
+	if !finiteCov(c) || c[0] < 0 || c[3] < 0 || c[5] < 0 || (c[0] == 0 && c[3] == 0) {
+		return 0, false
+	}
+	const maxCov = 1e14
+	nn := min(c[0], maxCov)
+	ee := min(c[3], maxCov)
+	limit := math.Sqrt(nn * ee)
+	ne := max(-limit, min(c[1], limit))
+	ce := geo.CEP95(nn, ne, ee)
+	if ce <= 0 || math.IsNaN(ce) || math.IsInf(ce, 0) {
+		return 0, false
+	}
+	return ce, true
 }
 
 // enumName is the bare enum name, or "" for the zero (unspecified) value and

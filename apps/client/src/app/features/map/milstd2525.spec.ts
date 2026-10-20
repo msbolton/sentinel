@@ -1,7 +1,14 @@
 import ms from 'milsymbol';
 import { Affiliation, EntityType, TrackEnvironment } from '../../shared/models/entity.model';
 import { Feed } from '../../shared/models/feed.model';
-import { isFromMilitaryFeed, sidcFor, symbolDataUrl, symbolImage } from './milstd2525';
+import {
+  isFromMilitaryFeed,
+  MAX_SYMBOL_CACHE_SIZE,
+  sidcFor,
+  symbolCacheSize,
+  symbolDataUrl,
+  symbolImage,
+} from './milstd2525';
 
 describe('milstd2525', () => {
   describe('sidcFor', () => {
@@ -114,7 +121,7 @@ describe('milstd2525', () => {
         { entityType: EntityType.FACILITY, expectedSet: '20', expectedCode: '110000' },
         { entityType: EntityType.VESSEL, expectedSet: '30', expectedCode: '120000' },
         { entityType: EntityType.VESSEL, trackEnvironment: TrackEnvironment.SUBSURFACE, expectedSet: '35', expectedCode: '110000' },
-        { entityType: EntityType.CYBER, expectedSet: '40', expectedCode: '110000' },
+        { entityType: EntityType.CYBER, expectedSet: '60', expectedCode: '110000' },
         { entityType: EntityType.UNKNOWN, trackEnvironment: TrackEnvironment.AIR, expectedSet: '01', expectedCode: '110000' },
         { entityType: EntityType.UNKNOWN, trackEnvironment: TrackEnvironment.SPACE, expectedSet: '05', expectedCode: '110000' },
         { entityType: EntityType.UNKNOWN, trackEnvironment: TrackEnvironment.SEA_SURFACE, expectedSet: '30', expectedCode: '120000' },
@@ -147,6 +154,14 @@ describe('milstd2525', () => {
       expect(url1.startsWith('data:image/svg+xml;base64,')).toBe(true);
       expect(atob(url1.slice('data:image/svg+xml;base64,'.length))).toContain('<svg');
       expect(url1).toBe(url2);
+    });
+
+    it('bounds the symbol image cache at MAX_SYMBOL_CACHE_SIZE with LRU eviction', () => {
+      for (let i = 0; i < MAX_SYMBOL_CACHE_SIZE + 20; i++) {
+        const suffix = String(i).padStart(4, '0');
+        symbolImage(`1006520000110300${suffix}`);
+      }
+      expect(symbolCacheSize()).toBeLessThanOrEqual(MAX_SYMBOL_CACHE_SIZE);
     });
   });
 

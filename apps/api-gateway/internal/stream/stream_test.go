@@ -206,7 +206,8 @@ func sampleEntity() *sentinelv1.Entity {
 	alt, spd := 9000.0, 400.0
 	return &sentinelv1.Entity{
 		Id: "e1", EntityType: sentinelv1.EntityType_ENTITY_TYPE_AIRCRAFT, Name: "UAL1", Source: sentinelv1.EntitySource_ENTITY_SOURCE_ADSB_LOL,
-		Classification: sentinelv1.Classification_CLASSIFICATION_UNCLASSIFIED, FeedId: "adsb-lol", LastFeedId: "ew-1", AgeoutState: sentinelv1.AgeoutState_AGEOUT_STATE_LIVE,
+		Classification: sentinelv1.Classification_CLASSIFICATION_UNCLASSIFIED, Affiliation: sentinelv1.Affiliation_AFFILIATION_HOSTILE,
+		FeedId: "adsb-lol", LastFeedId: "ew-1", AgeoutState: sentinelv1.AgeoutState_AGEOUT_STATE_LIVE,
 		Position: &sentinelv1.Coordinate{Latitude: 1.5, Longitude: 2.5, AltitudeMeters: &alt}, SpeedKnots: &spd,
 		Kinematics: &sentinelv1.KinematicState{
 			Velocity:           &sentinelv1.GeodeticVelocity{North: 100.5, East: -20},
@@ -256,7 +257,7 @@ func TestBridge_EntityEventsFromProto(t *testing.T) {
 	if adsb == nil || adsb["icaoHex"] != "A1B2C3" || adsb["squawk"] != "1200" || rf == nil || rf["frequencyHz"] != 9.41e9 || rf["emitterType"] != "RADAR_SEARCH" {
 		t.Errorf("platformData = %v", e1.Entity.PlatformData)
 	}
-	if e1.Entity.FeedID != "adsb-lol" || e1.Entity.LastFeedID != "ew-1" || e1.Entity.AgeoutState != "LIVE" || len(e1.Entity.Identities) != 1 || e1.Entity.Identities[0].Value != "A1B2C3" {
+	if e1.Entity.FeedID != "adsb-lol" || e1.Entity.LastFeedID != "ew-1" || e1.Entity.Affiliation != "HOSTILE" || e1.Entity.AgeoutState != "LIVE" || len(e1.Entity.Identities) != 1 || e1.Entity.Identities[0].Value != "A1B2C3" {
 		t.Errorf("provenance = %+v", e1.Entity)
 	}
 	if e2.Type != "created" || e2.Entity.Name != "Boat" || e2.Entity.Position.Altitude != nil || e2.Entity.CreatedAt != "2026-10-14T01:00:00Z" || e2.Entity.Kinematics != nil {

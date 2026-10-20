@@ -31,6 +31,7 @@ type NewEntity struct {
 	SourceEntityID   string
 	TrackEnvironment string
 	CountryOfOrigin  string
+	Affiliation      string // bare Affiliation name
 	Classification   string // bare Classification name; "" = UNCLASSIFIED
 	Exercise         bool   // the first report was an exercise report
 	SeenAt           time.Time

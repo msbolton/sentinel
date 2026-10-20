@@ -107,8 +107,3 @@ func CEP95(cNN, cNE, cEE float64) float64 {
 	}
 	return 0.5 * (lo + hi) * s1
 }
-
-// CEP returns the 95th-percentile circular error radius (alias for CEP95).
-func CEP(cNN, cNE, cEE float64) float64 {
-	return CEP95(cNN, cNE, cEE)
-}

@@ -210,6 +210,7 @@ func EntityFromProto(en *sentinelv1.Entity) Entity {
 		MilStd2525dSymbol: en.MilStd_2525DSymbol,
 		Metadata:          map[string]interface{}{},
 		Affiliations:      en.Affiliations,
+		Affiliation:       enumOrEmpty(en.Affiliation),
 		CreatedAt:         orNow(tsString(en.CreatedAt)),
 		UpdatedAt:         orNow(tsString(en.UpdatedAt)),
 		LastSeenAt:        tsString(en.LastSeenAt),

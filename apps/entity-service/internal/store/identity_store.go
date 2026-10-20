@@ -106,11 +106,11 @@ func (s *IdentityStore) createOne(ctx context.Context, tx pgx.Tx, spec identity.
 	err := tx.QueryRow(ctx, `
 		INSERT INTO sentinel.entities
 			("entityType", name, source, classification, "feedId", "sourceEntityId", "trackEnvironment",
-			 "countryOfOrigin", "primaryIdentityType", "primaryIdentityValue", metadata, affiliations, "ageoutState", exercise)
-		VALUES ($1, $2, $3, COALESCE(NULLIF(upper($10), ''), 'UNCLASSIFIED'), $4, $5, NULLIF($6, ''), NULLIF($7, ''), $8, $9, '{}'::jsonb, ARRAY[]::text[], 'LIVE', $11)
+			 "countryOfOrigin", "primaryIdentityType", "primaryIdentityValue", metadata, affiliations, "ageoutState", exercise, affiliation)
+		VALUES ($1, $2, $3, COALESCE(NULLIF(upper($10), ''), 'UNCLASSIFIED'), $4, $5, NULLIF($6, ''), NULLIF($7, ''), $8, $9, '{}'::jsonb, ARRAY[]::text[], 'LIVE', $11, NULLIF($12, ''))
 		RETURNING id`,
 		entityType, name, source, spec.FeedID, spec.SourceEntityID,
-		spec.TrackEnvironment, spec.CountryOfOrigin, spec.Key.Type, spec.Key.Value, spec.Classification, spec.Exercise).Scan(&id)
+		spec.TrackEnvironment, spec.CountryOfOrigin, spec.Key.Type, spec.Key.Value, spec.Classification, spec.Exercise, spec.Affiliation).Scan(&id)
 	if err != nil {
 		return "", false, fmt.Errorf("insert entity for %s: %w", spec.Key, err)
 	}

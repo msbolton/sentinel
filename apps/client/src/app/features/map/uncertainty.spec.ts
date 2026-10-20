@@ -10,9 +10,12 @@ function covFromEllipse(semiMajorM: number, semiMinorM: number, orientationDeg: 
   const c = Math.cos(theta);
   const s = Math.sin(theta);
   return {
-    posCovLatLat: s1Sq * c * c + s2Sq * s * s,
-    posCovLatLon: (s1Sq - s2Sq) * s * c,
-    posCovLonLon: s1Sq * s * s + s2Sq * c * c,
+    pnPn: s1Sq * c * c + s2Sq * s * s,
+    pnPe: (s1Sq - s2Sq) * s * c,
+    pnPu: 0,
+    pePe: s1Sq * s * s + s2Sq * c * c,
+    pePu: 0,
+    puPu: 0,
   };
 }
 
@@ -26,6 +29,25 @@ describe('ellipseFromCovariance', () => {
     expect(res!.orientationDeg).toBeCloseTo(35, 6);
     // 35° CW from North = 55° CCW from East
     expect(res!.rotationRad).toBeCloseTo((55 * Math.PI) / 180, 6);
+  });
+
+  it('decodes a gateway stream entity payload shaped like bridge.go output', () => {
+    // bridge.go serialises en.Kinematics.PositionCovariance with keys pnPn/pnPe/pnPu/pePe/pePu/puPu
+    const wireEntity = JSON.parse(
+      JSON.stringify({
+        id: 'sig-1',
+        entityType: 'SIGNAL',
+        kinematics: {
+          positionCovariance: covFromEllipse(1800, 420, 32),
+        },
+      }),
+    );
+    const res = ellipseFromCovariance(wireEntity.kinematics?.positionCovariance);
+    expect(res).not.toBeNull();
+    expect(res!.semiMajorM).toBeCloseTo(1800, 6);
+    expect(res!.semiMinorM).toBeCloseTo(420, 6);
+    expect(res!.orientationDeg).toBeCloseTo(32, 6);
+    expect(res!.rotationRad).toBeCloseTo(((90 - 32) * Math.PI) / 180, 6);
   });
 
   it('handles axis-aligned and circular covariances', () => {
@@ -49,9 +71,9 @@ describe('ellipseFromCovariance', () => {
   it('returns null for absent, zero, negative, or non-positive-definite covariances', () => {
     expect(ellipseFromCovariance(null)).toBeNull();
     expect(ellipseFromCovariance({})).toBeNull();
-    expect(ellipseFromCovariance({ posCovLatLat: 0, posCovLonLon: 100 })).toBeNull();
-    expect(ellipseFromCovariance({ posCovLatLat: -10, posCovLonLon: 100 })).toBeNull();
-    expect(ellipseFromCovariance({ posCovLatLat: 10, posCovLatLon: 20, posCovLonLon: 10 })).toBeNull();
-    expect(ellipseFromCovariance({ posCovLatLat: Number.NaN, posCovLonLon: 10 })).toBeNull();
+    expect(ellipseFromCovariance({ pnPn: 0, pePe: 100 })).toBeNull();
+    expect(ellipseFromCovariance({ pnPn: -10, pePe: 100 })).toBeNull();
+    expect(ellipseFromCovariance({ pnPn: 10, pnPe: 20, pePe: 10 })).toBeNull();
+    expect(ellipseFromCovariance({ pnPn: Number.NaN, pePe: 10 })).toBeNull();
   });
 });

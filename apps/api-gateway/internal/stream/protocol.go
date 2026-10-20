@@ -77,6 +77,7 @@ type Entity struct {
 	MilStd2525dSymbol string                 `json:"milStd2525dSymbol,omitempty"`
 	Metadata          map[string]interface{} `json:"metadata"`
 	Affiliations      []string               `json:"affiliations"`
+	Affiliation       string                 `json:"affiliation,omitempty"`
 	CreatedAt         string                 `json:"createdAt"`
 	UpdatedAt         string                 `json:"updatedAt"`
 	LastSeenAt        string                 `json:"lastSeenAt,omitempty"`

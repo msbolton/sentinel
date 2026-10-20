@@ -24,9 +24,9 @@ export interface EllipseAxes {
  */
 export function ellipseFromCovariance(cov?: PositionCovariance | null): EllipseAxes | null {
   if (!cov) return null;
-  const nn = cov.posCovLatLat;
-  const ne = cov.posCovLatLon ?? 0;
-  const ee = cov.posCovLonLon;
+  const nn = cov.pnPn;
+  const ne = cov.pnPe ?? 0;
+  const ee = cov.pePe;
   if (
     nn == null ||
     ee == null ||

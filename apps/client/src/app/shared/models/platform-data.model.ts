@@ -208,10 +208,12 @@ export interface Orientation {
 }
 
 export interface PositionCovariance {
-  posCovLatLat?: number;
-  posCovLatLon?: number;
-  posCovLonLon?: number;
-  posCovAltAlt?: number;
+  pnPn?: number;
+  pnPe?: number;
+  pnPu?: number;
+  pePe?: number;
+  pePu?: number;
+  puPu?: number;
 }
 
 export interface KinematicState {

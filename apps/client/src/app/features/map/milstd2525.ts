@@ -5,7 +5,13 @@ import { Feed } from '../../shared/models/feed.model';
 import { svgToDataUrl } from './cesium-config';
 
 const TWENTY_DIGITS = /^\d{20}$/;
+export const MAX_SYMBOL_CACHE_SIZE = 512;
 const symbolCache = new Map<string, string>();
+
+/** Visible for tests: number of cached symbol data URLs. */
+export function symbolCacheSize(): number {
+  return symbolCache.size;
+}
 
 /**
  * True when any feed in `feedId`, `lastFeedId` or `sources[].feedId` is a
@@ -112,7 +118,7 @@ function setAndCodeFor(
     case EntityType.VESSEL:
       return entity.trackEnvironment === TrackEnvironment.SUBSURFACE ? ['35', '110000'] : ['30', '120000'];
     case EntityType.CYBER:
-      return ['40', '110000'];
+      return ['60', '110000'];
     default:
       switch (entity.trackEnvironment) {
         case TrackEnvironment.AIR:
@@ -149,16 +155,26 @@ export function sidcFor(
 }
 
 /**
- * Renders a MIL-STD-2525D SIDC with `milsymbol` as a cached SVG data URL.
+ * Renders a MIL-STD-2525D SIDC with `milsymbol` as a bounded LRU-cached SVG data URL.
  */
 export function symbolImage(sidc: string, size = 32): string {
   const key = size === 32 ? sidc : `${sidc}@${size}`;
-  let cached = symbolCache.get(key);
-  if (!cached) {
-    const svg = new ms.Symbol(sidc, { size }).asSVG();
-    cached = svgToDataUrl(svg);
-    symbolCache.set(key, cached);
+  const existing = symbolCache.get(key);
+  if (existing !== undefined) {
+    // Refresh LRU order
+    symbolCache.delete(key);
+    symbolCache.set(key, existing);
+    return existing;
   }
+  const svg = new ms.Symbol(sidc, { size }).asSVG();
+  const cached = svgToDataUrl(svg);
+  if (symbolCache.size >= MAX_SYMBOL_CACHE_SIZE) {
+    const oldest = symbolCache.keys().next().value;
+    if (oldest !== undefined) {
+      symbolCache.delete(oldest);
+    }
+  }
+  symbolCache.set(key, cached);
   return cached;
 }
 

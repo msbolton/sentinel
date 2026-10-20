@@ -171,6 +171,31 @@ func TestFromProtoConvertsEllipseToCovarianceAndDerivesCEP95(t *testing.T) {
 	if o2.CircularError == nil || math.Abs(*o2.CircularError-244.77) > 0.01 {
 		t.Errorf("CircularError from explicit covariance = %v, want 244.77", o2.CircularError)
 	}
+
+	// Swapped axes (semi_major < semi_minor): (420, 1800, 32) puts the 420 m
+	// axis along 32° and the 1800 m axis along 122°, so it must yield the
+	// exact same covariance and CEP95 as (1800, 420, 122).
+	mSwapped := &sentinelv1.Observation{
+		SourceEntityId: "sig-swapped",
+		Uncertainty:    &sentinelv1.MeasurementUncertainty{SemiMajor: 420, SemiMinor: 1800, Orientation: 32},
+	}
+	mRotated := &sentinelv1.Observation{
+		SourceEntityId: "sig-rotated",
+		Uncertainty:    &sentinelv1.MeasurementUncertainty{SemiMajor: 1800, SemiMinor: 420, Orientation: 122},
+	}
+	oSwapped := FromProto(mSwapped)
+	oRotated := FromProto(mRotated)
+	if oSwapped.PosCovariance == nil || oRotated.PosCovariance == nil {
+		t.Fatal("expected non-nil PosCovariance for swapped and rotated ellipses")
+	}
+	for i := 0; i < 6; i++ {
+		if math.Abs(oSwapped.PosCovariance[i]-oRotated.PosCovariance[i]) > 1e-6 {
+			t.Errorf("PosCovariance[%d]: swapped=%v, rotated=%v", i, oSwapped.PosCovariance[i], oRotated.PosCovariance[i])
+		}
+	}
+	if oSwapped.CircularError == nil || oRotated.CircularError == nil || math.Abs(*oSwapped.CircularError-*oRotated.CircularError) > 1e-6 {
+		t.Errorf("CircularError: swapped=%v, rotated=%v", oSwapped.CircularError, oRotated.CircularError)
+	}
 }
 
 func TestFromProtoCopiesPolarAndIgnoresServiceOwnedEmplacementFields(t *testing.T) {

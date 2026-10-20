@@ -5,6 +5,8 @@ import {
   ViewChild,
   ElementRef,
   signal,
+  computed,
+  Signal,
   effect,
   NgZone,
   ChangeDetectionStrategy,
@@ -245,6 +247,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private flightPathLines: any[] = [];
   private flightPathKey = '';
 
+  /**
+   * Set of feed IDs configured with `config.military === true`. Uses a value
+   * equality comparator so periodic `FeedService.poll()` refreshes that do not
+   * change military flags do not trigger a billboard resync.
+   */
+  private readonly militaryFeedIds: Signal<ReadonlySet<string>>;
+
   constructor(
     private readonly ngZone: NgZone,
     private readonly router: Router,
@@ -262,9 +271,29 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly emplacements: EmplacementService,
     private readonly feedService: FeedService,
   ) {
-    // Re-sync billboards when feed configs load or change (e.g. military toggled).
+    this.militaryFeedIds = computed<ReadonlySet<string>>(
+      () => {
+        const ids = new Set<string>();
+        for (const f of this.feedService.feeds()) {
+          if (f.config?.['military'] === true) {
+            ids.add(f.id);
+          }
+        }
+        return ids;
+      },
+      {
+        equal: (a, b) => {
+          if (a.size !== b.size) return false;
+          for (const id of a) {
+            if (!b.has(id)) return false;
+          }
+          return true;
+        },
+      },
+    );
+    // Re-sync billboards only when the set of military feed IDs actually changes.
     effect(() => {
-      this.feedService.feeds();
+      this.militaryFeedIds();
       this.ngZone.runOutsideAngular(() => untracked(() => this.resyncMilitarySymbols()));
     });
     // Entities stay in the viewer when their layer is hidden (show=false) so
@@ -360,7 +389,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   async ngAfterViewInit(): Promise<void> {
     await this.initCesium();
-    if (!this.feedService.hasLoaded) {
+    if (!this.feedService.hasLoaded && !this.feedService.loading()) {
       this.feedService.load().subscribe({ error: () => undefined });
     }
     this.geofences.load().subscribe({ error: () => undefined });
@@ -850,6 +879,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         : HEADING_ROTATED_TYPES.has(entity.entityType) ? entity.heading ?? null : null;
     const rotation = headingDeg != null ? -Cesium.Math.toRadians(headingDeg) : 0;
     const signalEllipse = this.buildSignalEllipse(entity, cesiumColor, isStale);
+    const ellipseKey = signalEllipse
+      ? `${signalEllipse.semiMajorAxis}:${signalEllipse.semiMinorAxis}:${signalEllipse.rotation}:${isStale}`
+      : '';
 
     const existing = this.entityMap.get(entity.id);
     const shown = this.layerVisibility.isVisible(entity);
@@ -886,12 +918,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         existing.billboard.rotation = rotation;
         existing.billboard.color = (untintedBillboard ? this.Cesium.Color.WHITE : cesiumColor).withAlpha(billboardAlpha);
       }
+      existing._uses2525 = uses2525;
       if (existing.label) {
         existing.label.fillColor = this.Cesium.Color.WHITE.withAlpha(billboardAlpha);
       }
-      existing.ellipse = signalEllipse
-        ? (Cesium.EllipseGraphics ? new Cesium.EllipseGraphics(signalEllipse) : signalEllipse)
-        : undefined;
+      if (existing._ellipseKey !== ellipseKey) {
+        existing._ellipseKey = ellipseKey;
+        existing.ellipse = signalEllipse
+          ? (Cesium.EllipseGraphics ? new Cesium.EllipseGraphics(signalEllipse) : signalEllipse)
+          : undefined;
+      }
       // An entity first seen without an altitude was clamped to ground;
       // lift it once a fix with altitude arrives (and vice versa).
       if (existing._heightRef !== heightRef) {
@@ -970,6 +1006,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       cesiumEntity._posProp = posProp;
       cesiumEntity._heightRef = heightRef;
       cesiumEntity._labelText = labelText;
+      cesiumEntity._uses2525 = uses2525;
+      cesiumEntity._ellipseKey = ellipseKey;
       this.entityMap.set(entity.id, cesiumEntity);
     }
 
@@ -1848,9 +1886,30 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   private resyncMilitarySymbols(): void {
     if (!this.viewer || !this.Cesium || this.entityMap.size === 0) return;
+    let changed = false;
     for (const cesiumEntity of this.entityMap.values()) {
       const entity = cesiumEntity._sentinelEntity as Entity | undefined;
-      if (entity) this.addOrUpdateCesiumEntity(entity);
+      if (!entity || !cesiumEntity.billboard) continue;
+      const uses2525 = this.usesMilStdSymbol(entity);
+      if (cesiumEntity._uses2525 === uses2525) continue;
+      cesiumEntity._uses2525 = uses2525;
+      const cesiumColor = this.entityColor(entity);
+      const isStale = this.isEntityStale(entity);
+      const billboardAlpha = isStale ? 0.4 : 1.0;
+      const untintedBillboard = uses2525 || this.isMilitaryAircraft(entity);
+      const headingDeg = uses2525
+        ? null
+        : entity.entityType === EntityType.VESSEL
+          ? vesselHeading(entity)
+          : HEADING_ROTATED_TYPES.has(entity.entityType) ? entity.heading ?? null : null;
+      const rotation = headingDeg != null ? -this.Cesium.Math.toRadians(headingDeg) : 0;
+      cesiumEntity.billboard.image = this.getBillboardImage(entity);
+      cesiumEntity.billboard.rotation = rotation;
+      cesiumEntity.billboard.color = (untintedBillboard ? this.Cesium.Color.WHITE : cesiumColor).withAlpha(billboardAlpha);
+      changed = true;
+    }
+    if (changed) {
+      this.scheduleRender();
     }
   }
 

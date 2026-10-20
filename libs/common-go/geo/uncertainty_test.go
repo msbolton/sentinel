@@ -84,7 +84,6 @@ func TestEllipseCovarianceRoundTrip(t *testing.T) {
 func TestCEP95(t *testing.T) {
 	near(t, "circular", CEP95(100*100, 0, 100*100), 244.77, 0.01)
 	near(t, "same via ellipse", CEP95(Cov2FromEllipse(Ellipse95*100, Ellipse95*100, 0)), 244.77, 0.01)
-	near(t, "cep alias", CEP(100*100, 0, 100*100), 244.77, 0.01)
 	if got := CEP95(0, 0, 0); got != 0 {
 		t.Errorf("CEP95(0,0,0) = %v, want 0", got)
 	}

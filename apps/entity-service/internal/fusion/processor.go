@@ -281,7 +281,7 @@ func fusedUpdate(id string, r *Report) store.FusedUpdate {
 		KeyType: r.Key.Type, KeyValue: r.Key.Value, Name: o.DisplayName,
 		Lat: o.Position.Latitude, Lon: o.Position.Longitude, Altitude: o.Position.AltitudeMeters,
 		Heading: o.Heading, SpeedKnots: o.SpeedKnots, Course: o.Course,
-		TrackEnvironment: enumOrEmpty(o.TrackEnvironment), CountryOfOrigin: o.CountryOfOrigin,
+		TrackEnvironment: enumOrEmpty(o.TrackEnvironment), CountryOfOrigin: o.CountryOfOrigin, Affiliation: enumOrEmpty(o.Affiliation),
 		Platform: platformJSON(o), Kinematics: kinematicsJSON(o),
 		Classification: enumOrEmpty(o.Classification), Exercise: o.GetExercise(),
 	}
