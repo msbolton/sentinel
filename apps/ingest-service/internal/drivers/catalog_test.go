@@ -71,6 +71,7 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 		"tcp2":       `{"mode": "connect", "host": "feeds.example", "port": 7000, "format": "cot", "tls": {"enabled": true}}`,
 		"tcp3":       `{"mode": "listen", "port": 6000, "maxMessagesPerSec": 1000, "maxMessagesPerSecPerSender": 50}`,
 		"grpc":       `{"port": 6200}`,
+		"grpc2":      `{"port": 6200, "exercise": true}`,
 		"udp":        `{"port": 10110, "format": "nmea-ais"}`,
 		"udp2":       `{"port": 10111, "encoding": "json", "allow": ["10.0.0.0/8", "192.0.2.7"], "maxMessageBytes": 1500, "maxMessagesPerSec": 0}`,
 		"udp3":       `{"port": 10112, "maxMessagesPerSec": 1000, "maxMessagesPerSecPerSender": 50}`,
@@ -88,6 +89,8 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 			d = "stream"
 		case "celestrak2":
 			d = "celestrak"
+		case "grpc2":
+			d = "grpc"
 		case "tcp2", "tcp3":
 			d = "tcp"
 		case "udp2", "udp3", "udp4", "udp5", "udp6":
@@ -140,6 +143,7 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		{"grpc", `{"port": 80}`, "/config/port"},
 		{"grpc", `{"port":6200,"tls":{"enabled":true,"requireClientCrt":true}}`, "/config/tls"},
 		{"grpc", `{"port": 6200, "backpressure": "drop"}`, "/config/backpressure"},
+		{"grpc", `{"port": 6200, "exercise": "yes"}`, "/config/exercise"},
 		{"tcp", `{"mode": "listen"}`, "/config/port"},
 		{"tcp", `{"mode": "listen", "port": 80}`, "/config/port"},
 		{"tcp", `{"mode": "connect", "port": 7000}`, "/config/host"},

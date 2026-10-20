@@ -126,6 +126,9 @@ type CommonOptions struct {
 	// Classification is the default level stamped on this feed's
 	// observations (bare sentinel.v1.Classification name; "" = UNCLASSIFIED).
 	Classification string `json:"classification"`
+	// Exercise marks everything the connection brings in as synthetic
+	// (exercise or simulation); ORed onto each observation.
+	Exercise bool `json:"exercise"`
 	// Direction narrows a "both" driver to one way; "" keeps the driver's.
 	Direction string `json:"direction"`
 	// Policy is the outbound sharing policy (entity types, feeds, boxes,

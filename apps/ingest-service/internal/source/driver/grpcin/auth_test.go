@@ -113,7 +113,7 @@ func TestGetSessionAndListEmplacements(t *testing.T) {
 		{ID: "e-other", Name: "Elsewhere", Mobility: "MOBILE", SensorType: "RF", FeedID: &other, Classification: "UNCLASSIFIED", Active: true},
 	}}
 	f := tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: feed, Classification: "CONFIDENTIAL"})
-	r := start(t, map[string]any{"classification": "CONFIDENTIAL", "senderManagedEmplacements": true, "maxMessagesPerSec": 50}, nil, f, emps, nil)
+	r := start(t, map[string]any{"classification": "CONFIDENTIAL", "senderManagedEmplacements": true, "maxMessagesPerSec": 50, "exercise": true}, nil, f, emps, nil)
 	ctx, cancel := withToken(secretA)
 	defer cancel()
 	s, err := r.client(t).GetSession(ctx, &ingestv1.GetSessionRequest{})
@@ -121,7 +121,7 @@ func TestGetSessionAndListEmplacements(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s.GetFeedId() != feed || s.GetClassificationFloor() != sentinelv1.Classification_CLASSIFICATION_CONFIDENTIAL ||
-		!s.GetSenderManagedEmplacements() || s.GetMaxMessageBytes() != 65536 || s.GetMaxMessagesPerSec() != 50 {
+		!s.GetSenderManagedEmplacements() || s.GetMaxMessageBytes() != 65536 || s.GetMaxMessagesPerSec() != 50 || !s.GetExercise() {
 		t.Errorf("session = %v", s)
 	}
 	// Only this feed's emplacements, and none above the token's ceiling.

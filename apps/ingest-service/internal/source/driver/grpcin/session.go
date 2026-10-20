@@ -19,6 +19,7 @@ func (s *service) GetSession(ctx context.Context, _ *ingestv1.GetSessionRequest)
 		SenderManagedEmplacements: s.d.cfg.SenderManagedEmplacements,
 		MaxMessageBytes:           uint32(s.d.maxMessageBytes),
 		MaxMessagesPerSec:         uint32(s.d.maxPerSec),
+		Exercise:                  s.d.cfg.Exercise,
 	}, nil
 }
 

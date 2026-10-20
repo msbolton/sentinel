@@ -732,7 +732,7 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 		fail(fmt.Errorf("building outbound pump: %w", err))
 		return
 	}
-	runner := NewRunner(spec.ID, spec.Driver, drv, s.pub, s.metrics, logger, RunnerOptions{RawPolicy: common.RawPayload, RawMax: s.opts.RawMax, FencingToken: inst.token, Classification: common.Classification, Pump: pump,
+	runner := NewRunner(spec.ID, spec.Driver, drv, s.pub, s.metrics, logger, RunnerOptions{RawPolicy: common.RawPayload, RawMax: s.opts.RawMax, FencingToken: inst.token, Classification: common.Classification, Exercise: common.Exercise, Pump: pump,
 		NoRepeatSuppression: noRepeatSuppression(spec.Driver)})
 
 	runCtx, cancel := context.WithCancel(ctx)

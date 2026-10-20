@@ -264,6 +264,35 @@ func TestRunnerRepeatSuppressionCanBeTurnedOff(t *testing.T) {
 	}
 }
 
+func TestRunnerORsTheConnectionsExercise(t *testing.T) {
+	ts := time.Unix(1700000000, 0)
+	for _, tc := range []struct {
+		name          string
+		conn, emitted bool
+		want          bool
+	}{
+		{"live connection, live report", false, false, false},
+		{"exercise connection marks every report", true, false, true},
+		{"an exercise report stays exercise", false, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pub := &memPublisher{}
+			drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+				o := fix("a", 40, -80, ts)
+				o.Exercise = tc.emitted
+				return sink.Emit(ctx, o)
+			}}
+			r := NewRunner("f", "d", drv, pub, nil, nil, RunnerOptions{Exercise: tc.conn})
+			if err := r.Run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := pub.observations()[0].Exercise; got != tc.want {
+				t.Fatalf("exercise = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunnerStampsClassification(t *testing.T) {
 	ts := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
