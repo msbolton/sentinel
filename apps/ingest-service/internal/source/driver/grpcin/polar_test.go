@@ -247,3 +247,13 @@ func TestUnboundPolarWithAPositionKeepsIt(t *testing.T) {
 		t.Errorf("position %v,%v polar %v", o.Latitude, o.Longitude, o.Polar)
 	}
 }
+
+func TestUnboundAltitudeOnlyPolarIsRefused(t *testing.T) {
+	r := start(t, nil, nil, tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1"}), &fakeEmplacements{}, nil)
+	st := openStream(t, r, secretA)
+	rep := polarReport("p", 90, 1000, nil)
+	rep.GetObservation().Position = &sentinelv1.Coordinate{AltitudeMeters: ptr(3000.0)}
+	if ack := send(t, st, rep); ack.GetReason() != "unknown_emplacement" {
+		t.Errorf("%v, want unknown_emplacement", ack)
+	}
+}

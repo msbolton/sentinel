@@ -44,6 +44,12 @@ func badPolar(p *sentinelv1.PolarMeasurement) bool {
 	return false
 }
 
+// altitudeOnly reports a position of exactly 0,0 with an altitude: it carries
+// only the target's altitude, for a polar measurement to place, and is no fix.
+func altitudeOnly(c *sentinelv1.Coordinate) bool {
+	return c != nil && c.Latitude == 0 && c.Longitude == 0 && c.AltitudeMeters != nil
+}
+
 // trueAzimuth turns an azimuth into one from true north, in [0, 360). A
 // PLATFORM azimuth needs the platform's heading.
 func trueAzimuth(az float64, ref string, heading *float64) (float64, bool) {

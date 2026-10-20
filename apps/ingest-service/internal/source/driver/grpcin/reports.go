@@ -168,7 +168,7 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 		if badPolar(p) {
 			return s.reject(ack, "bad_polar"), nil
 		}
-		if m.GetPosition() == nil && !bound {
+		if (m.GetPosition() == nil || altitudeOnly(m.GetPosition())) && !bound {
 			return s.reject(ack, "unknown_emplacement"), nil
 		}
 	}
@@ -221,7 +221,7 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 		}
 		// A position of exactly 0,0 with an altitude carries only the
 		// target's altitude: the polar places it, at that altitude.
-		if o.Polar != nil && o.HasPosition && o.Latitude == 0 && o.Longitude == 0 && o.Altitude != nil {
+		if o.Polar != nil && o.HasPosition && altitudeOnly(m.GetPosition()) {
 			o.HasPosition = false
 		}
 		org, why := s.originOf(e, at)
