@@ -1,0 +1,57 @@
+<section class="emplacements" [attr.aria-label]="'Emplacements of ' + feed().name">
+  <div class="emplacements-head">
+    <h4>Emplacements</h4>
+    @if (canWrite() && bindable()) {
+      <button type="button" class="btn btn-secondary btn-sm new-emplacement" (click)="startNew()">+ New emplacement</button>
+    }
+  </div>
+  @if (error(); as message) {
+    <p class="form-error" role="alert">{{ message }}</p>
+  }
+  @if (editing(); as d) {
+    @if (d.id === null) {
+      <app-emplacement-editor [feed]="feed()" />
+    }
+  }
+  @if (rows().length === 0) {
+    <p class="muted empty">
+      @if (bindable()) {
+        No emplacements yet. Senders declare theirs with UpsertEmplacement, or add one here.
+      } @else {
+        None. Emplacements can be bound only to gRPC connections for now.
+      }
+    </p>
+  } @else {
+    <ul class="emp-list">
+      @for (row of rows(); track row.e.id) {
+        <li class="emp-row" [class.inactive]="!row.e.active">
+          <span class="emp-name">{{ row.e.name }}</span>
+          @if (!row.e.active) {
+            <span class="badge hb-inactive">inactive</span>
+          } @else {
+            @if (row.badge; as b) {
+              <span class="badge" [class]="'badge hb-' + b.tone">{{ b.label }}</span>
+            }
+          }
+          @if (row.intervalSec) {
+            <span class="muted mono interval">every {{ row.intervalSec }} s</span>
+          }
+          @if (canWrite()) {
+            <span class="emp-actions">
+              <button type="button" class="btn btn-ghost btn-sm" (click)="edit(row.e)">Edit</button>
+              @if (row.e.active) {
+                <button type="button" class="btn btn-ghost btn-sm deactivate" (click)="deactivate(row.e)">Deactivate</button>
+              }
+              @if (canDelete()) {
+                <button type="button" class="btn btn-ghost btn-sm btn-delete" (click)="remove(row.e)">Delete</button>
+              }
+            </span>
+          }
+        </li>
+        @if (editing()?.id === row.e.id) {
+          <li class="emp-editor"><app-emplacement-editor [feed]="feed()" /></li>
+        }
+      }
+    </ul>
+  }
+</section>

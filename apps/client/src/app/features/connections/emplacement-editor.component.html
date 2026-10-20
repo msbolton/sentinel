@@ -1,0 +1,79 @@
+@if (draft(); as d) {
+  <form class="editor" novalidate (submit)="$event.preventDefault(); save()">
+    @if (error(); as message) {
+      <p class="form-error" role="alert">{{ message }}</p>
+    }
+    <p class="locked muted">Connection <span class="mono">{{ feed().name }}</span></p>
+    <label class="field"><span class="field-label">Name</span>
+      <input type="text" name="name" [value]="d.name" [disabled]="!canWrite()" (input)="patch({ name: text($event) })" required />
+    </label>
+    <div class="field-pair">
+      <label class="field"><span class="field-label">Sensor</span>
+        <select name="sensorType" [disabled]="!canWrite()" (change)="patch({ sensorType: $any(text($event)) })">
+          @for (s of sensorTypes; track s) { <option [value]="s" [selected]="s === d.sensorType">{{ sensorLabels[s] }}</option> }
+        </select>
+      </label>
+      <label class="field"><span class="field-label">Mobility</span>
+        <select name="mobility" [disabled]="!canWrite()" (change)="patch({ mobility: $any(text($event)) })">
+          <option value="FIXED" [selected]="d.mobility === 'FIXED'">Fixed</option>
+          <option value="MOBILE" [selected]="d.mobility === 'MOBILE'">Mobile</option>
+        </select>
+      </label>
+    </div>
+    <div class="field-pair">
+      <label class="field"><span class="field-label">Latitude</span>
+        <input type="number" name="lat" step="any" [value]="latText()" [disabled]="!canWrite()" (input)="typeCoordinate('lat', $event)" />
+      </label>
+      <label class="field"><span class="field-label">Longitude</span>
+        <input type="number" name="lon" step="any" [value]="lonText()" [disabled]="!canWrite()" (input)="typeCoordinate('lon', $event)" />
+      </label>
+    </div>
+    <button type="button" class="link show-on-map" [disabled]="!d.position" (click)="showOnMap()">
+      <app-icon name="map-pin" [size]="14" /> Show on map
+    </button>
+    <div class="field-pair">
+      <label class="field"><span class="field-label">Altitude (m)</span>
+        <input type="number" name="altitude" step="any" [value]="d.altitude ?? ''" [disabled]="!canWrite()" (input)="patch({ altitude: num($event) })" />
+      </label>
+      <label class="field"><span class="field-label">Boresight (°)</span>
+        <input type="number" name="boresightDeg" step="any" [value]="d.boresightDeg" [disabled]="!canWrite()" (input)="patch({ boresightDeg: num($event) ?? 0 })" />
+      </label>
+    </div>
+    <div class="field-pair">
+      <label class="field"><span class="field-label">Width (°)</span>
+        <input type="number" name="azimuthWidthDeg" min="0" max="360" step="any" [value]="d.coverage.azimuthWidthDeg" [disabled]="!canWrite()" (input)="patchCoverage({ azimuthWidthDeg: num($event) ?? 0 })" />
+      </label>
+      <label class="field"><span class="field-label">Range (km)</span>
+        <input type="number" name="maxRangeKm" min="0" step="any" [value]="km(d.coverage.maxRangeM)" [disabled]="!canWrite()" (input)="patchCoverage({ maxRangeM: (num($event) ?? 0) * 1000 })" />
+      </label>
+      <label class="field"><span class="field-label">Min (km)</span>
+        <input type="number" name="minRangeKm" min="0" step="any" [value]="km(d.coverage.minRangeM)" [disabled]="!canWrite()" (input)="patchCoverage({ minRangeM: (num($event) ?? 0) * 1000 })" />
+      </label>
+    </div>
+    <div class="field-pair">
+      <label class="field"><span class="field-label">Azimuth from</span>
+        <select name="azimuthReference" [disabled]="!canWrite()" (change)="patch({ azimuthReference: $any(text($event)) })">
+          <option value="TRUE_NORTH" [selected]="d.azimuthReference === 'TRUE_NORTH'">True north</option>
+          <option value="PLATFORM" [selected]="d.azimuthReference === 'PLATFORM'">Platform heading</option>
+        </select>
+      </label>
+      <label class="field"><span class="field-label">Classification</span>
+        <select name="classification" [disabled]="!canWrite()" (change)="patch({ classification: text($event) })">
+          @for (l of levels(); track l) { <option [value]="l" [selected]="l === d.classification">{{ l }}</option> }
+        </select>
+      </label>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" name="active" [checked]="d.active" [disabled]="!canWrite()" (change)="patch({ active: checked($event) })" /> Active</label>
+      <label [attr.title]="exerciseLocked() ? 'This connection is an exercise, so its emplacements are too' : null">
+        <input type="checkbox" name="exercise" [checked]="d.exercise || exerciseLocked()" [disabled]="!canWrite() || exerciseLocked()" (change)="patch({ exercise: checked($event) })" /> Exercise
+      </label>
+    </div>
+    <div class="actions">
+      @if (canWrite()) {
+        <button type="submit" class="btn btn-primary btn-sm" [disabled]="saving()">{{ saving() ? 'Saving…' : 'Save' }}</button>
+      }
+      <button type="button" class="btn btn-sm" (click)="cancel()">Cancel</button>
+    </div>
+  </form>
+}

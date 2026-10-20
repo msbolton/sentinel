@@ -1,0 +1,16 @@
+:host { display: block; }
+
+.form-error { margin: 0; font-size: 0.75rem; color: var(--accent-red); }
+.locked { margin: 0; font-size: 0.75rem; }
+.editor {
+  display: flex; flex-direction: column; gap: 10px; padding: 10px 10px 12px;
+  border-radius: var(--radius-md); background: var(--bg-primary); border: 1px solid var(--border-color);
+}
+.field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0;
+  input, select { height: 32px; padding: 0 10px; min-width: 0; }
+}
+.field-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+.field-pair { display: flex; gap: 8px; flex-wrap: wrap; }
+.show-on-map { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; font-size: 0.75rem; }
+.checks { display: flex; gap: 16px; font-size: 0.8rem; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
