@@ -83,11 +83,15 @@ func TestTrackerSeedsFromRecentRows(t *testing.T) {
 	if s := tr.State("recent", sec, t0); s != HeartbeatOnline {
 		t.Errorf("recent: %s", s)
 	}
-	if s := tr.State("old", sec, t0); s != HeartbeatPending {
-		t.Errorf("old: %s, want pending (not seeded, within the grace)", s)
+	if s := tr.State("old", sec, t0); s != HeartbeatOffline {
+		t.Errorf("old: %s, want offline (seeded stale)", s)
 	}
 	if s := tr.State("none", 0, t0); s != HeartbeatPending {
 		t.Errorf("none: %s", s)
+	}
+	tr.Heartbeat("old", sec, t0)
+	if s := tr.State("old", sec, t0); s != HeartbeatOnline {
+		t.Errorf("old after a real heartbeat: %s", s)
 	}
 }
 

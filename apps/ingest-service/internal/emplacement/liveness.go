@@ -13,8 +13,8 @@ const (
 	HeartbeatOnline HeartbeatState = "online"
 	// HeartbeatOffline: heard from, but not within three intervals.
 	HeartbeatOffline HeartbeatState = "offline"
-	// HeartbeatNever: not heard from since the connection started, past the
-	// startup grace.
+	// HeartbeatNever: no heartbeat recorded, in memory or in the row, past
+	// the startup grace.
 	HeartbeatNever HeartbeatState = "never"
 	// HeartbeatPending: not heard from yet, within the startup grace.
 	HeartbeatPending HeartbeatState = "pending"
@@ -114,17 +114,14 @@ func (t *Tracker) Forget(id string) {
 	delete(t.beats, id)
 }
 
-// Seed records the heartbeats rows hold that are still within three of
-// their intervals at now.
-func (t *Tracker) Seed(rows []Emplacement, now time.Time) {
+// Seed records the heartbeats rows hold, stale ones too: a row heard from
+// once reads offline, not never. Rows with no heartbeat are left out.
+func (t *Tracker) Seed(rows []Emplacement, _ time.Time) {
 	for _, e := range rows {
 		if e.LastHeartbeatAt == nil {
 			continue
 		}
-		sec := RowIntervalSec(e)
-		if now.Sub(*e.LastHeartbeatAt) < Lapse(sec) {
-			t.Heartbeat(e.ID, sec, *e.LastHeartbeatAt)
-		}
+		t.Heartbeat(e.ID, RowIntervalSec(e), *e.LastHeartbeatAt)
 	}
 }
 
