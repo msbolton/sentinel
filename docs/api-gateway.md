@@ -139,7 +139,7 @@ Every frame is a JSON envelope: `{ "type": string, "data": object, "ts": RFC3339
 |------|------|-------------|
 | `connection:ack` | `{ clientId, viewport, serverTime }` | Sent on connect; the initial viewport is the whole globe |
 | `viewport:updated`, `entity:subscribed`, `entity:unsubscribed` | | Acknowledgements |
-| `entity:batch` | `EntityEvent[]` | Created, updated and position events coalesced over 200 ms, filtered per client; every entity carries `feedId`, `ageoutState`, `identities` and `lastObservedAt` |
+| `entity:batch` | `EntityEvent[]` | Created, updated and position events coalesced over 200 ms, filtered per client; every entity carries `feedId`, `ageoutState`, `identities` and `lastObservedAt` (`exercise: true` when the entity is exercise data, omitted when false) |
 | `entity:deleted` | `EntityEvent` | Broadcast to all clients; `bulk` and `count` are set for a clear-all |
 | `events.entity.stale`, `events.entity.agedout`, `events.entity.restored` | `{ id, feedId, ageoutState, lastSeenAt }[]` | Broadcast to all clients, coalesced into one array frame per type per 200 ms flush (the ageout pass can emit a thousand per cycle) |
 | `alert:new` | `Alert` | New alert from `alerts.events`, whichever service produced it |
@@ -174,7 +174,7 @@ The authenticated user carries realm roles plus the `sentinel-api` client roles,
 
 | Method | Path | Roles | Notes |
 |--------|------|-------|-------|
-| GET | `/api/v1/export/entities.geojson` | any | FeatureCollection of live entities with a position (`[lon, lat, alt]` points; properties `name`, `entityType`, `classification`, `feedId`, `lastFeedId`, `source`, `heading`, `speedKnots`, `course`, `altitude`, `sidc`, `affiliation`, `trackEnvironment`, `countryOfOrigin`, `ageoutState`, `lastObservedAt`). Query `bbox=west,south,east,north`, `types=`, `feeds=`, `page` (1), `limit` (1000, max 5000). `X-Total-Count` header. Reads through the entity service with the caller's identity, so the clearance ceiling applies |
+| GET | `/api/v1/export/entities.geojson` | any | FeatureCollection of live entities with a position (`[lon, lat, alt]` points; properties `name`, `entityType`, `classification`, `exercise`, `feedId`, `lastFeedId`, `source`, `heading`, `speedKnots`, `course`, `altitude`, `sidc`, `affiliation`, `trackEnvironment`, `countryOfOrigin`, `ageoutState`, `lastObservedAt`). Query `bbox=west,south,east,north`, `types=`, `feeds=`, `page` (1), `limit` (1000, max 5000). `X-Total-Count` header. Reads through the entity service with the caller's identity, so the clearance ceiling applies |
 | GET | `/api/v1/export/entities.kml` | any | The same as KML Placemarks (ExtendedData, `TimeStamp`, absolute altitude). With `link=1&refresh=30` it returns a `NetworkLink` document that reopens the plain URL every `refresh` seconds (min 5) and after the view stops, passing the view as `bbox`; every other parameter, including `api_key`, is kept in the link |
 | GET | `/api/v1/auth/api-keys` | any user token | The caller's live keys (`id`, `name`, `prefix`, `classification`, `createdAt`, `expiresAt`, `lastUsedAt`) |
 | POST | `/api/v1/auth/api-keys` | any user token | Body `{ name, classification?, expiresInDays? }`. 201 with the key plus `secret` (`sk_…`, shown once). A key carries the viewer role only and `classification = min(requested, caller's clearance)` |

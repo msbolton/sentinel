@@ -27,6 +27,7 @@ The fused track: one row per object the platform knows about. Feeds update it th
 | `"sourceEntityId"` | `VARCHAR(255)` | `NULL` | The source's own id for the object |
 | `"primaryIdentityType"` / `"primaryIdentityValue"` | `VARCHAR` | `NULL` | The canonical identity the entity was created from (ICAO24, MMSI, NORAD_ID, COT_UID, FEED_LOCAL) |
 | `classification` | `VARCHAR(50)` | `'UNCLASSIFIED'` | Security classification |
+| `exercise` | `BOOLEAN` | `FALSE` | Synthetic (exercise or simulation) mark; sticky (`e.exercise OR b.exercise`), also set when a duplicate or stale exercise report resolves to the entity, and never cleared |
 | `position` | `geometry(Point, 4326)` | `NULL` | WGS84 point |
 | `altitude`, `heading`, `"speedKnots"`, `course`, `pitch`, `roll` | `DOUBLE PRECISION` | `NULL` | Last accepted kinematics |
 | `kinematics` | `JSONB` | `{}` | Velocity, acceleration and covariance of the last fix |
@@ -139,7 +140,7 @@ An index covers `"feedId"`. Every create and revoke sends a NOTIFY on the channe
 
 | Column | Description |
 |--------|-------------|
-| `alerts.id`, `"alertType"`, `severity`, `title`, `description`, `"entityId"`, `"relatedEntityIds"`, `position`, `"ruleId"`, `metadata`, `"createdAt"`, `"acknowledgedAt"`, `"acknowledgedBy"`, `"resolvedAt"` | An alert from any producer; analytics alerts carry `anomalyType` and `score` in `metadata` and keep the producer's id |
+| `alerts.id`, `"alertType"`, `severity`, `title`, `description`, `"entityId"`, `"relatedEntityIds"`, `position`, `"ruleId"`, `metadata`, `classification`, `exercise`, `"createdAt"`, `"acknowledgedAt"`, `"acknowledgedBy"`, `"resolvedAt"` | An alert from any producer; analytics alerts carry `anomalyType` and `score` in `metadata` and keep the producer's id. `exercise` is stamped where the alert is made (by `alert-service` from the primary and related entities, and by `analytics-service` from an entity lookup that also raises the alert's classification to the entity's; a lookup error marks the alert `exercise` so outbound connections fail closed) |
 | `alert_rules.id`, `name`, `"ruleType"`, `config`, `"monitoredEntityTypes"`, `severity`, `enabled`, timestamps | Rule definitions (geofence polygons, thresholds) |
 
 ### sentinel.links
@@ -163,7 +164,7 @@ What the analytics service has learned about each entity and where it departs fr
 
 ### GIS views (`db/schema/90_gis_views.sql`)
 
-`sentinel.entities_live` presents live, non-deleted entities with a position in snake_case for GeoServer (`entity_type`, `classification`, `classification_rank`, `feed_id`, `last_feed_id`, `source`, `affiliation`, `track_environment`, `heading`, `speed_knots`, `course`, `altitude`, `sidc`, `ageout_state`, `last_observed_at`, `last_seen_at`, `lat`, `lon`, `geom`). `entities_live_u`, `_c`, `_s` and `_ts` filter it by rank; `locations_geo` adds a `geom` point to locations. `gt_pk_metadata` tells GeoTools the views' primary key. The role `sentinel_gis` may read the views only, never `entities`. `09_gis_views_drop.sql` drops the views at the start of an apply so column changes on the tables go through; the views are recreated at the end.
+`sentinel.entities_live` presents live, non-deleted entities with a position in snake_case for GeoServer (`entity_type`, `classification`, `classification_rank`, `feed_id`, `last_feed_id`, `source`, `affiliation`, `track_environment`, `heading`, `speed_knots`, `course`, `altitude`, `sidc`, `ageout_state`, `exercise`, `last_observed_at`, `last_seen_at`, `lat`, `lon`, `geom`). `entities_live_u`, `_c`, `_s` and `_ts` filter it by rank; `locations_geo` adds a `geom` point to locations. `gt_pk_metadata` tells GeoTools the views' primary key. The role `sentinel_gis` may read the views only, never `entities`. `09_gis_views_drop.sql` drops the views at the start of an apply so column changes on the tables go through; the views are recreated at the end.
 
 ### sentinel.api_keys
 
