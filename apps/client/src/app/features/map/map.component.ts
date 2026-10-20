@@ -18,7 +18,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, NavigationEnd } from '@angular/router';
 import { EntityDetailPanelComponent } from '../../shared/components/entity-detail-panel.component';
 import { IconComponent } from '../../shared/components/icon.component';
-import { Subscription, debounceTime, Subject, throttleTime, bufferTime, filter, timer, switchMap, catchError, EMPTY } from 'rxjs';
+import { Subscription, debounceTime, Subject, throttleTime, bufferTime, filter, timer, interval, switchMap, catchError, EMPTY } from 'rxjs';
 import {
   Entity,
   EntityType,
@@ -65,9 +65,9 @@ import { formatAltitude } from '../../shared/geo-format';
 import { entityLabel } from './entity-label';
 import { GeofenceService } from '../../core/services/geofence.service';
 import { DRAFT_ID, GeofenceLayer } from './geofence-layer';
-import { EMPLACEMENTS_LAYER, EMPLACEMENT_DRAFT_ID, EmplacementLayer, emplacementDrawingOf } from './emplacement-layer';
+import { EMPLACEMENT_DRAFT_ID, EmplacementLayer, emplacementDrawingOf, siteEntityOf, sitesShown } from './emplacement-layer';
 import { EmplacementService } from '../../core/services/emplacement.service';
-import { emplacementIdOf } from '../../shared/models/emplacement.model';
+import { emplacementIdOf, rowHeartbeatOf, siteHeartbeatOf } from '../../shared/models/emplacement.model';
 import { FeedService } from '../../core/services/feed.service';
 import { ellipseFromCovariance } from './uncertainty';
 import { isFromMilitaryFeed, sidcFor, symbolDataUrl } from './milstd2525';
@@ -342,29 +342,33 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.ngZone.runOutsideAngular(() => untracked(() => this.geofenceLayer?.sync(zones, selectedId, (id) => this.geofenceAnchorPosition(id), draft)));
     });
 
-    // Emplacements, their coverage and the form's unsaved preview, on the
-    // built-in emplacements feed's layer.
+    // Emplacements, their coverage and the form's unsaved preview, each site
+    // under its connection's layer toggle.
     effect(() => {
       // Read the signals here so the effect re-runs on each; the method re-reads them untracked.
       this.emplacements.emplacements();
       this.emplacements.selectedId();
       this.emplacements.draft();
       this.emplacements.showCoverage();
-      this.layerVisibility.isVisible(EMPLACEMENTS_LAYER);
+      this.layerVisibility.hidden();
       untracked(() => {
         this.syncLoadedEmplacements();
         this.resyncEmplacements();
       });
     });
-    // Emplacements change rarely; refresh them every 30 s while their layer is shown.
+    // Emplacements change rarely: refresh them every 30 s while the map is shown.
     this.subscriptions.add(
       timer(0, 30_000)
-        .pipe(
-          filter(() => this.layerVisibility.isVisible(EMPLACEMENTS_LAYER)),
-          switchMap(() => this.emplacements.load().pipe(catchError(() => EMPTY))),
-        )
+        .pipe(switchMap(() => this.emplacements.load().pipe(catchError(() => EMPTY))))
         .subscribe(),
     );
+    // A site goes silent with no event to say so: look again every 3 s.
+    this.subscriptions.add(interval(3_000).subscribe(() => this.ngZone.runOutsideAngular(() => this.resyncEmplacements())));
+    // "Show on map" from an emplacement editor: fly there once the viewer is up.
+    effect(() => {
+      this.emplacements.focus();
+      untracked(() => this.ngZone.runOutsideAngular(() => this.flyToFocus()));
+    });
 
     // A selected aircraft, drone or satellite shows how high it flies: a line to the ground.
     effect(() => {
@@ -481,6 +485,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.drawTool = new GeofenceDrawTool(this.viewer, Cesium);
       this.geofenceLayer.sync(this.geofences.zones(), this.geofences.selectedId(), (id) => this.geofenceAnchorPosition(id));
       this.resyncEmplacements();
+      this.flyToFocus();
 
       // Set dark atmosphere
       this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
@@ -527,12 +532,6 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     handler.setInputAction((click: any) => {
       const pickedObject = this.viewer.scene.pick(click.position);
 
-      if (this.emplacements.picking()) {
-        const p = this.pickLngLat(click.position);
-        if (p) this.ngZone.run(() => this.emplacements.pickAt(p[1], p[0]));
-        return;
-      }
-
       if (this.drawSession()) {
         this.drawClick(click.position, pickedObject);
         this.viewer.selectedEntity = undefined; // the viewer's own bracket means nothing while drawing
@@ -549,12 +548,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         return;
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelEmplacement) {
+        // A site selects its SENSOR entity, so the detail panel shows it.
         const id = pickedObject.id._sentinelEmplacement as string;
         this.viewer.selectedEntity = undefined;
         if (id !== EMPLACEMENT_DRAFT_ID) {
+          const site = siteEntityOf(this.emplacementEntities.values(), id);
           this.ngZone.run(() => {
-            const feedId = this.emplacements.emplacements().find((e) => e.id === id)?.feedId;
-            void this.router.navigate(['/connections'], feedId ? { queryParams: { open: feedId } } : {});
+            this.emplacements.select(id);
+            if (site) this.selectedEntity.set(site);
           });
         }
         return;
@@ -1496,16 +1497,34 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.scheduleRender();
   }
 
-  /** Redraw the emplacement layer from the service's state, drawing nothing while its layer is hidden. */
+  /**
+   * Redraw the emplacement layer from the service's state: the sites whose
+   * connection's layer is shown, each greyed while silent. The heartbeat is
+   * judged from its SENSOR entity against the server's clock; the REST row
+   * only bootstraps it until the entity is on the stream.
+   */
   private resyncEmplacements(): void {
-    const list = this.emplacements.emplacements();
+    const list = sitesShown(this.emplacements.emplacements(), this.layerVisibility.hidden());
+    const rows = new Map(list.map((e) => [e.id, e]));
     const selectedId = this.emplacements.selectedId();
     const draft = this.emplacements.draft();
     const coverage = this.emplacements.showCoverage();
-    const visible = this.layerVisibility.isVisible(EMPLACEMENTS_LAYER);
+    const now = this.wsService.serverNow();
+    const heartbeat = (id: string) => {
+      const row = rows.get(id);
+      return siteHeartbeatOf(siteEntityOf(this.emplacementEntities.values(), id), now) ?? (row ? rowHeartbeatOf(row) : null);
+    };
     this.ngZone.runOutsideAngular(() =>
-      this.emplacementLayer?.sync(visible ? list : [], selectedId, visible ? draft : null, coverage, (id) => this.emplacementPosition(id)),
+      this.emplacementLayer?.sync(list, selectedId, draft, coverage, (id) => this.emplacementPosition(id), heartbeat),
     );
+  }
+
+  /** "Show on map" from an emplacement editor: fly there once, when the viewer is up. */
+  private flyToFocus(): void {
+    const focus = this.emplacements.focus();
+    if (!focus || !this.viewer || !this.Cesium) return;
+    this.emplacements.focus.set(null);
+    this.viewer.camera.flyTo({ destination: this.Cesium.Cartesian3.fromDegrees(focus.lon, focus.lat, 60_000), duration: 1.2 });
   }
 
   /** Redraw the geofence layer from the service's current state. */

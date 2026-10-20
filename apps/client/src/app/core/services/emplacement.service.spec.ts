@@ -3,7 +3,7 @@ import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { EMPLACEMENT_WRITER_ROLES, EmplacementService, errorMessage } from './emplacement.service';
 import { AuthService } from './auth.service';
-import { Emplacement, newDraft } from '../../shared/models/emplacement.model';
+import { Emplacement } from '../../shared/models/emplacement.model';
 
 const e1 = { id: 'e1', name: 'Bravo', version: 3 } as Emplacement;
 const e2 = { id: 'e2', name: 'alpha', version: 1 } as Emplacement;
@@ -54,14 +54,6 @@ describe('EmplacementService', () => {
     http.expectOne('/api/v1/emplacements/e1').flush(null, { status: 204, statusText: 'No Content' });
     expect(service.emplacements().map((e) => e.id)).toEqual(['e2']);
     expect(service.selectedId()).toBeNull();
-  });
-
-  it('sets the draft position from a map pick and stops picking', () => {
-    service.draft.set(newDraft());
-    service.picking.set(true);
-    service.pickAt(51.5, -0.1);
-    expect(service.draft()?.position).toEqual({ lat: 51.5, lon: -0.1 });
-    expect(service.picking()).toBe(false);
   });
 
   it('leaves writing to operators and admins, as the gateway does', () => {
