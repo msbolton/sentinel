@@ -693,6 +693,12 @@ export interface Entity {
    * PlatformDetail oneof field name ("adsb", "ais", ...).
    */
   platforms: { [key: string]: PlatformDetail };
+  /**
+   * The entity is synthetic: an exercise or simulation contributed to it. Once
+   * set it stays set; outbound connections do not send it unless their
+   * policy allows exercise data.
+   */
+  exercise: boolean;
 }
 
 export interface Entity_MetadataEntry {
@@ -1930,6 +1936,7 @@ function createBaseEntity(): Entity {
     sources: [],
     lastObservedAt: undefined,
     platforms: {},
+    exercise: false,
   };
 }
 
@@ -2049,6 +2056,9 @@ export const Entity = {
     Object.entries(message.platforms).forEach(([key, value]) => {
       Entity_PlatformsEntry.encode({ key: key as any, value }, writer.uint32(322).fork()).ldelim();
     });
+    if (message.exercise !== false) {
+      writer.uint32(328).bool(message.exercise);
+    }
     return writer;
   },
 
@@ -2331,6 +2341,13 @@ export const Entity = {
             message.platforms[entry40.key] = entry40.value;
           }
           continue;
+        case 41:
+          if (tag !== 328) {
+            break;
+          }
+
+          message.exercise = reader.bool();
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2408,6 +2425,7 @@ export const Entity = {
           return acc;
         }, {})
         : {},
+      exercise: isSet(object.exercise) ? globalThis.Boolean(object.exercise) : false,
     };
   },
 
@@ -2539,6 +2557,9 @@ export const Entity = {
         });
       }
     }
+    if (message.exercise !== false) {
+      obj.exercise = message.exercise;
+    }
     return obj;
   },
 
@@ -2606,6 +2627,7 @@ export const Entity = {
       },
       {},
     );
+    message.exercise = object.exercise ?? false;
     return message;
   },
 };

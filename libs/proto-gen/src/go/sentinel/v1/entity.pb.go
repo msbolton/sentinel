@@ -1075,7 +1075,11 @@ type Entity struct {
 	LastObservedAt *timestamppb.Timestamp `protobuf:"bytes,39,opt,name=last_observed_at,json=lastObservedAt,proto3" json:"last_observed_at,omitempty"`
 	// Protocol-specific detail blocks, one per kind, keyed by the
 	// PlatformDetail oneof field name ("adsb", "ais", ...).
-	Platforms     map[string]*PlatformDetail `protobuf:"bytes,40,rep,name=platforms,proto3" json:"platforms,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Platforms map[string]*PlatformDetail `protobuf:"bytes,40,rep,name=platforms,proto3" json:"platforms,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// The entity is synthetic: an exercise or simulation contributed to it. Once
+	// set it stays set; outbound connections do not send it unless their
+	// policy allows exercise data.
+	Exercise      bool `protobuf:"varint,41,opt,name=exercise,proto3" json:"exercise,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1374,6 +1378,13 @@ func (x *Entity) GetPlatforms() map[string]*PlatformDetail {
 		return x.Platforms
 	}
 	return nil
+}
+
+func (x *Entity) GetExercise() bool {
+	if x != nil {
+		return x.Exercise
+	}
+	return false
 }
 
 // SourceContribution summarises what one feed has contributed to a fused entity.
@@ -2126,7 +2137,7 @@ const file_sentinel_v1_entity_proto_rawDesc = "" +
 	"Dimensions\x12\x16\n" +
 	"\x06length\x18\x01 \x01(\x01R\x06length\x12\x14\n" +
 	"\x05width\x18\x02 \x01(\x01R\x05width\x12\x16\n" +
-	"\x06height\x18\x03 \x01(\x01R\x06height\"\xde\x11\n" +
+	"\x06height\x18\x03 \x01(\x01R\x06height\"\xfa\x11\n" +
 	"\x06Entity\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x128\n" +
 	"\ventity_type\x18\x02 \x01(\x0e2\x17.sentinel.v1.EntityTypeR\n" +
@@ -2178,7 +2189,8 @@ const file_sentinel_v1_entity_proto_rawDesc = "" +
 	"identities\x129\n" +
 	"\asources\x18& \x03(\v2\x1f.sentinel.v1.SourceContributionR\asources\x12D\n" +
 	"\x10last_observed_at\x18' \x01(\v2\x1a.google.protobuf.TimestampR\x0elastObservedAt\x12@\n" +
-	"\tplatforms\x18( \x03(\v2\".sentinel.v1.Entity.PlatformsEntryR\tplatforms\x1a;\n" +
+	"\tplatforms\x18( \x03(\v2\".sentinel.v1.Entity.PlatformsEntryR\tplatforms\x12\x1a\n" +
+	"\bexercise\x18) \x01(\bR\bexercise\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aY\n" +
