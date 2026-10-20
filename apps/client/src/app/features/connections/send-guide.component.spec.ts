@@ -95,7 +95,7 @@ describe('SendGuideComponent', () => {
       expect(text(section)).toContain('Issue one under Tokens below.');
       expect(blocks()).toEqual([
         'grpcurl -plaintext -import-path proto -proto sentinel/ingest/v1/ingest_service.proto -H "authorization: Bearer $SENTINEL_INGEST_TOKEN" listener.example:6200 sentinel.ingest.v1.IngestService/GetSession',
-        'ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure',
+        'ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure --config examples/coastal-esm.yaml',
       ]);
       expect(copyButtons()).toHaveLength(2);
       const links = Array.from(el.querySelectorAll<HTMLAnchorElement>('.protos a')).map((a) => a.getAttribute('href'));

@@ -113,10 +113,14 @@ export function grpcurlCommand(t: GrpcTarget): string {
   ].join(' ');
 }
 
-/** The EW sensor simulator's command line for this connection. */
+/**
+ * The EW sensor simulator's command line for this connection. The CLI needs an emplacement
+ * position, so the line names the bundled example config, which resolves in the image
+ * (WORKDIR /app) and from apps/ew-sensor; the flags override what it sets.
+ */
 export function ewSensorCommand(t: GrpcTarget): string {
   const security = !t.tls ? '--insecure' : t.requireClientCert ? '--tls --ca ca.pem --cert client.pem --key client-key.pem' : '--tls --ca ca.pem';
-  return `ew-sensor --addr ${shellQuote(grpcEndpoint(t))} --token "$SENTINEL_INGEST_TOKEN" ${security}`;
+  return `ew-sensor --addr ${shellQuote(grpcEndpoint(t))} --token "$SENTINEL_INGEST_TOKEN" ${security} --config examples/coastal-esm.yaml`;
 }
 
 /**
