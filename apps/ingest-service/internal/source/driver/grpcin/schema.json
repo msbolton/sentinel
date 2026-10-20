@@ -14,6 +14,7 @@
     "maxMessagesPerSecPerSender": { "type": "integer", "minimum": 0, "default": 0, "title": "Maximum reports per second per sender", "description": "0 means no per-sender limit." },
     "maxPublishBatch": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100, "title": "Maximum reports per Publish call" },
     "senderManagedEmplacements": { "type": "boolean", "default": false, "title": "Senders may manage their emplacements" },
+    "maxEmplacements": { "type": "integer", "minimum": 1, "maximum": 256, "default": 16, "title": "Most emplacements senders may manage" },
     "enforceCoverage": { "type": "boolean", "default": false, "title": "Refuse reports outside the emplacement's coverage" },
     "ownshipToleranceMs": { "type": "integer", "minimum": 0, "maximum": 60000, "default": 2000, "title": "Ownship tolerance (ms)", "description": "How far past a mobile emplacement's newest position report its measurements may be placed." },
     "backpressure": { "type": "string", "enum": ["block"], "title": "Backpressure policy", "description": "A gRPC connection always blocks: each report is acked once it is queued." },

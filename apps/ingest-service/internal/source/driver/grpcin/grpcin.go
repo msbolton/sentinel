@@ -38,6 +38,9 @@ const (
 	maxPublishBatch        = 1000
 	maxSenders             = 50
 
+	defaultMaxEmplacements = 16
+	maxMaxEmplacements     = 256
+
 	defaultOwnshipToleranceMs = 2000
 	maxOwnshipToleranceMs     = 60000
 )
@@ -69,6 +72,8 @@ type Config struct {
 	MaxMessagesPerSecPerSender int      `json:"maxMessagesPerSecPerSender"`
 	MaxPublishBatch            int      `json:"maxPublishBatch"`
 	SenderManagedEmplacements  bool     `json:"senderManagedEmplacements"`
+	// MaxEmplacements is the most emplacements the senders may make (default 16).
+	MaxEmplacements int `json:"maxEmplacements"`
 	// EnforceCoverage refuses a report whose position lies outside its
 	// emplacement's coverage.
 	EnforceCoverage bool `json:"enforceCoverage"`
@@ -113,6 +118,7 @@ type Driver struct {
 	floor  string
 
 	maxConns, maxMessageBytes, maxPerSec, maxPublishBatch int
+	maxEmplacements                                       int
 
 	allow     transport.Allowlist
 	limit     *transport.Limiter
@@ -194,6 +200,13 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	if tol := intOr(c.OwnshipToleranceMs, defaultOwnshipToleranceMs); tol < 0 || tol > maxOwnshipToleranceMs {
 		return nil, fmt.Errorf("feed %s: ownshipToleranceMs must be 0 to %d", spec.FeedID, maxOwnshipToleranceMs)
 	}
+	maxEmps := c.MaxEmplacements
+	if maxEmps == 0 {
+		maxEmps = defaultMaxEmplacements
+	}
+	if maxEmps < 1 || maxEmps > maxMaxEmplacements {
+		return nil, fmt.Errorf("feed %s: maxEmplacements must be 1 to %d", spec.FeedID, maxMaxEmplacements)
+	}
 	batch := c.MaxPublishBatch
 	if batch == 0 {
 		batch = defaultPublishBatch
@@ -221,6 +234,7 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 		maxMessageBytes: size,
 		maxPerSec:       intOr(c.MaxMessagesPerSec, defaultMessagesPerSec),
 		maxPublishBatch: batch,
+		maxEmplacements: maxEmps,
 		allow:           allow,
 		senders:         transport.NewSenders(maxSenders),
 		perSender:       transport.NewSenderLimiter(c.MaxMessagesPerSecPerSender, transport.SenderLimiterKeys),

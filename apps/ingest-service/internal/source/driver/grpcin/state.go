@@ -25,7 +25,7 @@ const sensorEvery = time.Second
 // anchors the track's window and the ownship tolerance.
 const maxClockLead = 5 * time.Second
 
-var errBadState = errors.New("an emplacement_state needs a position inside WGS84 bounds, and finite heading and velocity, and a time within a minute of now")
+var errBadState = errors.New("an emplacement_state needs a position inside WGS84 bounds, and finite heading and velocity, and a time no more than 5 s ahead of the server's")
 
 // state takes a mobile emplacement's report of itself: it extends the
 // emplacement's track (the origin of its measurements), records its

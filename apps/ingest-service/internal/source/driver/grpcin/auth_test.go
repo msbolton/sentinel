@@ -141,17 +141,6 @@ func TestGetSessionAndListEmplacements(t *testing.T) {
 	}
 }
 
-func TestUpsertEmplacementWaitsForC2(t *testing.T) {
-	f := tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1"})
-	r := start(t, nil, nil, f, nil, nil)
-	ctx, cancel := withToken(secretA)
-	defer cancel()
-	_, err := r.client(t).UpsertEmplacement(ctx, &ingestv1.UpsertEmplacementRequest{})
-	if status.Code(err) != codes.Unimplemented {
-		t.Fatalf("UpsertEmplacement = %v, want Unimplemented", err)
-	}
-}
-
 // The registry cancels a token's calls, and only that token's.
 func TestCallsRevokeOnlyThatToken(t *testing.T) {
 	var c calls
