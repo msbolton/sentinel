@@ -76,6 +76,31 @@ func TestEvaluateReasonsInOrder(t *testing.T) {
 		t.Errorf("reexport on: %+v", d)
 	}
 
+	// Exercise comes after the loop and re-export guards and before the
+	// classification ceiling.
+	exLoop := aircraft("tak-hq", 40, -75)
+	exLoop.Exercise = true
+	if d := Evaluate(base, ctx, exLoop); d.Allow || d.Reason != ReasonLoop {
+		t.Errorf("exercise loop: %+v", d)
+	}
+	exOther := aircraft("opensky", 40, -75)
+	exOther.Exercise = true
+	exOther.Sources = append(exOther.Sources, &sentinelv1.SourceContribution{FeedId: "tak-field"})
+	if d := Evaluate(base, ctx, exOther); d.Allow || d.Reason != ReasonReexport {
+		t.Errorf("exercise reexport: %+v", d)
+	}
+	exSecret := aircraft("opensky", 40, -75)
+	exSecret.Exercise = true
+	exSecret.Classification = sentinelv1.Classification_CLASSIFICATION_SECRET
+	if d := Evaluate(base, ctx, exSecret); d.Allow || d.Reason != ReasonExercise {
+		t.Errorf("exercise before classification: %+v", d)
+	}
+	allowEx := base
+	allowEx.AllowExercise = true
+	if d := Evaluate(allowEx, ctx, exSecret); d.Allow || d.Reason != ReasonClassification {
+		t.Errorf("allowed exercise still meets the ceiling: %+v", d)
+	}
+
 	secret := aircraft("opensky", 40, -75)
 	secret.Classification = sentinelv1.Classification_CLASSIFICATION_SECRET
 	if d := Evaluate(base, ctx, secret); d.Allow || d.Reason != ReasonClassification {
@@ -114,6 +139,27 @@ func TestEvaluateReasonsInOrder(t *testing.T) {
 	}
 	if d := Evaluate(base, ctx, nil); d.Allow {
 		t.Error("nil entity allowed")
+	}
+}
+
+func TestEvaluateDeniesExercise(t *testing.T) {
+	ex := aircraft("opensky", 40, -75)
+	ex.Exercise = true
+	if d := Evaluate(Policy{}, Context{}, ex); d.Allow || d.Reason != ReasonExercise {
+		t.Errorf("exercise with a zero policy: %+v", d)
+	}
+	if d := Evaluate(Policy{AllowExercise: true}, Context{}, ex); !d.Allow {
+		t.Errorf("exercise with allowExercise: %+v", d)
+	}
+	live := aircraft("opensky", 40, -75)
+	for _, p := range []Policy{{}, {AllowExercise: true}} {
+		if d := Evaluate(p, Context{}, live); !d.Allow {
+			t.Errorf("live entity, %+v: %+v", p, d)
+		}
+	}
+	p, err := Parse([]byte(`{"allowExercise": true}`))
+	if err != nil || !p.AllowExercise {
+		t.Errorf("parse allowExercise: %+v, %v", p, err)
 	}
 }
 

@@ -1,7 +1,8 @@
 // Package policy decides what an outbound connection may send. It is pure:
 // a parsed policy, a little context about the connection, and an entity or
 // alert in, a decision out. The checks run cheapest first and the first
-// denial wins, so the reason names the rule that stopped the entity.
+// denial wins, so the reason names the rule that stopped the entity: loop,
+// re-export, exercise, classification ceiling, type, feed, then boxes.
 package policy
 
 import (
@@ -50,6 +51,7 @@ type Policy struct {
 	Boxes                 []Box       `json:"boxes"`
 	ClassificationCeiling string      `json:"classificationCeiling"`
 	Reexport              bool        `json:"reexport"`
+	AllowExercise         bool        `json:"allowExercise"` // exercise (synthetic) entities and their alerts go out; by default they never leave Sentinel
 	Alerts                AlertPolicy `json:"alerts"`
 }
 
@@ -68,6 +70,7 @@ type Context struct {
 const (
 	ReasonLoop           = "loop"
 	ReasonReexport       = "reexport"
+	ReasonExercise       = "exercise"
 	ReasonClassification = "classification"
 	ReasonType           = "type"
 	ReasonFeed           = "feed"
@@ -119,6 +122,10 @@ func Evaluate(p Policy, c Context, e *sentinelv1.Entity) Decision {
 	// Re-export: another connection's contributions stay put unless asked.
 	if !p.Reexport && contributed(e, func(id string) bool { return c.ConnectionFeedIDs[id] }) {
 		return deny(ReasonReexport)
+	}
+	// Exercise: synthetic data stays in Sentinel unless the policy allows it.
+	if e.GetExercise() && !p.AllowExercise {
+		return deny(ReasonExercise)
 	}
 	if classification.Rank(pbjson.EnumName(e.Classification)) > classification.Rank(p.ClassificationCeiling) {
 		return deny(ReasonClassification)

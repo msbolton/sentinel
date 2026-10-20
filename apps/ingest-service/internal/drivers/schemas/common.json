@@ -37,6 +37,7 @@
         },
         "classificationCeiling": { "type": "string", "enum": ["UNCLASSIFIED", "CONFIDENTIAL", "SECRET", "TOP_SECRET"], "default": "UNCLASSIFIED", "title": "Classification ceiling", "description": "Entities and alerts above this level are never sent." },
         "reexport": { "type": "boolean", "default": false, "title": "Re-export", "description": "Also send entities that another outbound connection contributed to (loops back to this connection are always prevented)." },
+        "allowExercise": { "type": "boolean", "default": false, "title": "Send exercise data", "description": "Also send entities marked EXERCISE, and their alerts. Off by default: synthetic data stays in Sentinel." },
         "alerts": {
           "type": "object", "title": "Alerts", "additionalProperties": false,
           "properties": {
