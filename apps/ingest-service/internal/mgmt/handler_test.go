@@ -18,6 +18,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/drivers"
 	"github.com/sentinel/ingest-service/internal/registry"
 	_ "github.com/sentinel/ingest-service/internal/source/all"
+	"github.com/sentinel/ingest-service/internal/source/driver"
 )
 
 type memStore struct {
@@ -270,8 +271,8 @@ func TestListAndFilters(t *testing.T) {
 		t.Fatalf("driver filter = %s", body)
 	}
 	_, body = do(t, srv, "GET", "/feeds?enabled=true", "", reqOpts{})
-	// Only the emplacements mirror is enabled out of the box: it needs no credentials.
-	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 1 || feeds[0].ID != "emplacements" {
+	// No built-in feed is enabled out of the box: each needs credentials or an operator.
+	if err := json.Unmarshal(body, &feeds); err != nil || len(feeds) != 0 {
 		t.Fatalf("enabled filter = %s", body)
 	}
 	// Every built-in feed is a source: direction=in lists all, out none.
@@ -1128,9 +1129,22 @@ func TestSecretPolicyIsEnforcedOnSave(t *testing.T) {
 	}
 }
 
+// No internal driver ships any more (the emplacements mirror was the only
+// one), so the refusal is checked against a catalog that has one.
 func TestCreateRefusesInternalDrivers(t *testing.T) {
-	srv, store, _ := newServer(t, "")
-	resp, out := do(t, srv, "POST", "/feeds", `{"name":"Second mirror","driver":"emplacement","config":{}}`, operator)
+	internal := driver.Definition{ID: "test-internal", Name: "Test internal", Internal: true,
+		New: func(driver.Spec, driver.Deps) (driver.Driver, error) { return nil, nil }}
+	catalog, err := drivers.Build(append(driver.All(), internal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newMemStore()
+	h := NewHandler(store, catalog, &fakeRuntime{live: map[string]bool{}}, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux, Auth(AuthOptions{}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	resp, out := do(t, srv, "POST", "/feeds", `{"name":"Second mirror","driver":"test-internal","config":{}}`, operator)
 	if resp.StatusCode != 422 {
 		t.Fatalf("status %d: %s", resp.StatusCode, out)
 	}
@@ -1141,7 +1155,6 @@ func TestCreateRefusesInternalDrivers(t *testing.T) {
 	if len(e.Details) == 0 || e.Details[0].Path != "/driver" || !strings.Contains(e.Details[0].Message, "internal") {
 		t.Fatalf("details = %+v", e.Details)
 	}
-	// The store starts with the builtins; the refused feed is not among them.
 	if feeds, _ := store.List(context.Background()); len(feeds) != len(registry.Builtins) {
 		t.Fatalf("a feed was stored: %d feeds, want the %d builtins", len(feeds), len(registry.Builtins))
 	}

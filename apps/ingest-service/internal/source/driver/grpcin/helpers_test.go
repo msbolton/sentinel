@@ -191,6 +191,7 @@ type fakeWriter struct {
 	mu      sync.Mutex
 	n       int
 	touched []touchCall
+	beats   []beatCall
 }
 
 func (w *fakeWriter) Create(_ context.Context, e emplacement.Emplacement) (emplacement.Emplacement, error) {
@@ -275,6 +276,26 @@ func (w *fakeWriter) touches() []touchCall {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return append([]touchCall(nil), w.touched...)
+}
+
+// beatCall is one Heartbeat the writer recorded.
+type beatCall struct {
+	id       string
+	interval int
+	at       time.Time
+}
+
+func (w *fakeWriter) Heartbeat(_ context.Context, id string, intervalSec int, at time.Time) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.beats = append(w.beats, beatCall{id: id, interval: intervalSec, at: at})
+	return nil
+}
+
+func (w *fakeWriter) heartbeats() []beatCall {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]beatCall(nil), w.beats...)
 }
 
 // emp is a live emplacement fixture; a fixed one gets a position.

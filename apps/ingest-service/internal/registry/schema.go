@@ -38,6 +38,8 @@ var RequiredColumns = []SchemaColumn{
 	{"ingest_replicas", "listener_host", feedsSchemaFile},
 	{"ingest_replicas", "listener_shared", feedsSchemaFile},
 	{"emplacements", "defaultSigma", emplacementsSchemaFile},
+	{"emplacements", "heartbeatIntervalSec", emplacementsSchemaFile},
+	{"emplacements", "lastHeartbeatAt", emplacementsSchemaFile},
 	{"ingest_tokens", "revokedAt", tokensSchemaFile},
 }
 

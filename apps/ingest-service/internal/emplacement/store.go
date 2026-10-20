@@ -41,7 +41,8 @@ func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
 const columns = `id::text, name, description, mobility, "sensorType",
 	ST_Y(position), ST_X(position), altitude, "boresightDeg", "azimuthReference",
 	coverage, "defaultSigma", "feedId", classification, exercise, active,
-	"lastReportAt", COALESCE("createdBy", ''), "createdAt", "updatedAt", version`
+	"lastReportAt", COALESCE("createdBy", ''), "createdAt", "updatedAt", version,
+	"heartbeatIntervalSec", "lastHeartbeatAt"`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -52,7 +53,7 @@ func scan(row rowScanner) (Emplacement, error) {
 	if err := row.Scan(&e.ID, &e.Name, &e.Description, &e.Mobility, &e.SensorType,
 		&lat, &lon, &e.Altitude, &e.BoresightDeg, &e.AzimuthReference,
 		&coverage, &sigma, &e.FeedID, &e.Classification, &e.Exercise, &e.Active,
-		&e.LastReportAt, &e.CreatedBy, &e.CreatedAt, &e.UpdatedAt, &e.Version); err != nil {
+		&e.LastReportAt, &e.CreatedBy, &e.CreatedAt, &e.UpdatedAt, &e.Version, &e.HeartbeatIntervalSec, &e.LastHeartbeatAt); err != nil {
 		return Emplacement{}, err
 	}
 	if lat != nil && lon != nil {
@@ -79,6 +80,10 @@ func mapErr(err error) error {
 			return ErrNameTaken
 		case "23503": // foreign_key_violation: feedId
 			return &ValidationError{Problems: []Problem{{Path: "/feedId", Message: "names no connection"}}}
+		case "23514": // check_violation: the connection rule; any other CHECK is Validate's to catch
+			if pg.ConstraintName == "emplacements_active_needs_feed" {
+				return &ValidationError{Problems: []Problem{{Path: "/feedId", Message: "is required for an active emplacement: bind it to a connection, or deactivate it"}}}
+			}
 		case "22P02": // invalid_text_representation: a malformed uuid
 			return ErrNotFound
 		}
@@ -202,11 +207,13 @@ func (s *PGStore) Update(ctx context.Context, id string, ifVersion int, fn func(
 			position = CASE WHEN $6::float8 IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint($7::float8, $6::float8), 4326) END,
 			altitude = $8, "boresightDeg" = $9, "azimuthReference" = $10, coverage = $11, "defaultSigma" = $12,
 			"feedId" = $13, classification = $14, exercise = $15, active = $16,
+			"heartbeatIntervalSec" = $17, "lastHeartbeatAt" = $18,
 			version = version + 1, "updatedAt" = NOW()
 			WHERE id = $1::uuid
 			RETURNING `+columns,
 			id, cur.Name, cur.Description, cur.Mobility, cur.SensorType, lat, lon, cur.Altitude, cur.BoresightDeg,
-			cur.AzimuthReference, coverage, sigma, cur.FeedID, cur.Classification, cur.Exercise, cur.Active))
+			cur.AzimuthReference, coverage, sigma, cur.FeedID, cur.Classification, cur.Exercise, cur.Active,
+			cur.HeartbeatIntervalSec, cur.LastHeartbeatAt))
 		if err != nil {
 			return mapErr(err)
 		}
@@ -230,10 +237,12 @@ func (s *PGStore) Delete(ctx context.Context, id string) error {
 	})
 }
 
-// Toucher records an emplacement's own report: the gRPC driver calls it for
-// a mobile emplacement's position reports, throttled.
+// Toucher records an emplacement's own reports: the grpc driver calls Touch
+// for a report (with a mobile one's position) and Heartbeat for a heartbeat,
+// each throttled on its own slot.
 type Toucher interface {
 	Touch(ctx context.Context, id string, pos *Point, alt *float64, at time.Time) error
+	Heartbeat(ctx context.Context, id string, intervalSec int, at time.Time) error
 }
 
 // Touch sets lastReportAt (never moving it back: replicas touch concurrently,
@@ -248,6 +257,22 @@ func (s *PGStore) Touch(ctx context.Context, id string, pos *Point, alt *float64
 		position = CASE WHEN $3::float8 IS NULL THEN position ELSE ST_SetSRID(ST_MakePoint($4::float8, $3::float8), 4326) END,
 		altitude = CASE WHEN $5::float8 IS NULL THEN altitude ELSE $5::float8 END
 		WHERE id = $1::uuid AND "deletedAt" IS NULL`, id, at, lat, lon, alt)
+	if err != nil {
+		return mapErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// Heartbeat records a heartbeat of a live emplacement: lastHeartbeatAt
+// (never moved back, as replicas write concurrently) and the interval it
+// declared. Like Touch it neither bumps the version nor notifies.
+func (s *PGStore) Heartbeat(ctx context.Context, id string, intervalSec int, at time.Time) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE sentinel.emplacements SET
+		"lastHeartbeatAt" = GREATEST(COALESCE("lastHeartbeatAt", $2), $2), "heartbeatIntervalSec" = $3
+		WHERE id = $1::uuid AND "deletedAt" IS NULL`, id, at, intervalSec)
 	if err != nil {
 		return mapErr(err)
 	}

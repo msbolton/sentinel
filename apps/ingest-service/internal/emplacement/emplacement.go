@@ -85,10 +85,16 @@ type Emplacement struct {
 	Exercise         bool       `json:"exercise"`
 	Active           bool       `json:"active"`
 	LastReportAt     *time.Time `json:"lastReportAt"`
-	CreatedBy        string     `json:"createdBy"`
-	CreatedAt        time.Time  `json:"createdAt"`
-	UpdatedAt        time.Time  `json:"updatedAt"`
-	Version          int        `json:"version"`
+	// HeartbeatIntervalSec and LastHeartbeatAt are what the row last recorded
+	// of the emplacement's heartbeats (the grpc driver writes them, throttled,
+	// with the server's receive time); null until the first heartbeat and
+	// after a change of connection.
+	HeartbeatIntervalSec *int       `json:"heartbeatIntervalSec"`
+	LastHeartbeatAt      *time.Time `json:"lastHeartbeatAt"`
+	CreatedBy            string     `json:"createdBy"`
+	CreatedAt            time.Time  `json:"createdAt"`
+	UpdatedAt            time.Time  `json:"updatedAt"`
+	Version              int        `json:"version"`
 }
 
 // Input is a create or PATCH body. A nil field is left as it is; FeedID ""

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -36,12 +37,15 @@ func testPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 	return pool, ctx
 }
 
+// fixed is an inactive fixed emplacement with no connection: an active one
+// needs a connection (emplacements_active_needs_feed).
 func fixed(name string) Emplacement {
 	e := New()
 	e.Name, e.Mobility, e.SensorType = name, MobilityFixed, "RADAR"
 	e.Position = &Point{Lat: 50.1, Lon: -4.2}
 	e.Coverage = Coverage{MaxRangeM: 60000, AzimuthWidthDeg: 120}
 	e.CreatedBy = "u1"
+	e.Active = false
 	return e
 }
 
@@ -207,11 +211,13 @@ func TestStoreFeedBinding(t *testing.T) {
 	if list, _ := s.List(ctx, Filter{FeedID: feed}); len(list) != 1 {
 		t.Fatalf("by feed = %v", list)
 	}
-	if _, err := pool.Exec(ctx, `DELETE FROM sentinel.feeds WHERE id = 'test-emp-feed'`); err != nil {
-		t.Fatal(err)
+	_, err = pool.Exec(ctx, `DELETE FROM sentinel.feeds WHERE id = 'test-emp-feed'`)
+	var pg *pgconn.PgError
+	if !errors.As(err, &pg) || pg.Code != "23503" {
+		t.Fatalf("deleting a feed that still has emplacements = %v, want a foreign key violation (registry.Delete lets them go first)", err)
 	}
-	if got, _ := s.Get(ctx, bound.ID); got.FeedID != nil {
-		t.Fatalf("deleting the feed must unbind, got %v", *got.FeedID)
+	if got, _ := s.Get(ctx, bound.ID); got.FeedID == nil {
+		t.Fatal("the refused delete unbound the emplacement")
 	}
 }
 
@@ -307,5 +313,76 @@ func TestStoreTouchNeverMovesLastReportAtBack(t *testing.T) {
 	}
 	if got, _ = s.Get(ctx, created.ID); got.LastReportAt == nil || !got.LastReportAt.Equal(newer.Add(time.Minute)) {
 		t.Fatalf("lastReportAt = %v after a newer touch", got.LastReportAt)
+	}
+}
+
+// The database refuses an active emplacement with no connection, and the
+// store answers it as the API's /feedId problem.
+func TestStoreActiveNeedsAConnection(t *testing.T) {
+	pool, ctx := testPool(t)
+	s := NewPGStore(pool)
+	e := fixed("test-active-unbound")
+	e.Active = true
+	_, err := s.Create(ctx, e)
+	var ve *ValidationError
+	if !errors.As(err, &ve) || len(ve.Problems) != 1 || ve.Problems[0].Path != "/feedId" {
+		t.Fatalf("an active emplacement with no connection = %v, want one /feedId problem", err)
+	}
+}
+
+func TestMapErrTurnsTheConnectionCheckIntoAProblem(t *testing.T) {
+	err := mapErr(&pgconn.PgError{Code: "23514", ConstraintName: "emplacements_active_needs_feed"})
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Problems[0].Path != "/feedId" {
+		t.Fatalf("mapErr = %v, want a /feedId problem", err)
+	}
+	other := &pgconn.PgError{Code: "23514", ConstraintName: "emplacements_fixed_has_position"}
+	if got := mapErr(other); !errors.Is(got, other) {
+		t.Fatalf("another CHECK came back as %v", got)
+	}
+}
+
+// A heartbeat is written quietly (no version, no notice), never moves
+// lastHeartbeatAt back, and an Update keeps it unless the write clears it.
+func TestStoreHeartbeat(t *testing.T) {
+	pool, ctx := testPool(t)
+	s := NewPGStore(pool)
+	created, err := s.Create(ctx, fixed("test-heartbeat"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	notices := listen(t, ctx, pool)
+	at := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	if err := s.Heartbeat(ctx, created.ID, 5, at); err != nil {
+		t.Fatal(err)
+	}
+	expectNoNotice(t, notices)
+	got, err := s.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != created.Version || got.HeartbeatIntervalSec == nil || *got.HeartbeatIntervalSec != 5 ||
+		got.LastHeartbeatAt == nil || !got.LastHeartbeatAt.Equal(at) {
+		t.Fatalf("after a heartbeat: %+v", got)
+	}
+	if err := s.Heartbeat(ctx, created.ID, 7, at.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Get(ctx, created.ID); !got.LastHeartbeatAt.Equal(at) || *got.HeartbeatIntervalSec != 7 {
+		t.Fatalf("after an older heartbeat: last %v, interval %v", got.LastHeartbeatAt, *got.HeartbeatIntervalSec)
+	}
+	kept, err := s.Update(ctx, created.ID, 0, func(e *Emplacement) error { e.Description = "edited"; return nil })
+	if err != nil || kept.LastHeartbeatAt == nil || !kept.LastHeartbeatAt.Equal(at) || kept.HeartbeatIntervalSec == nil {
+		t.Fatalf("an edit lost the heartbeat: %+v %v", kept, err)
+	}
+	cleared, err := s.Update(ctx, created.ID, 0, func(e *Emplacement) error {
+		e.LastHeartbeatAt, e.HeartbeatIntervalSec = nil, nil
+		return nil
+	})
+	if err != nil || cleared.LastHeartbeatAt != nil || cleared.HeartbeatIntervalSec != nil {
+		t.Fatalf("clearing the heartbeat: %+v %v", cleared, err)
+	}
+	if err := s.Heartbeat(ctx, "not-a-uuid", 5, at); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("heartbeat of a malformed id = %v", err)
 	}
 }
