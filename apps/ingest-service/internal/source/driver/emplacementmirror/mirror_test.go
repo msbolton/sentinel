@@ -293,7 +293,15 @@ func TestLeavingTheBoundMobileStateIsReported(t *testing.T) {
 type memFeeds struct {
 	mu    sync.Mutex
 	flags map[string]bool
-	fns   []func(string)
+	fns   map[int]func(string)
+	next  int
+}
+
+// subscribers is how many OnExerciseChange registrations are still live.
+func (m *memFeeds) subscribers() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.fns)
 }
 
 func (m *memFeeds) Exercise(id string) (bool, bool) {
@@ -304,9 +312,18 @@ func (m *memFeeds) Exercise(id string) (bool, bool) {
 }
 func (m *memFeeds) OnExerciseChange(fn func(string)) func() {
 	m.mu.Lock()
-	m.fns = append(m.fns, fn)
+	if m.fns == nil {
+		m.fns = map[int]func(string){}
+	}
+	id := m.next
+	m.next++
+	m.fns[id] = fn
 	m.mu.Unlock()
-	return func() {}
+	return func() {
+		m.mu.Lock()
+		delete(m.fns, id)
+		m.mu.Unlock()
+	}
 }
 func (m *memFeeds) set(id string, exercise bool) {
 	m.mu.Lock()
@@ -314,7 +331,10 @@ func (m *memFeeds) set(id string, exercise bool) {
 		m.flags = map[string]bool{}
 	}
 	m.flags[id] = exercise
-	fns := append([]func(string){}, m.fns...)
+	fns := make([]func(string), 0, len(m.fns))
+	for _, fn := range m.fns {
+		fns = append(fns, fn)
+	}
 	m.mu.Unlock()
 	for _, fn := range fns {
 		fn(id)
@@ -433,5 +453,37 @@ func TestConnectionExerciseChangeIsReported(t *testing.T) {
 	}
 	if n := count(sink.ids(), "mobile") + count(sink.ids(), "inactive"); n != 0 {
 		t.Errorf("a bound mobile or inactive emplacement was reported %d times, want 0", n)
+	}
+}
+
+// The driver the supervisor builds (through New) gets the connection source
+// from its deps: without it every mirror would report exercise emplacements as
+// real. It also lets go of the source when it stops.
+func TestNewWiresTheConnectionSource(t *testing.T) {
+	feeds := &memFeeds{}
+	feeds.set("ex", true)
+	src := &memSource{rows: map[string]emplacement.Emplacement{"a": bound("a", "ex", false)}}
+	drv, err := New(driver.Spec{FeedID: "emplacements", Driver: ID, Config: []byte(`{}`)},
+		driver.Deps{Logger: zap.NewNop(), Emplacements: src, Feeds: feeds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &memSink{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- drv.Run(ctx, sink) }()
+	waitFor(t, func() bool { return len(sink.ids()) >= 1 })
+	if !sink.last("a").Exercise {
+		t.Error("a driver built by New reported an exercise connection's emplacement as real")
+	}
+	if n := feeds.subscribers(); n != 1 {
+		t.Errorf("%d subscriptions while running, want 1", n)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned %v on cancel", err)
+	}
+	if n := feeds.subscribers(); n != 0 {
+		t.Errorf("%d subscriptions left after Run returned, want 0", n)
 	}
 }

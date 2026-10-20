@@ -28,13 +28,17 @@ func (s *service) ListEmplacements(ctx context.Context, _ *ingestv1.ListEmplacem
 }
 
 // emplacements lists the feed's emplacements the token may see: none above
-// its classification ceiling.
+// its classification ceiling. On an exercise connection they all say exercise.
 func (s *service) emplacements(a authed) []*sentinelv1.Emplacement {
 	ceiling := classification.Rank(a.tok.Classification)
 	var out []*sentinelv1.Emplacement
 	for _, e := range s.d.emps.ByFeed(s.d.feedID) {
 		if classification.Rank(e.Classification) <= ceiling {
-			out = append(out, emplacementProto(e))
+			m := emplacementProto(e)
+			// What the mirror reports: a connection's emplacements are exercise
+			// when it is, whatever an operator left on the row.
+			m.Exercise = m.Exercise || s.d.cfg.Exercise
+			out = append(out, m)
 		}
 	}
 	return out

@@ -367,3 +367,47 @@ func TestUpsertOnAnExerciseConnectionStoresExercise(t *testing.T) {
 		t.Error("a create without the flag, on an exercise connection, stored false")
 	}
 }
+
+// The session and the list tell a sender what the mirror reports: an
+// emplacement of an exercise connection is exercise even when an operator
+// wrote its row without the flag. A connection that is not exercise reports
+// the row as it is.
+func TestSessionReportsEmplacementsOfAnExerciseConnectionAsExercise(t *testing.T) {
+	feed := "grpc-1"
+	row := func(id string, exercise bool) emplacement.Emplacement {
+		e := emp(id, feed, "FIXED", "RF", "UNCLASSIFIED")
+		e.Exercise = exercise
+		return e
+	}
+	for _, tc := range []struct {
+		name     string
+		cfg      map[string]any
+		wantReal bool
+	}{{"exercise connection", map[string]any{"exercise": true}, false}, {"real connection", nil, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			emps := &fakeEmplacements{rows: []emplacement.Emplacement{row("plain", false), row("marked", true)}}
+			r := start(t, tc.cfg, nil, tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: feed}), emps, nil)
+			ctx, cancel := withToken(secretA)
+			defer cancel()
+			s, err := r.client(t).GetSession(ctx, &ingestv1.GetSessionRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			l, err := r.client(t).ListEmplacements(ctx, &ingestv1.ListEmplacementsRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for where, list := range map[string][]*sentinelv1.Emplacement{"session": s.GetEmplacements(), "list": l.GetEmplacements()} {
+				if len(list) != 2 {
+					t.Fatalf("%s lists %d emplacements, want 2", where, len(list))
+				}
+				for _, e := range list {
+					want := e.GetId() == "marked" || !tc.wantReal
+					if e.GetExercise() != want {
+						t.Errorf("%s: %s exercise %v, want %v", where, e.GetId(), e.GetExercise(), want)
+					}
+				}
+			}
+		})
+	}
+}
