@@ -20,9 +20,10 @@ import (
 // emitted: its sender may report many times a second.
 const sensorEvery = time.Second
 
-// maxClockLead is how far ahead of the server a fix may be stamped: a sender
-// further ahead would push the track's window past every real fix.
-const maxClockLead = ownshipWindow
+// maxClockLead is how far ahead of the server a fix may be stamped: it
+// allows for ordinary clock skew and nothing more, because the newest fix
+// anchors the track's window and the ownship tolerance.
+const maxClockLead = 5 * time.Second
 
 var errBadState = errors.New("an emplacement_state needs a position inside WGS84 bounds, and finite heading and velocity, and a time within a minute of now")
 
@@ -71,7 +72,7 @@ func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.
 	// The SENSOR observation is rated on server time for the same reason.
 	if s.d.sensorDue(e.ID, now) {
 		e.Position, e.Altitude = pos, alt
-		o := emplacementmirror.Observation(e, f.at)
+		o := emplacementmirror.Observation(e, reportAt)
 		o.Decoder = Decoder
 		o.ReceivedAt = now
 		if f.heading != nil {

@@ -12,7 +12,8 @@ import (
 // its newest fix.
 const ownshipWindow = 60 * time.Second
 
-// maxFixes bounds a track: 20 Hz over the window.
+// maxFixes is what a track is compacted down to (20 Hz over the window); it
+// holds up to twice that before it is, so compaction is amortised.
 const maxFixes = 1200
 
 // fix is one of a mobile emplacement's reports of itself.
@@ -27,8 +28,8 @@ type fix struct {
 type track struct{ fixes []fix }
 
 // add puts f in time order (a fix at a time already held replaces it) and
-// forgets fixes older than the window behind the newest, and the oldest
-// past maxFixes.
+// forgets fixes older than the window behind the newest, and, once it holds
+// 2*maxFixes, all but the newest maxFixes.
 func (t *track) add(f fix) {
 	i := sort.Search(len(t.fixes), func(i int) bool { return !t.fixes[i].at.Before(f.at) })
 	switch {
@@ -42,8 +43,10 @@ func (t *track) add(f fix) {
 	cut := t.fixes[len(t.fixes)-1].at.Add(-ownshipWindow)
 	k := sort.Search(len(t.fixes), func(i int) bool { return !t.fixes[i].at.Before(cut) })
 	t.fixes = t.fixes[k:]
-	if over := len(t.fixes) - maxFixes; over > 0 {
-		t.fixes = append([]fix(nil), t.fixes[over:]...)
+	if len(t.fixes) >= 2*maxFixes {
+		n := copy(t.fixes, t.fixes[len(t.fixes)-maxFixes:])
+		clear(t.fixes[n:])
+		t.fixes = t.fixes[:n]
 	}
 }
 

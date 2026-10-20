@@ -212,13 +212,13 @@ func TestStateThrottlesIgnoreTheSendersClock(t *testing.T) {
 func TestStateRefusesTheFarFutureAndKeepsTheTrackUsable(t *testing.T) {
 	ship := emp("ship", "grpc-1", "MOBILE", "RF", "UNCLASSIFIED")
 	ship.AzimuthReference = emplacement.AzimuthPlatform
-	_, w, clk, st := shipRig(t, nil, ingesttoken.Token{}, ship)
+	r, w, clk, st := shipRig(t, nil, ingesttoken.Token{}, ship)
 	now := clk.now()
 	if ack := send(t, st, stateReport("ship", now.AddDate(1, 0, 0), 50, -4, ptr(90.0))); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_DEAD_LETTERED || ack.GetReason() != "bad_state" {
 		t.Fatalf("+1 year: %v", ack)
 	}
 	invalid := stateReport("ship", now, 50, -4, nil)
-	invalid.GetEmplacementState().Time = &timestamppb.Timestamp{Seconds: 1 << 40}
+	invalid.GetEmplacementState().Time = &timestamppb.Timestamp{Seconds: -1 << 40}
 	if ack := send(t, st, invalid); ack.GetReason() != "bad_state" {
 		t.Errorf("an invalid timestamp: %v", ack)
 	}
@@ -232,6 +232,9 @@ func TestStateRefusesTheFarFutureAndKeepsTheTrackUsable(t *testing.T) {
 	if c := w.touches(); len(c) != 1 || !c[0].at.Equal(now) {
 		t.Errorf("touches %+v, want one at the server's time %v", c, now)
 	}
+	if sensors := sensorsOf(r); len(sensors) != 1 || !sensors[0].SourceTimestamp.Equal(now) {
+		t.Errorf("sensor observations %+v, want one stamped no later than the server's time %v", sensors, now)
+	}
 	rep := polarReport("target", 0, 1000, ptr(0.0))
 	rep.GetObservation().SourceTimestamp = timestamppb.New(now.Add(maxClockLead / 2))
 	if ack := send(t, st, rep); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
@@ -242,17 +245,36 @@ func TestStateRefusesTheFarFutureAndKeepsTheTrackUsable(t *testing.T) {
 func TestATrackIsBounded(t *testing.T) {
 	t0 := time.Unix(1700000000, 0)
 	var tr track
-	for i := range 2*maxFixes + 5 {
+	total := 2*maxFixes + 5
+	for i := range total {
 		tr.add(fix{at: t0.Add(time.Duration(i) * time.Millisecond), pos: geo.LLA{Lat: float64(i) / 1e6}})
+		if len(tr.fixes) > 2*maxFixes {
+			t.Fatalf("%d fixes after %d adds, want at most %d", len(tr.fixes), i+1, 2*maxFixes)
+		}
 	}
-	if len(tr.fixes) != maxFixes {
-		t.Fatalf("%d fixes, want %d", len(tr.fixes), maxFixes)
+	// Compacted to the newest maxFixes when it reached 2*maxFixes, then five more.
+	if len(tr.fixes) != maxFixes+5 {
+		t.Fatalf("%d fixes, want %d", len(tr.fixes), maxFixes+5)
 	}
-	if want := 2*maxFixes + 5 - maxFixes; !tr.fixes[0].at.Equal(t0.Add(time.Duration(want) * time.Millisecond)) {
+	if want := total - len(tr.fixes); !tr.fixes[0].at.Equal(t0.Add(time.Duration(want) * time.Millisecond)) {
 		t.Errorf("oldest kept at %v, want the %dth", tr.fixes[0].at.Sub(t0), want)
 	}
 	if _, ok := tr.at(t0, time.Second); ok {
 		t.Error("a dropped fix's time should be stale")
+	}
+}
+
+func TestStateAcceptsASmallClockLeadOnly(t *testing.T) {
+	_, w, clk, st := shipRig(t, nil, ingesttoken.Token{}, emp("ship", "grpc-1", "MOBILE", "RF", "UNCLASSIFIED"))
+	now := clk.now()
+	if ack := send(t, st, stateReport("ship", now.Add(6*time.Second), 50, -4, nil)); ack.GetReason() != "bad_state" {
+		t.Errorf("6 s ahead: %v", ack)
+	}
+	if ack := send(t, st, stateReport("ship", now.Add(4*time.Second), 50, -4, nil)); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
+		t.Errorf("4 s ahead: %v", ack)
+	}
+	if c := w.touches(); len(c) != 1 || !c[0].at.Equal(now) {
+		t.Errorf("touches %+v, want one clamped to the server's time", c)
 	}
 }
 
