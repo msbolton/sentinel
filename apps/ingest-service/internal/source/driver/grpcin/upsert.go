@@ -32,17 +32,26 @@ func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmp
 	if s.d.writer == nil {
 		return nil, status.Error(codes.Unavailable, "this replica cannot write emplacements: retry")
 	}
+	a := caller(ctx)
+	feed := s.d.feedID
+	ceiling := classification.Rank(a.tok.Classification)
+	// What a sender writes was authored over this connection: a token below
+	// the connection's level could not hold it.
+	if classification.Rank(s.d.floor) > ceiling {
+		return nil, status.Error(codes.PermissionDenied, "this connection is above the token's classification")
+	}
 	m := req.GetEmplacement()
 	if m == nil {
 		return nil, status.Error(codes.InvalidArgument, "send an emplacement")
 	}
-	a := caller(ctx)
-	feed := s.d.feedID
-	ceiling := classification.Rank(a.tok.Classification)
 	in := inputOf(m)
 	own := func(context.Context, string) (bool, bool, error) { return true, true, nil } // the connection itself
 	check := func(e *emplacement.Emplacement) error {
 		e.FeedID = &feed
+		// Never below the connection's own level.
+		if classification.Rank(e.Classification) < classification.Rank(s.d.floor) {
+			e.Classification = classification.Normalize(s.d.floor)
+		}
 		return emplacement.CheckWrite(ctx, e, ceiling, own)
 	}
 	// mine is whether the senders may touch e: bound to this connection, made
@@ -53,7 +62,11 @@ func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmp
 
 	var saved emplacement.Emplacement
 	var err error
-	existing, getErr := s.d.writer.Get(ctx, m.GetId())
+	var existing emplacement.Emplacement
+	getErr := emplacement.ErrNotFound // an empty id names no row
+	if m.GetId() != "" {
+		existing, getErr = s.d.writer.Get(ctx, m.GetId())
+	}
 	switch {
 	case m.GetId() != "" && getErr == nil:
 		if !mine(existing) {
@@ -66,9 +79,12 @@ func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmp
 			active := e.Active
 			in.Apply(e)
 			e.Active = active
+			if p := m.GetPosition(); p != nil && p.AltitudeMeters == nil {
+				e.Altitude = nil // a position sent without an altitude has none
+			}
 			return check(e)
 		})
-	case m.GetId() == "" || errors.Is(getErr, emplacement.ErrNotFound):
+	case errors.Is(getErr, emplacement.ErrNotFound):
 		rows, lerr := s.d.writer.List(ctx, emplacement.Filter{FeedID: feed})
 		if lerr != nil {
 			return nil, s.failed(lerr)
@@ -80,7 +96,7 @@ func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmp
 			}
 		}
 		if n >= s.d.maxEmplacements {
-			return nil, status.Errorf(codes.ResourceExhausted, "this connection's senders already manage %d emplacements, its most", n)
+			return nil, status.Error(codes.ResourceExhausted, "this connection's senders manage as many emplacements as it allows")
 		}
 		e := emplacement.New()
 		in.Apply(&e)
@@ -122,17 +138,39 @@ func (s *service) failed(err error) error {
 
 // awaitCache waits, briefly, for the emplacement cache to hold the write.
 func (s *service) awaitCache(ctx context.Context, id string, version int) {
-	deadline := time.Now().Add(cacheWait)
-	for time.Now().Before(deadline) && ctx.Err() == nil {
-		if e, ok := s.d.emps.Get(id); ok && e.Version >= version {
+	seen := func() bool {
+		e, ok := s.d.emps.Get(id)
+		return ok && e.Version >= version
+	}
+	if seen() {
+		return
+	}
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	timeout := time.NewTimer(cacheWait)
+	defer timeout.Stop()
+	for {
+		select {
+		case <-ctx.Done():
 			return
+		case <-timeout.C:
+			s.d.logger.Debug("the emplacement cache did not see an upsert in time", zap.String("emplacement", id))
+			return
+		case <-tick.C:
+			if seen() {
+				return
+			}
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
 }
 
-// inputOf reads an emplacement message as a write. Unset enums leave the
-// field as it is.
+// inputOf reads an emplacement message as a write. On every upsert the
+// message replaces the name, description, boresight and exercise flag, so a
+// zero value there clears the stored one. An unset enum (mobility, sensor
+// type, azimuth reference, classification) and an absent position, coverage
+// or default sigma keep what is stored, or take the defaults on create. A
+// position sent without an altitude clears the stored altitude (the caller
+// does that). The connection, creator and active flag are never read.
 func inputOf(m *sentinelv1.Emplacement) emplacement.Input {
 	name, desc := m.GetName(), m.GetDescription()
 	in := emplacement.Input{Name: &name, Description: &desc}

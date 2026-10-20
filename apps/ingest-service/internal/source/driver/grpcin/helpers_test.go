@@ -180,6 +180,10 @@ type touchCall struct {
 type fakeWriter struct {
 	emps *fakeEmplacements
 
+	// beforeUpdate, when set, runs at the start of every Update, before the
+	// row is read: a test changes the row between the driver's Get and Update.
+	beforeUpdate func(id string)
+
 	mu      sync.Mutex
 	n       int
 	touched []touchCall
@@ -201,6 +205,9 @@ func (w *fakeWriter) Create(_ context.Context, e emplacement.Emplacement) (empla
 }
 
 func (w *fakeWriter) Update(_ context.Context, id string, ifVersion int, fn func(*emplacement.Emplacement) error) (emplacement.Emplacement, error) {
+	if w.beforeUpdate != nil {
+		w.beforeUpdate(id)
+	}
 	e, ok := w.emps.Get(id)
 	if !ok {
 		return emplacement.Emplacement{}, emplacement.ErrNotFound

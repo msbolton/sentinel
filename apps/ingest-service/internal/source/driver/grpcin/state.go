@@ -68,7 +68,13 @@ func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.
 	if reportAt.After(now) {
 		reportAt = now
 	}
-	s.d.touch(ctx, e.ID, pos, alt, now, reportAt)
+	// A position reported over a connection above the emplacement's own level
+	// must not land in its row: only lastReportAt is written.
+	touchPos, touchAlt := pos, alt
+	if classification.Rank(e.Classification) < classification.Rank(s.d.floor) {
+		touchPos, touchAlt = nil, nil
+	}
+	s.d.touch(ctx, e.ID, touchPos, touchAlt, now, reportAt)
 	// The SENSOR observation is rated on server time for the same reason.
 	if s.d.sensorDue(e.ID, now) {
 		e.Position, e.Altitude = pos, alt

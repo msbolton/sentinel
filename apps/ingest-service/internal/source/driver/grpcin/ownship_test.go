@@ -399,3 +399,21 @@ func TestStateNamedByItsBodyAndStampedByTheServer(t *testing.T) {
 		t.Errorf("no id with two emplacements: %v", ack)
 	}
 }
+
+// A position reported over a connection above the emplacement's own level
+// does not land in its row: only the report time is written. The SENSOR
+// observation still goes out, at the connection's level.
+func TestStateOverAHigherConnectionTouchesWithoutPosition(t *testing.T) {
+	low := emp("low", "grpc-1", "MOBILE", "RF", "UNCLASSIFIED")
+	same := emp("same", "grpc-1", "MOBILE", "RF", "CONFIDENTIAL")
+	r, w, clk, st := shipRig(t, map[string]any{"classification": "CONFIDENTIAL"}, ingesttoken.Token{Classification: "CONFIDENTIAL"}, low, same)
+	send(t, st, stateReport("low", clk.now(), 50, -4, nil))
+	send(t, st, stateReport("same", clk.now(), 51, -5, nil))
+	c := w.touches()
+	if len(c) != 2 || c[0].id != "low" || c[0].pos != nil || c[1].id != "same" || c[1].pos == nil || c[1].pos.Lat != 51 {
+		t.Fatalf("touches %+v, want low without a position and same with one", c)
+	}
+	if n := len(sensorsOf(r)); n != 2 {
+		t.Errorf("%d sensor observations, want 2", n)
+	}
+}
