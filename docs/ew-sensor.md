@@ -111,8 +111,8 @@ Flags override the configuration file, which overrides the defaults. Most YAML k
 | `--width` | 120 | Azimuth coverage width, degrees (360 is omnidirectional). |
 | `--range-km` | 120 | Maximum range. |
 | `--min-range-km` | 0 | Minimum range. |
-| `--emitters N` | 5 | Number of emitters. Extra ones are synthesised (`SYN-01`, ...); surplus YAML ones are dropped. |
-| `--rate hz` | 1 | Ticks per second. |
+| `--emitters N` | 5 | Number of emitters, at most 1000. Extra ones are synthesised (`SYN-01`, ...); surplus YAML ones are dropped. |
+| `--rate hz` | 1 | Ticks per second, above 0 and at most 100. |
 | `--pd` | 0.9 | Probability of detection per emitter per tick, in (0, 1]. |
 | `--sigma-m` | 250 | Position error, 1 sigma, at the 10 km reference range, metres. |
 | `--seed` | from the clock | Random seed; the log shows it. |
@@ -140,17 +140,17 @@ Flags override the configuration file, which overrides the defaults. Most YAML k
 **Session and emplacement.** The CLI calls `GetSession`, then finds the emplacement it reports as:
 
 1. with `--emplacement-id`, that emplacement from the session (ids are compared without regard to case); an id the token cannot see is an error;
-2. otherwise, when the connection has `senderManagedEmplacements` on, `UpsertEmplacement` with the configured name, position, coverage, boresight and mobility. The upsert is by name, so restarting the CLI reuses the same emplacement and does not create a new one each time;
+2. otherwise, when the connection has `senderManagedEmplacements` on, `UpsertEmplacement` with the configured name, position, coverage, boresight and mobility. The upsert is by name, so restarting the CLI reuses the same emplacement and does not create a new one each time. The name must be unique across all emplacements, so a second sensor needs its own `--name`, and a name an operator already used fails with `AlreadyExists` (the error suggests `--name` or `--emplacement-id`). The upserted emplacement inherits the connection's `exercise` flag, so on an exercise connection the sensor site itself is marked exercise and the outbound exercise policy holds it back along with the fixes;
 3. otherwise the connection's single bound, active emplacement;
 4. otherwise it exits with an error that says what to do.
 
-For an emplacement that already exists on the server (cases 1 and 3), the server owns the geometry: its position, boresight, azimuth reference, coverage and mobility win over the flags and YAML. A created emplacement keeps the configured geometry.
+For an emplacement that already exists on the server (cases 1 and 3), the server owns the geometry: its position, boresight, azimuth reference, coverage and mobility win over the flags and YAML. A created emplacement keeps the configured geometry. If an existing emplacement has no coverage on the server, the CLI logs a warning and simulates the configured (or default 120 degree, 120 km) sector around the server's boresight; Sentinel draws no coverage for it, so emitters outside that sector are absent without any visible reason.
 
 **The fix and the ellipse.** The reported position is the true one plus Gaussian noise. The along-line-of-sight sigma is `sigma-m`; the cross-range sigma grows with range, as `sigma-m * max(1, range_km / 10)`, as it does for a direction finder. The uncertainty sent is the 95% ellipse: semi-major `2.4477 * cross sigma`, semi-minor `2.4477 * along sigma`, in metres, with the orientation in degrees from north (the long axis lies across the line of sight). Fixes are therefore long thin ellipses at long range. Sentinel draws them around the entity.
 
-**Mobile sensors.** A mobile sensor sends an `EmplacementState` (its position, heading and velocity) once a second, and always one first on every new stream, before any observation, so the server can place the measurements. The server refuses the others as `stale_ownship` until it has a position.
+**Mobile sensors.** A mobile sensor sends an `EmplacementState` (its position, heading and velocity) once a second, and always one first on every new stream, before any observation, so the server can place the measurements. The CLI sends absolute positions, never polar measurements, so the server needs the ownship position only when the connection has `enforceCoverage` on. In that case it refuses the observations of a mobile emplacement as `stale_ownship` until it has a position for it.
 
-**Reconnecting.** `Unauthenticated` and `PermissionDenied` end the run with exit code 2, and `Unimplemented` (the address is not a Sentinel ingest service) with exit code 1. Any other end of the stream (`Unavailable`, a transport error, a clean close by the server, `ResourceExhausted`) is logged as a warning and the CLI reconnects after a jittered exponential backoff from 0.5 s to 30 s. The line carries the cause, for example `msg="stream ended; reconnecting" stream=1 code=Unavailable message="connection moving: reconnect" backoff=612ms`. The backoff starts again once a stream has had an accepted report or has stayed open for 30 s. While disconnected the simulation keeps running, and the fixes it produces with no open stream are dropped and counted in `dropped_offline`, so the sequence of fixes for a seed does not depend on the connection. Reports that were sent but not acknowledged when a stream ended are not sent again: they are lost, not replayed.
+**Reconnecting.** `Unauthenticated` and `PermissionDenied` end the run with exit code 2, and `Unimplemented` (the address is not a Sentinel ingest service) with exit code 1. Any other end of the stream (`Unavailable`, a transport error, a clean close by the server, `ResourceExhausted`) is logged as a warning and the CLI reconnects after a jittered exponential backoff from 0.5 s to 30 s. The line carries the cause, for example `msg="stream ended; reconnecting" stream=1 code=Unavailable message="connection moving: reconnect" backoff=612ms`. The backoff starts again once a stream has had an accepted report or has stayed open for 30 s. While disconnected the simulation keeps running, and the fixes it produces with no open stream are dropped and counted in `dropped_offline`, so a disconnect does not change the sequence of fixes for a seed. (A `rate_limited` ack does, because it changes the tick interval.) Reports that were sent but not acknowledged when a stream ended are not sent again: they are lost, not replayed.
 
 **Backpressure and limits.**
 - A `rate_limited` rejection halves the tick rate for 10 s (further ones extend the hold, they do not compound), then restores it. The CLI warns at the start when `rate * (emitters + 1 if mobile)` exceeds the connection's `maxMessagesPerSec`.
@@ -163,10 +163,10 @@ For an emplacement that already exists on the server (cases 1 and 3), the server
 | Code | When |
 |------|------|
 | 0 | `--duration` elapsed, SIGINT or SIGTERM, or `--help`. |
-| 1 | A flag, YAML or validation error (the message and `Run ew-sensor --help for the flags.` go to stderr); an unreadable `--ca`, `--cert` or `--key`; an `--emplacement-id` not in the session; no bound emplacement, or more than one; an emplacement with no position; `UpsertEmplacement` `InvalidArgument`, `AlreadyExists` or `NotFound`; `Unimplemented`. |
-| 2 | `Unauthenticated` or `PermissionDenied` from any call: an unknown, revoked or expired token, another connection's token, a connection that is not sender-managed, a classification above the token's ceiling; or the sender-managed emplacement cap. |
+| 1 | A flag, YAML or validation error (the message and `Run ew-sensor --help for the flags.` go to stderr); an unreadable `--ca`, `--cert` or `--key`; an `--emplacement-id` not in the session; no bound emplacement, or more than one; an emplacement with no position; `UpsertEmplacement` `InvalidArgument` (including a `sensor.classification` above the token's ceiling), `AlreadyExists` or `NotFound`; `Unimplemented`. |
+| 2 | `Unauthenticated` or `PermissionDenied` from any call: an unknown, revoked or expired token, another connection's token, a connection that is not sender-managed, a connection above the token's classification; or the sender-managed emplacement cap. |
 
-A revoked token ends a running stream with `Unauthenticated`, so the CLI exits 2 and does not reconnect.
+Reports above the token's ceiling are rejected one by one (`above_ceiling`) and do not end the run. A revoked token ends a running stream with `Unauthenticated`, so the CLI exits 2 and does not reconnect.
 
 The CLI logs to stderr (text, one line per event; the token appears only as its first 8 characters). Every 10 s, and once more at exit as `final stats`, it logs a line such as:
 
@@ -174,7 +174,7 @@ The CLI logs to stderr (text, one line per event; the token appears only as its 
 msg=stats sent=412 ok=410 rejected=map[rate_limited:2] dead_lettered=0 retried=0 reconnects=1 dropped_oversize=0 dropped_offline=3
 ```
 
-`sent` counts reports written to the stream, `ok` those acknowledged `OK`, `rejected` the `REJECTED` acks by reason, `dead_lettered` the `DEAD_LETTERED` ones, `retried` the `unknown_emplacement` retries, and `reconnects` the streams opened after the first.
+`sent` counts reports written to the stream, `ok` those acknowledged `OK`, `rejected` the `REJECTED` acks by reason, `dead_lettered` the `DEAD_LETTERED` ones, `retried` the `unknown_emplacement` retries, and `reconnects` the stream ends and failed stream opens, each followed by a backoff and a new attempt, so a long outage counts every attempt.
 
 ## Limits and gotchas
 
@@ -190,7 +190,7 @@ msg=stats sent=412 ok=410 rejected=map[rate_limited:2] dead_lettered=0 retried=0
 With the sensor running against the connection above:
 
 - **The emplacement.** A violet (`#8b5cf6`) location dot at the sensor, with its coverage sector (the Emplacements panel lists it, and the built-in layer toggles it). A mobile sensor's dot has a dashed outer ring and moves with its reports, the footprint turning with the ship's heading when the azimuth reference is `PLATFORM`.
-- **The signals.** Moving `SIGNAL` entities named `EMITTER-<id>`, each with a translucent uncertainty ellipse that follows it and grows when the emitter is farther out. Emitters outside the coverage do not appear; ones inside blink in and out at the probability of detection.
+- **The signals.** Moving `SIGNAL` entities named by each emitter's `displayName` (its id when none is set; the source entity id is `EMITTER-<id>`), each with a translucent uncertainty ellipse that follows it and grows when the emitter is farther out. Emitters outside the coverage do not appear; ones inside blink in and out at the probability of detection.
 - **The detail panel.** An **RF** section with frequency (MHz or GHz), bandwidth, emitter type, modulation, PRI and PRF, pulse width, scan type and power, summarised like `9.41 GHz · RADAR_SEARCH`.
 - **The badge.** An **EXERCISE** badge in the detail header and the list rows, and ` · EX` on the map label. The mark is sticky: an entity that has received an exercise report keeps it.
 - **The symbols.** MIL-STD-2525D SIGINT symbols in the exercise context, because the connection is marked Military: the symbol set follows the track environment (50 to 54), the entity code follows the emitter type (communications, jammer, radar, or generic signal intercept), and the affiliation sets the frame. Entities from connections that are not marked Military keep their usual icons.
