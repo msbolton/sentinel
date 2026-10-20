@@ -1,5 +1,10 @@
 import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { ActivatedRoute, Router } from '@angular/router';
+import { EmplacementService } from '../../core/services/emplacement.service';
+import { sitesSummaryOf } from '../../shared/models/emplacement.model';
+import { ConnectionEmplacementsComponent } from './connection-emplacements.component';
 import { FeedService, problemsOf } from '../../core/services/feed.service';
 import {
   ConnectionPolicy,
@@ -63,8 +68,9 @@ const DIRECTION_LABELS: Record<FeedDirection, string> = {
 
 const HEALTH_LABELS: Record<FeedHealthLevel, string> = {
   healthy: 'Healthy',
-  warn: 'Stale (warning)',
-  critical: 'Stale (critical)',
+  // A connection with emplacements is warned when some are silent, not stale.
+  warn: 'Warning',
+  critical: 'Critical',
   unknown: 'Unknown',
 };
 
@@ -76,13 +82,16 @@ const HEALTH_LABELS: Record<FeedHealthLevel, string> = {
 @Component({
   selector: 'app-connections',
   standalone: true,
-  imports: [DecimalPipe, ConnectionFormComponent, DeadLettersComponent, HasRoleDirective, IngestTokensComponent, SendGuideComponent],
+  imports: [DecimalPipe, ConnectionEmplacementsComponent, ConnectionFormComponent, DeadLettersComponent, HasRoleDirective, IngestTokensComponent, SendGuideComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './connections.component.html',
   styleUrl: './connections.component.scss',
 })
 export class ConnectionsComponent implements OnInit, OnDestroy {
   private readonly feedService = inject(FeedService);
+  private readonly emplacements = inject(EmplacementService);
+  private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
 
   /** Who sees a connection's recent rejects; the server refuses everyone else, so this only spares them the panel. */
   readonly deadLetterRoles = ['sentinel-operator', 'sentinel-admin'];
@@ -121,7 +130,7 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
         sink,
         highlights: highlightsOf(feed.status?.detail, sink, feed),
         detailEntries: Object.entries(feed.status?.detail ?? {})
-          .filter(([key]) => key !== 'leaseToken')
+          .filter(([key]) => key !== 'leaseToken' && key !== 'emplacements' && key !== 'heartbeat')
           .map(([key, value]) => ({ key, value: formatDetail(value), withheld: isWithheld(value) })),
       };
     });
@@ -133,8 +142,18 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
   private release: (() => void) | null = null;
   private clock: ReturnType<typeof setInterval> | null = null;
 
+  constructor() {
+    // The expanded rows live in ?open=, so a link can open one (the entity
+    // panel's "connection" link) and a reload keeps them.
+    this.route.queryParamMap.pipe(takeUntilDestroyed()).subscribe((params) => {
+      const open = params.get('open');
+      this.expanded.set(new Set(open ? open.split(',').filter((id) => id !== '') : []));
+    });
+  }
+
   ngOnInit(): void {
     this.release = this.feedService.poll(10_000);
+    this.emplacements.load().subscribe({ error: () => undefined });
     this.feedService.loadDrivers().subscribe({
       next: () => this.driversError.set(null),
       error: (err) => this.driversError.set(`Driver catalog unavailable: ${problemsOf(err).message}`),
@@ -200,14 +219,18 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
   }
 
   toggleExpanded(id: string): void {
-    this.expanded.update((set) => {
-      const next = new Set(set);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
+    const next = new Set(this.expanded());
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    this.expanded.set(next);
+    void this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { open: next.size > 0 ? [...next].join(',') : null },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
     });
   }
 
@@ -311,6 +334,10 @@ function highlightsOf(detail: Record<string, unknown> | undefined, sink: SinkDet
     return [];
   }
   const out: string[] = [];
+  const sites = sitesSummaryOf(detail);
+  if (sites) {
+    out.push(sites);
+  }
   if (sink.remotePeer) {
     out.push(sink.remotePeer);
   }

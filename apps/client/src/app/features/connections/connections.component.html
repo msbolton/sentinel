@@ -238,6 +238,9 @@
                       </div>
                     </div>
                     <app-send-guide [feed]="row.feed" />
+                    @if (row.direction !== 'out') {
+                      <app-connection-emplacements [feed]="row.feed" [now]="now()" />
+                    }
                     <ng-container *appHasRole="deadLetterRoles">
                       @if (row.feed.driver === 'grpc') {
                         <app-ingest-tokens [feed]="row.feed" />

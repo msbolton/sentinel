@@ -6,6 +6,8 @@ import { ConnectionsComponent } from './connections.component';
 import { AuthService, UserProfile } from '../../core/services/auth.service';
 import { FeedService } from '../../core/services/feed.service';
 import { Feed, FeedDriver } from '../../shared/models/feed.model';
+import { ActivatedRoute, Router, convertToParamMap, ParamMap } from '@angular/router';
+import { Emplacement } from '../../shared/models/emplacement.model';
 
 function makeFeed(over: Partial<Feed> & { id: string }): Feed {
   return {
@@ -56,13 +58,16 @@ describe('ConnectionsComponent', () => {
   let el: HTMLElement;
   let httpMock: HttpTestingController;
   let profile$: BehaviorSubject<UserProfile | null>;
+  let queryParams$: BehaviorSubject<ParamMap>;
+  const router = { navigate: jest.fn().mockResolvedValue(true), navigateByUrl: jest.fn().mockResolvedValue(true) };
 
   /** Signs in with these roles (the page opens for an operator). */
   const signInAs = (...roles: string[]) => profile$.next({ username: 'tester', roles, classificationLevel: 'UNCLASSIFIED' });
 
-  function flushInitial(feeds: Feed[]): void {
+  function flushInitial(feeds: Feed[], emplacements: Emplacement[] = []): void {
     httpMock.expectOne('/api/v1/feeds').flush(feeds);
     httpMock.expectOne('/api/v1/drivers').flush(drivers);
+    httpMock.expectOne('/api/v1/emplacements').flush(emplacements);
     fixture.detectChanges();
   }
 
@@ -77,12 +82,23 @@ describe('ConnectionsComponent', () => {
 
   beforeEach(async () => {
     profile$ = new BehaviorSubject<UserProfile | null>({ username: 'op', roles: ['sentinel-operator'], classificationLevel: 'UNCLASSIFIED' });
+    queryParams$ = new BehaviorSubject<ParamMap>(convertToParamMap({}));
+    router.navigate.mockClear();
     await TestBed.configureTestingModule({
       imports: [ConnectionsComponent],
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
-        { provide: AuthService, useValue: { getClassificationLevel: () => 'UNCLASSIFIED', userProfile$: profile$ } },
+        {
+          provide: AuthService,
+          useValue: {
+            getClassificationLevel: () => 'UNCLASSIFIED',
+            userProfile$: profile$,
+            hasAnyRole: (...want: string[]) => want.some((r) => (profile$.value?.roles ?? []).includes(r)),
+          },
+        },
+        { provide: ActivatedRoute, useValue: { queryParamMap: queryParams$ } },
+        { provide: Router, useValue: router },
       ],
     }).compileComponents();
     httpMock = TestBed.inject(HttpTestingController);
@@ -626,5 +642,38 @@ describe('ConnectionsComponent', () => {
     flushInitial([]);
     fixture.destroy();
     // no further /api/v1/feeds request is pending; verify() in afterEach confirms it
+  });
+
+  it("summarises a heartbeating connection's sites and words its health as a warning, not staleness", () => {
+    flushInitial([
+      makeFeed({
+        id: 'grpc-1', driver: 'grpc',
+        status: {
+          ...makeFeed({ id: 'x' }).status, state: 'degraded', health: 'warn',
+          detail: { connections: 1, emplacements: [
+            { id: 'a', name: 'A', classification: 'UNCLASSIFIED', state: 'online', intervalSec: 5 },
+            { id: 'b', name: 'B', classification: 'UNCLASSIFIED', state: 'offline', intervalSec: 5 },
+          ] },
+        },
+      }),
+    ]);
+    const row = rowOf('grpc-1');
+    expect(row.querySelector('.highlights')?.textContent).toContain('1 of 2 sites online');
+    expect(row.querySelector('.health-dot')?.getAttribute('title')).toBe('Warning');
+    component.toggleExpanded('grpc-1');
+    fixture.detectChanges();
+    const block = Array.from(el.querySelectorAll('tr.detail-row .detail-block')).find((b) => b.querySelector('h4')?.textContent === 'Driver detail')!;
+    expect(Array.from(block.querySelectorAll('dt')).map((dt) => dt.textContent)).not.toContain('emplacements');
+    httpMock.expectOne('/api/v1/feeds/grpc-1/tokens').flush([]); // an expanded grpc row lists its ingest tokens
+  });
+
+  it('opens the rows named in ?open= and keeps the expanded rows in the URL', () => {
+    queryParams$.next(convertToParamMap({ open: 'grpc-1' }));
+    flushInitial([makeFeed({ id: 'grpc-1', driver: 'grpc' }), makeFeed({ id: 'other' })]);
+    expect(component.isExpanded('grpc-1')).toBe(true);
+    expect(el.querySelector('app-connection-emplacements')).not.toBeNull();
+    component.toggleExpanded('other');
+    expect(router.navigate).toHaveBeenCalledWith([], expect.objectContaining({ queryParams: { open: 'grpc-1,other' }, replaceUrl: true }));
+    httpMock.expectOne('/api/v1/feeds/grpc-1/tokens').flush([]); // an expanded grpc row lists its ingest tokens
   });
 });
