@@ -22,6 +22,10 @@ const (
 	Channel = "sentinel_emplacements"
 )
 
+// SenderPrefix starts the createdBy of an emplacement a sender made over
+// gRPC (UpsertEmplacement): "ingest-token:<token id>".
+const SenderPrefix = "ingest-token:"
+
 // SensorTypes are the bare sentinel.v1.SensorType names an emplacement may have.
 var SensorTypes = []string{"RADAR", "EO_IR", "RF", "ACOUSTIC", "AIS_RECEIVER", "ADSB_RECEIVER", "HUMAN", "OTHER"}
 
@@ -30,6 +34,9 @@ var (
 	ErrVersionConflict = errors.New("emplacement changed since it was read")
 	ErrNameTaken       = errors.New("an emplacement with this name already exists")
 )
+
+// SenderManaged reports whether a sender made e, rather than a person.
+func (e Emplacement) SenderManaged() bool { return strings.HasPrefix(e.CreatedBy, SenderPrefix) }
 
 // Point is a WGS84 position in degrees.
 type Point struct {

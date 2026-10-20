@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
+
+	"github.com/sentinel/ingest-service/internal/emplacement"
 )
 
 // Store reads and writes the feed tables.
@@ -250,15 +252,60 @@ func (s *Store) SetEnabled(ctx context.Context, id string, enabled bool) (Feed, 
 	return s.Get(ctx, id)
 }
 
-// Delete removes a feed; feed_status, feed_areas and feed_leases cascade.
+// emplacementsChannel is the emplacement store's channel (emplacement.Channel;
+// a test keeps the two equal).
+const emplacementsChannel = "sentinel_emplacements"
+
+// Delete removes a feed; feed_status, feed_areas, feed_leases and its ingest
+// tokens cascade. Its emplacements are let go in the same transaction, each
+// announced the way the emplacement store announces its own writes: the ones
+// its senders made (createdBy "ingest-token:...") are soft-deleted, the rest
+// unbound. The foreign key would only null feedId silently, and a cache that
+// never hears of it keeps binding the emplacement to a feed that is gone, or
+// to a new feed that takes its id.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `UPDATE sentinel.emplacements SET
+				"deletedAt" = CASE WHEN "createdBy" LIKE $2 THEN NOW() ELSE "deletedAt" END,
+				"feedId" = NULL, version = version + 1, "updatedAt" = NOW()
+			WHERE "feedId" = $1 AND "deletedAt" IS NULL
+			RETURNING id::text, "deletedAt" IS NOT NULL`, id, emplacement.SenderPrefix+"%")
+		if err != nil {
+			return fmt.Errorf("letting go of feed %s's emplacements: %w", id, err)
+		}
+		type change struct {
+			id      string
+			deleted bool
+		}
+		var changes []change
+		for rows.Next() {
+			var c change
+			if err := rows.Scan(&c.id, &c.deleted); err != nil {
+				rows.Close()
+				return err
+			}
+			changes = append(changes, c)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `DELETE FROM sentinel.feeds WHERE id = $1`, id)
 		if err != nil {
 			return fmt.Errorf("deleting feed %s: %w", id, err)
 		}
 		if tag.RowsAffected() == 0 {
 			return ErrNotFound
+		}
+		for _, c := range changes {
+			op := "upsert"
+			if c.deleted {
+				op = "delete"
+			}
+			payload, _ := json.Marshal(map[string]string{"id": c.id, "op": op})
+			if err := notify(ctx, tx, emplacementsChannel, string(payload)); err != nil {
+				return err
+			}
 		}
 		return notify(ctx, tx, ChannelFeeds, id)
 	})
