@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/sentinel/go-common/classification"
+	"github.com/sentinel/go-common/geo"
 	"github.com/sentinel/ingest-service/internal/source/decoder"
 	"github.com/sentinel/ingest-service/internal/source/decoder/sentinelobs"
 	"github.com/sentinel/ingest-service/internal/source/driver"
@@ -161,6 +162,16 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 	if max(classification.Rank(s.d.floor), content) > classification.Rank(a.tok.Classification) {
 		return s.reject(ack, "above_ceiling"), nil
 	}
+	// A polar measurement is checked here, not left to Validate, which would
+	// drop a non-finite one silently and let the report through without it.
+	if p := m.GetPolar(); p != nil {
+		if badPolar(p) {
+			return s.reject(ack, "bad_polar"), nil
+		}
+		if m.GetPosition() == nil && !bound {
+			return s.reject(ack, "unknown_emplacement"), nil
+		}
+	}
 	// Validate a copy without the EMPLACEMENT identities: only an
 	// emplacement's own report carries one, and Validate would otherwise key
 	// an identity-only target on it (a shared repeat key and observation id).
@@ -200,9 +211,39 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 		if classification.Rank(e.Classification) > classification.Rank(o.Classification) {
 			o.Classification = classification.Normalize(e.Classification)
 		}
-		s.d.touch(ctx, e.ID, nil, nil, o.ReceivedAt)
 	} else if o.SensorID == "" {
 		o.SensorID = transport.SenderIP(from)
+	}
+	if bound && (o.Polar != nil || s.d.cfg.EnforceCoverage) {
+		at := o.SourceTimestamp
+		if at.IsZero() {
+			at = o.ReceivedAt
+		}
+		org, why := s.originOf(e, at)
+		if o.Polar != nil && !o.HasPosition {
+			if why != "" {
+				return s.reject(ack, why), nil
+			}
+			if why := convert(o, e, org); why != "" {
+				return s.reject(ack, why), nil
+			}
+		}
+		if s.d.cfg.EnforceCoverage && o.HasPosition {
+			if why != "" {
+				return s.reject(ack, why), nil
+			}
+			alt := org.at.Alt
+			if o.Altitude != nil {
+				alt = *o.Altitude
+			}
+			if !inCoverage(e, org, geo.LLA{Lat: o.Latitude, Lon: o.Longitude, Alt: alt}) {
+				return s.reject(ack, "outside_coverage"), nil
+			}
+		}
+	}
+	// Only an accepted report counts as its emplacement reporting.
+	if bound {
+		s.d.touch(ctx, e.ID, nil, nil, o.ReceivedAt)
 	}
 	if raw, err := proto.Marshal(m); err == nil {
 		o.Raw = raw

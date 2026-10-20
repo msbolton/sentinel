@@ -57,16 +57,19 @@ func init() {
 
 // Config is the connection config.
 type Config struct {
-	Port                       int         `json:"port"`
-	Address                    string      `json:"address"`
-	Allow                      []string    `json:"allow"`
-	MaxConnections             *int        `json:"maxConnections"`
-	MaxMessageBytes            int         `json:"maxMessageBytes"`
-	MaxMessagesPerSec          *int        `json:"maxMessagesPerSec"`
-	MaxMessagesPerSecPerSender int         `json:"maxMessagesPerSecPerSender"`
-	MaxPublishBatch            int         `json:"maxPublishBatch"`
-	SenderManagedEmplacements  bool        `json:"senderManagedEmplacements"`
-	TLS                        *TLSOptions `json:"tls"`
+	Port                       int      `json:"port"`
+	Address                    string   `json:"address"`
+	Allow                      []string `json:"allow"`
+	MaxConnections             *int     `json:"maxConnections"`
+	MaxMessageBytes            int      `json:"maxMessageBytes"`
+	MaxMessagesPerSec          *int     `json:"maxMessagesPerSec"`
+	MaxMessagesPerSecPerSender int      `json:"maxMessagesPerSecPerSender"`
+	MaxPublishBatch            int      `json:"maxPublishBatch"`
+	SenderManagedEmplacements  bool     `json:"senderManagedEmplacements"`
+	// EnforceCoverage refuses a report whose position lies outside its
+	// emplacement's coverage.
+	EnforceCoverage bool        `json:"enforceCoverage"`
+	TLS             *TLSOptions `json:"tls"`
 	// Classification is the common key: the feed's level, the floor every
 	// report is raised to.
 	Classification string `json:"classification"`
