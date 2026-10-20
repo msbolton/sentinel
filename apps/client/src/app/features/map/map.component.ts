@@ -555,7 +555,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
           const site = siteEntityOf(this.emplacementEntities.values(), id);
           this.ngZone.run(() => {
             this.emplacements.select(id);
-            if (site) this.selectedEntity.set(site);
+            this.selectedEntity.set(site); // null when the site is not on the stream: never keep an unrelated selection
           });
         }
         return;

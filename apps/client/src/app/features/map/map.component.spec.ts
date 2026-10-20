@@ -271,6 +271,27 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     expect(TestBed.inject(Router).navigateByUrl).not.toHaveBeenCalled();
   });
 
+  it('clears any previous selection when the clicked site is not on the stream', () => {
+    const actions = new Map<unknown, (e: any) => void>();
+    (fakeCesium as any).ScreenSpaceEventHandler = function () {
+      return { setInputAction: (fn: (e: any) => void, type: unknown) => actions.set(type, fn) };
+    };
+    (fakeCesium as any).ScreenSpaceEventType = { LEFT_CLICK: 'L', LEFT_DOUBLE_CLICK: 'D', MOUSE_MOVE: 'M', LEFT_DOWN: 'DN', LEFT_UP: 'UP' };
+    (fakeCesium as any).defined = (x: unknown) => x != null;
+    const viewer = (component as any).viewer;
+    viewer.scene.canvas = {};
+    viewer.scene.pick = jest.fn(() => ({ id: { _sentinelEmplacement: 'emp-2' } }));
+    component.selectedEntity.set(baseSignalEntity({ id: 'ac-1', entityType: EntityType.AIRCRAFT }));
+
+    (component as any).setupEventHandlers();
+    actions.get('L')!({ position: { x: 1, y: 2 } });
+
+    expect(TestBed.inject(EmplacementService).select).toHaveBeenCalledWith('emp-2');
+    expect(component.selectedEntity()).toBeNull();
+    expect(TestBed.inject(Router).navigate).not.toHaveBeenCalled();
+    expect(TestBed.inject(Router).navigateByUrl).not.toHaveBeenCalled();
+  });
+
   it('draws a Cesium ellipse from gateway-shaped positionCovariance (pnPn/pnPe/pePe) for SIGNAL only and clears it when covariance clears', () => {
     // Wire payload matching api-gateway internal/stream/bridge.go output
     const wireEntity: Entity = JSON.parse(
