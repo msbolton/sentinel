@@ -140,6 +140,9 @@ type Driver struct {
 	emittedAt map[string]time.Time
 	tolerance time.Duration
 
+	// now is the server's clock (tests replace it).
+	now func() time.Time
+
 	// idleTimeout is how long a connection may have no RPCs (tests shorten it).
 	idleTimeout time.Duration
 
@@ -225,6 +228,7 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 		touched:   map[string]time.Time{},
 		tracks:    map[string]*track{},
 		emittedAt: map[string]time.Time{},
+		now:       time.Now,
 		tolerance: time.Duration(intOr(c.OwnshipToleranceMs, defaultOwnshipToleranceMs)) * time.Millisecond,
 		rejected:  map[string]int64{}, idleTimeout: idleTimeout,
 	}
@@ -242,8 +246,8 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 
 var errNoTokens = errors.New("the grpc driver needs the ingest token cache and the emplacements")
 
-// trackOf runs fn on the emplacement's track, under the lock.
-func (d *Driver) trackOf(id string, fn func(*track)) {
+// addFix puts a fix on the emplacement's track, making the track if need be.
+func (d *Driver) addFix(id string, f fix) {
 	d.tracksMu.Lock()
 	defer d.tracksMu.Unlock()
 	t := d.tracks[id]
@@ -251,7 +255,19 @@ func (d *Driver) trackOf(id string, fn func(*track)) {
 		t = &track{}
 		d.tracks[id] = t
 	}
-	fn(t)
+	t.add(f)
+}
+
+// originAt is where the emplacement was at ts according to its track. It
+// never makes a track.
+func (d *Driver) originAt(id string, ts time.Time) (origin, bool) {
+	d.tracksMu.Lock()
+	defer d.tracksMu.Unlock()
+	t := d.tracks[id]
+	if t == nil {
+		return origin{}, false
+	}
+	return t.at(ts, d.tolerance)
 }
 
 // sensorDue reports whether an emplacement's own observation is due, and

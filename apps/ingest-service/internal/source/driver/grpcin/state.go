@@ -20,7 +20,11 @@ import (
 // emitted: its sender may report many times a second.
 const sensorEvery = time.Second
 
-var errBadState = errors.New("an emplacement_state needs a position inside WGS84 bounds, and finite heading and velocity")
+// maxClockLead is how far ahead of the server a fix may be stamped: a sender
+// further ahead would push the track's window past every real fix.
+const maxClockLead = ownshipWindow
+
+var errBadState = errors.New("an emplacement_state needs a position inside WGS84 bounds, and finite heading and velocity, and a time within a minute of now")
 
 // state takes a mobile emplacement's report of itself: it extends the
 // emplacement's track (the origin of its measurements), records its
@@ -43,7 +47,7 @@ func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.
 	if max(classification.Rank(s.d.floor), classification.Rank(e.Classification)) > classification.Rank(a.tok.Classification) {
 		return s.reject(ack, "above_ceiling"), nil
 	}
-	now := time.Now().UTC()
+	now := s.d.now().UTC()
 	f, ok := fixOf(m, now)
 	if !ok {
 		if classification.Rank(e.Classification) > classification.Rank(s.d.floor) {
@@ -51,15 +55,19 @@ func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.
 		}
 		return s.deadLetter(ack, from, r, "bad_state", errBadState), nil
 	}
-	s.d.trackOf(e.ID, func(t *track) { t.add(f) })
+	s.d.addFix(e.ID, f)
 	pos := &emplacement.Point{Lat: f.pos.Lat, Lon: f.pos.Lon}
 	var alt *float64
 	if m.GetPosition().AltitudeMeters != nil {
 		alt = &f.pos.Alt
 	}
-	// The write is throttled on server time, and records the sender's fix
-	// time: a sender's clock may be far off and must not stall or flood it.
-	s.d.touch(ctx, e.ID, pos, alt, now, f.at)
+	// The write is throttled on server time, and records the fix time, never
+	// a later one: a sender's clock must not stall or flood the writes.
+	reportAt := f.at
+	if reportAt.After(now) {
+		reportAt = now
+	}
+	s.d.touch(ctx, e.ID, pos, alt, now, reportAt)
 	// The SENSOR observation is rated on server time for the same reason.
 	if s.d.sensorDue(e.ID, now) {
 		e.Position, e.Altitude = pos, alt
@@ -98,7 +106,13 @@ func fixOf(m *sentinelv1.EmplacementState, now time.Time) (fix, bool) {
 		f.pos.Alt = *p.AltitudeMeters
 	}
 	if t := m.GetTime(); t != nil {
+		if t.CheckValid() != nil {
+			return fix{}, false
+		}
 		f.at = t.AsTime().UTC()
+		if f.at.Sub(now) > maxClockLead {
+			return fix{}, false
+		}
 	}
 	if m.Heading != nil {
 		if !finite(*m.Heading) {
