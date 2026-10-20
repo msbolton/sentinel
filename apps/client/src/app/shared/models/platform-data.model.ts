@@ -171,6 +171,18 @@ export interface UAVData {
   frequencyRange?: number;
 }
 
+export interface RFData {
+  frequencyHz?: number;
+  bandwidthHz?: number;
+  powerDbm?: number;
+  modulation?: string;
+  priUs?: number;
+  pulseWidthUs?: number;
+  emitterType?: string;
+  scanType?: string;
+  scanRateRpm?: number;
+}
+
 export interface PlatformData {
   ais?: AISData;
   adsb?: ADSBData;
@@ -178,6 +190,7 @@ export interface PlatformData {
   link16?: Link16Data;
   cot?: CoTData;
   uav?: UAVData;
+  rf?: RFData;
 }
 
 // --- Kinematics ---
@@ -194,7 +207,15 @@ export interface Orientation {
   roll: number;
 }
 
+export interface PositionCovariance {
+  posCovLatLat?: number;
+  posCovLatLon?: number;
+  posCovLonLon?: number;
+  posCovAltAlt?: number;
+}
+
 export interface KinematicState {
   velocity?: GeodeticVelocity;
   acceleration?: { north: number; east: number; up: number };
+  positionCovariance?: PositionCovariance;
 }

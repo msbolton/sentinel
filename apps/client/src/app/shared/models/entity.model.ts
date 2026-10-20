@@ -70,6 +70,7 @@ export interface Entity {
 
   // Provenance from the fused entity (feed slug and natural identifiers)
   feedId?: string;
+  lastFeedId?: string;
   identities?: EntityIdentity[];
   lastObservedAt?: string;
   /** Every feed that has contributed an observation; more than one after fusion. */

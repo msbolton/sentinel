@@ -315,6 +315,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                       @case ('cot') { CoT Data }
                       @case ('link16') { Link 16 Data }
                       @case ('uav') { UAV Data }
+                      @case ('rf') { RF }
                     }
                   </h4>
                   @if (!isOpen('platformDetails')) {
@@ -529,6 +530,34 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                           }
                           @if (uav.serialNumber) {
                             <div class="field-row"><span class="field-label">Serial</span><span class="field-value mono">{{ uav.serialNumber }}</span></div>
+                          }
+                        }
+                      }
+                      @case ('rf') {
+                        @if (e.platformData?.rf; as rf) {
+                          @if (formatRfHz(rf.frequencyHz); as freq) {
+                            <div class="field-row"><span class="field-label">Frequency</span><span class="field-value mono">{{ freq }}</span></div>
+                          }
+                          @if (formatRfHz(rf.bandwidthHz); as bw) {
+                            <div class="field-row"><span class="field-label">Bandwidth</span><span class="field-value mono">{{ bw }}</span></div>
+                          }
+                          @if (rf.emitterType) {
+                            <div class="field-row"><span class="field-label">Emitter Type</span><span class="field-value mono">{{ rf.emitterType }}</span></div>
+                          }
+                          @if (rf.modulation) {
+                            <div class="field-row"><span class="field-label">Modulation</span><span class="field-value mono">{{ rf.modulation }}</span></div>
+                          }
+                          @if (formatRfPri(rf.priUs); as pri) {
+                            <div class="field-row"><span class="field-label">PRI / PRF</span><span class="field-value mono">{{ pri }}</span></div>
+                          }
+                          @if (formatRfPulseWidth(rf.pulseWidthUs); as pw) {
+                            <div class="field-row"><span class="field-label">Pulse Width</span><span class="field-value mono">{{ pw }}</span></div>
+                          }
+                          @if (formatRfScan(rf.scanType, rf.scanRateRpm); as scan) {
+                            <div class="field-row"><span class="field-label">Scan</span><span class="field-value mono">{{ scan }}</span></div>
+                          }
+                          @if (formatRfPower(rf.powerDbm); as pwr) {
+                            <div class="field-row"><span class="field-label">Power</span><span class="field-value mono">{{ pwr }}</span></div>
                           }
                         }
                       }
@@ -1419,9 +1448,10 @@ export class EntityDetailPanelComponent {
     effect(() => {
       const e = this.entity();
       // A satellite's platform section holds the orbit toggles, a vessel's its
-      // voyage and a military aircraft's its flight path: open them.
+      // voyage, a signal emitter's its RF parameters, and a military aircraft's
+      // its flight path: open them.
       const pd = e?.platformData;
-      this.expandedSections.set({ ...DEFAULT_SECTIONS, platformDetails: !!(pd?.tle || pd?.ais || (pd?.adsb && e?.source === EntitySource.INTELSKY)) });
+      this.expandedSections.set({ ...DEFAULT_SECTIONS, platformDetails: !!(pd?.tle || pd?.ais || pd?.rf || (pd?.adsb && e?.source === EntitySource.INTELSKY)) });
     });
     // Behaviour: the baseline and open findings of the shown entity. A
     // request counter drops answers for an entity that is no longer shown.
@@ -1520,6 +1550,7 @@ export class EntityDetailPanelComponent {
     else if (pd.cot) parts.push(pd.cot.cotType);
     else if (pd.link16) parts.push(pd.link16.jSeriesLabel);
     else if (pd.uav) parts.push(pd.uav.make, pd.uav.model);
+    else if (pd.rf) parts.push(this.formatRfHz(pd.rf.frequencyHz), pd.rf.emitterType);
     return parts.filter((p): p is string => typeof p === 'string' && p !== '').join(' · ');
   });
 
@@ -1665,6 +1696,7 @@ export class EntityDetailPanelComponent {
     if (pd.link16) return 'link16' as const;
     if (pd.cot) return 'cot' as const;
     if (pd.uav) return 'uav' as const;
+    if (pd.rf) return 'rf' as const;
     return null;
   });
 
@@ -1713,6 +1745,41 @@ export class EntityDetailPanelComponent {
   protected vesselTypeText(shipType: number | undefined, shipTypeName: string): string {
     const category = VESSEL_CATEGORY_LABELS[vesselCategory(shipType)];
     return shipTypeName && shipTypeName !== category ? `${category} · ${shipTypeName}` : category;
+  }
+
+  // --- RF -------------------------------------------------------------------
+
+  protected formatRfHz(hz: number | undefined): string {
+    if (hz == null || !Number.isFinite(hz) || hz <= 0) return '';
+    if (hz >= 1e9) return `${Number((hz / 1e9).toFixed(3))} GHz`;
+    if (hz >= 1e6) return `${Number((hz / 1e6).toFixed(3))} MHz`;
+    if (hz >= 1e3) return `${Number((hz / 1e3).toFixed(3))} kHz`;
+    return `${Number(hz.toFixed(1))} Hz`;
+  }
+
+  protected formatRfPri(priUs: number | undefined): string {
+    if (priUs == null || !Number.isFinite(priUs) || priUs <= 0) return '';
+    const prf = this.formatRfHz(1e6 / priUs);
+    return `${Number(priUs.toFixed(2))} µs (${prf})`;
+  }
+
+  protected formatRfPulseWidth(pwUs: number | undefined): string {
+    if (pwUs == null || !Number.isFinite(pwUs) || pwUs <= 0) return '';
+    return `${Number(pwUs.toFixed(2))} µs`;
+  }
+
+  protected formatRfScan(scanType?: string, scanRateRpm?: number): string {
+    const parts: string[] = [];
+    if (scanType) parts.push(scanType);
+    if (scanRateRpm != null && Number.isFinite(scanRateRpm) && scanRateRpm > 0) {
+      parts.push(`${Number(scanRateRpm.toFixed(1))} rpm`);
+    }
+    return parts.join(' · ');
+  }
+
+  protected formatRfPower(powerDbm: number | undefined): string {
+    if (powerDbm == null || !Number.isFinite(powerDbm)) return '';
+    return `${Number(powerDbm.toFixed(1))} dBm`;
   }
 
   protected affiliationColor = computed(() => {
