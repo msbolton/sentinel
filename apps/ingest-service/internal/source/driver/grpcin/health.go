@@ -32,7 +32,11 @@ func (d *Driver) Health() driver.Health {
 	detail["reportsRejected"] = byReason
 	st := transport.State{Connected: d.connected.Load(), Detail: detail}
 	d.tlsrc.Apply(&st)
-	return driver.Health{Connected: st.Connected, LastError: st.LastError, Detail: st.Detail}
+	h := driver.Health{Connected: st.Connected, LastError: st.LastError, Detail: st.Detail}
+	if t := d.liveness(); t != nil {
+		h.Emplacements = t.Snapshot(d.bound(), d.now().UTC())
+	}
+	return h
 }
 
 // allowDetail is "open" for an empty allowlist, else the entry count.

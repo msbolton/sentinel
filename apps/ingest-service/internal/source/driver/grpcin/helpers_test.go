@@ -112,11 +112,14 @@ func (f *fakeTokens) revoke(secret string) {
 }
 
 // fakeEmplacements is an EmplacementSource over a list the test controls.
+// put announces the change to the OnChange subscribers, as the cache does.
 type fakeEmplacements struct {
 	mu   sync.Mutex
 	rows []emplacement.Emplacement
 	// notReady, when set, leaves Ready open (the cache has not loaded).
 	notReady bool
+	fns      map[int]func(string)
+	nextFn   int
 }
 
 func (f *fakeEmplacements) Ready() <-chan struct{} {
@@ -127,17 +130,28 @@ func (f *fakeEmplacements) Ready() <-chan struct{} {
 	return r
 }
 
-// put replaces the row with e's ID, or appends e.
+// put replaces the row with e's ID, or appends e, and announces it.
 func (f *fakeEmplacements) put(e emplacement.Emplacement) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	replaced := false
 	for i := range f.rows {
 		if f.rows[i].ID == e.ID {
 			f.rows[i] = e
-			return
+			replaced = true
+			break
 		}
 	}
-	f.rows = append(f.rows, e)
+	if !replaced {
+		f.rows = append(f.rows, e)
+	}
+	fns := make([]func(string), 0, len(f.fns))
+	for _, fn := range f.fns {
+		fns = append(fns, fn)
+	}
+	f.mu.Unlock()
+	for _, fn := range fns {
+		fn(e.ID)
+	}
 }
 
 func (f *fakeEmplacements) All() []emplacement.Emplacement {
@@ -166,7 +180,21 @@ func (f *fakeEmplacements) ByFeed(feedID string) []emplacement.Emplacement {
 	}
 	return out
 }
-func (f *fakeEmplacements) OnChange(func(string)) (cancel func()) { return func() {} }
+func (f *fakeEmplacements) OnChange(fn func(string)) (cancel func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fns == nil {
+		f.fns = map[int]func(string){}
+	}
+	id := f.nextFn
+	f.nextFn++
+	f.fns[id] = fn
+	return func() {
+		f.mu.Lock()
+		delete(f.fns, id)
+		f.mu.Unlock()
+	}
+}
 
 // touchCall is one Touch the writer recorded.
 type touchCall struct {
@@ -414,6 +442,10 @@ func startWith(t *testing.T, cfg map[string]any, secrets map[string]string, toke
 		t.Fatal(err)
 	}
 	d := dv.(*Driver)
+	// The heartbeat model (the no_heartbeat gate, the re-publish ticker and
+	// the offline publish at Stop) has tests of its own, in heartbeat_test.go;
+	// liveRig turns it back on.
+	d.heartbeatsOff = true
 	if tweak != nil {
 		tweak(d)
 	}

@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"github.com/sentinel/go-common/classification"
+	"github.com/sentinel/ingest-service/internal/emplacement"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 	"github.com/sentinel/ingest-service/internal/source/driver/stream"
 	"github.com/sentinel/ingest-service/internal/source/transport"
@@ -143,16 +144,32 @@ type Driver struct {
 	touchMu    sync.Mutex
 	touched    map[string]time.Time
 	touchedPos map[string]time.Time
+	// beatTouched is when each emplacement's last heartbeat was written to
+	// its row, with the interval, on a throttle slot of its own (see beat).
+	beatTouched map[string]beatTouch
 
 	// tracks are the mobile emplacements' recent fixes, and emittedAt when
 	// each one's own observation last went out.
 	tracksMu  sync.Mutex
 	tracks    map[string]*track
 	emittedAt map[string]time.Time
-	tolerance time.Duration
+	// emittedState is the heartbeat state each site's last publish carried,
+	// so that a change goes out at once (siteDue).
+	emittedState map[string]emplacement.HeartbeatState
+	tolerance    time.Duration
 
 	// now is the server's clock (tests replace it).
 	now func() time.Time
+	// live is the run's heartbeat tracker; nil before the first Run.
+	live atomic.Pointer[emplacement.Tracker]
+	// republishTick is how often bound sites are checked for a publish
+	// (tests shorten it).
+	republishTick time.Duration
+	// heartbeatsOff turns the heartbeat model's refusals and publishes off:
+	// the no_heartbeat gate, the re-publish ticker and the offline publish at
+	// Stop. Tests of the report path written before heartbeats set it;
+	// production never does.
+	heartbeatsOff bool
 
 	// cacheWait is how long an upsert waits for the cache to see its write
 	// (tests shorten it).
@@ -248,14 +265,17 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 		senders:         transport.NewSenders(maxSenders),
 		perSender:       transport.NewSenderLimiter(c.MaxMessagesPerSecPerSender, transport.SenderLimiterKeys),
 		tokens:          deps.Tokens, emps: deps.Emplacements, writer: deps.EmplacementWriter, logger: deps.Logger,
-		touched:    map[string]time.Time{},
-		touchedPos: map[string]time.Time{},
-		tracks:     map[string]*track{},
-		emittedAt:  map[string]time.Time{},
-		now:        time.Now,
-		cacheWait:  cacheWait,
-		tolerance:  time.Duration(intOr(c.OwnshipToleranceMs, defaultOwnshipToleranceMs)) * time.Millisecond,
-		rejected:   map[string]int64{}, idleTimeout: idleTimeout,
+		touched:       map[string]time.Time{},
+		touchedPos:    map[string]time.Time{},
+		tracks:        map[string]*track{},
+		emittedAt:     map[string]time.Time{},
+		beatTouched:   map[string]beatTouch{},
+		emittedState:  map[string]emplacement.HeartbeatState{},
+		republishTick: republishTick,
+		now:           time.Now,
+		cacheWait:     cacheWait,
+		tolerance:     time.Duration(intOr(c.OwnshipToleranceMs, defaultOwnshipToleranceMs)) * time.Millisecond,
+		rejected:      map[string]int64{}, idleTimeout: idleTimeout,
 	}
 	if d.logger == nil {
 		d.logger = zap.NewNop()
@@ -303,6 +323,6 @@ func (d *Driver) sensorDue(id string, now time.Time) bool {
 	if last, ok := d.emittedAt[id]; ok && now.Sub(last) < sensorEvery {
 		return false
 	}
-	d.emittedAt[id] = now
+	d.emittedAt[id], d.emittedState[id] = now, emplacement.HeartbeatOnline
 	return true
 }

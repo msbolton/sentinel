@@ -309,8 +309,8 @@ func TestStateRules(t *testing.T) {
 	r := start(t, nil, nil, tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1"}), &fakeEmplacements{rows: []emplacement.Emplacement{fixed, ship}}, nil)
 	st := openStream(t, r, secretA)
 	now := time.Now()
-	if ack := send(t, st, stateReport("radar", now, 50, -4, nil)); ack.GetReason() != "unknown_emplacement" {
-		t.Errorf("a fixed emplacement's state: %v", ack)
+	if ack := send(t, st, stateReport("radar", now, 50, -4, nil)); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK || ack.GetEmplacementId() != "radar" {
+		t.Errorf("a fixed emplacement's state is its heartbeat: %v", ack)
 	}
 	mismatch := stateReport("ship", now, 50, -4, nil)
 	mismatch.GetEmplacementState().EmplacementId = "radar"
