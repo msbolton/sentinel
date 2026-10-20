@@ -29,9 +29,9 @@ The fused track: one row per object the platform knows about. Feeds update it th
 | `classification` | `VARCHAR(50)` | `'UNCLASSIFIED'` | Security classification |
 | `exercise` | `BOOLEAN` | `FALSE` | Synthetic (exercise or simulation) mark; sticky (`e.exercise OR b.exercise`), also set when a duplicate or stale exercise report resolves to the entity, and never cleared |
 | `position` | `geometry(Point, 4326)` | `NULL` | WGS84 point |
-| `altitude`, `heading`, `"speedKnots"`, `course`, `pitch`, `roll` | `DOUBLE PRECISION` | `NULL` | Last accepted kinematics |
-| `kinematics` | `JSONB` | `{}` | Velocity, acceleration and covariance of the last fix |
-| `"platformData"` | `JSONB` | `{}` | Platform detail (ADS-B, AIS, TLE, CoT, Link 16) |
+| `altitude`, `heading`, `"speedKnots"`, `course`, `pitch`, `roll`, `"circularError"` | `DOUBLE PRECISION` | `NULL` | Last accepted kinematics and 95th-percentile horizontal circular error radius (`"circularError"`, metres; derived from the 95% error ellipse or 2×2 North-East covariance via exact bivariate-normal $R_{95}$ when not given directly) |
+| `kinematics` | `JSONB` | `{}` | Velocity, acceleration and `positionCovariance` (`posCovLatLat`, `posCovLatLon`, `posCovLonLon`, `posCovAltAlt` in m²) of the last fix; cleared to `{}` when a new fix arrives without them |
+| `"platformData"` | `JSONB` | `{}` | Platform detail (ADS-B, AIS, TLE, CoT, Link 16, UAV, RF) |
 | `"trackEnvironment"`, `affiliation`, `"operationalStatus"`, `"countryOfOrigin"` | `VARCHAR` | | Classification attributes |
 | `"ageoutState"` | `VARCHAR(20)` | `'LIVE'` | LIVE, STALE or AGED_OUT |
 | `"lastObservedAt"` | `TIMESTAMPTZ` | `NULL` | Source timestamp of the last accepted observation; a fix older than it is rejected as `STALE_FIX` |
