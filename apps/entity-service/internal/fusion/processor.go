@@ -20,6 +20,7 @@ import (
 type EntityWriter interface {
 	ApplyFused(ctx context.Context, updates []store.FusedUpdate) ([]store.FusedResult, error)
 	ApplyStatic(ctx context.Context, updates []store.StaticUpdate) ([]store.FusedResult, error)
+	MarkExercise(ctx context.Context, ids []string) ([]store.EntityRecord, error)
 }
 
 // ObservationWriter persists every report.
@@ -149,6 +150,14 @@ func (p *Processor) ProcessBatch(ctx context.Context, observations []*sentinelv1
 		}
 	}
 
+	// An exercise report marks its entity whatever became of its fix: the
+	// upserts carry the mark only for the winner, and a duplicate or stale
+	// exercise report would otherwise leave the entity looking live.
+	marked, err := p.markExercise(ctx, reports, res.IDs, applied, staticApplied)
+	if err != nil {
+		return stats, err
+	}
+
 	// Persist every report and the per-feed provenance.
 	rows := make([]store.ObservationRow, 0, len(reports))
 	srcRows := make([]store.SourceRow, 0, len(reports))
@@ -216,7 +225,46 @@ func (p *Processor) ProcessBatch(ctx context.Context, observations []*sentinelv1
 			p.events.Position(entity, ref)
 		}
 	}
+	// Entities marked by a report that did not carry the mark itself.
+	for _, rec := range marked {
+		p.events.Updated(events.EntityProto(&rec, nil, nil), []string{"exercise"})
+	}
 	return stats, nil
+}
+
+// markExercise marks the entities of exercise reports whose upsert did not
+// already carry the mark. It patches the applied results so the events of
+// this batch show the mark, and returns the rows it changed.
+func (p *Processor) markExercise(ctx context.Context, reports []*Report, ids map[Key]string, applied, staticApplied map[string]store.FusedResult) ([]store.EntityRecord, error) {
+	var todo []string
+	seen := map[string]bool{}
+	for _, r := range reports {
+		id := ids[r.Key]
+		if id == "" || seen[id] || !r.Obs.GetExercise() {
+			continue
+		}
+		seen[id] = true
+		if a, ok := applied[id]; ok && a.Record.Exercise {
+			continue
+		}
+		if a, ok := staticApplied[id]; ok && a.Record.Exercise {
+			continue
+		}
+		todo = append(todo, id)
+	}
+	recs, err := p.entities.MarkExercise(ctx, todo)
+	if err != nil {
+		return nil, fmt.Errorf("marking exercise entities: %w", err)
+	}
+	for _, rec := range recs {
+		if a, ok := applied[rec.ID]; ok {
+			a.Record.Exercise = true
+		}
+		if a, ok := staticApplied[rec.ID]; ok {
+			a.Record.Exercise = true
+		}
+	}
+	return recs, nil
 }
 
 func fusedUpdate(id string, r *Report) store.FusedUpdate {

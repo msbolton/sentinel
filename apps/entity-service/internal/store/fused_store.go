@@ -173,6 +173,26 @@ func (s *EntityStore) ApplyStatic(ctx context.Context, updates []StaticUpdate) (
 	return scanFused(rows)
 }
 
+// MarkExercise sets the exercise mark on entities that lack it and returns
+// the rows it changed. It is for exercise reports that did not win the fix
+// (a duplicate in their batch, or older than the entity's last fix), which
+// ApplyFused never carries. The mark is never cleared.
+func (s *EntityStore) MarkExercise(ctx context.Context, ids []string) ([]EntityRecord, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+		UPDATE sentinel.entities
+		   SET exercise = true, "updatedAt" = NOW()
+		 WHERE id = ANY($1::uuid[]) AND NOT exercise AND deleted = false
+		RETURNING %s`, entitySelectColumns), ids)
+	if err != nil {
+		return nil, fmt.Errorf("mark exercise: %w", err)
+	}
+	defer rows.Close()
+	return scanEntities(rows)
+}
+
 func scanFused(rows pgx.Rows) ([]FusedResult, error) {
 	var out []FusedResult
 	for rows.Next() {

@@ -273,6 +273,44 @@ func TestExerciseIsSticky(t *testing.T) {
 	}
 }
 
+// MarkExercise marks live entities once, and leaves deleted ones alone.
+func TestMarkExercise(t *testing.T) {
+	pool, ctx := testPool(t)
+	ids := store.NewIdentityStore(pool, nil)
+	ents := store.NewEntityStore(pool, nil)
+	t0 := time.Now().UTC().Truncate(time.Millisecond)
+	icao := "TSM" + t0.Format("150405")
+
+	ra := report("test-mx", icao, t0, 41.9, -87.9)
+	rb := report("test-mx", icao+"D", t0, 42.9, -87.9)
+	created, _, err := ids.CreateEntities(ctx, []identity.NewEntity{fusion.SpecFor(ra), fusion.SpecFor(rb)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, gone := created[ra.Key], created[rb.Key]
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM sentinel.entities WHERE id = ANY($1::uuid[])`, []string{live, gone})
+	})
+	if _, err := pool.Exec(ctx, `UPDATE sentinel.entities SET deleted = true WHERE id = $1`, gone); err != nil {
+		t.Fatal(err)
+	}
+
+	if recs, err := ents.MarkExercise(ctx, nil); err != nil || recs != nil {
+		t.Fatalf("empty ids = %v %v", recs, err)
+	}
+	recs, err := ents.MarkExercise(ctx, []string{live, gone})
+	if err != nil || len(recs) != 1 || recs[0].ID != live || !recs[0].Exercise {
+		t.Fatalf("first mark = %+v %v", recs, err)
+	}
+	if recs, err := ents.MarkExercise(ctx, []string{live, gone}); err != nil || len(recs) != 0 {
+		t.Fatalf("second mark = %+v %v", recs, err)
+	}
+	var deletedMarked bool
+	if err := pool.QueryRow(ctx, `SELECT exercise FROM sentinel.entities WHERE id = $1`, gone).Scan(&deletedMarked); err != nil || deletedMarked {
+		t.Fatalf("deleted entity exercise = %v %v", deletedMarked, err)
+	}
+}
+
 // Reads apply the caller's clearance as a ceiling.
 func TestCeilingOnReads(t *testing.T) {
 	pool, ctx := testPool(t)

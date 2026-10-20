@@ -20,6 +20,7 @@ type memEntities struct {
 	static       [][]store.StaticUpdate
 	class        map[string]string
 	exercise     map[string]bool
+	marked       []string // ids MarkExercise changed
 }
 
 func newMemEntities() *memEntities {
@@ -67,6 +68,21 @@ func (m *memEntities) ApplyStatic(_ context.Context, updates []store.StaticUpdat
 		prevClass, class := m.raise(u.EntityID, u.Classification)
 		m.exercise[u.EntityID] = m.exercise[u.EntityID] || u.Exercise
 		out = append(out, store.FusedResult{EntityID: u.EntityID, PreviousState: m.state[u.EntityID], PreviousClassification: prevClass, Record: &store.EntityRecord{ID: u.EntityID, Name: u.Name, Classification: class, Exercise: m.exercise[u.EntityID], AgeoutState: "LIVE", CreatedAt: "2026-10-15 12:00:00+00", UpdatedAt: "2026-10-15 12:00:00+00"}})
+	}
+	return out, nil
+}
+
+// MarkExercise mirrors the store: only rows that lacked the mark are
+// returned.
+func (m *memEntities) MarkExercise(_ context.Context, ids []string) ([]store.EntityRecord, error) {
+	var out []store.EntityRecord
+	for _, id := range ids {
+		if m.exercise[id] {
+			continue
+		}
+		m.exercise[id] = true
+		m.marked = append(m.marked, id)
+		out = append(out, store.EntityRecord{ID: id, EntityType: "AIRCRAFT", Source: "OPENSKY", Classification: m.class[id], AgeoutState: "LIVE", Exercise: true, CreatedAt: "2026-10-15 12:00:00+00", UpdatedAt: "2026-10-15 12:00:00+00"})
 	}
 	return out, nil
 }
@@ -288,5 +304,75 @@ func TestExerciseObservationMarksEntity(t *testing.T) {
 	last = sink.events[len(sink.events)-1]
 	if last.kind != "position" || !last.entity.Exercise {
 		t.Fatalf("live report after exercise = %+v", last)
+	}
+}
+
+// An exercise report that loses to a live report in its own batch (it is the
+// older duplicate) still marks the entity, and the mark is announced.
+func TestExerciseDuplicateMarksEntity(t *testing.T) {
+	p, _, ents, obsw, _, sink := newTestProcessor()
+	t1 := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	live := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t1, 40, -80), "o1")
+	ex := withID(obs("sim", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t1.Add(-5*time.Second), 40.1, -80), "o2")
+	ex.Exercise = true
+	stats, err := p.ProcessBatch(context.Background(), []*sentinelv1.Observation{live, ex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Rejected[RejectDuplicate] != 1 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	id := obsw.rows[0].EntityID
+	if !ents.exercise[id] || len(ents.marked) != 1 {
+		t.Fatalf("exercise = %v marked = %v", ents.exercise, ents.marked)
+	}
+	var updated, positionExercise bool
+	for _, e := range sink.events {
+		if e.kind == "updated" && e.extra == "exercise" && e.entity.Exercise && e.entity.Id == id {
+			updated = true
+		}
+		if e.kind == "created" && e.entity.Exercise {
+			positionExercise = true
+		}
+	}
+	if !updated || !positionExercise {
+		t.Fatalf("updated=%v createdCarriesMark=%v events=%+v", updated, positionExercise, sink.events)
+	}
+}
+
+// An exercise report older than the entity's last fix loses the fix but
+// still marks the entity.
+func TestExerciseStaleFixMarksEntity(t *testing.T) {
+	p, _, ents, obsw, _, sink := newTestProcessor()
+	t1 := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	live := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t1, 40, -80), "o1")
+	if _, err := p.ProcessBatch(context.Background(), []*sentinelv1.Observation{live}); err != nil {
+		t.Fatal(err)
+	}
+	id := obsw.rows[0].EntityID
+	before := len(sink.events)
+
+	ex := withID(obs("sim", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t1.Add(-time.Minute), 40.1, -80), "o2")
+	ex.Exercise = true
+	stats, err := p.ProcessBatch(context.Background(), []*sentinelv1.Observation{ex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Rejected[RejectStaleFix] != 1 || !ents.exercise[id] {
+		t.Fatalf("stats = %+v exercise = %v", stats, ents.exercise)
+	}
+	if got := sink.events[before:]; len(got) != 1 || got[0].kind != "updated" || got[0].extra != "exercise" || !got[0].entity.Exercise {
+		t.Fatalf("events after stale exercise report = %+v", got)
+	}
+
+	// Already marked: another exercise report announces nothing extra.
+	again := withID(obs("sim", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t1.Add(-time.Second), 40.1, -80), "o3")
+	again.Exercise = true
+	n := len(sink.events)
+	if _, err := p.ProcessBatch(context.Background(), []*sentinelv1.Observation{again}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.events) != n || len(ents.marked) != 1 {
+		t.Fatalf("second stale exercise report re-announced: %+v marked=%v", sink.events[n:], ents.marked)
 	}
 }
