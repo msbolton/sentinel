@@ -58,6 +58,15 @@ export class EmplacementEditorComponent implements OnDestroy {
   /** The coordinate inputs' text, so a half-typed value ("-") is not lost to the draft. */
   protected readonly latText = signal('');
   protected readonly lonText = signal('');
+  /**
+   * The draft this editor was opened on (its id, or null for a new one, and its
+   * connection): moving straight to another editor replaces the draft before
+   * this one goes, and that one must not be cleared.
+   */
+  private readonly owned = untracked(() => {
+    const d = this.draft();
+    return d ? { id: d.id, feedId: d.feedId } : null;
+  });
 
   constructor() {
     // The inputs follow a position set from outside (opening another draft).
@@ -72,7 +81,8 @@ export class EmplacementEditorComponent implements OnDestroy {
   }
 
   ngOnDestroy(): void {
-    this.draft.set(null);
+    const d = untracked(() => this.draft());
+    if (d && this.owned && d.id === this.owned.id && d.feedId === this.owned.feedId) this.draft.set(null);
   }
 
   protected patch(change: Partial<EmplacementDraft>): void {

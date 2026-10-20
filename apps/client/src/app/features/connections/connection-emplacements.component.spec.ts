@@ -81,4 +81,35 @@ describe('ConnectionEmplacementsComponent', () => {
     req.flush(row('a', { active: false, version: 2 }));
     http.verify();
   });
+
+  describe('moving straight from one editor to another', () => {
+    const editOf = (el: HTMLElement, name: string) =>
+      Array.from(el.querySelectorAll('.emp-row'))
+        .find((r) => r.querySelector('.emp-name')?.textContent?.trim() === name)!
+        .querySelector('.emp-actions button') as HTMLButtonElement;
+    const nameInput = (el: HTMLElement) => el.querySelector('app-emplacement-editor input[name="name"]') as HTMLInputElement | null;
+
+    it("opens B's editor when Edit on B is clicked while A's is open", () => {
+      const { el, fixture, service } = create(grpc, [row('a'), row('b')]);
+      editOf(el, 'a').click();
+      fixture.detectChanges();
+      expect(nameInput(el)?.value).toBe('a');
+      editOf(el, 'b').click();
+      fixture.detectChanges();
+      expect(service.draft()).toEqual(expect.objectContaining({ id: 'b', name: 'b' }));
+      expect(el.querySelectorAll('app-emplacement-editor').length).toBe(1);
+      expect(nameInput(el)?.value).toBe('b');
+    });
+
+    it('opens an empty editor when + New is clicked while a row is being edited', () => {
+      const { el, fixture, service } = create(grpc, [row('a')]);
+      editOf(el, 'a').click();
+      fixture.detectChanges();
+      (el.querySelector('button.new-emplacement') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      expect(service.draft()).toEqual(expect.objectContaining({ id: null, feedId: 'grpc-1' }));
+      expect(el.querySelectorAll('app-emplacement-editor').length).toBe(1);
+      expect(nameInput(el)?.value).toBe('');
+    });
+  });
 });
