@@ -236,6 +236,8 @@ func TestBoundMobileEmplacementsAreLeftToTheirSenders(t *testing.T) {
 	moved.Position = &emplacement.Point{Lat: 51, Lon: -4}
 	src.change(moved)
 	src.change(free)
+	// The changes channel is ordered, so once the later change to "free" has
+	// been reported, the earlier one to "bound" has been handled (and skipped).
 	waitFor(t, func() bool { return count(sink.ids(), "free") == 2 })
 	cancel()
 	if err := <-done; err != nil {
@@ -247,4 +249,42 @@ func TestBoundMobileEmplacementsAreLeftToTheirSenders(t *testing.T) {
 	if n := count(sink.ids(), "bound-fixed"); n != 1 {
 		t.Errorf("a bound fixed emplacement was reported %d times at start, want 1", n)
 	}
+}
+
+// An emplacement that stops being a bound mobile one is reported again on
+// that change: unbound (the feed-delete path clears FeedID), or made fixed
+// while it stays bound.
+func TestLeavingTheBoundMobileStateIsReported(t *testing.T) {
+	feed := "grpc-1"
+	unbinds := place("unbinds", emplacement.MobilityMobile, true, true)
+	unbinds.FeedID = &feed
+	fixes := place("fixes", emplacement.MobilityMobile, true, true)
+	fixes.FeedID = &feed
+	src := &memSource{rows: map[string]emplacement.Emplacement{"unbinds": unbinds, "fixes": fixes}}
+	sink := &memSink{}
+	d := &Driver{src: src, heartbeat: time.Hour, logger: zap.NewNop(), now: time.Now}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.Run(ctx, sink) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("run returned %v on cancel", err)
+		}
+	}()
+
+	// Let the start report finish: it reports neither.
+	time.Sleep(50 * time.Millisecond)
+	if ids := sink.ids(); len(ids) != 0 {
+		t.Fatalf("start reported %v, want nothing", ids)
+	}
+	unbound := unbinds
+	unbound.FeedID = nil
+	src.change(unbound)
+	waitFor(t, func() bool { return count(sink.ids(), "unbinds") == 1 })
+
+	fixed := fixes
+	fixed.Mobility = emplacement.MobilityFixed
+	src.change(fixed)
+	waitFor(t, func() bool { return count(sink.ids(), "fixes") == 1 })
 }

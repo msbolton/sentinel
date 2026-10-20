@@ -84,8 +84,8 @@ type Deps struct {
 }
 
 // EmplacementWriter writes emplacements for the drivers whose senders manage
-// or move their own (grpc): position reports through Touch, and
-// UpsertEmplacement. *emplacement.PGStore is the real one.
+// or move their own (grpc): position reports through Touch, and the
+// emplacements senders create and update through the Store. *emplacement.PGStore is the real one.
 type EmplacementWriter interface {
 	emplacement.Store
 	emplacement.Toucher

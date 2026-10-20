@@ -34,7 +34,9 @@ func (depsEmplacements) Ready() <-chan struct{} {
 }
 func (depsEmplacements) OnChange(func(id string)) (cancel func()) { return func() {} }
 
-type depsWriter struct{}
+// depsWriter has a field so it is not zero-size: pointers to distinct
+// zero-size values may compare equal.
+type depsWriter struct{ _ byte }
 
 func (depsWriter) List(context.Context, emplacement.Filter) ([]emplacement.Emplacement, error) {
 	return nil, nil
