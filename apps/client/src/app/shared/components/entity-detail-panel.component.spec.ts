@@ -204,6 +204,20 @@ describe('EntityDetailPanelComponent', () => {
       expect(chips).toEqual(['UNIT', 'HOSTILE']);
     });
 
+    it('badges exercise data in the header chips, and nothing on a live or old entity', () => {
+      fixture.componentRef.setInput('entity', makeEntity({ exercise: true }));
+      fixture.detectChanges();
+      expect(el.querySelector('.header-chips .chip-exercise')?.textContent?.trim()).toBe('EXERCISE');
+
+      fixture.componentRef.setInput('entity', makeEntity());
+      fixture.detectChanges();
+      expect(el.querySelector('.chip-exercise')).toBeNull();
+
+      fixture.componentRef.setInput('entity', makeEntity({ exercise: false }));
+      fixture.detectChanges();
+      expect(el.querySelector('.chip-exercise')).toBeNull();
+    });
+
     it('marks a track the feed declared stale even when its timestamp is recent', () => {
       fixture.componentRef.setInput('entity', makeEntity({ lastSeenAt: secondsAgo(5), ageoutState: 'STALE' }));
       fixture.detectChanges();

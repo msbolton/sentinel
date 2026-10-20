@@ -76,6 +76,31 @@ func TestEvaluateReasonsInOrder(t *testing.T) {
 		t.Errorf("reexport on: %+v", d)
 	}
 
+	// Exercise comes after the loop and re-export guards and before the
+	// classification ceiling.
+	exLoop := aircraft("tak-hq", 40, -75)
+	exLoop.Exercise = true
+	if d := Evaluate(base, ctx, exLoop); d.Allow || d.Reason != ReasonLoop {
+		t.Errorf("exercise loop: %+v", d)
+	}
+	exOther := aircraft("opensky", 40, -75)
+	exOther.Exercise = true
+	exOther.Sources = append(exOther.Sources, &sentinelv1.SourceContribution{FeedId: "tak-field"})
+	if d := Evaluate(base, ctx, exOther); d.Allow || d.Reason != ReasonReexport {
+		t.Errorf("exercise reexport: %+v", d)
+	}
+	exSecret := aircraft("opensky", 40, -75)
+	exSecret.Exercise = true
+	exSecret.Classification = sentinelv1.Classification_CLASSIFICATION_SECRET
+	if d := Evaluate(base, ctx, exSecret); d.Allow || d.Reason != ReasonExercise {
+		t.Errorf("exercise before classification: %+v", d)
+	}
+	allowEx := base
+	allowEx.AllowExercise = true
+	if d := Evaluate(allowEx, ctx, exSecret); d.Allow || d.Reason != ReasonClassification {
+		t.Errorf("allowed exercise still meets the ceiling: %+v", d)
+	}
+
 	secret := aircraft("opensky", 40, -75)
 	secret.Classification = sentinelv1.Classification_CLASSIFICATION_SECRET
 	if d := Evaluate(base, ctx, secret); d.Allow || d.Reason != ReasonClassification {
@@ -117,37 +142,78 @@ func TestEvaluateReasonsInOrder(t *testing.T) {
 	}
 }
 
+func TestEvaluateDeniesExercise(t *testing.T) {
+	ex := aircraft("opensky", 40, -75)
+	ex.Exercise = true
+	if d := Evaluate(Policy{}, Context{}, ex); d.Allow || d.Reason != ReasonExercise {
+		t.Errorf("exercise with a zero policy: %+v", d)
+	}
+	if d := Evaluate(Policy{AllowExercise: true}, Context{}, ex); !d.Allow {
+		t.Errorf("exercise with allowExercise: %+v", d)
+	}
+	live := aircraft("opensky", 40, -75)
+	for _, p := range []Policy{{}, {AllowExercise: true}} {
+		if d := Evaluate(p, Context{}, live); !d.Allow {
+			t.Errorf("live entity, %+v: %+v", p, d)
+		}
+	}
+	p, err := Parse([]byte(`{"allowExercise": true}`))
+	if err != nil || !p.AllowExercise {
+		t.Errorf("parse allowExercise: %+v, %v", p, err)
+	}
+}
+
 func TestAllowAlert(t *testing.T) {
 	ctx := Context{SelfFeedID: "c"}
 	p := Policy{Boxes: []Box{{North: 1, South: 0, East: 1, West: 0}}, ClassificationCeiling: "UNCLASSIFIED", Alerts: AlertPolicy{MinSeverity: "MEDIUM", Types: []string{"GEOFENCE_BREACH"}}}
 	a := &sentinelv1.Alert{AlertType: sentinelv1.AlertType_ALERT_TYPE_GEOFENCE_BREACH, Severity: sentinelv1.AlertSeverity_ALERT_SEVERITY_HIGH}
-	if d := AllowAlert(p, ctx, a, true); !d.Allow {
+	if d := AllowAlert(p, ctx, a, true, false); !d.Allow {
 		t.Fatalf("tracked alert denied: %+v", d)
 	}
-	if d := AllowAlert(p, ctx, a, false); d.Allow || d.Reason != ReasonNotTracked {
+	if d := AllowAlert(p, ctx, a, false, false); d.Allow || d.Reason != ReasonNotTracked {
 		t.Errorf("untracked without position: %+v", d)
 	}
 	a.Position = &sentinelv1.Coordinate{Latitude: 0.5, Longitude: 0.5}
-	if d := AllowAlert(p, ctx, a, false); !d.Allow {
+	if d := AllowAlert(p, ctx, a, false, false); !d.Allow {
 		t.Errorf("untracked inside box: %+v", d)
 	}
 	low := &sentinelv1.Alert{AlertType: a.AlertType, Severity: sentinelv1.AlertSeverity_ALERT_SEVERITY_LOW}
-	if d := AllowAlert(p, ctx, low, true); d.Allow || d.Reason != ReasonSeverity {
+	if d := AllowAlert(p, ctx, low, true, false); d.Allow || d.Reason != ReasonSeverity {
 		t.Errorf("severity: %+v", d)
 	}
 	wrongType := &sentinelv1.Alert{AlertType: sentinelv1.AlertType_ALERT_TYPE_SPEED_ANOMALY, Severity: a.Severity}
-	if d := AllowAlert(p, ctx, wrongType, true); d.Allow || d.Reason != ReasonAlertType {
+	if d := AllowAlert(p, ctx, wrongType, true, false); d.Allow || d.Reason != ReasonAlertType {
 		t.Errorf("alert type: %+v", d)
 	}
 	secret := &sentinelv1.Alert{AlertType: a.AlertType, Severity: a.Severity, Classification: sentinelv1.Classification_CLASSIFICATION_SECRET}
-	if d := AllowAlert(p, ctx, secret, true); d.Allow || d.Reason != ReasonClassification {
+	if d := AllowAlert(p, ctx, secret, true, false); d.Allow || d.Reason != ReasonClassification {
 		t.Errorf("classification: %+v", d)
 	}
 	off := false
-	if d := AllowAlert(Policy{Alerts: AlertPolicy{Enabled: &off}}, ctx, a, true); d.Allow || d.Reason != ReasonAlertsOff {
+	if d := AllowAlert(Policy{Alerts: AlertPolicy{Enabled: &off}}, ctx, a, true, false); d.Allow || d.Reason != ReasonAlertsOff {
 		t.Errorf("alerts off: %+v", d)
 	}
-	if d := AllowAlert(p, ctx, nil, true); d.Allow {
+	if d := AllowAlert(p, ctx, nil, true, false); d.Allow {
 		t.Error("nil alert allowed")
+	}
+
+	// An alert about an exercise entity is denied whether or not the entity
+	// is tracked or the alert sits inside the boxes, and the exercise rule
+	// is checked before every other.
+	for _, tracked := range []bool{true, false} {
+		if d := AllowAlert(p, ctx, a, tracked, true); d.Allow || d.Reason != ReasonExercise {
+			t.Errorf("exercise, tracked=%v: %+v", tracked, d)
+		}
+	}
+	if d := AllowAlert(Policy{Alerts: AlertPolicy{Enabled: &off}}, ctx, a, true, true); d.Allow || d.Reason != ReasonExercise {
+		t.Errorf("exercise with alerts off: %+v", d)
+	}
+	allowEx := p
+	allowEx.AllowExercise = true
+	if d := AllowAlert(allowEx, ctx, a, true, true); !d.Allow {
+		t.Errorf("exercise with allowExercise: %+v", d)
+	}
+	if d := AllowAlert(allowEx, ctx, secret, true, true); d.Allow || d.Reason != ReasonClassification {
+		t.Errorf("allowed exercise still meets the other rules: %+v", d)
 	}
 }

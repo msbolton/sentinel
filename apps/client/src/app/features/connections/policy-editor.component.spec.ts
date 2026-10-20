@@ -121,6 +121,7 @@ describe('PolicyEditorComponent', () => {
     expect(last().value.entityTypes).toEqual(['VESSEL']);
 
     component.form.controls.reexport.setValue(true);
+    component.form.controls.allowExercise.setValue(true);
     component.form.controls.alertsEnabled.setValue(true);
     component.form.controls.alertsMinSeverity.setValue('HIGH');
     component.form.controls.classificationCeiling.setValue('SECRET');
@@ -130,6 +131,7 @@ describe('PolicyEditorComponent', () => {
       feeds: ['opensky'],
       classificationCeiling: 'SECRET',
       reexport: true,
+      allowExercise: true,
       alerts: { enabled: true, minSeverity: 'HIGH' },
     });
     expect(last().valid).toBe(true);
@@ -224,6 +226,7 @@ describe('PolicyEditorComponent', () => {
       boxes: [{ north: 60, south: 50, east: 10, west: 0 }],
       classificationCeiling: 'CONFIDENTIAL',
       reexport: true,
+      allowExercise: true,
       alerts: { enabled: true, minSeverity: 'MEDIUM', types: ['GEOFENCE'] },
     });
 
@@ -236,6 +239,7 @@ describe('PolicyEditorComponent', () => {
     expect(el.querySelector<HTMLInputElement>('input[name="box-0-west"]')?.value).toBe('0');
     expect(el.querySelector<HTMLSelectElement>('#pe-ceiling')?.value).toBe('CONFIDENTIAL');
     expect(el.querySelector<HTMLInputElement>('input[name="reexport"]')?.checked).toBe(true);
+    expect(el.querySelector<HTMLInputElement>('input[name="allowExercise"]')?.checked).toBe(true);
     expect(el.querySelector<HTMLInputElement>('input[name="alertsEnabled"]')?.checked).toBe(true);
     expect(el.querySelector<HTMLSelectElement>('#pe-alert-severity')?.value).toBe('MEDIUM');
 
@@ -247,9 +251,14 @@ describe('PolicyEditorComponent', () => {
         boxes: [{ north: 60, south: 50, east: 10, west: 0 }],
         classificationCeiling: 'CONFIDENTIAL',
         reexport: true,
+        allowExercise: true,
         alerts: { enabled: true, minSeverity: 'MEDIUM', types: ['GEOFENCE'] },
       },
     });
+
+    el.querySelector<HTMLInputElement>('input[name="allowExercise"]')!.click();
+    fixture.detectChanges();
+    expect(last().value).not.toHaveProperty('allowExercise');
   });
 
   it('routes server problems to the box field, the section, or the top of the editor', () => {
@@ -260,6 +269,7 @@ describe('PolicyEditorComponent', () => {
       { path: '/config/policy/boxes', message: 'too many' },
       { path: '/config/policy/entityTypes/0', message: 'unknown type' },
       { path: '/config/policy/classificationCeiling', message: 'above your clearance' },
+      { path: '/config/policy/allowExercise', message: 'must be a boolean' },
       { path: '/config/policy', message: 'policy rejected' },
       { path: '/config/intervalSec', message: 'not ours' },
     ]);
@@ -271,6 +281,9 @@ describe('PolicyEditorComponent', () => {
     expect(component.sectionProblems('boxes')).toEqual(['too many']);
     expect(component.sectionProblems('entityTypes')).toEqual(['unknown type']);
     expect(component.sectionProblems('classificationCeiling')).toEqual(['above your clearance']);
+    expect(component.sectionProblems('allowExercise')).toEqual(['must be a boolean']);
+    expect(el.querySelector('[data-pointer="/config/policy/allowExercise"] .pe-error-server')?.textContent).toContain('must be a boolean');
+    expect(el.querySelector('.pe-problems')?.textContent).not.toContain('must be a boolean');
     expect(el.querySelector('.pe-problems')?.textContent).toContain('policy rejected');
     expect(el.querySelector('.pe-problems')?.textContent).not.toContain('not ours');
   });

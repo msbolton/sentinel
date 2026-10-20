@@ -11,6 +11,7 @@
     "pinnedReplica": { "type": "string", "title": "Pinned replica", "description": "Run this feed only on the named ingest replica. Optional: a connection that listens on a port runs on a listener replica by default." },
     "rawPayload": { "type": "string", "enum": ["none", "bounded", "full"], "default": "bounded", "title": "Raw payload retention" },
     "classification": { "type": "string", "enum": ["UNCLASSIFIED", "CONFIDENTIAL", "SECRET", "TOP_SECRET"], "default": "UNCLASSIFIED", "title": "Classification", "description": "Stamped on every observation this feed emits unless the decoder reports a higher level. Entities keep the highest level any feed reported." },
+    "exercise": { "type": "boolean", "default": false, "title": "Exercise data", "description": "Everything this connection brings in is synthetic (an exercise or a simulation). Its entities are marked EXERCISE and outbound connections do not send them unless their policy allows it." },
     "direction": { "type": "string", "enum": ["in", "out", "both"], "title": "Direction", "description": "Narrows a driver that can do both to one way; cannot widen a driver's own direction." },
     "policy": {
       "type": "object",
@@ -36,6 +37,7 @@
         },
         "classificationCeiling": { "type": "string", "enum": ["UNCLASSIFIED", "CONFIDENTIAL", "SECRET", "TOP_SECRET"], "default": "UNCLASSIFIED", "title": "Classification ceiling", "description": "Entities and alerts above this level are never sent." },
         "reexport": { "type": "boolean", "default": false, "title": "Re-export", "description": "Also send entities that another outbound connection contributed to (loops back to this connection are always prevented)." },
+        "allowExercise": { "type": "boolean", "default": false, "title": "Send exercise data", "description": "Also send entities marked EXERCISE, and their alerts. Off by default: synthetic data stays in Sentinel." },
         "alerts": {
           "type": "object", "title": "Alerts", "additionalProperties": false,
           "properties": {

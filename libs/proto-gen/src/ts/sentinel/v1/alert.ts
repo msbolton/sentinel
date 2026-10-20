@@ -443,6 +443,12 @@ export interface Alert {
   metadata: { [key: string]: string };
   /** Classification inherited from the primary entity when the alert fired. */
   classification: Classification;
+  /**
+   * True when the alert is about an exercise entity (the primary one or a
+   * related one). Set by the service that makes the alert, never by a sender;
+   * outbound connections refuse a marked alert unless they allow exercise data.
+   */
+  exercise: boolean;
 }
 
 export interface Alert_MetadataEntry {
@@ -705,6 +711,7 @@ function createBaseAlert(): Alert {
     acknowledgedBy: "",
     metadata: {},
     classification: Classification.UNSPECIFIED,
+    exercise: false,
   };
 }
 
@@ -751,6 +758,9 @@ export const Alert = {
     });
     if (message.classification !== Classification.UNSPECIFIED) {
       writer.uint32(112).int32(classificationToNumber(message.classification));
+    }
+    if (message.exercise !== false) {
+      writer.uint32(120).bool(message.exercise);
     }
     return writer;
   },
@@ -863,6 +873,13 @@ export const Alert = {
 
           message.classification = classificationFromJSON(reader.int32());
           continue;
+        case 15:
+          if (tag !== 120) {
+            break;
+          }
+
+          message.exercise = reader.bool();
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -897,6 +914,7 @@ export const Alert = {
       classification: isSet(object.classification)
         ? classificationFromJSON(object.classification)
         : Classification.UNSPECIFIED,
+      exercise: isSet(object.exercise) ? globalThis.Boolean(object.exercise) : false,
     };
   },
 
@@ -950,6 +968,9 @@ export const Alert = {
     if (message.classification !== Classification.UNSPECIFIED) {
       obj.classification = classificationToJSON(message.classification);
     }
+    if (message.exercise !== false) {
+      obj.exercise = message.exercise;
+    }
     return obj;
   },
 
@@ -979,6 +1000,7 @@ export const Alert = {
       return acc;
     }, {});
     message.classification = object.classification ?? Classification.UNSPECIFIED;
+    message.exercise = object.exercise ?? false;
     return message;
   },
 };

@@ -35,3 +35,13 @@ func TestDocumentFromEntity(t *testing.T) {
 		t.Error("nil or id-less entities must yield no document")
 	}
 }
+
+func TestDocumentFromEntityExercise(t *testing.T) {
+	doc := DocumentFromEntity(&sentinelv1.Entity{Id: "e1", Name: "SIM1", Exercise: true})
+	if doc == nil || !doc.Exercise {
+		t.Fatalf("exercise entity doc = %+v", doc)
+	}
+	if live := DocumentFromEntity(&sentinelv1.Entity{Id: "e2", Name: "UAL1"}); live == nil || live.Exercise {
+		t.Fatalf("live entity doc = %+v", live)
+	}
+}

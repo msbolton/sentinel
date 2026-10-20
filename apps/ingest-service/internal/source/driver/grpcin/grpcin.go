@@ -84,6 +84,8 @@ type Config struct {
 	// Classification is the common key: the feed's level, the floor every
 	// report is raised to.
 	Classification string `json:"classification"`
+	// Exercise is the common key, reported in GetSession.
+	Exercise bool `json:"exercise"`
 }
 
 // TLSOptions turns TLS on, and client certificates with it.

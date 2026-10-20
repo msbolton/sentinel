@@ -48,6 +48,8 @@ type RunnerOptions struct {
 	// Classification is the feed's default level (bare Classification
 	// name). Observations below it are raised to it; "" means UNCLASSIFIED.
 	Classification string
+	// Exercise is the connection's flag, ORed onto every observation.
+	Exercise bool
 	// Pump is the outbound half of a connection (nil for a plain source).
 	// It runs beside the driver; when either stops with an error the other
 	// is cancelled and the supervisor restarts the connection.
@@ -192,6 +194,7 @@ func (r *Runner) Emit(ctx context.Context, o *obs.Observation) error {
 	if o.Classification == "" {
 		o.Classification = obs.ClassUnclassified
 	}
+	o.Exercise = o.Exercise || r.opts.Exercise
 	dropForeignEmplacements(o)
 	o.EnsureIdentity()
 	r.boundRaw(o)

@@ -144,15 +144,16 @@ A connection is a feed whose driver declares direction `out` or `both`. The repl
 
 ```
 entities.events, alerts.events ──▶ consumer group sentinel-conn-<feedId>
-      │ policy: loop guard → re-export guard → classification ceiling → entity types → feeds → area boxes
+      │ policy: loop guard → re-export guard → exercise → classification ceiling → entity types → feeds → area boxes
       │ per-entity coalescing (newest snapshot waits, removals never dropped)
-      │ per-entity spacing, global rate limit, lag drop, policy-exit grace
+      │ per-entity spacing, global rate limit, lag drop, policy-exit grace (none for exercise)
       ▼
 driver.Consumer.HandleEntity / HandleAlert ──▶ remote (CoT over the TAK session)
 ```
 
 - The pump's own consumer group means offsets survive restarts and lease handovers, and a slow remote never stalls another connection.
 - Loop prevention: an entity that came from this connection is never sent back on it; entities contributed by any sending connection are not re-exported elsewhere unless the policy says so; outbound CoT carries a `<_sentinel site>` marker and the CoT decoder skips events bearing this site's id.
+- Exercise isolation: entities marked `exercise` and alerts about them (stamped `exercise` by `alert-service` or `analytics-service`, or naming an entity or related entity the pump has seen as exercise; an entity lookup failure when making an alert marks it exercise so it fails closed) are denied unless `policy.allowExercise` is set. A tracked entity that becomes exercise is removed at once, with no grace period.
 - `deleted` and `aged_out` events become removals; an entity that stops passing the policy is removed after a grace period; while the driver reports it is not connected the pump pauses and keeps its queue.
 - Counters appear in `feed_status.detail.outbound` and on the Connections page.
 

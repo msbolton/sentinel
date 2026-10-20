@@ -95,6 +95,8 @@ type Entity struct {
 	LastObservedAt string           `json:"lastObservedAt,omitempty"`
 	// Sources lists every feed that contributed to the fused entity.
 	Sources []EntitySourceRef `json:"sources,omitempty"`
+	// Exercise marks a simulated or training entity. Absent means live.
+	Exercise bool `json:"exercise,omitempty"`
 }
 
 // EntitySourceRef is one feed's contribution to a fused entity.

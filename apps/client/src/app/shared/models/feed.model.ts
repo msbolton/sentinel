@@ -152,6 +152,8 @@ export interface ConnectionPolicy {
   classificationCeiling?: string;
   /** Whether entities that themselves arrived from another connection may go out again. */
   reexport?: boolean;
+  /** Whether exercise (synthetic) entities may go out; default false. */
+  allowExercise?: boolean;
   alerts?: {
     enabled?: boolean;
     minSeverity?: AlertSeverity;

@@ -60,6 +60,7 @@ import { pathRuns } from './flight-path';
 import { CLUSTER_CONFIG, CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, drawClusterDisc, syncLabelGlyphClusterShow } from './entity-clusters';
 import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine, type GeoPoint } from './drop-line';
 import { formatAltitude } from '../../shared/geo-format';
+import { entityLabel } from './entity-label';
 import { GeofenceService } from '../../core/services/geofence.service';
 import { DRAFT_ID, GeofenceLayer } from './geofence-layer';
 import { EMPLACEMENTS_LAYER, EMPLACEMENT_DRAFT_ID, EmplacementLayer, emplacementDrawingOf } from './emplacement-layer';
@@ -851,7 +852,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         ? Cesium.Cartesian3.fromDegrees(satPosition.lon, satPosition.lat, satPosition.height)
         : position;
 
-    const labelText = satPosition ? this.satelliteLabel(entity.name, satPosition.height) : entity.name;
+    const labelText = entityLabel(entity.name, entity.exercise, satPosition ? formatAltitude(satPosition.height) : undefined);
 
     if (existing) {
       // Update existing entity
@@ -1023,7 +1024,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       }
       if (cesiumEntity.show === false) return;
       cesiumEntity._posProp.setValue(Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.height, undefined, this.drScratch));
-      const text = this.satelliteLabel(cesiumEntity._sentinelEntity?.name ?? '', pos.height);
+      const text = entityLabel(cesiumEntity._sentinelEntity?.name ?? '', cesiumEntity._sentinelEntity?.exercise, formatAltitude(pos.height));
       if (cesiumEntity._labelText !== text && cesiumEntity.label) {
         cesiumEntity._labelText = text;
         cesiumEntity.label.text = text;
@@ -1537,12 +1538,6 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (!cartesian) return null;
     const carto = Cesium.Cartographic.fromCartesian(cartesian);
     return [Cesium.Math.toDegrees(carto.longitude), Cesium.Math.toDegrees(carto.latitude)];
-  }
-
-  // --- Satellite altitude -------------------------------------------------------
-
-  private satelliteLabel(name: string, heightM: number): string {
-    return `${name} · ${formatAltitude(heightM)}`;
   }
 
   /** Show the drop line under the selected aircraft, drone or satellite, or none. */

@@ -32,6 +32,7 @@ type NewEntity struct {
 	TrackEnvironment string
 	CountryOfOrigin  string
 	Classification   string // bare Classification name; "" = UNCLASSIFIED
+	Exercise         bool   // the first report was an exercise report
 	SeenAt           time.Time
 }
 

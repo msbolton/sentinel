@@ -112,6 +112,7 @@ func (c *Client) EnsureIndex(ctx context.Context) error {
 				"feedId":            map[string]interface{}{"type": "keyword"},
 				"ageoutState":       map[string]interface{}{"type": "keyword"},
 				"identities":        map[string]interface{}{"type": "keyword"},
+				"exercise":          map[string]interface{}{"type": "boolean"},
 				"platformIdentifiers": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -180,7 +181,8 @@ func (c *Client) WarmIndex(ctx context.Context) error {
 	rows, err := c.pool.Query(ctx, `
 		SELECT id, "entityType", name, description, source, classification,
 			ST_Y(position::geometry) as lat, ST_X(position::geometry) as lng,
-			affiliations, metadata, "createdAt", "updatedAt", "lastSeenAt"
+			affiliations, metadata, "createdAt", "updatedAt", "lastSeenAt",
+			exercise
 		FROM sentinel.entities
 		WHERE deleted = false
 	`)
@@ -205,6 +207,7 @@ func (c *Client) WarmIndex(ctx context.Context) error {
 			&lat, &lng,
 			&affiliations, &metadata,
 			&doc.CreatedAt, &doc.UpdatedAt, &doc.LastSeenAt,
+			&doc.Exercise,
 		)
 		if err != nil {
 			c.logger.Warn("failed to scan entity row", zap.Error(err))

@@ -220,6 +220,7 @@ func EntityFromProto(en *sentinelv1.Entity) Entity {
 		CircularError:     en.CircularError,
 		FeedID:            en.FeedId,
 		AgeoutState:       enumOrEmpty(en.AgeoutState),
+		Exercise:          en.Exercise,
 	}
 	if e.Affiliations == nil {
 		e.Affiliations = []string{}

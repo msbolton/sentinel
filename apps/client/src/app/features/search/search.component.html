@@ -120,6 +120,9 @@
           <span class="chip chip-entity-type" [ngClass]="entity.entityType">
             {{ entity.entityType }}
           </span>
+          @if (entity.exercise) {
+            <span class="chip chip-exercise" title="Exercise data">EX</span>
+          }
         </div>
         @if (entity.description) {
           <p class="entity-description">{{ entity.description }}</p>

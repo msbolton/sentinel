@@ -97,6 +97,7 @@ type Pump struct {
 	mu          sync.Mutex
 	tracked     map[string]bool
 	deniedSince map[string]time.Time
+	exercise    map[string]bool // entities seen carrying the exercise mark; their alerts stay home too
 	counters    Counters
 	now         func() time.Time
 }
@@ -110,7 +111,7 @@ func New(o Options, drv driver.Consumer, factory ConsumerFactory, m *metrics.Met
 	return &Pump{
 		opts: o, drv: drv, factory: factory, metrics: m, logger: logger,
 		queue: NewQueue(o.QueueMax, o.PerEntityMin), alerts: make(chan *sentinelv1.AlertEvent, 1000), wake: make(chan struct{}, 1),
-		tracked: map[string]bool{}, deniedSince: map[string]time.Time{}, now: time.Now,
+		tracked: map[string]bool{}, deniedSince: map[string]time.Time{}, exercise: map[string]bool{}, now: time.Now,
 	}
 }
 
@@ -223,13 +224,34 @@ func (p *Pump) handleEntity(m *ckafka.Message, now time.Time) {
 	if entity == nil || entity.Id == "" {
 		return
 	}
-	d := policy.Evaluate(p.opts.Policy, p.opts.Context, entity)
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if entity.GetExercise() {
+		p.exercise[entity.Id] = true
+	}
+	// An entity the pump has seen as exercise stays exercise for the pump, so
+	// a later event without the flag (a REST update, an older producer) cannot
+	// let it out. The shared message is not changed; the policy sees a copy.
+	judged := entity
+	if p.exercise[entity.Id] && !entity.GetExercise() {
+		judged = proto.Clone(entity).(*sentinelv1.Entity)
+		judged.Exercise = true
+	}
+	d := policy.Evaluate(p.opts.Policy, p.opts.Context, judged)
 	if !d.Allow {
 		p.counters.Denied++
 		if p.metrics != nil {
 			p.metrics.OutboundDeniedTotal.WithLabelValues(p.opts.FeedID, d.Reason).Inc()
+		}
+		if d.Reason == policy.ReasonExercise {
+			// The mark is sticky, so the entity cannot come back inside the
+			// policy: no grace period, the remote drops it now.
+			if p.tracked[entity.Id] {
+				delete(p.tracked, entity.Id)
+				delete(p.deniedSince, entity.Id)
+				p.queue.Push(driver.EntityUpdate{Kind: driver.RemoveEntity, EntityID: entity.Id, Reason: "policy", EventAt: now})
+			}
+			return
 		}
 		if p.tracked[entity.Id] {
 			if _, already := p.deniedSince[entity.Id]; !already {
@@ -240,7 +262,7 @@ func (p *Pump) handleEntity(m *ckafka.Message, now time.Time) {
 	}
 	delete(p.deniedSince, entity.Id)
 	p.tracked[entity.Id] = true
-	p.queue.Push(driver.EntityUpdate{Kind: driver.UpsertEntity, EntityID: entity.Id, Entity: entity, EventAt: eventAt})
+	p.queue.Push(driver.EntityUpdate{Kind: driver.UpsertEntity, EntityID: entity.Id, Entity: judged, EventAt: eventAt})
 }
 
 func (p *Pump) handleAlert(m *ckafka.Message, now time.Time) {
@@ -256,8 +278,15 @@ func (p *Pump) handleAlert(m *ckafka.Message, now time.Time) {
 	}
 	p.mu.Lock()
 	tracked := p.tracked[ev.Alert.EntityId]
+	// An alert about an exercise entity is exercise data too: it says so
+	// itself (stamped where it was made), or the primary entity or any related
+	// one is known to the pump as exercise.
+	exercise := ev.Alert.GetExercise() || p.exercise[ev.Alert.EntityId]
+	for _, id := range ev.Alert.RelatedEntityIds {
+		exercise = exercise || p.exercise[id]
+	}
 	p.mu.Unlock()
-	if d := policy.AllowAlert(p.opts.Policy, p.opts.Context, ev.Alert, tracked); !d.Allow {
+	if d := policy.AllowAlert(p.opts.Policy, p.opts.Context, ev.Alert, tracked, exercise); !d.Allow {
 		p.mu.Lock()
 		p.counters.Denied++
 		p.mu.Unlock()
@@ -280,6 +309,7 @@ func (p *Pump) remove(id, reason string, at time.Time) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	delete(p.exercise, id)
 	if !p.tracked[id] {
 		return
 	}
@@ -296,6 +326,7 @@ func (p *Pump) removeAll(reason string, at time.Time) {
 	}
 	p.tracked = map[string]bool{}
 	p.deniedSince = map[string]time.Time{}
+	p.exercise = map[string]bool{}
 }
 
 // expireDenied removes entities that have failed the policy for longer than

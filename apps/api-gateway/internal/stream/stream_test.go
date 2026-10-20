@@ -259,6 +259,43 @@ func TestBridge_EntityEventsFromProto(t *testing.T) {
 	}
 }
 
+func TestBridge_EntityCarriesExerciseMark(t *testing.T) {
+	b, c := newTestBridge(t)
+	exercise := sampleEntity()
+	exercise.Exercise = true
+	live := sampleEntity()
+	live.Id = "e2"
+	for _, en := range []*sentinelv1.Entity{exercise, live} {
+		b.Handle(kafka.TopicEntityEvents, protoBytes(t, &sentinelv1.EntityEvent{EntityId: en.Id, EventTime: timestamppb.Now(),
+			Event: &sentinelv1.EntityEvent_Position{Position: &sentinelv1.EntityPosition{Entity: en}}}))
+	}
+	b.batcher.Flush()
+
+	env := decodeFrame(t, c)
+	var events []EntityEvent
+	if err := json.Unmarshal(env.Data, &events); err != nil || len(events) != 2 {
+		t.Fatalf("events = %+v err %v", events, err)
+	}
+	if !events[0].Entity.Exercise {
+		t.Error("an exercise entity must carry exercise true")
+	}
+	if events[1].Entity.Exercise {
+		t.Error("a live entity must not read as exercise")
+	}
+	var raw []struct {
+		Entity map[string]json.RawMessage `json:"entity"`
+	}
+	if err := json.Unmarshal(env.Data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if string(raw[0].Entity["exercise"]) != "true" {
+		t.Errorf("exercise entity JSON = %s", raw[0].Entity["exercise"])
+	}
+	if _, present := raw[1].Entity["exercise"]; present {
+		t.Error("a live entity's JSON must have no exercise key")
+	}
+}
+
 func TestBridge_DeletedAgeoutRestoredAndAlerts(t *testing.T) {
 	b, c := newTestBridge(t)
 	b.Handle(kafka.TopicEntityEvents, protoBytes(t, &sentinelv1.EntityEvent{EventTime: timestamppb.New(time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)),

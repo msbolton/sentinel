@@ -126,6 +126,17 @@
         <p class="pe-error pe-error-server">{{ msg }}</p>
       }
     </div>
+
+    <div class="pe-field" data-pointer="/config/policy/allowExercise">
+      <label class="pe-check pe-check-block">
+        <input type="checkbox" name="allowExercise" formControlName="allowExercise" />
+        <span>Send exercise data</span>
+      </label>
+      <p class="pe-help">Exercise entities and the alerts about them stay in unless this is on.</p>
+      @for (msg of sectionProblems('allowExercise'); track msg) {
+        <p class="pe-error pe-error-server">{{ msg }}</p>
+      }
+    </div>
   </section>
 
   <!-- Alerts -->

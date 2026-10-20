@@ -107,7 +107,7 @@ class GeofenceRule(_message.Message):
     def __init__(self, rule_id: _Optional[str] = ..., name: _Optional[str] = ..., polygon: _Optional[_Iterable[_Union[_common_pb2.Coordinate, _Mapping]]] = ..., monitored_entity_types: _Optional[_Iterable[_Union[_entity_pb2.EntityType, str]]] = ..., trigger_on_enter: _Optional[bool] = ..., trigger_on_exit: _Optional[bool] = ...) -> None: ...
 
 class Alert(_message.Message):
-    __slots__ = ("alert_id", "alert_type", "severity", "title", "description", "entity_id", "related_entity_ids", "position", "rule_id", "created_at", "acknowledged_at", "acknowledged_by", "metadata", "classification")
+    __slots__ = ("alert_id", "alert_type", "severity", "title", "description", "entity_id", "related_entity_ids", "position", "rule_id", "created_at", "acknowledged_at", "acknowledged_by", "metadata", "classification", "exercise")
     class MetadataEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -129,6 +129,7 @@ class Alert(_message.Message):
     ACKNOWLEDGED_BY_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
     CLASSIFICATION_FIELD_NUMBER: _ClassVar[int]
+    EXERCISE_FIELD_NUMBER: _ClassVar[int]
     alert_id: str
     alert_type: AlertType
     severity: AlertSeverity
@@ -143,7 +144,8 @@ class Alert(_message.Message):
     acknowledged_by: str
     metadata: _containers.ScalarMap[str, str]
     classification: _common_pb2.Classification
-    def __init__(self, alert_id: _Optional[str] = ..., alert_type: _Optional[_Union[AlertType, str]] = ..., severity: _Optional[_Union[AlertSeverity, str]] = ..., title: _Optional[str] = ..., description: _Optional[str] = ..., entity_id: _Optional[str] = ..., related_entity_ids: _Optional[_Iterable[str]] = ..., position: _Optional[_Union[_common_pb2.Coordinate, _Mapping]] = ..., rule_id: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., acknowledged_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., acknowledged_by: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., classification: _Optional[_Union[_common_pb2.Classification, str]] = ...) -> None: ...
+    exercise: bool
+    def __init__(self, alert_id: _Optional[str] = ..., alert_type: _Optional[_Union[AlertType, str]] = ..., severity: _Optional[_Union[AlertSeverity, str]] = ..., title: _Optional[str] = ..., description: _Optional[str] = ..., entity_id: _Optional[str] = ..., related_entity_ids: _Optional[_Iterable[str]] = ..., position: _Optional[_Union[_common_pb2.Coordinate, _Mapping]] = ..., rule_id: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., acknowledged_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., acknowledged_by: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., classification: _Optional[_Union[_common_pb2.Classification, str]] = ..., exercise: _Optional[bool] = ...) -> None: ...
 
 class CreateAlertRuleRequest(_message.Message):
     __slots__ = ("name", "polygon", "monitored_entity_types", "trigger_on_enter", "trigger_on_exit")
