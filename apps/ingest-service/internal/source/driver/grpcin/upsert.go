@@ -67,7 +67,9 @@ func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmp
 		on := true
 		in.Exercise = &on
 	}
-	own := func(context.Context, string) (bool, bool, error) { return true, true, nil } // the connection itself
+	own := func(context.Context, string) (emplacement.FeedInfo, error) { // the connection itself
+		return emplacement.FeedInfo{Exists: true, Inbound: true, Driver: ID}, nil
+	}
 	check := func(e *emplacement.Emplacement) error {
 		e.FeedID = &feed
 		// Never below the connection's own level.

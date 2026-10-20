@@ -17,9 +17,21 @@ import (
 	"github.com/sentinel/go-common/middleware"
 )
 
-// FeedCheck reports whether a feed exists and takes data in, for binding an
-// emplacement to the connection that may report as it.
-type FeedCheck func(ctx context.Context, feedID string) (exists, inbound bool, err error)
+// FeedInfo is what binding an emplacement needs to know of a connection.
+type FeedInfo struct {
+	Exists, Inbound bool
+	// Driver is the connection's driver id.
+	Driver string
+}
+
+// FeedCheck looks a connection up, for binding an emplacement to the
+// connection that reports as it.
+type FeedCheck func(ctx context.Context, feedID string) (FeedInfo, error)
+
+// BindableDriver is the one driver an emplacement may be bound to until the
+// TCP/UDP (sub-project 2) and TAK (sub-project 3) heartbeats exist: only it
+// reports its emplacements' heartbeats.
+const BindableDriver = "grpc"
 
 // Handler serves the emplacement routes of the management API.
 type Handler struct {
@@ -105,7 +117,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	e := New()
 	in.Apply(&e)
 	e.CreatedBy = middleware.UserID(r.Context())
-	if err := h.check(r, &e); err != nil {
+	if err := h.check(r, &e, nil); err != nil {
 		h.fail(w, err)
 		return
 	}
@@ -152,8 +164,13 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 			(in.Mobility == nil || strings.ToUpper(strings.TrimSpace(*in.Mobility)) == MobilityMobile) {
 			in.Position, in.Altitude = nil, nil
 		}
+		prev := e.FeedID
 		in.Apply(e)
-		return h.check(r, e)
+		// A new connection knows nothing of the emplacement's heartbeats.
+		if !sameFeed(prev, e.FeedID) {
+			e.LastHeartbeatAt, e.HeartbeatIntervalSec = nil, nil
+		}
+		return h.check(r, e, prev)
 	})
 	if err != nil {
 		h.fail(w, err)
@@ -196,13 +213,13 @@ func CheckWrite(ctx context.Context, e *Emplacement, ceilingRank int, feeds Feed
 		ve.Problems = append(ve.Problems, Problem{Path: "/classification", Message: "is above your clearance"})
 	}
 	if e.FeedID != nil {
-		exists, inbound, err := feeds(ctx, *e.FeedID)
+		info, err := feeds(ctx, *e.FeedID)
 		switch {
 		case err != nil:
 			return err
-		case !exists:
+		case !info.Exists:
 			ve.Problems = append(ve.Problems, Problem{Path: "/feedId", Message: "names no connection"})
-		case !inbound:
+		case !info.Inbound:
 			ve.Problems = append(ve.Problems, Problem{Path: "/feedId", Message: "names a connection that does not take data in"})
 		}
 	}
@@ -212,8 +229,36 @@ func CheckWrite(ctx context.Context, e *Emplacement, ceilingRank int, feeds Feed
 	return nil
 }
 
-func (h *Handler) check(r *http.Request, e *Emplacement) error {
-	return CheckWrite(r.Context(), e, clearance(r), h.feeds)
+// check is CheckWrite with the caller's clearance. A write that binds e to a
+// connection it was not bound to (prev) is refused for a connection whose
+// driver does not heartbeat its emplacements yet; a row bound to one before
+// that rule keeps being editable.
+func (h *Handler) check(r *http.Request, e *Emplacement, prev *string) error {
+	err := CheckWrite(r.Context(), e, clearance(r), h.feeds)
+	if e.FeedID == nil || sameFeed(prev, e.FeedID) {
+		return err
+	}
+	ve := &ValidationError{}
+	if err != nil && !errors.As(err, &ve) {
+		return err
+	}
+	info, ferr := h.feeds(r.Context(), *e.FeedID)
+	if ferr != nil {
+		return ferr
+	}
+	if info.Exists && info.Inbound && info.Driver != BindableDriver {
+		ve.Problems = append(ve.Problems, Problem{Path: "/feedId",
+			Message: "names a " + info.Driver + " connection: emplacements can be bound only to grpc connections for now"})
+	}
+	if len(ve.Problems) > 0 {
+		return ve
+	}
+	return nil
+}
+
+// sameFeed reports whether two bindings name the same connection (or none).
+func sameFeed(a, b *string) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }
 
 func pathID(w http.ResponseWriter, r *http.Request) (string, bool) {

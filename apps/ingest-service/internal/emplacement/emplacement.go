@@ -5,6 +5,7 @@
 package emplacement
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -114,6 +115,11 @@ type Input struct {
 	Classification   *string   `json:"classification"`
 	Exercise         *bool     `json:"exercise"`
 	Active           *bool     `json:"active"`
+	// Read-only fields a client may send back from a GET: accepted, ignored.
+	Heartbeat            json.RawMessage `json:"heartbeat"`
+	SilentSince          json.RawMessage `json:"silentSince"`
+	LastHeartbeatAt      json.RawMessage `json:"lastHeartbeatAt"`
+	HeartbeatIntervalSec json.RawMessage `json:"heartbeatIntervalSec"`
 }
 
 // New is what a create starts from before its input is applied.

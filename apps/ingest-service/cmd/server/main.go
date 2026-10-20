@@ -357,22 +357,22 @@ func newLogger() (*zap.Logger, error) {
 	return cfg.Build()
 }
 
-// feedCheck says whether a feed exists and takes data in (its effective
-// direction, after config.direction narrows a bidirectional driver), so an
-// emplacement is bound only to a connection that can report as it.
+// feedCheck looks a connection up for an emplacement binding: whether it
+// exists, takes data in (its effective direction, after config.direction
+// narrows a bidirectional driver) and which driver it runs.
 func feedCheck(reg *registry.Store, catalog *drivers.Catalog) emplacement.FeedCheck {
-	return func(ctx context.Context, id string) (bool, bool, error) {
+	return func(ctx context.Context, id string) (emplacement.FeedInfo, error) {
 		f, err := reg.Get(ctx, id)
 		if errors.Is(err, registry.ErrNotFound) {
-			return false, false, nil
+			return emplacement.FeedInfo{}, nil
 		}
 		if err != nil {
-			return false, false, err
+			return emplacement.FeedInfo{}, err
 		}
 		info, ok := catalog.Get(f.Driver)
 		if !ok {
-			return true, false, nil
+			return emplacement.FeedInfo{Exists: true, Driver: f.Driver}, nil
 		}
-		return true, f.Direction(info.Dir()).Inbound(), nil
+		return emplacement.FeedInfo{Exists: true, Inbound: f.Direction(info.Dir()).Inbound(), Driver: f.Driver}, nil
 	}
 }

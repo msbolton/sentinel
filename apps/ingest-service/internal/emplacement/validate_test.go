@@ -14,6 +14,8 @@ func valid() Emplacement {
 	e.Name, e.Mobility, e.SensorType = "Coastal radar", MobilityFixed, "RADAR"
 	e.Position = &Point{Lat: 50.1, Lon: -4.2}
 	e.Coverage = Coverage{MinRangeM: 0, MaxRangeM: 60000, AzimuthWidthDeg: 120}
+	feed := "grpc-1" // an active emplacement needs a connection
+	e.FeedID = &feed
 	return e
 }
 

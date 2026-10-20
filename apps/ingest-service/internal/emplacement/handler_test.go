@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sentinel/go-common/middleware"
 )
@@ -90,14 +91,16 @@ func seeded() *memStore {
 	return newMemStore(u, s, m)
 }
 
-func feeds(_ context.Context, id string) (bool, bool, error) {
+func feeds(_ context.Context, id string) (FeedInfo, error) {
 	switch id {
-	case "grpc-1":
-		return true, true, nil
+	case "grpc-1", "grpc-2":
+		return FeedInfo{Exists: true, Inbound: true, Driver: "grpc"}, nil
+	case "tcp-in":
+		return FeedInfo{Exists: true, Inbound: true, Driver: "tcp"}, nil
 	case "tak-out":
-		return true, false, nil
+		return FeedInfo{Exists: true, Inbound: false, Driver: "tak"}, nil
 	}
-	return false, false, nil
+	return FeedInfo{}, nil
 }
 
 func serve(t *testing.T, store Store, method, path, clearance, body string, headers ...string) *httptest.ResponseRecorder {
@@ -236,6 +239,7 @@ func TestCheckWriteHoldsToTheCeiling(t *testing.T) {
 	e := New()
 	e.Name, e.Mobility, e.SensorType = "x", MobilityMobile, "RF"
 	e.Classification = "SECRET"
+	e.Active = false                                      // an active one would need a connection too
 	err := CheckWrite(context.Background(), &e, 1, feeds) // CONFIDENTIAL ceiling
 	var ve *ValidationError
 	if !errors.As(err, &ve) || len(ve.Problems) != 1 || ve.Problems[0].Path != "/classification" {
@@ -298,4 +302,79 @@ func senderEmplacement(mobility, createdBy string) Emplacement {
 	e.Position = &Point{Lat: 50, Lon: -4}
 	e.Altitude = &alt
 	return e
+}
+
+func TestAnActiveEmplacementNeedsAConnection(t *testing.T) {
+	store := newMemStore()
+	site := `"name":"Mast 5","mobility":"FIXED","sensorType":"RADAR","position":{"lat":51,"lon":1}`
+	if w := serve(t, store, http.MethodPost, "/emplacements", "UNCLASSIFIED", `{`+site+`}`); w.Code != 422 || !strings.Contains(w.Body.String(), "/feedId") {
+		t.Fatalf("active with no connection: %d %s", w.Code, w.Body)
+	}
+	// Inactive it may have none: the Unassigned group's rows.
+	if w := serve(t, store, http.MethodPost, "/emplacements", "UNCLASSIFIED", `{`+site+`,"active":false}`); w.Code != 201 {
+		t.Fatalf("inactive with no connection: %d %s", w.Code, w.Body)
+	}
+	// Unbinding an active one needs active:false in the same PATCH.
+	bound := senderEmplacement(MobilityFixed, "u1")
+	store.rows[bound.ID] = bound
+	if w := serve(t, store, http.MethodPatch, "/emplacements/"+bound.ID, "SECRET", `{"feedId":""}`); w.Code != 422 {
+		t.Fatalf("unbinding an active emplacement: %d %s", w.Code, w.Body)
+	}
+	if w := serve(t, store, http.MethodPatch, "/emplacements/"+bound.ID, "SECRET", `{"feedId":"","active":false}`); w.Code != 200 {
+		t.Fatalf("unbinding and deactivating: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestBindingIsForGrpcConnectionsOnly(t *testing.T) {
+	store := newMemStore()
+	body := `{"name":"Mast 6","mobility":"FIXED","sensorType":"RADAR","position":{"lat":51,"lon":1},"feedId":"tcp-in"}`
+	if w := serve(t, store, http.MethodPost, "/emplacements", "UNCLASSIFIED", body); w.Code != 422 || !strings.Contains(w.Body.String(), "grpc") {
+		t.Fatalf("binding to a tcp connection: %d %s", w.Code, w.Body)
+	}
+	// A row bound to a tcp connection before the change can still be edited.
+	legacy := senderEmplacement(MobilityFixed, "u1")
+	tcp := "tcp-in"
+	legacy.FeedID = &tcp
+	store.rows[legacy.ID] = legacy
+	if w := serve(t, store, http.MethodPatch, "/emplacements/"+legacy.ID, "SECRET", `{"description":"kept"}`); w.Code != 200 {
+		t.Fatalf("editing a legacy tcp-bound row: %d %s", w.Code, w.Body)
+	}
+	// Moving it to a grpc connection is a binding, and allowed.
+	if w := serve(t, store, http.MethodPatch, "/emplacements/"+legacy.ID, "SECRET", `{"feedId":"grpc-1"}`); w.Code != 200 {
+		t.Fatalf("moving it to grpc: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestChangingTheConnectionResetsTheHeartbeat(t *testing.T) {
+	e := senderEmplacement(MobilityFixed, "u1")
+	at := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	sec := 5
+	e.LastHeartbeatAt, e.HeartbeatIntervalSec = &at, &sec
+	store := newMemStore(e)
+	if w := serve(t, store, http.MethodPatch, "/emplacements/"+e.ID, "SECRET", `{"description":"same connection"}`); w.Code != 200 {
+		t.Fatalf("edit: %d %s", w.Code, w.Body)
+	}
+	if got := store.rows[e.ID]; got.LastHeartbeatAt == nil || got.HeartbeatIntervalSec == nil {
+		t.Fatal("an edit that keeps the connection cleared the heartbeat")
+	}
+	if w := serve(t, store, http.MethodPatch, "/emplacements/"+e.ID, "SECRET", `{"feedId":"grpc-2"}`); w.Code != 200 {
+		t.Fatalf("rebind: %d %s", w.Code, w.Body)
+	}
+	if got := store.rows[e.ID]; got.LastHeartbeatAt != nil || got.HeartbeatIntervalSec != nil {
+		t.Fatalf("after a rebind: last %v, interval %v; want both cleared", got.LastHeartbeatAt, got.HeartbeatIntervalSec)
+	}
+}
+
+// A client may send back what it read: the computed and recorded heartbeat
+// fields are accepted and ignored.
+func TestComputedFieldsAreIgnoredOnInput(t *testing.T) {
+	e := senderEmplacement(MobilityFixed, "u1")
+	store := newMemStore(e)
+	body := `{"description":"from a GET","heartbeat":"online","silentSince":"2026-10-20T12:00:00Z","lastHeartbeatAt":"2026-10-20T12:00:00Z","heartbeatIntervalSec":5}`
+	if w := serve(t, store, http.MethodPatch, "/emplacements/"+e.ID, "SECRET", body); w.Code != 200 {
+		t.Fatalf("patch with read-only fields: %d %s", w.Code, w.Body)
+	}
+	if got := store.rows[e.ID]; got.LastHeartbeatAt != nil || got.HeartbeatIntervalSec != nil || got.Description != "from a GET" {
+		t.Fatalf("after the patch: %+v", got)
+	}
 }
