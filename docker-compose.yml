@@ -867,6 +867,29 @@ services:
           memory: 128m
           cpus: "0.1"
 
+  # Simulated EW (ESM) sensor: a one-shot CLI that streams RF emitter fixes to a
+  # `grpc` connection on the ingest listener. Not started by `up`; run it with
+  #   docker compose -p sentinel --profile inbound --profile sim run --rm ew-sensor \
+  #     --addr localhost:<port> --insecure --config examples/coastal-esm.yaml
+  # (see docs/ew-sensor.md). It shares the host's network because the listener
+  # does: with host networking off on Docker Desktop the listener's port is
+  # reachable only from inside the Docker VM, so the CLI has to run there too.
+  # Host networking is incompatible with `networks:`, and `localhost` is the VM's.
+  # Optional secrets/ew-sensor.env (gitignored) holds EW_SENSOR_TOKEN=si_... (the
+  # token issued under the connection's Tokens) and, if you like,
+  # EW_SENSOR_ADDR=localhost:<port>. No restart policy and no default command:
+  # pass the flags on the `run` line.
+  ew-sensor:
+    profiles: ["sim"]
+    image: sentinel/ew-sensor:dev
+    build:
+      context: .
+      dockerfile: ./apps/ew-sensor/Dockerfile
+    network_mode: host
+    env_file:
+      - path: ./secrets/ew-sensor.env
+        required: false
+
   # ===========================================================================
   # Analytics Service (Go): behavioural baselines and findings
   # ===========================================================================
