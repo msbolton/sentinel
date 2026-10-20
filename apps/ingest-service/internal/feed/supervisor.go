@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/sentinel/ingest-service/internal/aoi"
+	"github.com/sentinel/ingest-service/internal/emplacement"
 	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/outbound"
 	"github.com/sentinel/ingest-service/internal/policy"
@@ -283,6 +284,31 @@ func noRepeatSuppression(id string) bool {
 func heartbeats(id string) bool {
 	d, ok := driver.Lookup(id)
 	return ok && d.Heartbeats
+}
+
+// heartbeatRollup is a connection's health from its emplacements' heartbeats.
+// While none is offline or never heard from, it is healthy; pending is true
+// while some still wait for their first heartbeat after a start. Some silent
+// while others are online or waiting is a warning, degraded. None online or
+// waiting is critical, degraded.
+func heartbeatRollup(list []emplacement.Liveness) (health, state string, pending bool) {
+	var online, waiting int
+	for _, l := range list {
+		switch l.State {
+		case emplacement.HeartbeatOnline:
+			online++
+		case emplacement.HeartbeatPending:
+			waiting++
+		}
+	}
+	switch silent := len(list) - online - waiting; {
+	case silent == 0:
+		return registry.HealthHealthy, registry.StateRunning, waiting > 0
+	case online > 0 || waiting > 0:
+		return registry.HealthWarn, registry.StateDegraded, false
+	default:
+		return registry.HealthCritical, registry.StateDegraded, false
+	}
 }
 
 // outboundTuning mirrors config.outbound.
@@ -974,10 +1000,15 @@ func (s *Supervisor) statusOf(inst *instance, now time.Time) registry.Status {
 		as = aa.AreaStatus()
 		idle = idle || as.Idle
 	}
+	pending := false
 	if inst.state == registry.StateRunning {
 		switch {
 		case idle:
 			st.State = registry.StateIdle
+		case len(health.Emplacements) > 0:
+			// A connection with emplacements is as healthy as their heartbeats,
+			// not as recent as its last report.
+			st.Health, st.State, pending = heartbeatRollup(health.Emplacements)
 		case !stats.LastSuccessAt.IsZero():
 			age := now.Sub(stats.LastSuccessAt)
 			switch {
@@ -999,6 +1030,12 @@ func (s *Supervisor) statusOf(inst *instance, now time.Time) registry.Status {
 	detail := map[string]any{}
 	for k, v := range health.Detail {
 		detail[k] = v
+	}
+	if len(health.Emplacements) > 0 {
+		detail["emplacements"] = health.Emplacements
+		if pending {
+			detail["heartbeat"] = "pending"
+		}
 	}
 	// Whichever driver the feed runs, the cause of the last undecodable payload
 	// is reported under lastDecodeError. The management API hides that text from
