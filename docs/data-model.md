@@ -91,7 +91,7 @@ Stale and age-out thresholds in milliseconds, per feed (`"feedId"`), per source 
 
 ### sentinel.emplacements (`db/schema/72_emplacements.sql`)
 
-The places observations come from (see `docs/emplacements.md`). One row per emplacement; a delete sets `"deletedAt"` (soft delete). `db/seed/seed.sql` adds one demo emplacement, `Lizard Point radar` (fixed, no connection), under a fixed id, so re-running the seed neither duplicates it nor brings it back once deleted.
+The places observations come from (see `docs/emplacements.md`). One row per emplacement; a delete sets `"deletedAt"` (soft delete). `db/seed/seed.sql` adds one demo emplacement, `Lizard Point radar` (fixed, inserted inactive, no connection), under a fixed id, so re-running the seed neither duplicates it nor brings it back once deleted.
 
 | Column | Content |
 |--------|---------|
@@ -106,16 +106,18 @@ The places observations come from (see `docs/emplacements.md`). One row per empl
 | `"azimuthReference"` | `TRUE_NORTH` (default) or `PLATFORM` |
 | `coverage` | JSONB `{minRangeM, maxRangeM, azimuthWidthDeg, elevationMinDeg?, elevationMaxDeg?}`; `{}` when unknown |
 | `"defaultSigma"` | JSONB `{rangeM?, azimuthDeg?, elevationDeg?}`, the standard deviations used for reports that carry none |
-| `"feedId"` | The connection (`feeds.id`) the emplacement is bound to; `ON DELETE SET NULL`. Deleting the connection first soft-deletes the emplacements its senders made (`"createdBy"` starts `ingest-token:`) and unbinds the others, in the same transaction, raising `version` and sending a NOTIFY for each |
+| `"feedId"` | The connection (`feeds.id`) the emplacement is bound to; `ON DELETE RESTRICT`. Deleting the connection first soft-deletes the emplacements its senders made (`"createdBy"` starts `ingest-token:`) and unbinds and deactivates the others, in the same transaction, raising `version` and sending a NOTIFY for each. The CHECK `emplacements_active_needs_feed` requires an active, live row to have a connection |
 | `classification` | `UNCLASSIFIED` (default) to `TOP_SECRET`; callers above it neither see nor edit the row |
 | `exercise` | Whether the emplacement belongs to an exercise, default false |
 | `active` | Whether it is reported, default true |
 | `"lastReportAt"` | When it last reported over its `grpc` connection (the earlier of the report's time and the server's), written at most every 10 s with no version change and no NOTIFY; null until it has |
+| `"heartbeatIntervalSec"` | The interval the emplacement last declared in its heartbeat, written with `"lastHeartbeatAt"`; null until its first heartbeat and after a change of connection |
+| `"lastHeartbeatAt"` | When its last heartbeat arrived (server time), written at most every interval and every 10 s with no version change and no NOTIFY; never moved back |
 | `"createdBy"`, `"createdAt"`, `"updatedAt"` | Provenance and timestamps; `"createdBy"` is `ingest-token:<token id>` for an emplacement a sender made over gRPC |
 | `"deletedAt"` | Set by a delete |
 | `version` | Starts at 1 and rises on every write; the API's ETag and `If-Match` |
 
-A partial unique index on `lower(name)` where `"deletedAt" IS NULL` keeps live names unique whatever their case and frees a deleted emplacement's name. A GIST index covers `position`, and a partial index covers `"feedId"` for live rows. Each write sends a NOTIFY on the channel `sentinel_emplacements` with the payload `{"id": "<uuid>", "op": "upsert"|"delete"}`; every ingest replica follows it to keep its cache current. The file also seeds the `feed_ageout_config` rows of the built-in `emplacements` feed (stale after 180000 ms, aged out after 600000 ms, for each of the sources `RADAR`, `AIS`, `ADS_B`, `HUMINT`, `SIGINT` and `MASINT`).
+A partial unique index on `lower(name)` where `"deletedAt" IS NULL` keeps live names unique whatever their case and frees a deleted emplacement's name. A GIST index covers `position`, and a partial index covers `"feedId"` for live rows. Each write sends a NOTIFY on the channel `sentinel_emplacements` with the payload `{"id": "<uuid>", "op": "upsert"|"delete"}`; every ingest replica follows it to keep its cache current. The file also removes the retired `emplacements` feed and its `feed_ageout_config` rows; site entities use the global per-source thresholds.
 
 ### sentinel.ingest_tokens (`db/schema/76_ingest_tokens.sql`)
 
