@@ -410,8 +410,12 @@ type Alert struct {
 	Metadata map[string]string `protobuf:"bytes,13,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Classification inherited from the primary entity when the alert fired.
 	Classification Classification `protobuf:"varint,14,opt,name=classification,proto3,enum=sentinel.v1.Classification" json:"classification,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// True when the alert is about an exercise entity (the primary one or a
+	// related one). Set by the service that makes the alert, never by a sender;
+	// outbound connections refuse a marked alert unless they allow exercise data.
+	Exercise      bool `protobuf:"varint,15,opt,name=exercise,proto3" json:"exercise,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Alert) Reset() {
@@ -540,6 +544,13 @@ func (x *Alert) GetClassification() Classification {
 		return x.Classification
 	}
 	return Classification_CLASSIFICATION_UNSPECIFIED
+}
+
+func (x *Alert) GetExercise() bool {
+	if x != nil {
+		return x.Exercise
+	}
+	return false
 }
 
 // CreateAlertRuleRequest registers a new geofence-based alert rule.
@@ -1052,7 +1063,7 @@ const file_sentinel_v1_alert_proto_rawDesc = "" +
 	"\apolygon\x18\x03 \x03(\v2\x17.sentinel.v1.CoordinateR\apolygon\x12M\n" +
 	"\x16monitored_entity_types\x18\x04 \x03(\x0e2\x17.sentinel.v1.EntityTypeR\x14monitoredEntityTypes\x12(\n" +
 	"\x10trigger_on_enter\x18\x05 \x01(\bR\x0etriggerOnEnter\x12&\n" +
-	"\x0ftrigger_on_exit\x18\x06 \x01(\bR\rtriggerOnExit\"\xcb\x05\n" +
+	"\x0ftrigger_on_exit\x18\x06 \x01(\bR\rtriggerOnExit\"\xe7\x05\n" +
 	"\x05Alert\x12\x19\n" +
 	"\balert_id\x18\x01 \x01(\tR\aalertId\x125\n" +
 	"\n" +
@@ -1070,7 +1081,8 @@ const file_sentinel_v1_alert_proto_rawDesc = "" +
 	"\x0facknowledged_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\x0eacknowledgedAt\x12'\n" +
 	"\x0facknowledged_by\x18\f \x01(\tR\x0eacknowledgedBy\x12<\n" +
 	"\bmetadata\x18\r \x03(\v2 .sentinel.v1.Alert.MetadataEntryR\bmetadata\x12C\n" +
-	"\x0eclassification\x18\x0e \x01(\x0e2\x1b.sentinel.v1.ClassificationR\x0eclassification\x1a;\n" +
+	"\x0eclassification\x18\x0e \x01(\x0e2\x1b.sentinel.v1.ClassificationR\x0eclassification\x12\x1a\n" +
+	"\bexercise\x18\x0f \x01(\bR\bexercise\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x80\x02\n" +
