@@ -87,6 +87,9 @@ func TestDefaults(t *testing.T) {
 	if len(cfg.Emitters) != 0 {
 		t.Errorf("Emitters = %d, want 0 (synthesised later)", len(cfg.Emitters))
 	}
+	if cfg.Sensor.HeartbeatInterval != 5*time.Second || cfg.Sensor.HeartbeatSeconds() != 5 {
+		t.Errorf("HeartbeatInterval = %v, want 5s", cfg.Sensor.HeartbeatInterval)
+	}
 }
 
 func TestLoadCoastalExample(t *testing.T) {
@@ -404,6 +407,9 @@ func TestValidationErrors(t *testing.T) {
 		{"rate far above the bound", minimal("--rate", "2e9"), nil, "rate"},
 		{"emitters above the bound", minimal("--emitters", "1001"), nil, "emitters"},
 		{"sigma zero", minimal("--sigma-m", "0"), nil, "sigma"},
+		{"heartbeat interval zero", minimal("--heartbeat-interval", "0s"), nil, "heartbeat"},
+		{"heartbeat interval above the bound", minimal("--heartbeat-interval", "301s"), nil, "heartbeat"},
+		{"heartbeat interval not whole seconds", minimal("--heartbeat-interval", "1500ms"), nil, "heartbeat"},
 		{"width zero", minimal("--width", "0"), nil, "width"},
 		{"width over 360", minimal("--width", "361"), nil, "width"},
 		{"range zero", minimal("--range-km", "0"), nil, "range"},
@@ -673,5 +679,16 @@ func TestRateAndEmitterBounds(t *testing.T) {
 		if !strings.Contains(err.Error(), w) {
 			t.Errorf("error missing %q: %v", w, err)
 		}
+	}
+}
+
+func TestHeartbeatIntervalFlag(t *testing.T) {
+	cfg := mustLoad(t, minimal("--heartbeat-interval", "20s"), nil)
+	if cfg.Sensor.HeartbeatInterval != 20*time.Second || cfg.Sensor.HeartbeatSeconds() != 20 || cfg.Sensor.HeartbeatEvery() != 20*time.Second {
+		t.Fatalf("heartbeat = %v / %d / %v", cfg.Sensor.HeartbeatInterval, cfg.Sensor.HeartbeatSeconds(), cfg.Sensor.HeartbeatEvery())
+	}
+	// A hand-built Config with none takes the default.
+	if s := (Sensor{}); s.HeartbeatSeconds() != 5 || s.HeartbeatEvery() != 5*time.Second {
+		t.Fatalf("zero value = %d / %v", s.HeartbeatSeconds(), s.HeartbeatEvery())
 	}
 }

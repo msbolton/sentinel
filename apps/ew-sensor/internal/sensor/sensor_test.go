@@ -486,3 +486,11 @@ func TestPlatformSeamThroughStep(t *testing.T) {
 		t.Fatalf("covered = %v, want sw and w only", got)
 	}
 }
+
+func TestEmplacementStateDeclaresTheHeartbeatInterval(t *testing.T) {
+	c := cfgWith(at("e", 270, 50000))
+	c.Sensor.HeartbeatInterval = 7 * time.Second
+	if st := sensor.New(c).EmplacementState("emp-1", t0, fixedPose(c)); st.HeartbeatIntervalSec != 7 {
+		t.Fatalf("heartbeat_interval_sec = %d, want 7", st.HeartbeatIntervalSec)
+	}
+}

@@ -24,6 +24,7 @@ sensor:
   rate: 1
   pd: 0.85
   sigmaM: 300
+  heartbeatInterval: 5s  # declared on the 1 Hz position reports; offline after three missed
   # classification is left unset, so the server applies its floor.
 
 # The ship patrols this box, 12 knots, and loops back to the first point.

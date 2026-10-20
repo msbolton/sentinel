@@ -128,7 +128,7 @@ Flags override the configuration file, which overrides the defaults. Most YAML k
 
 - `connection`: `addr`, `token`, `insecure`, `tls`, `ca`, `cert`, `key`.
 - `emplacement`: `emplacementId`, `name`, `lat`, `lon`, `alt`, `boresight`, `width`, `rangeKm`, `minRangeKm`, `mobility` (`FIXED` or `MOBILE`), `azimuthReference` (`TRUE_NORTH`, or `PLATFORM`, which needs `MOBILE`: the boresight is then measured from the ship's bow and turns with it).
-- `sensor`: `rate`, `pd`, `sigmaM`, `classification` (optional: empty takes the connection's level; when set it is stamped on every observation), `sendTimestamps`.
+- `sensor`: `rate`, `pd`, `sigmaM`, `classification` (optional: empty takes the connection's level; when set it is stamped on every observation), `sendTimestamps`, `heartbeatInterval` (default `5s`, whole seconds from 1s to 300s; `--heartbeat-interval`).
 - `ownship` (mobile only): `path` (`circle` or `waypoints`), `speedKts`, `radiusKm` (circle, default 5), `waypoints` (a list of `{lat, lon}`, at least two, looped).
 - `emitters`: a list, each with `id` (unique), `displayName`, `emitterType` (for example `RADAR_SEARCH`, `RADAR_TRACK`, `SATCOM`, `COMMS_DATALINK`, `JAMMER`), `frequencyHz` (required), `bandwidthHz`, `priUs`, `pulseWidthUs`, `modulation`, `scanType`, `powerDbm`, `affiliation`, `trackEnvironment` (`AIR`, `SEA_SURFACE`, `SUBSURFACE`, `GROUND`, `SPACE`, `UNKNOWN`; unset or `LAND` is `GROUND`), `start` (`{lat, lon}`) and `motion` (`type` `static`, `random-walk` or `waypoints`, with `speedKts`, and `waypoints` for the last).
 - `duration`, `seed`.
@@ -148,13 +148,19 @@ For an emplacement that already exists on the server (cases 1 and 3), the server
 
 **The fix and the ellipse.** The reported position is the true one plus Gaussian noise. The along-line-of-sight sigma is `sigma-m`; the cross-range sigma grows with range, as `sigma-m * max(1, range_km / 10)`, as it does for a direction finder. The uncertainty sent is the 95% ellipse: semi-major `2.4477 * cross sigma`, semi-minor `2.4477 * along sigma`, in metres, with the orientation in degrees from north (the long axis lies across the line of sight). Fixes are therefore long thin ellipses at long range. Sentinel draws them around the entity.
 
-**Mobile sensors.** A mobile sensor sends an `EmplacementState` (its position, heading and velocity) once a second, and always one first on every new stream, before any observation, so the server can place the measurements. The CLI sends absolute positions, never polar measurements, so the server needs the ownship position only when the connection has `enforceCoverage` on. In that case it refuses the observations of a mobile emplacement as `stale_ownship` until it has a position for it.
+**Heartbeats.** The emplacement is its connection's heartbeat. Every stream begins with an `EmplacementState` (before any observation), and every state declares `heartbeat_interval_sec`, the `--heartbeat-interval` (default 5 s).
+
+- A fixed site sends one every interval. It carries the site's position, which the server ignores.
+- A mobile sensor sends one every second, with its position, heading and velocity, so the server can place its measurements.
+
+The server calls the emplacement offline after three missed intervals: it refuses its observations as `no_heartbeat`, draws the site grey, and turns the connection amber or red. A `no_heartbeat` ack, which a replica move can cause, makes the CLI send a heartbeat at once (at most one a second) and send the refused fix again once. The CLI sends absolute positions, never polar measurements, so a mobile sensor's ownship position matters only when the connection has `enforceCoverage` on; then the server refuses its observations as `stale_ownship` until it has one.
 
 **Reconnecting.** `Unauthenticated` and `PermissionDenied` end the run with exit code 2, and `Unimplemented` (the address is not a Sentinel ingest service) with exit code 1. Any other end of the stream (`Unavailable`, a transport error, a clean close by the server, `ResourceExhausted`) is logged as a warning and the CLI reconnects after a jittered exponential backoff from 0.5 s to 30 s. The line carries the cause, for example `msg="stream ended; reconnecting" stream=1 code=Unavailable message="connection moving: reconnect" backoff=612ms`. The backoff starts again once a stream has had an accepted report or has stayed open for 30 s. While disconnected the simulation keeps running, and the fixes it produces with no open stream are dropped and counted in `dropped_offline`, so a disconnect does not change the sequence of fixes for a seed. (A `rate_limited` ack does, because it changes the tick interval.) Reports that were sent but not acknowledged when a stream ended are not sent again: they are lost, not replayed.
 
 **Backpressure and limits.**
-- A `rate_limited` rejection halves the tick rate for 10 s (further ones extend the hold, they do not compound), then restores it. The CLI warns at the start when `rate * (emitters + 1 if mobile)` exceeds the connection's `maxMessagesPerSec`.
+- A `rate_limited` rejection halves the tick rate for 10 s (further ones extend the hold, they do not compound), then restores it. The CLI warns at the start when `rate * emitters` exceeds the connection's `maxMessagesPerSec`; heartbeats are never rate limited and do not count.
 - An `unknown_emplacement` rejection within 5 s of creating the emplacement is retried once after 250 ms, in case the replica that serves the stream has not seen the new row yet. Outside that window it counts as a rejection.
+- A `no_heartbeat` rejection sends a heartbeat at once and retries the fix once after 250 ms; both the rejection and the retry are counted.
 - A report larger than the session's `max_message_bytes` is dropped by the CLI and logged, never sent. If the server ends a stream with `ResourceExhausted` for an oversize message, the report is dropped and the CLI reconnects.
 - `UpsertEmplacement` retries `Unavailable` ("saved; retry") and "rate limited" answers; the emplacement cap (`maxEmplacements`) is fatal.
 
@@ -174,7 +180,7 @@ The CLI logs to stderr (text, one line per event; the token appears only as its 
 msg=stats sent=412 ok=410 rejected=map[rate_limited:2] dead_lettered=0 retried=0 reconnects=1 dropped_oversize=0 dropped_offline=3
 ```
 
-`sent` counts reports written to the stream, `ok` those acknowledged `OK`, `rejected` the `REJECTED` acks by reason, `dead_lettered` the `DEAD_LETTERED` ones, `retried` the `unknown_emplacement` retries, and `reconnects` the stream ends and failed stream opens, each followed by a backoff and a new attempt, so a long outage counts every attempt.
+`sent` counts reports written to the stream, `ok` those acknowledged `OK`, `rejected` the `REJECTED` acks by reason, `dead_lettered` the `DEAD_LETTERED` ones, `retried` the `unknown_emplacement` and `no_heartbeat` retries, and `reconnects` the stream ends and failed stream opens, each followed by a backoff and a new attempt, so a long outage counts every attempt.
 
 ## Limits and gotchas
 
@@ -189,7 +195,7 @@ msg=stats sent=412 ok=410 rejected=map[rate_limited:2] dead_lettered=0 retried=0
 
 With the sensor running against the connection above:
 
-- **The emplacement.** A violet (`#8b5cf6`) location dot at the sensor, with its coverage sector (the Emplacements panel lists it, and the built-in layer toggles it). A mobile sensor's dot has a dashed outer ring and moves with its reports, the footprint turning with the ship's heading when the azimuth reference is `PLATFORM`.
+- **The emplacement.** A violet location dot at the sensor, with its coverage sector, shown under the connection's own row in the map's layers pill and listed in the connection's **Emplacements** section on the Connections page with an **online** badge. The connection is green while it heartbeats. Stop the CLI and, within three heartbeat intervals, the connection turns red and the dot greys, hollow, labelled "silent since 14:02Z". A mobile sensor's dot has a dashed outer ring and moves with its reports.
 - **The signals.** Moving `SIGNAL` entities named by each emitter's `displayName` (its id when none is set; the source entity id is `EMITTER-<id>`), each with a translucent uncertainty ellipse that follows it and grows when the emitter is farther out. Emitters outside the coverage do not appear; ones inside blink in and out at the probability of detection.
 - **The detail panel.** An **RF** section with frequency (MHz or GHz), bandwidth, emitter type, modulation, PRI and PRF, pulse width, scan type and power, summarised like `9.41 GHz · RADAR_SEARCH`.
 - **The badge.** An **EXERCISE** badge in the detail header and the list rows, and ` · EX` on the map label. The mark is sticky: an entity that has received an exercise report keeps it.

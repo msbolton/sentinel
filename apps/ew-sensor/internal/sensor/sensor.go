@@ -176,8 +176,9 @@ func (s *Sensor) EmplacementState(emplacementID string, t time.Time, pose ownshi
 			Longitude:      pose.Lon,
 			AltitudeMeters: proto.Float64(pose.Alt),
 		},
-		Heading:  proto.Float64(pose.HeadingDeg),
-		Velocity: &sentinelv1.GeodeticVelocity{North: pose.VelNorth, East: pose.VelEast, Up: pose.VelUp},
+		Heading:              proto.Float64(pose.HeadingDeg),
+		Velocity:             &sentinelv1.GeodeticVelocity{North: pose.VelNorth, East: pose.VelEast, Up: pose.VelUp},
+		HeartbeatIntervalSec: s.cfg.Sensor.HeartbeatSeconds(),
 	}
 	if s.cfg.Sensor.SendTimestamps {
 		st.Time = timestamppb.New(t)

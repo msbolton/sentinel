@@ -85,6 +85,13 @@ type Options struct {
 	RetryDelay    time.Duration // delay before that retry; default 250ms
 	RPCTimeout    time.Duration // per unary call; default 30s
 
+	// HeartbeatEvery is a fixed site's heartbeat period; default the
+	// configured --heartbeat-interval (tests shorten it).
+	HeartbeatEvery time.Duration
+	// HeartbeatKickMin is the least time between two heartbeats sent because
+	// of no_heartbeat acks; default 1s.
+	HeartbeatKickMin time.Duration
+
 	// OnAck, when set, is called by the ack reader after each ack's effects
 	// (stats, rate limit, retry) are applied. Tests use it to synchronise.
 	OnAck func(*ingestv1.Ack)
@@ -114,6 +121,7 @@ func (o *Options) defaults() {
 	set(&o.GraceWindow, 5*time.Second)
 	set(&o.RetryDelay, 250*time.Millisecond)
 	set(&o.RPCTimeout, 30*time.Second)
+	set(&o.HeartbeatKickMin, time.Second)
 }
 
 // Stats counts what the client did.
@@ -122,7 +130,7 @@ type Stats struct {
 	OK              uint64            // ACK_STATUS_OK
 	Rejected        map[string]uint64 // ACK_STATUS_REJECTED by reason (retried ones excluded)
 	DeadLettered    uint64            // ACK_STATUS_DEAD_LETTERED
-	Retried         uint64            // unknown_emplacement re-sent in the upsert grace window
+	Retried         uint64            // re-sent: unknown_emplacement in the upsert grace window, or no_heartbeat
 	Reconnects      uint64            // stream ends and failed opens, each followed by a retry
 	DroppedOversize uint64            // larger than the session's max_message_bytes, never sent
 	DroppedOffline  uint64            // generated while no stream was open
@@ -169,12 +177,19 @@ type Client struct {
 	pending      map[string]pendingReport
 	retries      []retryItem
 	seenReason   map[string]bool
+	// stateKick asks the loop for a heartbeat now (a no_heartbeat ack);
+	// lastKick debounces it.
+	stateKick bool
+	lastKick  time.Time
 }
 
 // New builds a client for cfg. It fails (exit 1) when the credentials
 // cannot be loaded.
 func New(cfg config.Config, opts Options) (*Client, error) {
 	opts.defaults()
+	if opts.HeartbeatEvery <= 0 {
+		opts.HeartbeatEvery = cfg.Sensor.HeartbeatEvery()
+	}
 	creds, err := DialOptions(cfg.Connection, opts.Logger)
 	if err != nil {
 		return nil, &ExitError{Code: ExitFatal, Err: err}

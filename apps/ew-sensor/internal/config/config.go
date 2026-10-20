@@ -68,6 +68,10 @@ const (
 	MaxRate = 100
 	// MaxEmitters is the largest --emitters.
 	MaxEmitters = 1000
+	// DefaultHeartbeatInterval is how often the emplacement heartbeats by default.
+	DefaultHeartbeatInterval = 5 * time.Second
+	// MaxHeartbeatInterval is the longest --heartbeat-interval (the server's limit).
+	MaxHeartbeatInterval = 300 * time.Second
 )
 
 // Config is everything the sensor needs to run. Load returns it normalised
@@ -140,7 +144,22 @@ type Sensor struct {
 	// SendTimestamps sets source_timestamp (and EmplacementState.time).
 	// Off by default: the server refuses clocks skewed beyond +5 s / -60 s.
 	SendTimestamps bool `yaml:"sendTimestamps"`
+	// HeartbeatInterval is how often the emplacement sends its EmplacementState
+	// heartbeat, and the interval it declares (heartbeat_interval_sec): whole
+	// seconds, 1s to 300s. The server calls it offline after three missed ones.
+	HeartbeatInterval time.Duration `yaml:"heartbeatInterval"`
 }
+
+// HeartbeatEvery is the heartbeat interval, the default when none is set.
+func (s Sensor) HeartbeatEvery() time.Duration {
+	if s.HeartbeatInterval <= 0 {
+		return DefaultHeartbeatInterval
+	}
+	return s.HeartbeatInterval
+}
+
+// HeartbeatSeconds is HeartbeatEvery in whole seconds, as the heartbeat declares it.
+func (s Sensor) HeartbeatSeconds() uint32 { return uint32(s.HeartbeatEvery() / time.Second) }
 
 // Ownship is the path a mobile sensor follows.
 type Ownship struct {
@@ -220,7 +239,7 @@ func defaults() Config {
 			Mobility:         MobilityFixed,
 			AzimuthReference: AzimuthTrueNorth,
 		},
-		Sensor:       Sensor{Rate: 1, Pd: 0.9, SigmaM: 250},
+		Sensor:       Sensor{Rate: 1, Pd: 0.9, SigmaM: 250, HeartbeatInterval: DefaultHeartbeatInterval},
 		Ownship:      Ownship{Path: PathCircle, SpeedKts: 12, RadiusKm: 5},
 		EmitterCount: defaultEmitterCount,
 	}
@@ -244,6 +263,7 @@ type flagValues struct {
 	path                       string
 	speedKts                   float64
 	sendTimestamps             bool
+	heartbeatInterval          time.Duration
 }
 
 func newFlagSet(fv *flagValues, d Config) *flag.FlagSet {
@@ -281,6 +301,7 @@ func newFlagSet(fv *flagValues, d Config) *flag.FlagSet {
 	fs.StringVar(&fv.path, "path", d.Ownship.Path, "ownship path: circle or waypoints")
 	fs.Float64Var(&fv.speedKts, "speed-kts", d.Ownship.SpeedKts, "ownship speed, knots")
 	fs.BoolVar(&fv.sendTimestamps, "send-timestamps", false, "set source timestamps (the server refuses clocks skewed beyond +5s/-60s)")
+	fs.DurationVar(&fv.heartbeatInterval, "heartbeat-interval", d.Sensor.HeartbeatInterval, "how often the emplacement heartbeats (EmplacementState), whole seconds from 1s to 300s; the server calls it offline after three missed")
 	return fs
 }
 
@@ -426,6 +447,7 @@ func applyFlags(c *Config, fv *flagValues, s map[string]bool) {
 	override(s, "pd", &c.Sensor.Pd, fv.pd)
 	override(s, "sigma-m", &c.Sensor.SigmaM, fv.sigmaM)
 	override(s, "send-timestamps", &c.Sensor.SendTimestamps, fv.sendTimestamps)
+	override(s, "heartbeat-interval", &c.Sensor.HeartbeatInterval, fv.heartbeatInterval)
 	override(s, "seed", &c.Seed, fv.seed)
 	override(s, "duration", &c.Duration, fv.duration)
 	override(s, "path", &c.Ownship.Path, fv.path)
@@ -537,6 +559,9 @@ func (c Config) Validate() error {
 	}
 	if !positive(s.SigmaM) {
 		add("sigmaM (--sigma-m) must be > 0 (got %v)", s.SigmaM)
+	}
+	if hb := s.HeartbeatInterval; hb < time.Second || hb > MaxHeartbeatInterval || hb%time.Second != 0 {
+		add("heartbeat interval (--heartbeat-interval) must be whole seconds from 1s to 300s (got %v)", hb)
 	}
 	if s.Classification != "" && !oneOf(s.Classification, classifications) {
 		add("sensor classification %q must be one of %s", s.Classification, strings.Join(classifications, ", "))
