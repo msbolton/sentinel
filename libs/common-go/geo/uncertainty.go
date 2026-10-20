@@ -58,10 +58,15 @@ func Cov2FromEllipse(semiMajorM, semiMinorM, orientationDeg float64) (cNN, cNE, 
 	return v1*cO*cO + v2*sO*sO, (v1 - v2) * sO * cO, v1*sO*sO + v2*cO*cO
 }
 
-// CEP is the radius of the circle holding half the horizontal error, from
-// the standard deviations along the covariance's principal axes. 0.5887·(σ1+σ2)
-// is exact for a circular error and within a few percent while σ2/σ1 ≥ 0.3.
+// CEP is the 95th-percentile circular error radius (in metres) approximated
+// from the 95% confidence ellipse's principal half-axes: 0.5·(maj+min), which
+// is exact (Ellipse95·σ = 2.4477·σ) for a circular error.
 func CEP(cNN, cNE, cEE float64) float64 {
 	maj, min, _ := EllipseFromCov2(cNN, cNE, cEE)
-	return 0.5887 * (maj + min) / Ellipse95
+	return 0.5 * (maj + min)
+}
+
+// CEP95 is an explicit alias for CEP (95th-percentile circular error radius).
+func CEP95(cNN, cNE, cEE float64) float64 {
+	return CEP(cNN, cNE, cEE)
 }

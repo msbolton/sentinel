@@ -80,8 +80,10 @@ func TestEllipseCovarianceRoundTrip(t *testing.T) {
 }
 
 func TestCEP(t *testing.T) {
-	near(t, "circular", CEP(100*100, 0, 100*100), 117.74, 0.01)
-	near(t, "same via ellipse", CEP(Cov2FromEllipse(Ellipse95*100, Ellipse95*100, 0)), 117.74, 0.01)
+	near(t, "circular", CEP(100*100, 0, 100*100), 244.77, 0.01)
+	near(t, "same via ellipse", CEP(Cov2FromEllipse(Ellipse95*100, Ellipse95*100, 0)), 244.77, 0.01)
+	near(t, "cep95 alias", CEP95(100*100, 0, 100*100), 244.77, 0.01)
+	near(t, "elliptical 95%", CEP(Cov2FromEllipse(1800, 420, 32)), (1800+420)/2.0, 1e-6)
 }
 
 // The axis-aligned cases above zero every cross term. At an oblique geometry

@@ -137,11 +137,37 @@ export interface UavDetail {
   frequencyRange: number;
 }
 
+/** RfDetail carries intercepted RF / electronic-warfare emitter parameters. */
+export interface RfDetail {
+  /** center frequency, Hz */
+  frequencyHz: number;
+  /** instantaneous bandwidth, Hz */
+  bandwidthHz?:
+    | number
+    | undefined;
+  /** e.g. RADAR_SEARCH, RADAR_TRACK, SATCOM, JAMMER */
+  emitterType: string;
+  /** e.g. PULSE, CW, FM, CHIRP, FHSS, OFDM */
+  modulation: string;
+  /** pulse repetition interval, microseconds */
+  priUs?:
+    | number
+    | undefined;
+  /** pulse width, microseconds */
+  pulseWidthUs?:
+    | number
+    | undefined;
+  /** e.g. CIRCULAR, SECTOR, RASTER, ELECTRONIC, FIXED */
+  scanType: string;
+  /** received or estimated ERP, dBm */
+  powerDbm?: number | undefined;
+}
+
 /**
  * PlatformDetail is the protocol-specific block attached to one observation.
  * An entity fused from several feeds keeps one PlatformDetail per kind, keyed
  * by the oneof field name ("ais", "adsb", "tle", "link16", "cot", "uav",
- * "generic").
+ * "generic", "rf").
  */
 export interface PlatformDetail {
   ais?: AisDetail | undefined;
@@ -151,6 +177,7 @@ export interface PlatformDetail {
   cot?: CotDetail | undefined;
   uav?: UavDetail | undefined;
   generic?: GenericDetail | undefined;
+  rf?: RfDetail | undefined;
 }
 
 /**
@@ -2007,6 +2034,179 @@ export const UavDetail = {
   },
 };
 
+function createBaseRfDetail(): RfDetail {
+  return {
+    frequencyHz: 0,
+    bandwidthHz: undefined,
+    emitterType: "",
+    modulation: "",
+    priUs: undefined,
+    pulseWidthUs: undefined,
+    scanType: "",
+    powerDbm: undefined,
+  };
+}
+
+export const RfDetail = {
+  encode(message: RfDetail, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.frequencyHz !== 0) {
+      writer.uint32(9).double(message.frequencyHz);
+    }
+    if (message.bandwidthHz !== undefined) {
+      writer.uint32(17).double(message.bandwidthHz);
+    }
+    if (message.emitterType !== "") {
+      writer.uint32(26).string(message.emitterType);
+    }
+    if (message.modulation !== "") {
+      writer.uint32(34).string(message.modulation);
+    }
+    if (message.priUs !== undefined) {
+      writer.uint32(41).double(message.priUs);
+    }
+    if (message.pulseWidthUs !== undefined) {
+      writer.uint32(49).double(message.pulseWidthUs);
+    }
+    if (message.scanType !== "") {
+      writer.uint32(58).string(message.scanType);
+    }
+    if (message.powerDbm !== undefined) {
+      writer.uint32(65).double(message.powerDbm);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): RfDetail {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseRfDetail();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          if (tag !== 9) {
+            break;
+          }
+
+          message.frequencyHz = reader.double();
+          continue;
+        case 2:
+          if (tag !== 17) {
+            break;
+          }
+
+          message.bandwidthHz = reader.double();
+          continue;
+        case 3:
+          if (tag !== 26) {
+            break;
+          }
+
+          message.emitterType = reader.string();
+          continue;
+        case 4:
+          if (tag !== 34) {
+            break;
+          }
+
+          message.modulation = reader.string();
+          continue;
+        case 5:
+          if (tag !== 41) {
+            break;
+          }
+
+          message.priUs = reader.double();
+          continue;
+        case 6:
+          if (tag !== 49) {
+            break;
+          }
+
+          message.pulseWidthUs = reader.double();
+          continue;
+        case 7:
+          if (tag !== 58) {
+            break;
+          }
+
+          message.scanType = reader.string();
+          continue;
+        case 8:
+          if (tag !== 65) {
+            break;
+          }
+
+          message.powerDbm = reader.double();
+          continue;
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skipType(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): RfDetail {
+    return {
+      frequencyHz: isSet(object.frequencyHz) ? globalThis.Number(object.frequencyHz) : 0,
+      bandwidthHz: isSet(object.bandwidthHz) ? globalThis.Number(object.bandwidthHz) : undefined,
+      emitterType: isSet(object.emitterType) ? globalThis.String(object.emitterType) : "",
+      modulation: isSet(object.modulation) ? globalThis.String(object.modulation) : "",
+      priUs: isSet(object.priUs) ? globalThis.Number(object.priUs) : undefined,
+      pulseWidthUs: isSet(object.pulseWidthUs) ? globalThis.Number(object.pulseWidthUs) : undefined,
+      scanType: isSet(object.scanType) ? globalThis.String(object.scanType) : "",
+      powerDbm: isSet(object.powerDbm) ? globalThis.Number(object.powerDbm) : undefined,
+    };
+  },
+
+  toJSON(message: RfDetail): unknown {
+    const obj: any = {};
+    if (message.frequencyHz !== 0) {
+      obj.frequencyHz = message.frequencyHz;
+    }
+    if (message.bandwidthHz !== undefined) {
+      obj.bandwidthHz = message.bandwidthHz;
+    }
+    if (message.emitterType !== "") {
+      obj.emitterType = message.emitterType;
+    }
+    if (message.modulation !== "") {
+      obj.modulation = message.modulation;
+    }
+    if (message.priUs !== undefined) {
+      obj.priUs = message.priUs;
+    }
+    if (message.pulseWidthUs !== undefined) {
+      obj.pulseWidthUs = message.pulseWidthUs;
+    }
+    if (message.scanType !== "") {
+      obj.scanType = message.scanType;
+    }
+    if (message.powerDbm !== undefined) {
+      obj.powerDbm = message.powerDbm;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RfDetail>, I>>(base?: I): RfDetail {
+    return RfDetail.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RfDetail>, I>>(object: I): RfDetail {
+    const message = createBaseRfDetail();
+    message.frequencyHz = object.frequencyHz ?? 0;
+    message.bandwidthHz = object.bandwidthHz ?? undefined;
+    message.emitterType = object.emitterType ?? "";
+    message.modulation = object.modulation ?? "";
+    message.priUs = object.priUs ?? undefined;
+    message.pulseWidthUs = object.pulseWidthUs ?? undefined;
+    message.scanType = object.scanType ?? "";
+    message.powerDbm = object.powerDbm ?? undefined;
+    return message;
+  },
+};
+
 function createBasePlatformDetail(): PlatformDetail {
   return {
     ais: undefined,
@@ -2016,6 +2216,7 @@ function createBasePlatformDetail(): PlatformDetail {
     cot: undefined,
     uav: undefined,
     generic: undefined,
+    rf: undefined,
   };
 }
 
@@ -2041,6 +2242,9 @@ export const PlatformDetail = {
     }
     if (message.generic !== undefined) {
       GenericDetail.encode(message.generic, writer.uint32(58).fork()).ldelim();
+    }
+    if (message.rf !== undefined) {
+      RfDetail.encode(message.rf, writer.uint32(66).fork()).ldelim();
     }
     return writer;
   },
@@ -2101,6 +2305,13 @@ export const PlatformDetail = {
 
           message.generic = GenericDetail.decode(reader, reader.uint32());
           continue;
+        case 8:
+          if (tag !== 66) {
+            break;
+          }
+
+          message.rf = RfDetail.decode(reader, reader.uint32());
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2119,6 +2330,7 @@ export const PlatformDetail = {
       cot: isSet(object.cot) ? CotDetail.fromJSON(object.cot) : undefined,
       uav: isSet(object.uav) ? UavDetail.fromJSON(object.uav) : undefined,
       generic: isSet(object.generic) ? GenericDetail.fromJSON(object.generic) : undefined,
+      rf: isSet(object.rf) ? RfDetail.fromJSON(object.rf) : undefined,
     };
   },
 
@@ -2145,6 +2357,9 @@ export const PlatformDetail = {
     if (message.generic !== undefined) {
       obj.generic = GenericDetail.toJSON(message.generic);
     }
+    if (message.rf !== undefined) {
+      obj.rf = RfDetail.toJSON(message.rf);
+    }
     return obj;
   },
 
@@ -2166,6 +2381,7 @@ export const PlatformDetail = {
     message.generic = (object.generic !== undefined && object.generic !== null)
       ? GenericDetail.fromPartial(object.generic)
       : undefined;
+    message.rf = (object.rf !== undefined && object.rf !== null) ? RfDetail.fromPartial(object.rf) : undefined;
     return message;
   },
 };

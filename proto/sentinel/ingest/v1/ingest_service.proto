@@ -18,6 +18,9 @@ service IngestService {
   rpc ListEmplacements(ListEmplacementsRequest) returns (ListEmplacementsResponse);
   // UpsertEmplacement creates or updates an emplacement bound to the
   // connection; refused unless the connection allows sender-managed ones.
+  // An id (or name when id is empty or unknown) is matched case-insensitively
+  // (ignoring surrounding whitespace) against sender-managed emplacements on
+  // this connection.
   rpc UpsertEmplacement(UpsertEmplacementRequest) returns (UpsertEmplacementResponse);
   // StreamReports takes reports and answers each with an ack.
   rpc StreamReports(stream StreamReportsRequest) returns (stream StreamReportsResponse);
@@ -53,7 +56,8 @@ message UpsertEmplacementResponse {
 
 // Report is one thing a sender says: an observation, or a mobile
 // emplacement's own position. client_ref comes back on the ack.
-// emplacement_id names the emplacement the report comes from; the service
+// emplacement_id names the emplacement the report comes from (matched
+// case-insensitively, ignoring surrounding whitespace); the service
 // checks it against the emplacements bound to the connection (an empty one
 // means the connection's only emplacement, when it has exactly one).
 // For an emplacement_state body, its own emplacement_id must be empty or
@@ -81,7 +85,8 @@ enum AckStatus {
 message Ack {
   string client_ref = 1;
   AckStatus status = 2;
-  // Why a report was not accepted: unknown_emplacement, stale_ownship, …
+  // Why a report was not accepted: unknown_emplacement, stale_ownship,
+  // clock_skew (EmplacementState.time >5s ahead of or >60s behind server time), …
   string reason = 3;
 }
 
