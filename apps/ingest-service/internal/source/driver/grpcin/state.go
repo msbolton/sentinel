@@ -38,23 +38,35 @@ var (
 // SENSOR entity. Either way the SENSOR entity goes out online, at most once a
 // second, stamped and throttled on the server's clock.
 func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.Report, m *sentinelv1.EmplacementState, ack *ingestv1.Ack) (*ingestv1.Ack, error) {
+	// Only a state taken as a heartbeat is exempt from the rate limits: every
+	// refusal is charged first, so malformed states cannot flood the dead
+	// letters.
+	refuse := func(reason string) *ingestv1.Ack {
+		if s.limited(from) {
+			reason = "rate_limited"
+		}
+		return s.reject(ack, reason)
+	}
 	if m == nil {
+		if s.limited(from) {
+			return s.reject(ack, "rate_limited"), nil
+		}
 		return s.deadLetter(ack, from, r, "empty_report", errors.New("the report's emplacement_state is empty")), nil
 	}
 	claim := claimOf(r.GetEmplacementId())
 	if id := claimOf(m.GetEmplacementId()); id != "" {
 		if claim != "" && claim != id {
-			return s.reject(ack, "unknown_emplacement"), nil
+			return refuse("unknown_emplacement"), nil
 		}
 		claim = id
 	}
 	e, bound, reason := s.resolve(a, claim)
 	if reason != "" || !bound {
-		return s.reject(ack, "unknown_emplacement"), nil
+		return refuse("unknown_emplacement"), nil
 	}
 	ack.EmplacementId = e.ID
 	if max(classification.Rank(s.d.floor), classification.Rank(e.Classification)) > classification.Rank(a.tok.Classification) {
-		return s.reject(ack, "above_ceiling"), nil
+		return refuse("above_ceiling"), nil
 	}
 	interval, ok := emplacement.IntervalOf(m.GetHeartbeatIntervalSec())
 	if !ok {
@@ -82,7 +94,7 @@ func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.
 	switch why {
 	case "":
 	case "clock_skew":
-		return s.reject(ack, why), nil
+		return refuse(why), nil
 	default:
 		return s.badState(ack, from, r, e, errBadState), nil
 	}
@@ -134,6 +146,9 @@ func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.
 // above the connection's level, so its content stays out of the dead
 // letters (gated at the connection's level), and dead-lettered otherwise.
 func (s *service) badState(ack *ingestv1.Ack, from string, r *ingestv1.Report, e emplacement.Emplacement, cause error) *ingestv1.Ack {
+	if s.limited(from) {
+		return s.reject(ack, "rate_limited")
+	}
 	if classification.Rank(e.Classification) > classification.Rank(s.d.floor) {
 		return s.reject(ack, "bad_state")
 	}

@@ -296,3 +296,122 @@ func TestTheSiteIsPublishedAtMostOncePerSecond(t *testing.T) {
 		t.Fatalf("%d online publishes a second later, want 2", n)
 	}
 }
+
+// Only a state taken as a heartbeat is exempt from the rate limits: refused
+// ones are charged, so malformed states cannot flood the dead letters.
+func TestRefusedStatesAreRateLimited(t *testing.T) {
+	cfg := map[string]any{"maxMessagesPerSec": 1, "maxMessagesPerSecPerSender": 1}
+	r, _, _, st := liveRig(t, cfg, ingesttoken.Token{}, rowsOf(emp("radar", "grpc-1", "FIXED", "RADAR", "UNCLASSIFIED")))
+	if ack := send(t, st, heartbeat("radar", 301)); ack.GetReason() != "bad_state" {
+		t.Fatalf("the first malformed state: %v", ack)
+	}
+	mismatch := heartbeat("radar", 5)
+	mismatch.GetEmplacementState().EmplacementId = "mast"
+	for i, bad := range []*ingestv1.Report{heartbeat("radar", 301), mismatch, heartbeat("nowhere", 5)} {
+		if ack := send(t, st, bad); ack.GetReason() != "rate_limited" {
+			t.Fatalf("refused state %d past the limit: %v", i, ack)
+		}
+	}
+	if n := len(r.sink.deadLetters()); n != 1 {
+		t.Fatalf("%d dead letters, want 1", n)
+	}
+	if ack := send(t, st, heartbeat("radar", 5)); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
+		t.Fatalf("a good heartbeat past the limit: %v", ack)
+	}
+}
+
+// The row's heartbeat is written at most every min(interval, touchEvery), and
+// a changed interval at most once a second, whatever the report touches do.
+func TestHeartbeatWritesAreThrottled(t *testing.T) {
+	_, w, clk, st := liveRig(t, nil, ingesttoken.Token{}, rowsOf(emp("radar", "grpc-1", "FIXED", "RADAR", "UNCLASSIFIED")))
+	writes := func(want int) {
+		t.Helper()
+		if b := w.heartbeats(); len(b) != want {
+			t.Fatalf("%d heartbeat writes, want %d: %+v", len(b), want, b)
+		}
+	}
+	send(t, st, heartbeat("radar", 5))
+	writes(1)
+	clk.advance(time.Second)
+	send(t, st, heartbeat("radar", 5))
+	writes(1)
+	if ack := send(t, st, claiming(observation("T-1", 50.2, -4.1), "radar")); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
+		t.Fatalf("a fix: %v", ack)
+	}
+	if len(w.touches()) == 0 {
+		t.Fatal("the fix touched nothing")
+	}
+	writes(1)
+	clk.advance(5 * time.Second)
+	send(t, st, heartbeat("radar", 5))
+	writes(2)
+	clk.advance(500 * time.Millisecond)
+	send(t, st, heartbeat("radar", 6))
+	send(t, st, heartbeat("radar", 5))
+	send(t, st, heartbeat("radar", 6))
+	writes(2)
+	clk.advance(time.Second)
+	send(t, st, heartbeat("radar", 6))
+	writes(3)
+	if b := w.heartbeats(); b[2].interval != 6 {
+		t.Fatalf("the changed interval written = %d, want 6", b[2].interval)
+	}
+}
+
+// A mobile site is stamped on its sender's fix clock by every publish, so a
+// re-publish never outdates the sender's next move.
+func TestAMobileSiteIsStampedOnItsFixClock(t *testing.T) {
+	r, _, clk, st := liveRig(t, nil, ingesttoken.Token{}, rowsOf(emp("ship", "grpc-1", "MOBILE", "RF", "UNCLASSIFIED")))
+	behind := func() *ingestv1.Report {
+		rep := stateReport("ship", clk.now().Add(-30*time.Second), 50, -4, nil)
+		rep.GetEmplacementState().HeartbeatIntervalSec = 5
+		return rep
+	}
+	fixAt := clk.now().Add(-30 * time.Second)
+	if ack := send(t, st, behind()); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
+		t.Fatalf("a state 30 s behind: %v", ack)
+	}
+	waitFor(t, func() bool { return sitesIn(r, "ship", emplacement.HeartbeatOnline) > 0 })
+	if o := lastSite(r, "ship"); !o.SourceTimestamp.Equal(fixAt) {
+		t.Fatalf("online stamp = %v, want the fix time %v", o.SourceTimestamp, fixAt)
+	}
+	clk.advance(16 * time.Second)
+	waitFor(t, func() bool { return sitesIn(r, "ship", emplacement.HeartbeatOffline) > 0 })
+	off := lastSite(r, "ship")
+	if off.SourceTimestamp.After(fixAt) {
+		t.Fatalf("offline stamp %v is past the newest fix %v", off.SourceTimestamp, fixAt)
+	}
+	clk.advance(time.Second)
+	fixAt = clk.now().Add(-30 * time.Second)
+	send(t, st, behind())
+	waitFor(t, func() bool { return lastSite(r, "ship").Generic[emplacement.FieldHeartbeat] == "online" })
+	if o := lastSite(r, "ship"); !o.SourceTimestamp.Equal(fixAt) || o.SourceTimestamp.Before(off.SourceTimestamp) {
+		t.Fatalf("the next online stamp = %v, want %v and not before %v", o.SourceTimestamp, fixAt, off.SourceTimestamp)
+	}
+	if err := r.stop(t); err != nil {
+		t.Fatal(err)
+	}
+	if o := lastSite(r, "ship"); o.Generic[emplacement.FieldHeartbeat] != "offline" || o.SourceTimestamp.After(fixAt) {
+		t.Fatalf("the stop publish = %+v, want offline stamped no later than %v", o, fixAt)
+	}
+}
+
+// A sender that does not stream heartbeats through Publish.
+func TestAHeartbeatThroughPublish(t *testing.T) {
+	r, _, _, _ := liveRig(t, nil, ingesttoken.Token{}, rowsOf(emp("radar", "grpc-1", "FIXED", "RADAR", "UNCLASSIFIED")))
+	ctx, cancel := withToken(secretA)
+	defer cancel()
+	resp, err := r.client(t).Publish(ctx, &ingestv1.PublishRequest{Reports: []*ingestv1.Report{
+		heartbeat("radar", 5), claiming(observation("T-1", 50.2, -4.1), "radar")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, ack := range resp.GetAcks() {
+		if ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK || ack.GetEmplacementId() != "radar" {
+			t.Fatalf("ack %d: %v", i, ack)
+		}
+	}
+	if n := len(resp.GetAcks()); n != 2 {
+		t.Fatalf("%d acks, want 2", n)
+	}
+}

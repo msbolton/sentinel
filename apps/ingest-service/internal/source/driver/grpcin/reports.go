@@ -113,18 +113,11 @@ func (s *service) Publish(ctx context.Context, req *ingestv1.PublishRequest) (*i
 func (s *service) handle(ctx context.Context, a authed, from string, r *ingestv1.Report) (*ingestv1.Ack, error) {
 	ack := &ingestv1.Ack{ClientRef: r.GetClientRef()}
 	// A heartbeat is never rate limited: a refused one would take its
-	// emplacement offline and refuse its fixes. Reports draw on the sender's
-	// own bucket first, so a flooder spends none of the shared one.
-	if _, heartbeat := r.GetBody().(*ingestv1.Report_EmplacementState); !heartbeat {
-		if !s.d.perSender.Allow(transport.SenderIP(from), time.Now()) {
-			s.d.senders.RateLimited(from, 1)
-			s.d.counts.SenderRateLimited.Add(1)
-			return s.reject(ack, "rate_limited"), nil
-		}
-		if !s.d.limit.Allow() {
-			s.d.counts.RateLimited.Add(1)
-			return s.reject(ack, "rate_limited"), nil
-		}
+	// emplacement offline and refuse its fixes. A state that is refused is
+	// charged by state itself, before it is dead-lettered (see limited).
+	_, heartbeat := r.GetBody().(*ingestv1.Report_EmplacementState)
+	if !heartbeat && s.limited(from) {
+		return s.reject(ack, "rate_limited"), nil
 	}
 	s.d.senders.Seen(from, time.Now().UTC())
 	s.d.counts.Accepted.Add(1)
@@ -132,6 +125,9 @@ func (s *service) handle(ctx context.Context, a authed, from string, r *ingestv1
 	// and a dead letter (visible at the connection's level) must not be
 	// written for it, whatever the body: no body is read at all.
 	if classification.Rank(s.d.floor) > classification.Rank(a.tok.Classification) {
+		if heartbeat && s.limited(from) {
+			return s.reject(ack, "rate_limited"), nil
+		}
 		return s.reject(ack, "above_ceiling"), nil
 	}
 	switch body := r.GetBody().(type) {
@@ -142,6 +138,22 @@ func (s *service) handle(ctx context.Context, a authed, from string, r *ingestv1
 	default:
 		return s.deadLetter(ack, from, r, "empty_report", errors.New("the report has neither an observation nor an emplacement_state")), nil
 	}
+}
+
+// limited charges a report to the rate limits and reports whether it is over
+// them. The sender's own bucket is drawn on first, so a flooder spends none
+// of the shared one.
+func (s *service) limited(from string) bool {
+	if !s.d.perSender.Allow(transport.SenderIP(from), time.Now()) {
+		s.d.senders.RateLimited(from, 1)
+		s.d.counts.SenderRateLimited.Add(1)
+		return true
+	}
+	if !s.d.limit.Allow() {
+		s.d.counts.RateLimited.Add(1)
+		return true
+	}
+	return false
 }
 
 func (s *service) observation(ctx context.Context, a authed, from string, r *ingestv1.Report, m *sentinelv1.Observation, ack *ingestv1.Ack) (*ingestv1.Ack, error) {

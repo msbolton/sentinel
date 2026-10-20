@@ -18,6 +18,9 @@ const (
 	maxRepublish = 60 * time.Second
 	// stopPublishTimeout bounds the offline publish when the run ends.
 	stopPublishTimeout = 2 * time.Second
+	// beatChangeEvery is the most often a changed interval is written: a
+	// sender alternating intervals must not force a write per message.
+	beatChangeEvery = time.Second
 )
 
 // beatTouch is the last heartbeat written to a row.
@@ -75,7 +78,8 @@ func (d *Driver) watchBindings(t *emplacement.Tracker) (cancel func()) {
 
 // beat records a heartbeat of id at the server's time now, and writes it to
 // the row at most every min(interval, touchEvery), apart from the report
-// touches, and at once when the interval changes. A failed write is logged.
+// touches, and sooner when the interval changes, but never twice within
+// beatChangeEvery. A failed write is logged.
 func (d *Driver) beat(ctx context.Context, id string, intervalSec int, now time.Time) {
 	if t := d.liveness(); t != nil {
 		t.Heartbeat(id, intervalSec, now)
@@ -86,9 +90,12 @@ func (d *Driver) beat(ctx context.Context, id string, intervalSec int, now time.
 	every := min(time.Duration(intervalSec)*time.Second, touchEvery)
 	d.touchMu.Lock()
 	last, seen := d.beatTouched[id]
-	if seen && last.interval == intervalSec && now.Sub(last.at) < every && last.at.Sub(now) < every {
-		d.touchMu.Unlock()
-		return
+	if seen {
+		within := func(w time.Duration) bool { return now.Sub(last.at) < w && last.at.Sub(now) < w }
+		if within(every) && (last.interval == intervalSec || within(beatChangeEvery)) {
+			d.touchMu.Unlock()
+			return
+		}
 	}
 	d.beatTouched[id] = beatTouch{at: now, interval: intervalSec}
 	d.touchMu.Unlock()
@@ -110,11 +117,14 @@ func (d *Driver) newestFix(id string) (fix, bool) {
 	return t.fixes[len(t.fixes)-1], true
 }
 
-// siteFor is e's SENSOR observation for a publish in state. It is stamped
-// with e's last heartbeat (the run's start when it has had none), never with
-// now, so that a re-publish of a silent site does not look like a fresh
-// report. A mobile one is placed at its newest fix. ok is false when there
-// is nowhere to place it.
+// siteFor is e's SENSOR observation for a publish in state. A fixed one is
+// stamped with e's last heartbeat (the run's start when it has had none),
+// never with now, so that a re-publish of a silent site does not look like a
+// fresh report. A mobile one is placed at its newest fix and stamped with
+// that fix's time (no later than now), the clock its online publishes in
+// state use, so a re-publish never outdates the sender's next move; with no
+// fix it falls back to the heartbeat stamp. ok is false when there is
+// nowhere to place it.
 func (d *Driver) siteFor(e emplacement.Emplacement, state emplacement.HeartbeatState, now time.Time) (*obs.Observation, bool) {
 	interval := emplacement.RowIntervalSec(e)
 	var last time.Time
@@ -129,6 +139,10 @@ func (d *Driver) siteFor(e emplacement.Emplacement, state emplacement.HeartbeatS
 		if f, ok := d.newestFix(e.ID); ok {
 			alt := f.pos.Alt
 			e.Position, e.Altitude = &emplacement.Point{Lat: f.pos.Lat, Lon: f.pos.Lon}, &alt
+			at = f.at
+			if at.After(now) {
+				at = now
+			}
 		}
 	}
 	if e.Position == nil {
