@@ -430,3 +430,59 @@ func TestGolden(t *testing.T) {
 		}
 	}
 }
+
+// The effective boresight of a PLATFORM sensor is boresight + heading, so it
+// can be anywhere in [0,720). The azimuth offset must wrap for all of them.
+func TestCoveredAzimuthOffsetWrapsForAnyBoresight(t *testing.T) {
+	tests := []struct {
+		name        string
+		bore, az    float64
+		width       float64
+		wantCovered bool
+		wantOffset  float64 // documented true offset, for readability
+	}{
+		{"300+300 az10 offset 130 (narrow: out)", 600, 10, 120, false, 130},
+		{"300+300 az10 offset 130 (wide 270: in)", 600, 10, 270, true, 130},
+		{"300+300 az10 offset 130 (wide 250: out)", 600, 10, 250, false, 130},
+		{"600 az 240 offset 0", 600, 240, 10, true, 0},
+		{"719 az 318 offset 41", 719, 318, 90, true, 41},
+		{"719 az 318 offset 41 narrow", 719, 318, 80, false, 41},
+		{"719 az 355 offset 4", 719, 355, 10, true, 4},
+		{"719 az 5 offset 6 (seam)", 719, 5, 20, true, 6},
+		{"700 az 0 offset 20 (seam)", 700, 0, 50, true, 20},
+		{"700 az 0 offset 20 (seam) narrow", 700, 0, 38, false, 20},
+		{"exactly 360 az 0", 360, 0, 10, true, 0},
+		{"exactly 360 az 100 offset 100", 360, 100, 200, true, 100},
+		{"exactly 360 az 100 offset 100 narrow", 360, 100, 190, false, 100},
+		{"exactly 720 az 350 offset 10", 720, 350, 20, true, 10},
+		{"exactly 720 az 350 offset 10 narrow", 720, 350, 19, false, 10},
+		{"az above bore by more than 180: bore 10 az 300 offset 70", 10, 300, 140, true, 70},
+		{"az above bore by more than 180: out", 10, 300, 139, false, 70},
+		{"bore 100 az 350 offset 110", 100, 350, 220, true, 110},
+		{"bore 100 az 350 offset 110 narrow", 100, 350, 219, false, 110},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			target := geo.AERToLLA(site, tc.az, 0, 40000)
+			e := config.Emplacement{Width: tc.width, RangeKm: 150}
+			_, _, _, ok := sensor.Covered(site, tc.bore, e, target)
+			if ok != tc.wantCovered {
+				t.Errorf("bore %v az %v width %v (offset %v): covered=%v, want %v", tc.bore, tc.az, tc.width, tc.wantOffset, ok, tc.wantCovered)
+			}
+		})
+	}
+}
+
+func TestPlatformSeamThroughStep(t *testing.T) {
+	// boresight 300 + heading 300 = 600 (== 240); a 100-degree sector covers
+	// azimuths 190..290 only.
+	c := cfgWith(at("sw", 240, 40000), at("north", 10, 40000), at("w", 285, 40000), at("nw", 330, 40000))
+	c.Emplacement.Mobility = config.MobilityMobile
+	c.Emplacement.AzimuthReference = config.AzimuthPlatform
+	c.Emplacement.Boresight, c.Emplacement.Width = 300, 100
+	pose := ownship.Pose{Lat: site.Lat, Lon: site.Lon, Alt: site.Alt, HeadingDeg: 300}
+	got := detected(sensor.New(c).Step(t0, pose))
+	if !got["EMITTER-sw"] || !got["EMITTER-w"] || got["EMITTER-north"] || got["EMITTER-nw"] || len(got) != 2 {
+		t.Fatalf("covered = %v, want sw and w only", got)
+	}
+}

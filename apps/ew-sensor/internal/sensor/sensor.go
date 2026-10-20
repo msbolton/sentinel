@@ -102,7 +102,12 @@ func Covered(site geo.LLA, boresightDeg float64, e config.Emplacement, target ge
 	if e.Width >= 360 {
 		return az, el, rangeM, true
 	}
-	off := math.Abs(math.Mod(az-boresightDeg+540, 360) - 180)
+	// The boresight can be any angle (a PLATFORM boresight plus the heading
+	// reaches 720), so wrap the difference without assuming its sign.
+	off := math.Mod(math.Abs(az-boresightDeg), 360)
+	if off > 180 {
+		off = 360 - off
+	}
 	return az, el, rangeM, off <= e.Width/2
 }
 
