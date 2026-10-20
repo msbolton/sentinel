@@ -29,10 +29,10 @@ The fused track: one row per object the platform knows about. Feeds update it th
 | `classification` | `VARCHAR(50)` | `'UNCLASSIFIED'` | Security classification |
 | `exercise` | `BOOLEAN` | `FALSE` | Synthetic (exercise or simulation) mark; sticky (`e.exercise OR b.exercise`), also set when a duplicate or stale exercise report resolves to the entity, and never cleared |
 | `position` | `geometry(Point, 4326)` | `NULL` | WGS84 point |
-| `altitude`, `heading`, `"speedKnots"`, `course`, `pitch`, `roll` | `DOUBLE PRECISION` | `NULL` | Last accepted kinematics |
-| `kinematics` | `JSONB` | `{}` | Velocity, acceleration and covariance of the last fix |
-| `"platformData"` | `JSONB` | `{}` | Platform detail (ADS-B, AIS, TLE, CoT, Link 16) |
-| `"trackEnvironment"`, `affiliation`, `"operationalStatus"`, `"countryOfOrigin"` | `VARCHAR` | | Classification attributes |
+| `altitude`, `heading`, `"speedKnots"`, `course`, `pitch`, `roll`, `"circularError"` | `DOUBLE PRECISION` | `NULL` | Last accepted kinematics and 95th-percentile horizontal circular error radius (`"circularError"`, metres; derived from the 95% error ellipse or 2×2 North-East covariance via exact bivariate-normal $R_{95}$ when not given directly; cleared to `NULL` when a fix without covariance or CE replaces a covariance-backed fix, while scalar CE from non-covariance feeds is preserved across fixes without CE) |
+| `kinematics` | `JSONB` | `{}` | Velocity, acceleration and `positionCovariance` (`pnPn`, `pnPe`, `pnPu`, `pePe`, `pePu`, `puPu` in m²) of the last fix; cleared to `{}` when a new fix arrives without them |
+| `"platformData"` | `JSONB` | `{}` | Platform detail (ADS-B, AIS, TLE, CoT, Link 16, UAV, RF) |
+| `"trackEnvironment"`, `affiliation`, `"operationalStatus"`, `"countryOfOrigin"` | `VARCHAR` | | Classification attributes (`affiliation` defaults to `'UNKNOWN'` on creation and updates with each non-empty feed report via `COALESCE(NULLIF(b.affiliation, ''), e.affiliation)`) |
 | `"ageoutState"` | `VARCHAR(20)` | `'LIVE'` | LIVE, STALE or AGED_OUT |
 | `"lastObservedAt"` | `TIMESTAMPTZ` | `NULL` | Source timestamp of the last accepted observation; a fix older than it is rejected as `STALE_FIX` |
 | `"lastSeenAt"` | `TIMESTAMPTZ` | `NULL` | When the last report arrived |

@@ -71,7 +71,7 @@ func TestValidateAcceptsSeedConfigs(t *testing.T) {
 		"tcp2":       `{"mode": "connect", "host": "feeds.example", "port": 7000, "format": "cot", "tls": {"enabled": true}}`,
 		"tcp3":       `{"mode": "listen", "port": 6000, "maxMessagesPerSec": 1000, "maxMessagesPerSecPerSender": 50}`,
 		"grpc":       `{"port": 6200}`,
-		"grpc2":      `{"port": 6200, "exercise": true}`,
+		"grpc2":      `{"port": 6200, "exercise": true, "military": true}`,
 		"udp":        `{"port": 10110, "format": "nmea-ais"}`,
 		"udp2":       `{"port": 10111, "encoding": "json", "allow": ["10.0.0.0/8", "192.0.2.7"], "maxMessageBytes": 1500, "maxMessagesPerSec": 0}`,
 		"udp3":       `{"port": 10112, "maxMessagesPerSec": 1000, "maxMessagesPerSecPerSender": 50}`,

@@ -30,8 +30,15 @@ func TestEntityProtoMapsRow(t *testing.T) {
 		ID: "e1", EntityType: "AIRCRAFT", Name: "UAL123", Source: "OPENSKY", Classification: "UNCLASSIFIED", FeedID: &feed,
 		Position: &store.GeoPoint{Lat: 41.9, Lon: -87.9}, Altitude: &alt, Heading: &hdg, CircularError: &ce,
 		Metadata: map[string]interface{}{"k": "v", "n": 1.0}, Affiliations: nil, TrackEnvironment: &env,
-		Kinematics:   map[string]interface{}{"velocity": map[string]interface{}{"north": 1.5, "east": -2.0, "up": 0.0}},
-		PlatformData: map[string]interface{}{"adsb": map[string]interface{}{"icao_hex": "A1B2C3", "squawk": "1200"}, "ais": map[string]interface{}{"mmsi": "123", "navStatus": "MOORED"}},
+		Kinematics: map[string]interface{}{
+			"velocity":           map[string]interface{}{"north": 1.5, "east": -2.0, "up": 0.0},
+			"positionCovariance": map[string]interface{}{"pnPn": 400.0, "pnPe": -50.0, "pePe": 100.0},
+		},
+		PlatformData: map[string]interface{}{
+			"adsb": map[string]interface{}{"icao_hex": "A1B2C3", "squawk": "1200"},
+			"ais":  map[string]interface{}{"mmsi": "123", "navStatus": "MOORED"},
+			"rf":   map[string]interface{}{"frequencyHz": 9.41e9, "bandwidthHz": 20e6, "emitterType": "RADAR_SEARCH", "modulation": "PULSE", "priUs": 1000.0, "pulseWidthUs": 1.5, "scanType": "CIRCULAR", "powerDbm": -62.0},
+		},
 		AgeoutState:  "LIVE", CreatedAt: "2026-10-15 12:00:00+00", UpdatedAt: "2026-10-15 12:00:01+00", LastSeenAt: &last, LastObservedAt: &last,
 		Exercise: true,
 	}
@@ -45,10 +52,12 @@ func TestEntityProtoMapsRow(t *testing.T) {
 	if e.Metadata["k"] != "v" || e.Metadata["n"] != "1" || len(e.Affiliations) != 0 || e.FeedId != "opensky" {
 		t.Errorf("metadata/affiliations/feed = %v %v %q", e.Metadata, e.Affiliations, e.FeedId)
 	}
-	if e.Kinematics == nil || e.Kinematics.Velocity.East != -2 {
+	if e.Kinematics == nil || e.Kinematics.Velocity.East != -2 || e.Kinematics.PositionCovariance == nil || e.Kinematics.PositionCovariance.PnPn != 400 || e.Kinematics.PositionCovariance.PnPe != -50 || e.Kinematics.PositionCovariance.PePe != 100 {
 		t.Errorf("kinematics = %v", e.Kinematics)
 	}
-	if e.Platforms["adsb"].GetAdsb().IcaoHex != "A1B2C3" || e.Platforms["ais"].GetAis().NavStatus != sentinelv1.NavigationalStatus_NAVIGATIONAL_STATUS_MOORED {
+	rf := e.Platforms["rf"].GetRf()
+	if e.Platforms["adsb"].GetAdsb().IcaoHex != "A1B2C3" || e.Platforms["ais"].GetAis().NavStatus != sentinelv1.NavigationalStatus_NAVIGATIONAL_STATUS_MOORED ||
+		rf == nil || rf.FrequencyHz != 9.41e9 || rf.GetBandwidthHz() != 20e6 || rf.EmitterType != "RADAR_SEARCH" || rf.GetPriUs() != 1000 || rf.GetPowerDbm() != -62 {
 		t.Errorf("platforms = %v", e.Platforms)
 	}
 	if !e.Exercise {

@@ -502,4 +502,72 @@ describe('EntityDetailPanelComponent', () => {
       expect(el.querySelector('.path-range')).toBeNull();
     });
   });
+
+  describe('RF section', () => {
+    const signalEntity = (rf: Record<string, unknown>) =>
+      makeEntity({ entityType: EntityType.SIGNAL, name: 'EMITTER-1', platformData: { rf } as any });
+    const rfRows = () =>
+      Array.from(el.querySelectorAll('.field-row')).map((r) => `${r.querySelector('.field-label')?.textContent?.trim()}: ${r.querySelector('.field-value')?.textContent?.trim()}`);
+
+    it('opens by default when platformData.rf is present and formats frequency, bandwidth, PRI/PRF, scan and power', () => {
+      fixture.componentRef.setInput(
+        'entity',
+        signalEntity({
+          frequencyHz: 9_410_000_000,
+          bandwidthHz: 25_000_000,
+          emitterType: 'RADAR_SEARCH',
+          modulation: 'PULSE',
+          priUs: 400,
+          pulseWidthUs: 1.2,
+          scanType: 'CIRCULAR',
+          scanRateRpm: 12,
+          powerDbm: -62,
+        }),
+      );
+      fixture.detectChanges();
+
+      const section = el.querySelector('[data-section="platformDetails"]') as HTMLElement;
+      expect(section.getAttribute('aria-expanded')).toBe('true');
+      expect(section.querySelector('.section-label')?.textContent?.trim()).toBe('RF');
+
+      const r = rfRows();
+      expect(r).toContain('Frequency: 9.41 GHz');
+      expect(r).toContain('Bandwidth: 25 MHz');
+      expect(r).toContain('Emitter Type: RADAR_SEARCH');
+      expect(r).toContain('Modulation: PULSE');
+      expect(r).toContain('PRI / PRF: 400 µs (2.5 kHz)');
+      expect(r).toContain('Pulse Width: 1.2 µs');
+      expect(r).toContain('Scan: CIRCULAR · 12 rpm');
+      expect(r).toContain('Power: -62 dBm');
+
+      // When collapsed, summary shows frequency and emitter type
+      section.click();
+      fixture.detectChanges();
+      expect(section.querySelector('.section-summary')?.textContent?.trim()).toBe('9.41 GHz · RADAR_SEARCH');
+    });
+
+    it('omits absent or zero RF fields except zero powerDbm', () => {
+      fixture.componentRef.setInput(
+        'entity',
+        signalEntity({
+          frequencyHz: 450,
+          bandwidthHz: 0,
+          priUs: 0,
+          pulseWidthUs: 0,
+          scanType: 'SECTOR',
+          scanRateRpm: 0,
+          powerDbm: 0,
+        }),
+      );
+      fixture.detectChanges();
+
+      const r = rfRows();
+      expect(r).toContain('Frequency: 450 Hz');
+      expect(r).toContain('Scan: SECTOR');
+      expect(r).toContain('Power: 0 dBm');
+      expect(r.some((row) => row.startsWith('Bandwidth:'))).toBe(false);
+      expect(r.some((row) => row.startsWith('PRI / PRF:'))).toBe(false);
+      expect(r.some((row) => row.startsWith('Pulse Width:'))).toBe(false);
+    });
+  });
 });

@@ -206,12 +206,19 @@ func sampleEntity() *sentinelv1.Entity {
 	alt, spd := 9000.0, 400.0
 	return &sentinelv1.Entity{
 		Id: "e1", EntityType: sentinelv1.EntityType_ENTITY_TYPE_AIRCRAFT, Name: "UAL1", Source: sentinelv1.EntitySource_ENTITY_SOURCE_ADSB_LOL,
-		Classification: sentinelv1.Classification_CLASSIFICATION_UNCLASSIFIED, FeedId: "adsb-lol", AgeoutState: sentinelv1.AgeoutState_AGEOUT_STATE_LIVE,
+		Classification: sentinelv1.Classification_CLASSIFICATION_UNCLASSIFIED, Affiliation: sentinelv1.Affiliation_AFFILIATION_HOSTILE,
+		FeedId: "adsb-lol", LastFeedId: "ew-1", AgeoutState: sentinelv1.AgeoutState_AGEOUT_STATE_LIVE,
 		Position: &sentinelv1.Coordinate{Latitude: 1.5, Longitude: 2.5, AltitudeMeters: &alt}, SpeedKnots: &spd,
-		Kinematics: &sentinelv1.KinematicState{Velocity: &sentinelv1.GeodeticVelocity{North: 100.5, East: -20}},
+		Kinematics: &sentinelv1.KinematicState{
+			Velocity:           &sentinelv1.GeodeticVelocity{North: 100.5, East: -20},
+			PositionCovariance: &sentinelv1.PositionCovariance{PnPn: 500, PnPe: 25, PePe: 200},
+		},
 		Identities: []*sentinelv1.Identity{{Type: sentinelv1.IdentityType_IDENTITY_TYPE_ICAO24, Value: "A1B2C3"}},
-		Platforms:  map[string]*sentinelv1.PlatformDetail{"adsb": {Detail: &sentinelv1.PlatformDetail_Adsb{Adsb: &sentinelv1.AdsbDetail{IcaoHex: "A1B2C3", Squawk: "1200"}}}},
-		CreatedAt:  timestamppb.New(time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)), LastSeenAt: timestamppb.New(time.Date(2026, 10, 14, 0, 0, 5, 0, time.UTC)),
+		Platforms: map[string]*sentinelv1.PlatformDetail{
+			"adsb": {Detail: &sentinelv1.PlatformDetail_Adsb{Adsb: &sentinelv1.AdsbDetail{IcaoHex: "A1B2C3", Squawk: "1200"}}},
+			"rf":   {Detail: &sentinelv1.PlatformDetail_Rf{Rf: &sentinelv1.RfDetail{FrequencyHz: 9.41e9, EmitterType: "RADAR_SEARCH"}}},
+		},
+		CreatedAt:      timestamppb.New(time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)), LastSeenAt: timestamppb.New(time.Date(2026, 10, 14, 0, 0, 5, 0, time.UTC)),
 		LastObservedAt: timestamppb.New(time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)),
 	}
 }
@@ -241,14 +248,16 @@ func TestBridge_EntityEventsFromProto(t *testing.T) {
 		t.Errorf("e1 timestamps = %s %s %s", e1.Timestamp, e1.Entity.LastSeenAt, e1.Entity.CreatedAt)
 	}
 	velocity, _ := e1.Entity.Kinematics["velocity"].(map[string]interface{})
-	if velocity == nil || velocity["north"] != 100.5 || velocity["east"] != -20.0 {
+	posCov, _ := e1.Entity.Kinematics["positionCovariance"].(map[string]interface{})
+	if velocity == nil || velocity["north"] != 100.5 || velocity["east"] != -20.0 || posCov == nil || posCov["pnPn"] != 500.0 || posCov["pnPe"] != 25.0 || posCov["pePe"] != 200.0 {
 		t.Errorf("kinematics = %v", e1.Entity.Kinematics)
 	}
 	adsb, _ := e1.Entity.PlatformData["adsb"].(map[string]interface{})
-	if adsb == nil || adsb["icaoHex"] != "A1B2C3" || adsb["squawk"] != "1200" {
+	rf, _ := e1.Entity.PlatformData["rf"].(map[string]interface{})
+	if adsb == nil || adsb["icaoHex"] != "A1B2C3" || adsb["squawk"] != "1200" || rf == nil || rf["frequencyHz"] != 9.41e9 || rf["emitterType"] != "RADAR_SEARCH" {
 		t.Errorf("platformData = %v", e1.Entity.PlatformData)
 	}
-	if e1.Entity.FeedID != "adsb-lol" || e1.Entity.AgeoutState != "LIVE" || len(e1.Entity.Identities) != 1 || e1.Entity.Identities[0].Value != "A1B2C3" {
+	if e1.Entity.FeedID != "adsb-lol" || e1.Entity.LastFeedID != "ew-1" || e1.Entity.Affiliation != "HOSTILE" || e1.Entity.AgeoutState != "LIVE" || len(e1.Entity.Identities) != 1 || e1.Entity.Identities[0].Value != "A1B2C3" {
 		t.Errorf("provenance = %+v", e1.Entity)
 	}
 	if e2.Type != "created" || e2.Entity.Name != "Boat" || e2.Entity.Position.Altitude != nil || e2.Entity.CreatedAt != "2026-10-14T01:00:00Z" || e2.Entity.Kinematics != nil {

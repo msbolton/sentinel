@@ -27,6 +27,7 @@ type FusedUpdate struct {
 	Course           *float64
 	TrackEnvironment string
 	CountryOfOrigin  string
+	Affiliation      string
 	CircularError    *float64
 	Platform         json.RawMessage // {"adsb": {...}} merged into platformData
 	Kinematics       json.RawMessage // {"velocity": {...}, "acceleration": {...}}
@@ -65,15 +66,15 @@ func (s *EntityStore) ApplyFused(ctx context.Context, updates []FusedUpdate) ([]
 	if len(updates) == 0 {
 		return nil, nil
 	}
-	const params = 21
+	const params = 22
 	values := make([]string, 0, len(updates))
 	args := make([]interface{}, 0, len(updates)*params)
 	ids := make([]string, 0, len(updates))
 	for i, u := range updates {
 		b := i * params
 		values = append(values, fmt.Sprintf(
-			"($%d::uuid, $%d::timestamptz, $%d::text, $%d::text, $%d::text, $%d::text, $%d::text, $%d::text, $%d::double precision, $%d::double precision, $%d::double precision, $%d::double precision, $%d::double precision, $%d::double precision, $%d::text, $%d::text, $%d::double precision, $%d::jsonb, $%d::jsonb, $%d::text, $%d::boolean)",
-			b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8, b+9, b+10, b+11, b+12, b+13, b+14, b+15, b+16, b+17, b+18, b+19, b+20, b+21))
+			"($%d::uuid, $%d::timestamptz, $%d::text, $%d::text, $%d::text, $%d::text, $%d::text, $%d::text, $%d::double precision, $%d::double precision, $%d::double precision, $%d::double precision, $%d::double precision, $%d::double precision, $%d::text, $%d::text, $%d::double precision, $%d::jsonb, $%d::jsonb, $%d::text, $%d::boolean, $%d::text)",
+			b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8, b+9, b+10, b+11, b+12, b+13, b+14, b+15, b+16, b+17, b+18, b+19, b+20, b+21, b+22))
 		var platform, kinematics interface{}
 		if len(u.Platform) > 0 {
 			platform = string(u.Platform)
@@ -83,7 +84,7 @@ func (s *EntityStore) ApplyFused(ctx context.Context, updates []FusedUpdate) ([]
 		}
 		args = append(args, u.EntityID, u.ObservedAt, u.FeedID, u.Source, u.SourceEntityID, u.KeyType, u.KeyValue, u.Name,
 			u.Lon, u.Lat, u.Altitude, u.Heading, u.SpeedKnots, u.Course, u.TrackEnvironment, u.CountryOfOrigin, u.CircularError,
-			platform, kinematics, u.Classification, u.Exercise)
+			platform, kinematics, u.Classification, u.Exercise, u.Affiliation)
 		ids = append(ids, u.EntityID)
 	}
 	query := fmt.Sprintf(`
@@ -100,7 +101,12 @@ func (s *EntityStore) ApplyFused(ctx context.Context, updates []FusedUpdate) ([]
 		       course = COALESCE(b.course, e.course),
 		       "trackEnvironment" = COALESCE(NULLIF(b.track_env, ''), e."trackEnvironment"),
 		       "countryOfOrigin" = COALESCE(NULLIF(b.country, ''), e."countryOfOrigin"),
-		       "circularError" = COALESCE(b.circular_err, e."circularError"),
+		       affiliation = COALESCE(NULLIF(b.affiliation, ''), e.affiliation),
+		       "circularError" = CASE
+		           WHEN b.circular_err IS NOT NULL THEN b.circular_err
+		           WHEN b.kinematics IS NOT NULL AND (e.kinematics ? 'positionCovariance') AND NOT (b.kinematics ? 'positionCovariance') THEN NULL
+		           ELSE e."circularError"
+		       END,
 		       "platformData" = COALESCE(e."platformData", '{}'::jsonb) || COALESCE(b.platform, '{}'::jsonb),
 		       kinematics = COALESCE(b.kinematics, e.kinematics),
 		       name = CASE WHEN e."feedId" = 'manual' OR b.name = '' THEN e.name ELSE b.name END,
@@ -112,7 +118,7 @@ func (s *EntityStore) ApplyFused(ctx context.Context, updates []FusedUpdate) ([]
 		       "primaryIdentityValue" = b.key_value,
 		       "lastSeenAt" = NOW(),
 		       "ageoutState" = 'LIVE'
-		  FROM (VALUES %s) AS b(id, observed_at, feed_id, source, source_entity_id, key_type, key_value, name, lng, lat, altitude, heading, speed_knots, course, track_env, country, circular_err, platform, kinematics, classification, exercise)
+		  FROM (VALUES %s) AS b(id, observed_at, feed_id, source, source_entity_id, key_type, key_value, name, lng, lat, altitude, heading, speed_knots, course, track_env, country, circular_err, platform, kinematics, classification, exercise, affiliation)
 		 WHERE e.id = b.id AND e.deleted = false
 		   AND (e."lastObservedAt" IS NULL OR b.observed_at >= e."lastObservedAt")
 		RETURNING %s, (SELECT p."ageoutState" FROM prev p WHERE p.id = e.id), (SELECT p.classification FROM prev p WHERE p.id = e.id)`,

@@ -140,6 +140,17 @@
             }
           </div>
 
+          <div class="field" data-pointer="/config/military">
+            <label class="check" for="feed-military">
+              <input id="feed-military" type="checkbox" formControlName="military" />
+              <span>Military source</span>
+            </label>
+            <p class="help">Draw entities from this connection with MIL-STD-2525D tactical symbols on the map.</p>
+            @for (msg of configProblemsFor('military'); track msg) {
+              <p class="error">Server: {{ msg }}</p>
+            }
+          </div>
+
           @if (driverCanNarrow()) {
             <div class="field" data-pointer="/config/direction">
               <label for="feed-direction">Direction</label>

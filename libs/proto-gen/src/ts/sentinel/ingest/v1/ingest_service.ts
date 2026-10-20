@@ -103,7 +103,8 @@ export interface UpsertEmplacementResponse {
 /**
  * Report is one thing a sender says: an observation, or a mobile
  * emplacement's own position. client_ref comes back on the ack.
- * emplacement_id names the emplacement the report comes from; the service
+ * emplacement_id names the emplacement the report comes from (matched
+ * case-insensitively, ignoring surrounding whitespace); the service
  * checks it against the emplacements bound to the connection (an empty one
  * means the connection's only emplacement, when it has exactly one).
  * For an emplacement_state body, its own emplacement_id must be empty or
@@ -119,7 +120,10 @@ export interface Report {
 export interface Ack {
   clientRef: string;
   status: AckStatus;
-  /** Why a report was not accepted: unknown_emplacement, stale_ownship, … */
+  /**
+   * Why a report was not accepted: unknown_emplacement, stale_ownship,
+   * clock_skew (EmplacementState.time >5s ahead of or >60s behind server time), …
+   */
   reason: string;
 }
 

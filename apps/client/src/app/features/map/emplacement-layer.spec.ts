@@ -1,4 +1,5 @@
-import { emplacementDrawingOf, placementOf } from './emplacement-layer';
+import { EmplacementLayer, emplacementDrawingOf, placementOf } from './emplacement-layer';
+import { locationDotDataUrl } from './location-dot';
 
 const fixed = { id: 'f', mobility: 'FIXED' as const, position: { lat: 50, lon: -4 }, boresightDeg: 270, azimuthReference: 'TRUE_NORTH' as const };
 const ship = { id: 's', mobility: 'MOBILE' as const, position: { lat: 1, lon: 1 }, boresightDeg: 90, azimuthReference: 'PLATFORM' as const };
@@ -39,5 +40,89 @@ describe('emplacementDrawingOf', () => {
 
   it('draws an entity with no emplacement identity as an ordinary entity', () => {
     expect(emplacementDrawingOf(sensor(), loaded)).toBeNull();
+  });
+});
+
+describe('EmplacementLayer', () => {
+  it('renders an emplacement marker as a violet location-dot billboard instead of a point', () => {
+    const added: any[] = [];
+    const viewer = {
+      entities: {
+        add: (cfg: any) => {
+          added.push(cfg);
+          return cfg;
+        },
+        remove: jest.fn(),
+      },
+      scene: { requestRender: jest.fn() },
+      isDestroyed: () => false,
+    };
+    const Cesium = {
+      Color: {
+        fromCssColorString: (css: string) => ({ css, withAlpha: (a: number) => ({ css, a }) }),
+        BLACK: 'black',
+      },
+      Cartesian3: { fromDegrees: (lon: number, lat: number, h: number) => ({ lon, lat, h }) },
+      Cartesian2: function (x: number, y: number) {
+        return { x, y };
+      },
+      NearFarScalar: function (...args: number[]) {
+        return args;
+      },
+      CallbackProperty: function (fn: () => unknown) {
+        return fn;
+      },
+      HeightReference: { CLAMP_TO_GROUND: 'CLAMP_TO_GROUND' },
+      LabelStyle: { FILL_AND_OUTLINE: 'FILL_AND_OUTLINE' },
+      HorizontalOrigin: { LEFT: 'LEFT' },
+      VerticalOrigin: { CENTER: 'CENTER', BOTTOM: 'BOTTOM' },
+    };
+
+    const emp = {
+      id: 'emp-1',
+      name: 'EW Hilltop',
+      description: '',
+      sensorType: 'RF' as const,
+      mobility: 'FIXED' as const,
+      position: { lat: 50.8, lon: -1.1 },
+      altitude: null,
+      boresightDeg: 180,
+      azimuthReference: 'TRUE_NORTH' as const,
+      coverage: { minRangeM: 0, maxRangeM: 50000, azimuthWidthDeg: 120 },
+      defaultSigma: {},
+      feedId: null,
+      classification: 'UNCLASSIFIED',
+      exercise: false,
+      active: true,
+      lastReportAt: null,
+      createdBy: 'admin',
+      createdAt: '2026-10-20T00:00:00Z',
+      updatedAt: '2026-10-20T00:00:00Z',
+      version: 1,
+    };
+
+    const layer = new EmplacementLayer(viewer, Cesium);
+    layer.sync([emp], null, null, false, () => null);
+
+    expect(added).toHaveLength(1);
+    expect(added[0].point).toBeUndefined();
+    expect(added[0].billboard).toEqual(
+      expect.objectContaining({
+        image: locationDotDataUrl('#8b5cf6'),
+        scale: 0.7,
+        heightReference: 'CLAMP_TO_GROUND',
+        verticalOrigin: 'CENTER',
+      }),
+    );
+    expect(added[0].label.pixelOffset).toEqual({ x: 14, y: -6 });
+
+    // Selecting scales the billboard up to 0.9, and mobile uses a dashed outer ring
+    added.length = 0;
+    layer.sync([emp], 'emp-1', null, false, () => null);
+    expect(added[0].billboard.scale).toBe(0.9);
+
+    added.length = 0;
+    layer.sync([{ ...emp, id: 'emp-2', mobility: 'MOBILE' }], null, null, false, () => null);
+    expect(added[0].billboard.image).toBe(locationDotDataUrl('#8b5cf6', { dashed: true }));
   });
 });

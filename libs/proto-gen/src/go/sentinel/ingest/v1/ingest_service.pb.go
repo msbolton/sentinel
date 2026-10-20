@@ -376,7 +376,8 @@ func (x *UpsertEmplacementResponse) GetEmplacement() *v1.Emplacement {
 
 // Report is one thing a sender says: an observation, or a mobile
 // emplacement's own position. client_ref comes back on the ack.
-// emplacement_id names the emplacement the report comes from; the service
+// emplacement_id names the emplacement the report comes from (matched
+// case-insensitively, ignoring surrounding whitespace); the service
 // checks it against the emplacements bound to the connection (an empty one
 // means the connection's only emplacement, when it has exactly one).
 // For an emplacement_state body, its own emplacement_id must be empty or
@@ -483,7 +484,8 @@ type Ack struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	ClientRef string                 `protobuf:"bytes,1,opt,name=client_ref,json=clientRef,proto3" json:"client_ref,omitempty"`
 	Status    AckStatus              `protobuf:"varint,2,opt,name=status,proto3,enum=sentinel.ingest.v1.AckStatus" json:"status,omitempty"`
-	// Why a report was not accepted: unknown_emplacement, stale_ownship, …
+	// Why a report was not accepted: unknown_emplacement, stale_ownship,
+	// clock_skew (EmplacementState.time >5s ahead of or >60s behind server time), …
 	Reason        string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

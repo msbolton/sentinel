@@ -259,9 +259,15 @@ export class EntityService implements OnDestroy {
 
     switch (event.type) {
       case 'created':
-      case 'updated':
-        map.set(event.entity.id, event.entity);
+      case 'updated': {
+        const prev = map.get(event.entity.id);
+        const merged =
+          prev && event.entity.affiliation == null && prev.affiliation != null
+            ? { ...event.entity, affiliation: prev.affiliation }
+            : event.entity;
+        map.set(event.entity.id, merged);
         break;
+      }
       case 'deleted':
         map.delete(event.entity.id);
         break;

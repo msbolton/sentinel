@@ -40,6 +40,9 @@ type IngestServiceClient interface {
 	ListEmplacements(ctx context.Context, in *ListEmplacementsRequest, opts ...grpc.CallOption) (*ListEmplacementsResponse, error)
 	// UpsertEmplacement creates or updates an emplacement bound to the
 	// connection; refused unless the connection allows sender-managed ones.
+	// An id (or name when id is empty or unknown) is matched case-insensitively
+	// (ignoring surrounding whitespace) against sender-managed emplacements on
+	// this connection.
 	UpsertEmplacement(ctx context.Context, in *UpsertEmplacementRequest, opts ...grpc.CallOption) (*UpsertEmplacementResponse, error)
 	// StreamReports takes reports and answers each with an ack.
 	StreamReports(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamReportsRequest, StreamReportsResponse], error)
@@ -122,6 +125,9 @@ type IngestServiceServer interface {
 	ListEmplacements(context.Context, *ListEmplacementsRequest) (*ListEmplacementsResponse, error)
 	// UpsertEmplacement creates or updates an emplacement bound to the
 	// connection; refused unless the connection allows sender-managed ones.
+	// An id (or name when id is empty or unknown) is matched case-insensitively
+	// (ignoring surrounding whitespace) against sender-managed emplacements on
+	// this connection.
 	UpsertEmplacement(context.Context, *UpsertEmplacementRequest) (*UpsertEmplacementResponse, error)
 	// StreamReports takes reports and answers each with an ack.
 	StreamReports(grpc.BidiStreamingServer[StreamReportsRequest, StreamReportsResponse]) error

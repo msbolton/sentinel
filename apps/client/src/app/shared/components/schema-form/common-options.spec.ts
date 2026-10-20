@@ -9,7 +9,7 @@ const server: JsonSchema = JSON.parse(
 );
 
 /** Options of common.json that the connection form owns, so the schema form builds no field for them. */
-const CONNECTION_FORM_OWNS = ['classification', 'exercise', 'direction', 'policy'];
+const CONNECTION_FORM_OWNS = ['classification', 'exercise', 'military', 'direction', 'policy'];
 
 /** Keywords that carry wording or structure rather than a limit: the copy may word an option its own way. */
 const NOT_LIMITS = ['$schema', '$id', '$comment', 'title', 'description', 'examples', 'properties', 'additionalProperties'];

@@ -137,6 +137,7 @@ func SpecFor(r *Report) identity.NewEntity {
 		SourceEntityID:   o.SourceEntityId,
 		TrackEnvironment: enumOrEmpty(o.TrackEnvironment),
 		CountryOfOrigin:  o.CountryOfOrigin,
+		Affiliation:      enumOrEmpty(o.Affiliation),
 		Classification:   enumOrEmpty(o.Classification),
 		Exercise:         o.GetExercise(),
 		SeenAt:           r.ReceivedAt,

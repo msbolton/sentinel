@@ -1,11 +1,13 @@
 package wire
 
 import (
+	"math"
 	"reflect"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/sentinel/go-common/geo"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
 	"github.com/sentinel/ingest-service/internal/obs"
@@ -38,6 +40,18 @@ func TestFromProtoRoundTripsEveryPlatform(t *testing.T) {
 			o.Link16 = &obs.Link16Data{TrackNumber: 1234, JSeriesLabel: "J3.2", Quality: 7}
 		},
 		"uav": func(o *obs.Observation) { o.ADSB = nil; o.UAV = &obs.UAVData{Make: "DJI", Model: "M300"} },
+		"rf": func(o *obs.Observation) {
+			o.ADSB = nil
+			bw, pri, pw, pwr := 20e6, 1000.0, 1.5, -62.0
+			o.RF = &obs.RFData{
+				FrequencyHz: 9.41e9, BandwidthHz: &bw, EmitterType: "RADAR_SEARCH",
+				Modulation: "PULSE", PriUs: &pri, PulseWidthUs: &pw, ScanType: "CIRCULAR", PowerDbm: &pwr,
+			}
+		},
+		"rf minimal": func(o *obs.Observation) {
+			o.ADSB = nil
+			o.RF = &obs.RFData{FrequencyHz: 1.2e9, EmitterType: "SATCOM"}
+		},
 		"kinematics": func(o *obs.Observation) {
 			o.SpeedKnots, o.Course = &speed, &course
 			o.Acceleration = &[3]float64{0.1, 0.2, 0.3}
@@ -95,6 +109,13 @@ func fill(t *testing.T, v any) {
 			f.SetFloat(float64(i) + 0.5)
 		case reflect.Bool:
 			f.SetBool(true)
+		case reflect.Pointer:
+			if f.Type().Elem().Kind() == reflect.Float64 {
+				val := float64(i) + 0.25
+				f.Set(reflect.ValueOf(&val))
+				continue
+			}
+			fallthrough
 		default:
 			t.Fatalf("fill: unhandled kind %s for %s", f.Kind(), s.Type().Field(i).Name)
 		}
@@ -102,19 +123,78 @@ func fill(t *testing.T, v any) {
 }
 
 func TestFromProtoCopiesEveryPlatformField(t *testing.T) {
-	adsb, ais, tle, l16, cot, uav := &obs.ADSBData{}, &obs.AISData{}, &obs.TLEData{}, &obs.Link16Data{}, &obs.CoTData{}, &obs.UAVData{}
-	for _, d := range []any{adsb, ais, tle, l16, cot, uav} {
+	adsb, ais, tle, l16, cot, uav, rf := &obs.ADSBData{}, &obs.AISData{}, &obs.TLEData{}, &obs.Link16Data{}, &obs.CoTData{}, &obs.UAVData{}, &obs.RFData{}
+	for _, d := range []any{adsb, ais, tle, l16, cot, uav, rf} {
 		fill(t, d)
 	}
 	ais.NavStatus = "MOORED" // an enum, so it must be a declared name
 	for name, o := range map[string]*obs.Observation{
-		"adsb": {ADSB: adsb}, "ais": {AIS: ais}, "tle": {TLE: tle}, "link16": {Link16: l16}, "cot": {CoT: cot}, "uav": {UAV: uav},
+		"adsb": {ADSB: adsb}, "ais": {AIS: ais}, "tle": {TLE: tle}, "link16": {Link16: l16}, "cot": {CoT: cot}, "uav": {UAV: uav}, "rf": {RF: rf},
 	} {
 		got := FromProto(ToProto(o))
 		if !reflect.DeepEqual(got.ADSB, o.ADSB) || !reflect.DeepEqual(got.AIS, o.AIS) || !reflect.DeepEqual(got.TLE, o.TLE) ||
-			!reflect.DeepEqual(got.Link16, o.Link16) || !reflect.DeepEqual(got.CoT, o.CoT) || !reflect.DeepEqual(got.UAV, o.UAV) {
+			!reflect.DeepEqual(got.Link16, o.Link16) || !reflect.DeepEqual(got.CoT, o.CoT) || !reflect.DeepEqual(got.UAV, o.UAV) ||
+			!reflect.DeepEqual(got.RF, o.RF) {
 			t.Errorf("%s: platform detail differs\nwant %+v\ngot  %+v", name, o, got)
 		}
+	}
+}
+
+func TestFromProtoConvertsEllipseToCovarianceAndDerivesCEP95(t *testing.T) {
+	m := &sentinelv1.Observation{
+		SourceEntityId: "sig-1",
+		Uncertainty:    &sentinelv1.MeasurementUncertainty{SemiMajor: 1800, SemiMinor: 420, Orientation: 32},
+	}
+	o := FromProto(m)
+	if o.PosCovariance == nil {
+		t.Fatal("expected PosCovariance to be populated from Uncertainty ellipse")
+	}
+	wantNN, wantNE, wantEE := geo.Cov2FromEllipse(1800, 420, 32)
+	if math.Abs(o.PosCovariance[0]-wantNN) > 1e-6 || math.Abs(o.PosCovariance[1]-wantNE) > 1e-6 || math.Abs(o.PosCovariance[3]-wantEE) > 1e-6 {
+		t.Errorf("PosCovariance = %v, want [%v, %v, 0, %v, 0, 0]", o.PosCovariance, wantNN, wantNE, wantEE)
+	}
+	wantCEP := geo.CEP95(wantNN, wantNE, wantEE)
+	if o.CircularError == nil || math.Abs(*o.CircularError-wantCEP) > 1e-6 || *o.CircularError < 1450 || *o.CircularError > 1500 {
+		t.Errorf("CircularError = %v, want %v (in [1450, 1500])", o.CircularError, wantCEP)
+	}
+
+	// Explicit PositionCovariance wins over Uncertainty ellipse axes, while still deriving 95% CEP when CircularError is 0.
+	m2 := &sentinelv1.Observation{
+		SourceEntityId:     "sig-2",
+		Uncertainty:        &sentinelv1.MeasurementUncertainty{SemiMajor: 1800, SemiMinor: 420, Orientation: 32},
+		PositionCovariance: &sentinelv1.PositionCovariance{PnPn: 10000, PePe: 10000},
+	}
+	o2 := FromProto(m2)
+	if o2.PosCovariance == nil || o2.PosCovariance[0] != 10000 || o2.PosCovariance[3] != 10000 {
+		t.Errorf("explicit PositionCovariance not preserved: %v", o2.PosCovariance)
+	}
+	if o2.CircularError == nil || math.Abs(*o2.CircularError-244.77) > 0.01 {
+		t.Errorf("CircularError from explicit covariance = %v, want 244.77", o2.CircularError)
+	}
+
+	// Swapped axes (semi_major < semi_minor): (420, 1800, 32) puts the 420 m
+	// axis along 32° and the 1800 m axis along 122°, so it must yield the
+	// exact same covariance and CEP95 as (1800, 420, 122).
+	mSwapped := &sentinelv1.Observation{
+		SourceEntityId: "sig-swapped",
+		Uncertainty:    &sentinelv1.MeasurementUncertainty{SemiMajor: 420, SemiMinor: 1800, Orientation: 32},
+	}
+	mRotated := &sentinelv1.Observation{
+		SourceEntityId: "sig-rotated",
+		Uncertainty:    &sentinelv1.MeasurementUncertainty{SemiMajor: 1800, SemiMinor: 420, Orientation: 122},
+	}
+	oSwapped := FromProto(mSwapped)
+	oRotated := FromProto(mRotated)
+	if oSwapped.PosCovariance == nil || oRotated.PosCovariance == nil {
+		t.Fatal("expected non-nil PosCovariance for swapped and rotated ellipses")
+	}
+	for i := 0; i < 6; i++ {
+		if math.Abs(oSwapped.PosCovariance[i]-oRotated.PosCovariance[i]) > 1e-6 {
+			t.Errorf("PosCovariance[%d]: swapped=%v, rotated=%v", i, oSwapped.PosCovariance[i], oRotated.PosCovariance[i])
+		}
+	}
+	if oSwapped.CircularError == nil || oRotated.CircularError == nil || math.Abs(*oSwapped.CircularError-*oRotated.CircularError) > 1e-6 {
+		t.Errorf("CircularError: swapped=%v, rotated=%v", oSwapped.CircularError, oRotated.CircularError)
 	}
 }
 

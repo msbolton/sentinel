@@ -27,6 +27,14 @@
             "icaoHex": "A1B2C3",
             "squawk": "1200"
           }
+        },
+        "rf": {
+          "rf": {
+            "emitterType": "RADAR_SEARCH",
+            "frequencyHz": 9410000000,
+            "modulation": "PULSE",
+            "priUs": 400
+          }
         }
       },
       "position": {
