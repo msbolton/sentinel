@@ -49,3 +49,16 @@ func TestReportNamesItsEmplacement(t *testing.T) {
 		t.Fatalf("Report.emplacement_id must be field 4, outside the body oneof: %v", f)
 	}
 }
+
+// The heartbeat contract: an emplacement's state declares its interval, and
+// an ack names the emplacement the report was resolved to.
+func TestHeartbeatFields(t *testing.T) {
+	f := (&sentinelv1.EmplacementState{}).ProtoReflect().Descriptor().Fields().ByName("heartbeat_interval_sec")
+	if f == nil || f.Number() != 7 || f.Kind() != protoreflect.Uint32Kind {
+		t.Fatalf("EmplacementState.heartbeat_interval_sec must be uint32 field 7: %v", f)
+	}
+	a := (&ingestv1.Ack{}).ProtoReflect().Descriptor().Fields().ByName("emplacement_id")
+	if a == nil || a.Number() != 4 || a.Kind() != protoreflect.StringKind {
+		t.Fatalf("Ack.emplacement_id must be string field 4: %v", a)
+	}
+}

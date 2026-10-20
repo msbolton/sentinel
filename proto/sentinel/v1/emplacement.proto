@@ -88,7 +88,11 @@ message Emplacement {
   google.protobuf.Timestamp updated_at = 15;
 }
 
-// EmplacementState is a mobile emplacement's own position report (ownship).
+// EmplacementState is an emplacement's heartbeat. Every emplacement bound to
+// a grpc connection sends one at least every heartbeat_interval_sec; three
+// missed intervals make it offline and its fixes are refused (no_heartbeat).
+// A mobile emplacement's state also carries its position (ownship); a fixed
+// one's position and time are ignored.
 message EmplacementState {
   string emplacement_id = 1;
   google.protobuf.Timestamp time = 2;
@@ -96,4 +100,7 @@ message EmplacementState {
   optional double heading = 4;
   GeodeticVelocity velocity = 5;
   Orientation orientation = 6;
+  // How often this emplacement heartbeats, in seconds: 1 to 300, 0 for the
+  // default of 10. A value above 300 refuses the state as bad_state.
+  uint32 heartbeat_interval_sec = 7;
 }
