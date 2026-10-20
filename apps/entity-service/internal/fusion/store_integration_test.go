@@ -485,3 +485,49 @@ func TestAffiliationStickyAndCovarianceCEPClears(t *testing.T) {
 		t.Fatalf("expected covariance-derived CE to clear when covariance clears, got %v (err=%v)", res[0].Record.CircularError, err)
 	}
 }
+
+// Review focus 3: a silent site's re-publish carries the same source time as
+// its last online one and still lands: the entity turns INACTIVE and its
+// generic detail is replaced, silentSince with it.
+func TestSiteStatusFollowsItsConnection(t *testing.T) {
+	pool, ctx := testPool(t)
+	ids := store.NewIdentityStore(pool, nil)
+	ents := store.NewEntityStore(pool, nil)
+	t0 := time.Now().UTC().Truncate(time.Millisecond)
+	icao := "TSO" + t0.Format("150405")
+	r1 := report("test-op", icao, t0, 41.9, -87.9)
+	created, _, err := ids.CreateEntities(ctx, []identity.NewEntity{fusion.SpecFor(r1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entityID := created[r1.Key]
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM sentinel.entities WHERE id = $1`, entityID)
+	})
+	apply := func(status, platform string, at time.Time) *store.EntityRecord {
+		t.Helper()
+		res, err := ents.ApplyFused(ctx, []store.FusedUpdate{{EntityID: entityID, ObservedAt: at, FeedID: "test-op", Source: "OPENSKY",
+			SourceEntityID: r1.Obs.SourceEntityId, KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "X", Lat: 1, Lon: 1,
+			OperationalStatus: status, Platform: json.RawMessage(platform)}})
+		if err != nil || len(res) != 1 {
+			t.Fatalf("apply %s = %+v %v", status, res, err)
+		}
+		return res[0].Record
+	}
+	rec := apply("OPERATIONAL", `{"generic":{"fields":{"heartbeat":"online"}}}`, t0)
+	if rec.OperationalStatus == nil || *rec.OperationalStatus != "OPERATIONAL" {
+		t.Fatalf("online: %v", rec.OperationalStatus)
+	}
+	rec = apply("INACTIVE", `{"generic":{"fields":{"heartbeat":"offline","silentSince":"x"}}}`, t0)
+	if rec.OperationalStatus == nil || *rec.OperationalStatus != "INACTIVE" {
+		t.Fatalf("a re-publish at the same time did not land: %v", rec.OperationalStatus)
+	}
+	rec = apply("", `{"generic":{"fields":{"heartbeat":"online"}}}`, t0.Add(time.Second))
+	if *rec.OperationalStatus != "INACTIVE" {
+		t.Fatalf("a report with no status changed it: %v", *rec.OperationalStatus)
+	}
+	fields, _ := rec.PlatformData["generic"].(map[string]interface{})["fields"].(map[string]interface{})
+	if _, ok := fields["silentSince"]; ok || fields["heartbeat"] != "online" {
+		t.Fatalf("generic detail = %v, want the newest one only", rec.PlatformData["generic"])
+	}
+}

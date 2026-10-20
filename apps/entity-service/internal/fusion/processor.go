@@ -284,6 +284,7 @@ func fusedUpdate(id string, r *Report) store.FusedUpdate {
 		TrackEnvironment: enumOrEmpty(o.TrackEnvironment), CountryOfOrigin: o.CountryOfOrigin, Affiliation: enumOrEmpty(o.Affiliation),
 		Platform: platformJSON(o), Kinematics: kinematicsJSON(o),
 		Classification: enumOrEmpty(o.Classification), Exercise: o.GetExercise(),
+		OperationalStatus: enumOrEmpty(o.OperationalStatus),
 	}
 	if o.Uncertainty != nil && o.Uncertainty.CircularError != 0 {
 		ce := o.Uncertainty.CircularError
