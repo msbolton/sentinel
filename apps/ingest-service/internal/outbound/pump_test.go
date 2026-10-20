@@ -122,6 +122,8 @@ func entityMsg(t *testing.T, eventType, id, feed string, lat float64, at time.Ti
 		ev.Event = &sentinelv1.EntityEvent_Created{Created: &sentinelv1.EntityCreated{Entity: e}}
 	case "position":
 		ev.Event = &sentinelv1.EntityEvent_Position{Position: &sentinelv1.EntityPosition{Entity: e}}
+	case "updated":
+		ev.Event = &sentinelv1.EntityEvent_Updated{Updated: &sentinelv1.EntityUpdated{Entity: e}}
 	case "deleted":
 		ev.Event = &sentinelv1.EntityEvent_Deleted{Deleted: &sentinelv1.EntityDeleted{}}
 	case "aged_out":
@@ -289,6 +291,57 @@ func TestPumpDeniesAlertsAboutExerciseEntities(t *testing.T) {
 			t.Fatalf("alerts=%d stats=%+v", alerts, p.Stats())
 		}
 	})
+}
+
+func TestPumpDeniesAlertsAboutRelatedExerciseEntities(t *testing.T) {
+	rec := newRecorder()
+	p, fc, _ := startPump(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{Boxes: []policy.Box{{North: 10, South: -10, East: 10, West: -10}}}, Context: policy.Context{SelfFeedID: "tak"}}, rec)
+	now := time.Now()
+	inBox := func(a *sentinelv1.Alert) { a.Position = &sentinelv1.Coordinate{Latitude: 1, Longitude: 0} }
+	related := func(ids ...string) func(*sentinelv1.Alert) {
+		return func(a *sentinelv1.Alert) { inBox(a); a.RelatedEntityIds = ids }
+	}
+	fc.deliver(t, entityMsg(t, "created", "ex", "sim", 1, now, exercise)) // denied, remembered
+	fc.deliver(t, alertMsg(t, "live", now, related("other", "ex")))       // about a live entity near an exercise one
+	fc.deliver(t, alertMsg(t, "live", now, related("other")))             // only live entities involved
+	rec.wait(t, 1)
+	rec.mu.Lock()
+	alerts := append([]*sentinelv1.AlertEvent(nil), rec.alerts...)
+	rec.mu.Unlock()
+	if len(alerts) != 1 || len(alerts[0].Alert.RelatedEntityIds) != 1 || p.Stats().Denied != 2 {
+		t.Fatalf("alerts=%v stats=%+v", alerts, p.Stats())
+	}
+}
+
+func TestPumpRemovesATrackedEntityAtOnceWhenItBecomesExercise(t *testing.T) {
+	rec := newRecorder()
+	box := []policy.Box{{North: 10, South: -10, East: 10, West: -10}}
+	// The grace period is long enough that only the immediate path can remove.
+	p, fc, _ := startPump(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{Boxes: box}, Context: policy.Context{SelfFeedID: "tak"}, ExitGrace: time.Hour}, rec)
+	now := time.Now()
+	fc.deliver(t, entityMsg(t, "created", "e1", "opensky", 1, now))
+	rec.wait(t, 1)
+	// A live entity gets one exercise report.
+	fc.deliver(t, entityMsg(t, "updated", "e1", "opensky", 1, now, exercise))
+	got := rec.wait(t, 2)
+	if len(got) != 2 || got[1].Kind != driver.RemoveEntity || got[1].EntityID != "e1" || got[1].Reason != "policy" {
+		t.Fatalf("updates = %+v", got)
+	}
+	if st := p.Stats(); st.Tracked != 0 || st.Denied != 1 {
+		t.Fatalf("stats = %+v", st)
+	}
+	// Later reports of it (the entity service keeps the mark) stay home, and
+	// so do its alerts.
+	fc.deliver(t, entityMsg(t, "position", "e1", "opensky", 1, now, exercise), alertMsg(t, "e1", now, func(a *sentinelv1.Alert) {
+		a.Position = &sentinelv1.Coordinate{Latitude: 1, Longitude: 0}
+	}))
+	time.Sleep(100 * time.Millisecond)
+	rec.mu.Lock()
+	updates, alerts := len(rec.updates), len(rec.alerts)
+	rec.mu.Unlock()
+	if updates != 2 || alerts != 0 || p.Stats().Denied != 3 {
+		t.Fatalf("updates=%d alerts=%d stats=%+v", updates, alerts, p.Stats())
+	}
 }
 
 func TestPumpPolicyExitGraceAndLag(t *testing.T) {

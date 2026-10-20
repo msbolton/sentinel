@@ -185,6 +185,18 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 	}
 }
 
+// The policy's allowExercise key is a boolean on every outbound driver.
+func TestValidateAllowExercise(t *testing.T) {
+	c := Default()
+	if problems := c.Validate("tak", json.RawMessage(`{"address": "h:1", "policy": {"allowExercise": true}}`)); len(problems) != 0 {
+		t.Errorf("allowExercise: true refused: %+v", problems)
+	}
+	problems := c.Validate("tak", json.RawMessage(`{"address": "h:1", "policy": {"allowExercise": "yes"}}`))
+	if got := problemPaths(problems); !slices.Equal(got, []string{"/config/policy/allowExercise"}) {
+		t.Errorf("allowExercise: \"yes\" refused at %v (%+v)", got, problems)
+	}
+}
+
 // problemPaths lists the paths of problems in sorted order, so a test can
 // compare the exact set a config is refused at.
 func problemPaths(problems []Problem) []string {
