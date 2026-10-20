@@ -74,13 +74,13 @@ func FromProto(m *sentinelv1.Observation) *obs.Observation {
 		}
 		ce := u.GetCircularError()
 		if ce == 0 && o.PosCovariance != nil {
-			if derived := geo.CEP(o.PosCovariance[0], o.PosCovariance[1], o.PosCovariance[3]); derived > 0 && !math.IsNaN(derived) && !math.IsInf(derived, 0) {
+			if derived := geo.CEP95(o.PosCovariance[0], o.PosCovariance[1], o.PosCovariance[3]); derived > 0 && !math.IsNaN(derived) && !math.IsInf(derived, 0) {
 				ce = derived
 			}
 		}
 		o.CircularError = &ce
 	} else if o.PosCovariance != nil && finiteCov(*o.PosCovariance) && o.PosCovariance[0] >= 0 && o.PosCovariance[3] >= 0 && o.PosCovariance[5] >= 0 && (o.PosCovariance[0] > 0 || o.PosCovariance[3] > 0) {
-		if ce := geo.CEP(o.PosCovariance[0], o.PosCovariance[1], o.PosCovariance[3]); ce > 0 && !math.IsNaN(ce) && !math.IsInf(ce, 0) {
+		if ce := geo.CEP95(o.PosCovariance[0], o.PosCovariance[1], o.PosCovariance[3]); ce > 0 && !math.IsNaN(ce) && !math.IsInf(ce, 0) {
 			o.CircularError = &ce
 		}
 	}

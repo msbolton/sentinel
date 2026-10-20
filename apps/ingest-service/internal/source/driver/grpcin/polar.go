@@ -134,7 +134,7 @@ func convert(o *obs.Observation, e emplacement.Emplacement, org origin) string {
 	if cov, ok := geo.PolarCovarianceNEU(az, el, p.RangeM, sigma); ok && slices.IndexFunc(cov[:], func(v float64) bool { return !finite(v) }) < 0 {
 		o.PosCovariance = &cov
 		if o.CircularError == nil || *o.CircularError <= 0 {
-			if ce := geo.CEP(cov[0], cov[1], cov[3]); ce > 0 && finite(ce) {
+			if ce := geo.CEP95(cov[0], cov[1], cov[3]); ce > 0 && finite(ce) {
 				o.CircularError = &ce
 			}
 		}

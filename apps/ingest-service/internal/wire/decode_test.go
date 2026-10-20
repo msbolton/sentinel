@@ -153,9 +153,9 @@ func TestFromProtoConvertsEllipseToCovarianceAndDerivesCEP95(t *testing.T) {
 	if math.Abs(o.PosCovariance[0]-wantNN) > 1e-6 || math.Abs(o.PosCovariance[1]-wantNE) > 1e-6 || math.Abs(o.PosCovariance[3]-wantEE) > 1e-6 {
 		t.Errorf("PosCovariance = %v, want [%v, %v, 0, %v, 0, 0]", o.PosCovariance, wantNN, wantNE, wantEE)
 	}
-	wantCEP := geo.CEP(wantNN, wantNE, wantEE) // 95% radius = (1800+420)/2 = 1110
-	if o.CircularError == nil || math.Abs(*o.CircularError-wantCEP) > 1e-6 || math.Abs(*o.CircularError-1110) > 1e-6 {
-		t.Errorf("CircularError = %v, want %v (1110)", o.CircularError, wantCEP)
+	wantCEP := geo.CEP95(wantNN, wantNE, wantEE)
+	if o.CircularError == nil || math.Abs(*o.CircularError-wantCEP) > 1e-6 || *o.CircularError < 1450 || *o.CircularError > 1500 {
+		t.Errorf("CircularError = %v, want %v (in [1450, 1500])", o.CircularError, wantCEP)
 	}
 
 	// Explicit PositionCovariance wins over Uncertainty ellipse axes, while still deriving 95% CEP when CircularError is 0.

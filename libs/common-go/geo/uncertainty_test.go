@@ -2,6 +2,8 @@ package geo
 
 import (
 	"math"
+	"math/rand/v2"
+	"slices"
 	"testing"
 )
 
@@ -79,11 +81,69 @@ func TestEllipseCovarianceRoundTrip(t *testing.T) {
 	}
 }
 
-func TestCEP(t *testing.T) {
-	near(t, "circular", CEP(100*100, 0, 100*100), 244.77, 0.01)
-	near(t, "same via ellipse", CEP(Cov2FromEllipse(Ellipse95*100, Ellipse95*100, 0)), 244.77, 0.01)
-	near(t, "cep95 alias", CEP95(100*100, 0, 100*100), 244.77, 0.01)
-	near(t, "elliptical 95%", CEP(Cov2FromEllipse(1800, 420, 32)), (1800+420)/2.0, 1e-6)
+func TestCEP95(t *testing.T) {
+	near(t, "circular", CEP95(100*100, 0, 100*100), 244.77, 0.01)
+	near(t, "same via ellipse", CEP95(Cov2FromEllipse(Ellipse95*100, Ellipse95*100, 0)), 244.77, 0.01)
+	near(t, "cep alias", CEP(100*100, 0, 100*100), 244.77, 0.01)
+	if got := CEP95(0, 0, 0); got != 0 {
+		t.Errorf("CEP95(0,0,0) = %v, want 0", got)
+	}
+
+	// Verify CEP95 against both the 1-D radial/Cartesian erf integral
+	// P(X²+Y² ≤ R²) = 0.95 and a fixed-seed Monte Carlo across aspect ratios
+	// k = σ2/σ1 ∈ {0, 0.1, 0.25, 0.5, 1}.
+	rng := rand.New(rand.NewPCG(42, 1024))
+	const N = 200_000
+	z1 := make([]float64, N)
+	z2 := make([]float64, N)
+	for i := 0; i < N; i++ {
+		z1[i] = rng.NormFloat64()
+		z2[i] = rng.NormFloat64()
+	}
+	radii := make([]float64, N)
+
+	// Cartesian integral P(X²+Y² ≤ R²) for k > 0 using math.Erf.
+	cdfNumeric := func(s1, s2, r float64) float64 {
+		if s2 == 0 {
+			return math.Erf(r / (math.Sqrt2 * s1))
+		}
+		const m = 512
+		dPhi := (math.Pi / 2) / m
+		sum := 0.0
+		for i := 0; i < m; i++ {
+			phi := (float64(i) + 0.5) * dPhi
+			s, c := math.Sincos(phi)
+			y := r * s
+			xMax := r * c
+			sum += c * math.Exp(-0.5*(y*y)/(s2*s2)) * math.Erf(xMax/(math.Sqrt2*s1))
+		}
+		return (2 * r / (math.Sqrt(2*math.Pi) * s2)) * sum * dPhi
+	}
+
+	s1 := 100.0
+	for _, k := range []float64{0, 0.1, 0.25, 0.5, 1.0} {
+		s2 := k * s1
+		got := CEP95(s1*s1, 0, s2*s2)
+		prob := cdfNumeric(s1, s2, got)
+		if math.Abs(prob-0.95) > 1e-4 {
+			t.Errorf("k=%v: P(r <= CEP95=%v) = %.6f, want 0.95", k, got, prob)
+		}
+		for i := 0; i < N; i++ {
+			radii[i] = math.Hypot(s1*z1[i], s2*z2[i])
+		}
+		slices.Sort(radii)
+		mc := radii[int(0.95*float64(N))]
+		relErr := math.Abs(got-mc) / mc
+		if relErr > 0.01 {
+			t.Errorf("k=%v: CEP95=%v vs Monte Carlo=%v (relErr=%.4f > 1%%)", k, got, mc, relErr)
+		}
+	}
+
+	// Specifically check the 1800 m x 420 m 95% ellipse example (~1474 m).
+	r1800 := CEP95(Cov2FromEllipse(1800, 420, 32))
+	if r1800 < 1450 || r1800 > 1500 {
+		t.Errorf("CEP95(1800x420) = %v, want in [1450, 1500]", r1800)
+	}
 }
 
 // The axis-aligned cases above zero every cross term. At an oblique geometry
