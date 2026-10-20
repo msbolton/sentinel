@@ -182,13 +182,14 @@ func TestStateEmitsTheSensorAndTouches(t *testing.T) {
 	}
 }
 
-// The throttles run on the server's clock: a sender whose clock is hours off
-// neither floods the writes nor stalls them, and Touch records its fix time.
+// The throttles run on the server's clock: a sender whose fix times run
+// ahead of or behind it, within what is accepted, neither floods the writes
+// nor stalls them, and Touch records its fix time.
 func TestStateThrottlesIgnoreTheSendersClock(t *testing.T) {
 	r, w, clk, st := shipRig(t, nil, ingesttoken.Token{}, emp("ship", "grpc-1", "MOBILE", "RF", "UNCLASSIFIED"))
-	first := clk.now().Add(-5 * time.Hour)
+	first := clk.now().Add(-45 * time.Second)
 	for i := range 5 {
-		send(t, st, stateReport("ship", first.Add(time.Duration(i)*time.Hour), 50, -4, nil))
+		send(t, st, stateReport("ship", first.Add(time.Duration(i)*10*time.Second), 50, -4, nil))
 	}
 	c := w.touches()
 	if len(c) != 1 || !c[0].at.Equal(first) {
@@ -214,7 +215,7 @@ func TestStateRefusesTheFarFutureAndKeepsTheTrackUsable(t *testing.T) {
 	ship.AzimuthReference = emplacement.AzimuthPlatform
 	r, w, clk, st := shipRig(t, nil, ingesttoken.Token{}, ship)
 	now := clk.now()
-	if ack := send(t, st, stateReport("ship", now.AddDate(1, 0, 0), 50, -4, ptr(90.0))); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_DEAD_LETTERED || ack.GetReason() != "bad_state" {
+	if ack := send(t, st, stateReport("ship", now.AddDate(1, 0, 0), 50, -4, ptr(90.0))); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_REJECTED || ack.GetReason() != "clock_skew" {
 		t.Fatalf("+1 year: %v", ack)
 	}
 	invalid := stateReport("ship", now, 50, -4, nil)
@@ -267,7 +268,7 @@ func TestATrackIsBounded(t *testing.T) {
 func TestStateAcceptsASmallClockLeadOnly(t *testing.T) {
 	_, w, clk, st := shipRig(t, nil, ingesttoken.Token{}, emp("ship", "grpc-1", "MOBILE", "RF", "UNCLASSIFIED"))
 	now := clk.now()
-	if ack := send(t, st, stateReport("ship", now.Add(6*time.Second), 50, -4, nil)); ack.GetReason() != "bad_state" {
+	if ack := send(t, st, stateReport("ship", now.Add(6*time.Second), 50, -4, nil)); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_REJECTED || ack.GetReason() != "clock_skew" {
 		t.Errorf("6 s ahead: %v", ack)
 	}
 	if ack := send(t, st, stateReport("ship", now.Add(4*time.Second), 50, -4, nil)); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {

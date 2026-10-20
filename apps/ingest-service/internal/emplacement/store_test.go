@@ -278,3 +278,34 @@ func TestStoreTouchIsQuiet(t *testing.T) {
 		t.Fatalf("touch malformed id = %v", err)
 	}
 }
+
+// lastReportAt only moves forward: an older report landing late (another
+// replica, a slower write) does not move it back.
+func TestStoreTouchNeverMovesLastReportAtBack(t *testing.T) {
+	pool, ctx := testPool(t)
+	s := NewPGStore(pool)
+	created, err := s.Create(ctx, fixed("test-touch-monotonic"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	if err := s.Touch(ctx, created.ID, nil, nil, newer); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Touch(ctx, created.ID, nil, nil, newer.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastReportAt == nil || !got.LastReportAt.Equal(newer) {
+		t.Fatalf("lastReportAt = %v after an older touch, want %v", got.LastReportAt, newer)
+	}
+	if err := s.Touch(ctx, created.ID, nil, nil, newer.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Get(ctx, created.ID); got.LastReportAt == nil || !got.LastReportAt.Equal(newer.Add(time.Minute)) {
+		t.Fatalf("lastReportAt = %v after a newer touch", got.LastReportAt)
+	}
+}

@@ -293,8 +293,9 @@ func TestUpsertRechecksUnderTheLock(t *testing.T) {
 	}
 }
 
-// An update replaces the name, description, boresight and exercise flag,
-// and keeps what the message leaves unset.
+// An update replaces the name, description and boresight, keeps what the
+// message leaves unset, and never clears the exercise flag (see
+// TestUpsertExerciseIsSticky).
 func TestUpsertUpdateSemantics(t *testing.T) {
 	e := senderRow("mine-1")
 	e.Description, e.BoresightDeg, e.Exercise = "aft mast", 90, true
@@ -306,13 +307,13 @@ func TestUpsertUpdateSemantics(t *testing.T) {
 	r, w, _ := consentRig(t, nil, ingesttoken.Token{}, e)
 	ctx, cancel := withToken(secretA)
 	defer cancel()
-	// Only a name: the rest of the replaced fields clear, the rest is kept.
+	// Only a name: the replaced fields clear (not the exercise flag), the rest is kept.
 	req := &ingestv1.UpsertEmplacementRequest{Emplacement: &sentinelv1.Emplacement{Id: "mine-1", Name: "Renamed"}}
 	if _, err := r.client(t).UpsertEmplacement(ctx, req); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := w.Get(context.Background(), "mine-1")
-	if got.Name != "Renamed" || got.Description != "" || got.BoresightDeg != 0 || got.Exercise {
+	if got.Name != "Renamed" || got.Description != "" || got.BoresightDeg != 0 || !got.Exercise {
 		t.Errorf("replaced fields: %+v", got)
 	}
 	if got.Mobility != "MOBILE" || got.SensorType != "RADAR" || got.AzimuthReference != emplacement.AzimuthPlatform || got.Classification != "UNCLASSIFIED" {

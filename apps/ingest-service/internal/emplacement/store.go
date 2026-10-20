@@ -236,14 +236,15 @@ type Toucher interface {
 	Touch(ctx context.Context, id string, pos *Point, alt *float64, at time.Time) error
 }
 
-// Touch sets lastReportAt, the position when pos is not nil and the altitude
+// Touch sets lastReportAt (never moving it back: replicas touch concurrently,
+// and an older report can land after a newer one), the position when pos is not nil and the altitude
 // when alt is not nil, on a live emplacement. It does not bump the version and sends no notification:
 // position reports arrive every second, and every replica refreshing its
 // cache that often would be all the cache did. Editors therefore never see a
 // version conflict caused by a sensor reporting where it is.
 func (s *PGStore) Touch(ctx context.Context, id string, pos *Point, alt *float64, at time.Time) error {
 	lat, lon := latLon(pos)
-	tag, err := s.pool.Exec(ctx, `UPDATE sentinel.emplacements SET "lastReportAt" = $2,
+	tag, err := s.pool.Exec(ctx, `UPDATE sentinel.emplacements SET "lastReportAt" = GREATEST(COALESCE("lastReportAt", $2), $2),
 		position = CASE WHEN $3::float8 IS NULL THEN position ELSE ST_SetSRID(ST_MakePoint($4::float8, $3::float8), 4326) END,
 		altitude = CASE WHEN $5::float8 IS NULL THEN altitude ELSE $5::float8 END
 		WHERE id = $1::uuid AND "deletedAt" IS NULL`, id, at, lat, lon, alt)

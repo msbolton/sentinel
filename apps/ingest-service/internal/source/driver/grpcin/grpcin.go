@@ -134,10 +134,12 @@ type Driver struct {
 	writer driver.EmplacementWriter // nil when the host has none
 	logger *zap.Logger
 
-	// touched is when each emplacement's last report was recorded, so Touch
-	// runs at most once per touchEvery for each.
-	touchMu sync.Mutex
-	touched map[string]time.Time
+	// touched is when each emplacement's last report was recorded, and
+	// touchedPos when its position last was, so Touch runs at most once per
+	// touchEvery for each of the two (see touch).
+	touchMu    sync.Mutex
+	touched    map[string]time.Time
+	touchedPos map[string]time.Time
 
 	// tracks are the mobile emplacements' recent fixes, and emittedAt when
 	// each one's own observation last went out.
@@ -148,6 +150,10 @@ type Driver struct {
 
 	// now is the server's clock (tests replace it).
 	now func() time.Time
+
+	// cacheWait is how long an upsert waits for the cache to see its write
+	// (tests shorten it).
+	cacheWait time.Duration
 
 	// idleTimeout is how long a connection may have no RPCs (tests shorten it).
 	idleTimeout time.Duration
@@ -239,12 +245,14 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 		senders:         transport.NewSenders(maxSenders),
 		perSender:       transport.NewSenderLimiter(c.MaxMessagesPerSecPerSender, transport.SenderLimiterKeys),
 		tokens:          deps.Tokens, emps: deps.Emplacements, writer: deps.EmplacementWriter, logger: deps.Logger,
-		touched:   map[string]time.Time{},
-		tracks:    map[string]*track{},
-		emittedAt: map[string]time.Time{},
-		now:       time.Now,
-		tolerance: time.Duration(intOr(c.OwnshipToleranceMs, defaultOwnshipToleranceMs)) * time.Millisecond,
-		rejected:  map[string]int64{}, idleTimeout: idleTimeout,
+		touched:    map[string]time.Time{},
+		touchedPos: map[string]time.Time{},
+		tracks:     map[string]*track{},
+		emittedAt:  map[string]time.Time{},
+		now:        time.Now,
+		cacheWait:  cacheWait,
+		tolerance:  time.Duration(intOr(c.OwnshipToleranceMs, defaultOwnshipToleranceMs)) * time.Millisecond,
+		rejected:   map[string]int64{}, idleTimeout: idleTimeout,
 	}
 	if d.logger == nil {
 		d.logger = zap.NewNop()

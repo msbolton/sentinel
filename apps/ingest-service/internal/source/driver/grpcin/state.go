@@ -22,10 +22,13 @@ const sensorEvery = time.Second
 
 // maxClockLead is how far ahead of the server a fix may be stamped: it
 // allows for ordinary clock skew and nothing more, because the newest fix
-// anchors the track's window and the ownship tolerance.
+// anchors the track's window and the ownship tolerance. A fix more than
+// ownshipWindow behind the server is as unusable: it falls outside the
+// window its own track keeps. Either is refused as clock_skew, a sender's
+// clock to mend, and not a malformed report.
 const maxClockLead = 5 * time.Second
 
-var errBadState = errors.New("an emplacement_state needs a position inside WGS84 bounds, and finite heading and velocity, and a time no more than 5 s ahead of the server's")
+var errBadState = errors.New("an emplacement_state needs a position inside WGS84 bounds, and finite heading and velocity, and a valid time")
 
 // state takes a mobile emplacement's report of itself: it extends the
 // emplacement's track (the origin of its measurements), records its
@@ -34,8 +37,8 @@ func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.
 	if m == nil {
 		return s.deadLetter(ack, from, r, "empty_report", errors.New("the report's emplacement_state is empty")), nil
 	}
-	claim := r.GetEmplacementId()
-	if id := m.GetEmplacementId(); id != "" {
+	claim := claimOf(r.GetEmplacementId())
+	if id := claimOf(m.GetEmplacementId()); id != "" {
 		if claim != "" && claim != id {
 			return s.reject(ack, "unknown_emplacement"), nil
 		}
@@ -49,8 +52,12 @@ func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.
 		return s.reject(ack, "above_ceiling"), nil
 	}
 	now := s.d.now().UTC()
-	f, ok := fixOf(m, now)
-	if !ok {
+	f, why := fixOf(m, now)
+	switch why {
+	case "":
+	case "clock_skew":
+		return s.reject(ack, why), nil
+	default:
 		if classification.Rank(e.Classification) > classification.Rank(s.d.floor) {
 			return s.reject(ack, "bad_state"), nil
 		}
@@ -98,41 +105,46 @@ func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.
 	return ack, nil
 }
 
-// fixOf reads a state report, or reports that it is malformed.
-func fixOf(m *sentinelv1.EmplacementState, now time.Time) (fix, bool) {
+// fixOf reads a state report. why is "" for a usable one, "bad_state" for a
+// malformed one, and "clock_skew" for one stamped more than maxClockLead
+// ahead of now or more than ownshipWindow behind it (a malformed report is
+// bad_state whatever its time).
+func fixOf(m *sentinelv1.EmplacementState, now time.Time) (f fix, why string) {
 	p := m.GetPosition()
 	if p == nil || !finite(p.GetLatitude()) || !finite(p.GetLongitude()) ||
 		p.GetLatitude() < -90 || p.GetLatitude() > 90 || p.GetLongitude() < -180 || p.GetLongitude() > 180 {
-		return fix{}, false
+		return fix{}, "bad_state"
 	}
-	f := fix{at: now, pos: geo.LLA{Lat: p.GetLatitude(), Lon: p.GetLongitude()}}
+	f = fix{at: now, pos: geo.LLA{Lat: p.GetLatitude(), Lon: p.GetLongitude()}}
 	if p.AltitudeMeters != nil {
 		if !finite(*p.AltitudeMeters) {
-			return fix{}, false
+			return fix{}, "bad_state"
 		}
 		f.pos.Alt = *p.AltitudeMeters
 	}
+	skewed := false
 	if t := m.GetTime(); t != nil {
 		if t.CheckValid() != nil {
-			return fix{}, false
+			return fix{}, "bad_state"
 		}
 		f.at = t.AsTime().UTC()
-		if f.at.Sub(now) > maxClockLead {
-			return fix{}, false
-		}
+		skewed = f.at.Sub(now) > maxClockLead || now.Sub(f.at) > ownshipWindow
 	}
 	if m.Heading != nil {
 		if !finite(*m.Heading) {
-			return fix{}, false
+			return fix{}, "bad_state"
 		}
 		h := math.Mod(math.Mod(*m.Heading, 360)+360, 360)
 		f.heading = &h
 	}
 	if v := m.GetVelocity(); v != nil {
 		if !finite(v.GetNorth()) || !finite(v.GetEast()) || !finite(v.GetUp()) {
-			return fix{}, false
+			return fix{}, "bad_state"
 		}
 		f.vel = &[3]float64{v.GetNorth(), v.GetEast(), v.GetUp()}
 	}
-	return f, true
+	if skewed {
+		return fix{}, "clock_skew"
+	}
+	return f, ""
 }

@@ -124,6 +124,12 @@ func (s *service) handle(ctx context.Context, a authed, from string, r *ingestv1
 	}
 	s.d.senders.Seen(from, time.Now().UTC())
 	s.d.counts.Accepted.Add(1)
+	// A token below the connection's level could not hold anything it sent,
+	// and a dead letter (visible at the connection's level) must not be
+	// written for it, whatever the body: no body is read at all.
+	if classification.Rank(s.d.floor) > classification.Rank(a.tok.Classification) {
+		return s.reject(ack, "above_ceiling"), nil
+	}
 	switch body := r.GetBody().(type) {
 	case *ingestv1.Report_Observation:
 		return s.observation(ctx, a, from, r, body.Observation, ack)
@@ -200,7 +206,7 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 	if bound && o.SourceEntityID == e.ID {
 		return s.reject(ack, "bad_identity"), nil
 	}
-	o.ReceivedAt = time.Now().UTC()
+	o.ReceivedAt = s.d.now().UTC()
 	if bound {
 		o.EmplacementID, o.SensorID = e.ID, e.ID
 		if o.Source == "" {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/sentinel/go-common/classification"
 	"github.com/sentinel/ingest-service/internal/emplacement"
+	"github.com/sentinel/ingest-service/internal/source/transport"
 	ingestv1 "github.com/sentinel/proto-gen/sentinel/ingest/v1"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 )
@@ -23,8 +24,12 @@ const cacheWait = 2 * time.Second
 // UpsertEmplacement creates or updates one of the emplacements this
 // connection's senders manage. An id names one to update: it must be bound
 // to this connection and made by one of its senders, else NotFound. An empty
-// or unknown id creates one, up to maxEmplacements. The connection, the
-// creator and whether it is active are Sentinel's to set, not the sender's.
+// or unknown id looks for a sender's row of the same name (ignoring case and
+// surrounding space) on this connection, so a retried upsert is idempotent,
+// and updates it; failing that it creates one, up to maxEmplacements. A name
+// any other row holds is AlreadyExists. The connection, the creator and
+// whether it is active are Sentinel's to set, not the sender's. Upserts draw
+// on the same rate limits as reports.
 func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmplacementRequest) (*ingestv1.UpsertEmplacementResponse, error) {
 	if !s.d.cfg.SenderManagedEmplacements {
 		return nil, status.Error(codes.PermissionDenied, "this connection does not let senders manage their emplacements")
@@ -33,6 +38,17 @@ func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmp
 		return nil, status.Error(codes.Unavailable, "this replica cannot write emplacements: retry")
 	}
 	a := caller(ctx)
+	from := peerOf(ctx)
+	// The sender's own bucket first, so a flooder spends none of the shared one.
+	if !s.d.perSender.Allow(transport.SenderIP(from), time.Now()) {
+		s.d.senders.RateLimited(from, 1)
+		s.d.counts.SenderRateLimited.Add(1)
+		return nil, status.Error(codes.ResourceExhausted, "rate limited")
+	}
+	if !s.d.limit.Allow() {
+		s.d.counts.RateLimited.Add(1)
+		return nil, status.Error(codes.ResourceExhausted, "rate limited")
+	}
 	feed := s.d.feedID
 	ceiling := classification.Rank(a.tok.Classification)
 	// What a sender writes was authored over this connection: a token below
@@ -60,35 +76,55 @@ func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmp
 		return e.FeedID != nil && *e.FeedID == feed && e.SenderManaged() && classification.Rank(e.Classification) <= ceiling
 	}
 
+	// target is the row to update: the one the id names, else the sender's
+	// own row of the same name.
+	var target *emplacement.Emplacement
+	if m.GetId() != "" {
+		existing, err := s.d.writer.Get(ctx, m.GetId())
+		switch {
+		case err == nil:
+			if !mine(existing) {
+				return nil, errNotYours
+			}
+			target = &existing
+		case !errors.Is(err, emplacement.ErrNotFound):
+			return nil, s.failed(err)
+		}
+	}
+	var rows []emplacement.Emplacement
+	if target == nil {
+		var err error
+		if rows, err = s.d.writer.List(ctx, emplacement.Filter{FeedID: feed}); err != nil {
+			return nil, s.failed(err)
+		}
+		name := strings.TrimSpace(m.GetName())
+		for _, r := range rows {
+			if mine(r) && strings.EqualFold(strings.TrimSpace(r.Name), name) {
+				target = &r
+				break
+			}
+		}
+	}
+
 	var saved emplacement.Emplacement
 	var err error
-	var existing emplacement.Emplacement
-	getErr := emplacement.ErrNotFound // an empty id names no row
-	if m.GetId() != "" {
-		existing, getErr = s.d.writer.Get(ctx, m.GetId())
-	}
-	switch {
-	case m.GetId() != "" && getErr == nil:
-		if !mine(existing) {
-			return nil, errNotYours
-		}
-		saved, err = s.d.writer.Update(ctx, existing.ID, 0, func(e *emplacement.Emplacement) error {
+	if target != nil {
+		saved, err = s.d.writer.Update(ctx, target.ID, 0, func(e *emplacement.Emplacement) error {
 			if !mine(*e) { // it changed since it was read
 				return emplacement.ErrNotFound
 			}
-			active := e.Active
+			active, exercise := e.Active, e.Exercise
 			in.Apply(e)
 			e.Active = active
+			// A sender may set the exercise flag but never clear it: a
+			// person does, over REST.
+			e.Exercise = exercise || e.Exercise
 			if p := m.GetPosition(); p != nil && p.AltitudeMeters == nil {
 				e.Altitude = nil // a position sent without an altitude has none
 			}
 			return check(e)
 		})
-	case errors.Is(getErr, emplacement.ErrNotFound):
-		rows, lerr := s.d.writer.List(ctx, emplacement.Filter{FeedID: feed})
-		if lerr != nil {
-			return nil, s.failed(lerr)
-		}
+	} else {
 		n := 0
 		for _, r := range rows {
 			if r.SenderManaged() {
@@ -105,13 +141,13 @@ func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmp
 		if err = check(&e); err == nil {
 			saved, err = s.d.writer.Create(ctx, e)
 		}
-	default:
-		return nil, s.failed(getErr)
 	}
 	if err != nil {
 		return nil, s.failed(err)
 	}
-	s.awaitCache(ctx, saved.ID, saved.Version)
+	if !s.awaitCache(ctx, saved.ID, saved.Version) {
+		return nil, status.Error(codes.Unavailable, "the emplacement was saved; retry once the service has caught up")
+	}
 	return &ingestv1.UpsertEmplacementResponse{Emplacement: emplacementProto(saved)}, nil
 }
 
@@ -136,37 +172,40 @@ func (s *service) failed(err error) error {
 	return status.Error(codes.Internal, "the emplacement could not be saved")
 }
 
-// awaitCache waits, briefly, for the emplacement cache to hold the write.
-func (s *service) awaitCache(ctx context.Context, id string, version int) {
+// awaitCache waits, briefly, for the emplacement cache to hold the write,
+// and reports whether it did. The write itself has succeeded either way.
+func (s *service) awaitCache(ctx context.Context, id string, version int) bool {
 	seen := func() bool {
 		e, ok := s.d.emps.Get(id)
 		return ok && e.Version >= version
 	}
 	if seen() {
-		return
+		return true
 	}
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
-	timeout := time.NewTimer(cacheWait)
+	timeout := time.NewTimer(s.d.cacheWait)
 	defer timeout.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case <-timeout.C:
 			s.d.logger.Debug("the emplacement cache did not see an upsert in time", zap.String("emplacement", id))
-			return
+			return false
 		case <-tick.C:
 			if seen() {
-				return
+				return true
 			}
 		}
 	}
 }
 
 // inputOf reads an emplacement message as a write. On every upsert the
-// message replaces the name, description, boresight and exercise flag, so a
-// zero value there clears the stored one. An unset enum (mobility, sensor
+// message replaces the name, description and boresight, so a zero value
+// there clears the stored one. The exercise flag is read as requested, but
+// the caller makes it sticky on an update: a sender can set it and never
+// clear it (a person clears it over REST). An unset enum (mobility, sensor
 // type, azimuth reference, classification) and an absent position, coverage
 // or default sigma keep what is stored, or take the defaults on create. A
 // position sent without an altitude clears the stored altitude (the caller

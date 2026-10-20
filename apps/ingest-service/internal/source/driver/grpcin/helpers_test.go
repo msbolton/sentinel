@@ -184,6 +184,10 @@ type fakeWriter struct {
 	// row is read: a test changes the row between the driver's Get and Update.
 	beforeUpdate func(id string)
 
+	// lag, when set, leaves the driver's cache view one version behind every
+	// write (the cache has not caught up), though the write itself succeeds.
+	lag bool
+
 	mu      sync.Mutex
 	n       int
 	touched []touchCall
@@ -200,7 +204,7 @@ func (w *fakeWriter) Create(_ context.Context, e emplacement.Emplacement) (empla
 	e.ID = fmt.Sprintf("e-%d", w.n)
 	w.mu.Unlock()
 	e.Version = 1
-	w.emps.put(e)
+	w.put(e)
 	return e, nil
 }
 
@@ -219,8 +223,19 @@ func (w *fakeWriter) Update(_ context.Context, id string, ifVersion int, fn func
 		return emplacement.Emplacement{}, err
 	}
 	e.Version++
-	w.emps.put(e)
+	w.put(e)
 	return e, nil
+}
+
+// put stores a written row in the cache view the driver reads.
+func (w *fakeWriter) put(e emplacement.Emplacement) {
+	if w.lag {
+		stale := e
+		stale.Version--
+		w.emps.put(stale)
+		return
+	}
+	w.emps.put(e)
 }
 
 func (w *fakeWriter) Get(_ context.Context, id string) (emplacement.Emplacement, error) {
