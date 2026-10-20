@@ -100,6 +100,9 @@ type Options struct {
 	Emplacements driver.EmplacementSource
 	// Tokens lets the drivers that take ingest tokens (grpc) authenticate senders.
 	Tokens driver.TokenSource
+	// EmplacementWriter lets the drivers whose senders manage or move their
+	// own emplacements (grpc) write them.
+	EmplacementWriter driver.EmplacementWriter
 	// Density builds the density-grid publisher for one feed (nil: drivers
 	// get none and keep their counts to themselves).
 	Density func(feedID, classification string) driver.DensityPublisher
@@ -714,7 +717,8 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 	common := spec.Common()
 	logger := s.logger.With(zap.String("feed", spec.ID), zap.String("driver", spec.Driver))
 	deps := driver.Deps{Logger: logger, Shapes: s.opts.Shapes, ListenerHost: s.opts.ListenerHost,
-		ReloadSecrets: s.secretReloader(spec), SecretReloadEvery: s.opts.SecretReloadEvery, Emplacements: s.opts.Emplacements, Tokens: s.opts.Tokens}
+		ReloadSecrets: s.secretReloader(spec), SecretReloadEvery: s.opts.SecretReloadEvery, Emplacements: s.opts.Emplacements, Tokens: s.opts.Tokens,
+		EmplacementWriter: s.opts.EmplacementWriter}
 	if s.opts.Density != nil {
 		deps.Density = s.opts.Density(spec.ID, common.Classification)
 	}

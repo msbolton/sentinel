@@ -6,8 +6,9 @@
 // An active emplacement with a position is reported when the driver starts
 // and whenever it changes. Fixed ones are reported again every heartbeat so
 // their entities stay live. A mobile one is not, because its position comes
-// from its own reports. Deactivating or deleting an emplacement stops its
-// reports, and the entity ages out.
+// from its own reports. A mobile one bound to a connection is never reported
+// here: that connection's position reports report it. Deactivating or
+// deleting an emplacement stops its reports, and the entity ages out.
 package emplacementmirror
 
 import (
@@ -98,7 +99,7 @@ func (d *Driver) Run(ctx context.Context, sink driver.Sink) error {
 		case <-ctx.Done():
 			return nil
 		case id := <-changes:
-			if e, ok := d.src.Get(id); ok && e.Active && e.Position != nil {
+			if e, ok := d.src.Get(id); ok && e.Active && e.Position != nil && !boundMobile(e) {
 				if err := d.emit(ctx, sink, e); err != nil {
 					return quiet(ctx, err)
 				}
@@ -116,7 +117,7 @@ func (d *Driver) Run(ctx context.Context, sink driver.Sink) error {
 func (d *Driver) report(ctx context.Context, sink driver.Sink, withMobile bool) error {
 	n := 0
 	for _, e := range d.src.All() {
-		if !e.Active || e.Position == nil || (e.Mobility != emplacement.MobilityFixed && !withMobile) {
+		if !e.Active || e.Position == nil || boundMobile(e) || (e.Mobility != emplacement.MobilityFixed && !withMobile) {
 			continue
 		}
 		if err := d.emit(ctx, sink, e); err != nil {
@@ -126,6 +127,13 @@ func (d *Driver) report(ctx context.Context, sink driver.Sink, withMobile bool) 
 	}
 	sink.Succeeded(n)
 	return nil
+}
+
+// boundMobile is a mobile emplacement bound to a connection. That connection's
+// reports place it; the stored position only goes stale between Touch writes,
+// which send no notice.
+func boundMobile(e emplacement.Emplacement) bool {
+	return e.Mobility == emplacement.MobilityMobile && e.FeedID != nil
 }
 
 func (d *Driver) emit(ctx context.Context, sink driver.Sink, e emplacement.Emplacement) error {

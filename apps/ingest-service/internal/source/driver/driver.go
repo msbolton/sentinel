@@ -78,6 +78,17 @@ type Deps struct {
 	// Tokens authenticates senders for the drivers that take ingest tokens
 	// (nil when there is none).
 	Tokens TokenSource
+	// EmplacementWriter writes emplacements for the drivers whose senders
+	// manage or move their own (nil when there is none).
+	EmplacementWriter EmplacementWriter
+}
+
+// EmplacementWriter writes emplacements for the drivers whose senders manage
+// or move their own (grpc): position reports through Touch, and
+// UpsertEmplacement. *emplacement.PGStore is the real one.
+type EmplacementWriter interface {
+	emplacement.Store
+	emplacement.Toucher
 }
 
 // DensityPublisher sends a feed's density grids to the density.events

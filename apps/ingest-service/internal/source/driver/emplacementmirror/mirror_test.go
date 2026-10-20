@@ -213,3 +213,38 @@ func count(s []string, v string) int {
 	}
 	return n
 }
+
+// A mobile emplacement bound to a connection is placed by that connection's
+// reports; the stored position goes stale between Touch writes, which send no
+// notice. One bound to no connection is still reported, at start and on change.
+func TestBoundMobileEmplacementsAreLeftToTheirSenders(t *testing.T) {
+	feed := "grpc-1"
+	bound := place("bound", emplacement.MobilityMobile, true, true)
+	bound.FeedID = &feed
+	free := place("free", emplacement.MobilityMobile, true, true)
+	boundFixed := place("bound-fixed", emplacement.MobilityFixed, true, true)
+	boundFixed.FeedID = &feed
+	src := &memSource{rows: map[string]emplacement.Emplacement{"bound": bound, "free": free, "bound-fixed": boundFixed}}
+	sink := &memSink{}
+	d := &Driver{src: src, heartbeat: time.Hour, logger: zap.NewNop(), now: time.Now}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.Run(ctx, sink) }()
+
+	waitFor(t, func() bool { return len(sink.ids()) >= 2 })
+	moved := bound
+	moved.Position = &emplacement.Point{Lat: 51, Lon: -4}
+	src.change(moved)
+	src.change(free)
+	waitFor(t, func() bool { return count(sink.ids(), "free") == 2 })
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned %v on cancel", err)
+	}
+	if n := count(sink.ids(), "bound"); n != 0 {
+		t.Errorf("a bound mobile emplacement was reported %d times, want 0", n)
+	}
+	if n := count(sink.ids(), "bound-fixed"); n != 1 {
+		t.Errorf("a bound fixed emplacement was reported %d times at start, want 1", n)
+	}
+}
