@@ -1,0 +1,23 @@
+{
+  "name": "ew-sensor",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/ew-sensor",
+  "projectType": "application",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/dist/apps/ew-sensor"],
+      "options": {
+        "commands": ["cd apps/ew-sensor && CGO_ENABLED=0 go build -o ../../dist/apps/ew-sensor/ew-sensor ./cmd/ew-sensor"],
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": ["cd apps/ew-sensor && go test -v -race ./..."],
+        "cwd": "{workspaceRoot}"
+      }
+    }
+  }
+}
