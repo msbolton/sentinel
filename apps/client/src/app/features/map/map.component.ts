@@ -66,6 +66,10 @@ import { DRAFT_ID, GeofenceLayer } from './geofence-layer';
 import { EMPLACEMENTS_LAYER, EMPLACEMENT_DRAFT_ID, EmplacementLayer, emplacementDrawingOf } from './emplacement-layer';
 import { EmplacementService } from '../../core/services/emplacement.service';
 import { emplacementIdOf } from '../../shared/models/emplacement.model';
+import { FeedService } from '../../core/services/feed.service';
+import { ellipseFromCovariance } from './uncertainty';
+import { isFromMilitaryFeed, sidcFor, symbolDataUrl } from './milstd2525';
+import { locationDotDataUrl } from './location-dot';
 import { GeofenceDrawTool } from './geofence-draw';
 import { GeofenceToolbarComponent } from './geofence-toolbar.component';
 import { DrawSession, addPoint, canFinish, draftFromSession, finishShape, newSession, setAnchor, setCursor, setRadius } from './geofence-draw-state';
@@ -256,7 +260,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly geofences: GeofenceService,
     private readonly flightPath: FlightPathService,
     private readonly emplacements: EmplacementService,
+    private readonly feedService: FeedService,
   ) {
+    // Re-sync billboards when feed configs load or change (e.g. military toggled).
+    effect(() => {
+      this.feedService.feeds();
+      this.ngZone.runOutsideAngular(() => untracked(() => this.resyncMilitarySymbols()));
+    });
     // Entities stay in the viewer when their layer is hidden (show=false) so
     // dead reckoning keeps advancing them; this flips `show` when the user's
     // hidden set changes.
@@ -350,6 +360,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   async ngAfterViewInit(): Promise<void> {
     await this.initCesium();
+    if (!this.feedService.hasLoaded) {
+      this.feedService.load().subscribe({ error: () => undefined });
+    }
     this.geofences.load().subscribe({ error: () => undefined });
     this.setupEventHandlers();
     this.subscribeToEntities();
@@ -827,10 +840,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       : Cesium.HeightReference.CLAMP_TO_GROUND;
 
     // Vessels point along their heading only while moving or when they report a true heading.
-    const headingDeg = entity.entityType === EntityType.VESSEL
-      ? vesselHeading(entity)
-      : HEADING_ROTATED_TYPES.has(entity.entityType) ? entity.heading ?? null : null;
+    // MIL-STD-2525D symbols stay north-up.
+    const uses2525 = this.usesMilStdSymbol(entity);
+    const untintedBillboard = uses2525 || this.isMilitaryAircraft(entity);
+    const headingDeg = uses2525
+      ? null
+      : entity.entityType === EntityType.VESSEL
+        ? vesselHeading(entity)
+        : HEADING_ROTATED_TYPES.has(entity.entityType) ? entity.heading ?? null : null;
     const rotation = headingDeg != null ? -Cesium.Math.toRadians(headingDeg) : 0;
+    const signalEllipse = this.buildSignalEllipse(entity, cesiumColor, isStale);
 
     const existing = this.entityMap.get(entity.id);
     const shown = this.layerVisibility.isVisible(entity);
@@ -863,12 +882,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         existing.label.text = labelText;
       }
       if (existing.billboard) {
+        existing.billboard.image = this.getBillboardImage(entity);
         existing.billboard.rotation = rotation;
-        existing.billboard.color = (this.isMilitaryAircraft(entity) ? this.Cesium.Color.WHITE : cesiumColor).withAlpha(billboardAlpha);
+        existing.billboard.color = (untintedBillboard ? this.Cesium.Color.WHITE : cesiumColor).withAlpha(billboardAlpha);
       }
       if (existing.label) {
         existing.label.fillColor = this.Cesium.Color.WHITE.withAlpha(billboardAlpha);
       }
+      existing.ellipse = signalEllipse
+        ? (Cesium.EllipseGraphics ? new Cesium.EllipseGraphics(signalEllipse) : signalEllipse)
+        : undefined;
       // An entity first seen without an altitude was clamped to ground;
       // lift it once a fix with altitude arrives (and vice versa).
       if (existing._heightRef !== heightRef) {
@@ -906,13 +929,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         billboard: {
           image: this.getBillboardImage(entity),
           scale: 0.5,
-          color: (this.isMilitaryAircraft(entity) ? Cesium.Color.WHITE : cesiumColor).withAlpha(billboardAlpha),
+          color: (untintedBillboard ? Cesium.Color.WHITE : cesiumColor).withAlpha(billboardAlpha),
           heightReference: heightRef,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
           verticalOrigin: Cesium.VerticalOrigin.CENTER,
           rotation,
           alignedAxis: Cesium.Cartesian3.UNIT_Z,
         },
+        ellipse: signalEllipse,
         label: {
           text: labelText,
           font: '12px JetBrains Mono, monospace',
@@ -1817,7 +1841,41 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       && (entity.source === EntitySource.INTELSKY || entity.source === EntitySource.ADSB_LOL);
   }
 
+  /** True when the entity's connection is marked military and should be drawn with MIL-STD-2525D symbols. */
+  private usesMilStdSymbol(entity: Entity): boolean {
+    return isFromMilitaryFeed(entity, this.feedService.feeds());
+  }
+
+  private resyncMilitarySymbols(): void {
+    if (!this.viewer || !this.Cesium || this.entityMap.size === 0) return;
+    for (const cesiumEntity of this.entityMap.values()) {
+      const entity = cesiumEntity._sentinelEntity as Entity | undefined;
+      if (entity) this.addOrUpdateCesiumEntity(entity);
+    }
+  }
+
+  private buildSignalEllipse(entity: Entity, cesiumColor: any, isStale: boolean): any | undefined {
+    if (entity.entityType !== EntityType.SIGNAL || !this.Cesium) return undefined;
+    const axes = ellipseFromCovariance(entity.kinematics?.positionCovariance);
+    if (!axes) return undefined;
+    const fillAlpha = isStale ? 0.05 : 0.12;
+    const outlineAlpha = isStale ? 0.22 : 0.55;
+    return {
+      semiMajorAxis: axes.semiMajorM,
+      semiMinorAxis: axes.semiMinorM,
+      rotation: axes.rotationRad,
+      height: 0,
+      heightReference: this.Cesium.HeightReference.CLAMP_TO_GROUND,
+      material: cesiumColor.withAlpha(fillAlpha),
+      outline: true,
+      outlineColor: cesiumColor.withAlpha(outlineAlpha),
+    };
+  }
+
   private getBillboardImage(entity: Entity): string {
+    if (this.usesMilStdSymbol(entity)) {
+      return symbolDataUrl(sidcFor(entity));
+    }
     const isMilAircraft = this.isMilitaryAircraft(entity);
     const cacheKey = isMilAircraft ? 'MIL_AIRCRAFT' : entity.entityType;
 
@@ -2012,13 +2070,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (this.userLocationEntity) {
       this.userLocationEntity.position = position;
     } else {
-      // Blue dot SVG with pulse ring — similar to Apple Maps
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-        <circle cx="32" cy="32" r="28" fill="rgba(59,130,246,0.12)" stroke="rgba(59,130,246,0.3)" stroke-width="1"/>
-        <circle cx="32" cy="32" r="18" fill="rgba(59,130,246,0.2)" stroke="rgba(59,130,246,0.4)" stroke-width="1"/>
-        <circle cx="32" cy="32" r="9" fill="#3b82f6" stroke="white" stroke-width="2.5"/>
-      </svg>`;
-      const dataUrl = 'data:image/svg+xml;base64,' + btoa(svg);
+      const dataUrl = locationDotDataUrl('#3b82f6');
 
       this.userLocationEntity = this.viewer.entities.add({
         position,

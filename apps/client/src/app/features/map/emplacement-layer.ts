@@ -3,6 +3,7 @@ import { Emplacement, EmplacementDraft, emplacementIdOf } from '../../shared/mod
 import { EntityType } from '../../shared/models/entity.model';
 import { ENTITY_TYPE_PIN_COLORS, LABEL_SCALE_BY_DISTANCE, LABEL_TRANSLUCENCY_BY_DISTANCE } from './cesium-config';
 import { coverageRings, hasCoverage } from './emplacement-geometry';
+import { locationDotDataUrl } from './location-dot';
 
 /** The layer key emplacements obey: the built-in emplacements feed's row in the layers pill. */
 export const EMPLACEMENTS_LAYER = 'emplacements';
@@ -89,7 +90,8 @@ export class EmplacementLayer {
     if (existing) for (const x of existing.entities) this.viewer.entities.remove(x);
 
     const C = this.Cesium;
-    const color = C.Color.fromCssColorString(ENTITY_TYPE_PIN_COLORS[EntityType.SENSOR] ?? '#8b5cf6');
+    const cssColor = ENTITY_TYPE_PIN_COLORS[EntityType.SENSOR] ?? '#8b5cf6';
+    const color = C.Color.fromCssColorString(cssColor);
     const mobile = e.mobility === 'MOBILE';
     const place = () => placementOf(e, this.live);
     const cartesian = () => {
@@ -106,13 +108,12 @@ export class EmplacementLayer {
     const marker = this.viewer.entities.add({
       position: dynamic(cartesian),
       show: mobile ? new C.CallbackProperty(() => place() !== null, false) : true,
-      point: {
-        pixelSize: selected ? 14 : 11,
-        color: mobile ? color.withAlpha(0.25) : color,
-        outlineColor: mobile ? color : C.Color.WHITE,
-        outlineWidth: mobile ? 3 : 2,
+      billboard: {
+        image: locationDotDataUrl(cssColor),
+        scale: selected ? 0.85 : 0.7,
         heightReference: C.HeightReference.CLAMP_TO_GROUND,
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        verticalOrigin: C.VerticalOrigin.CENTER,
       },
       label: {
         text: e.name || 'New emplacement',
@@ -121,7 +122,7 @@ export class EmplacementLayer {
         outlineColor: C.Color.BLACK,
         outlineWidth: 2,
         style: C.LabelStyle.FILL_AND_OUTLINE,
-        pixelOffset: new C.Cartesian2(10, -6),
+        pixelOffset: new C.Cartesian2(14, -6),
         horizontalOrigin: C.HorizontalOrigin.LEFT,
         verticalOrigin: C.VerticalOrigin.BOTTOM,
         scaleByDistance: new C.NearFarScalar(...LABEL_SCALE_BY_DISTANCE),
