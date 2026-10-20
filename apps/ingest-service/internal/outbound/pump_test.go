@@ -470,3 +470,25 @@ func TestPumpKeepsAKnownExerciseEntityHomeWhenALaterEventLacksTheFlag(t *testing
 		t.Fatalf("denied{exercise} = %v, want 2", got)
 	}
 }
+
+// When the policy lets exercise out, a later event without the flag is still
+// pushed marked, so a driver that renders exercise sees it.
+func TestPumpPushesAKnownExerciseEntityMarkedWhenAllowed(t *testing.T) {
+	rec := newRecorder()
+	p, fc, _ := startPump(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{AllowExercise: true}, Context: policy.Context{SelfFeedID: "tak"}}, rec)
+	now := time.Now()
+	fc.deliver(t, entityMsg(t, "created", "e1", "sim", 1, now, exercise))
+	fc.deliver(t, entityMsg(t, "position", "e1", "sim", 2, now))
+	rec.wait(t, 2)
+	rec.mu.Lock()
+	updates := append([]driver.EntityUpdate(nil), rec.updates...)
+	rec.mu.Unlock()
+	if len(updates) != 2 {
+		t.Fatalf("updates = %+v stats=%+v", updates, p.Stats())
+	}
+	for i, u := range updates {
+		if u.Kind != driver.UpsertEntity || !u.Entity.GetExercise() {
+			t.Errorf("update %d = %+v, want an upsert marked exercise", i, u)
+		}
+	}
+}

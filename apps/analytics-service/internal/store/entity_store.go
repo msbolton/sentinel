@@ -57,6 +57,16 @@ func (s *EntityStore) Classification(ctx context.Context, entityID string) (stri
 	return level, nil
 }
 
+// EntityMarks returns an entity's exercise mark and stored level in one read.
+// An unknown entity is pgx.ErrNoRows, which callers treat as not exercise.
+func (s *EntityStore) EntityMarks(ctx context.Context, entityID string) (exercise bool, classification string, err error) {
+	err = s.pool.QueryRow(ctx, `SELECT exercise, classification FROM sentinel.entities WHERE id = $1`, entityID).Scan(&exercise, &classification)
+	if err != nil {
+		return false, "", err
+	}
+	return exercise, classification, nil
+}
+
 // ListActive returns the live entities with a fix since the given time.
 func (s *EntityStore) ListActive(ctx context.Context, since time.Time) ([]EntityRef, error) {
 	rows, err := s.pool.Query(ctx,

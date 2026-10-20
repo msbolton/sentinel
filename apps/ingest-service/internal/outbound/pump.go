@@ -262,7 +262,7 @@ func (p *Pump) handleEntity(m *ckafka.Message, now time.Time) {
 	}
 	delete(p.deniedSince, entity.Id)
 	p.tracked[entity.Id] = true
-	p.queue.Push(driver.EntityUpdate{Kind: driver.UpsertEntity, EntityID: entity.Id, Entity: entity, EventAt: eventAt})
+	p.queue.Push(driver.EntityUpdate{Kind: driver.UpsertEntity, EntityID: entity.Id, Entity: judged, EventAt: eventAt})
 }
 
 func (p *Pump) handleAlert(m *ckafka.Message, now time.Time) {
