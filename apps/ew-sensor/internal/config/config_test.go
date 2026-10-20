@@ -400,6 +400,9 @@ func TestValidationErrors(t *testing.T) {
 		{"pd NaN", minimal("--pd", "NaN"), nil, "pd"},
 		{"rate zero", minimal("--rate", "0"), nil, "rate"},
 		{"rate negative", minimal("--rate", "-1"), nil, "rate"},
+		{"rate above the bound", minimal("--rate", "100.5"), nil, "rate"},
+		{"rate far above the bound", minimal("--rate", "2e9"), nil, "rate"},
+		{"emitters above the bound", minimal("--emitters", "1001"), nil, "emitters"},
 		{"sigma zero", minimal("--sigma-m", "0"), nil, "sigma"},
 		{"width zero", minimal("--width", "0"), nil, "width"},
 		{"width over 360", minimal("--width", "361"), nil, "width"},
@@ -654,3 +657,21 @@ func TestTokenNeverLeaks(t *testing.T) {
 }
 
 func sprint(format string, a ...any) string { return fmt.Sprintf(format, a...) }
+
+func TestRateAndEmitterBounds(t *testing.T) {
+	cfg := mustLoad(t, minimal("--rate", "100", "--emitters", "1000"), nil)
+	if cfg.Sensor.Rate != 100 || cfg.EmitterCount != 1000 {
+		t.Fatalf("rate %v emitters %d, want the bounds accepted", cfg.Sensor.Rate, cfg.EmitterCount)
+	}
+	cfg.Sensor.Rate = 2e9
+	cfg.EmitterCount = 1001
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate accepted rate 2e9 and 1001 emitters")
+	}
+	for _, w := range []string{"rate must be <= 100", "emitters must be <= 1000"} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("error missing %q: %v", w, err)
+		}
+	}
+}

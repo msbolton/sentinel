@@ -96,6 +96,10 @@ func (c *Client) newLoop(api ingestv1.IngestServiceClient, sess *ingestv1.GetSes
 		if cfg, err = withServerGeometry(cfg, emp); err != nil {
 			return nil, err
 		}
+		if emp.GetCoverage().GetMaxRangeM() <= 0 {
+			c.log.Warn("the emplacement has no coverage on the server; simulating the configured (or default) sector around its boresight",
+				"emplacement_id", emp.GetId(), "width_deg", cfg.Emplacement.Width, "range_km", cfg.Emplacement.RangeKm, "min_range_km", cfg.Emplacement.MinRangeKm)
+		}
 		if cfg.Mobile() != c.cfg.Mobile() {
 			c.log.Warn("using the emplacement's mobility from the server", "mobility", cfg.Emplacement.Mobility)
 		}

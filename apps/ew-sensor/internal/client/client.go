@@ -123,7 +123,7 @@ type Stats struct {
 	Rejected        map[string]uint64 // ACK_STATUS_REJECTED by reason (retried ones excluded)
 	DeadLettered    uint64            // ACK_STATUS_DEAD_LETTERED
 	Retried         uint64            // unknown_emplacement re-sent in the upsert grace window
-	Reconnects      uint64            // streams re-opened after one ended or failed to open
+	Reconnects      uint64            // stream ends and failed opens, each followed by a retry
 	DroppedOversize uint64            // larger than the session's max_message_bytes, never sent
 	DroppedOffline  uint64            // generated while no stream was open
 }

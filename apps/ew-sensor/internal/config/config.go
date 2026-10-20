@@ -61,6 +61,15 @@ const (
 
 const defaultEmitterCount = 5
 
+// Upper bounds, so a typo cannot become a zero tick interval or a runaway
+// simulation.
+const (
+	// MaxRate is the largest --rate, in Hz.
+	MaxRate = 100
+	// MaxEmitters is the largest --emitters.
+	MaxEmitters = 1000
+)
+
 // Config is everything the sensor needs to run. Load returns it normalised
 // (enum strings upper-cased, defaults filled) and validated.
 type Config struct {
@@ -520,6 +529,8 @@ func (c Config) Validate() error {
 	s := c.Sensor
 	if !positive(s.Rate) {
 		add("rate must be > 0 (got %v)", s.Rate)
+	} else if s.Rate > MaxRate {
+		add("rate must be <= %d Hz (got %v)", MaxRate, s.Rate)
 	}
 	if !(s.Pd > 0 && s.Pd <= 1) {
 		add("pd must be in (0,1] (got %v)", s.Pd)
@@ -538,6 +549,9 @@ func (c Config) Validate() error {
 		add("emitters must be >= 0 (got %d)", c.EmitterCount)
 	} else if c.EmitterCount == 0 && len(c.Emitters) == 0 {
 		add("at least one emitter is required")
+	}
+	if n := max(c.EmitterCount, len(c.Emitters)); n > MaxEmitters {
+		add("emitters must be <= %d (got %d)", MaxEmitters, n)
 	}
 
 	if c.Mobile() {

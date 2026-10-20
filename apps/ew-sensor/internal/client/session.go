@@ -106,7 +106,7 @@ func (c *Client) emplacement(ctx context.Context, api ingestv1.IngestServiceClie
 			id, len(emps), sess.GetFeedId())
 	}
 	if sess.GetSenderManagedEmplacements() {
-		e, err := c.upsert(ctx, api)
+		e, err := c.upsert(ctx, api, sess)
 		if e != nil {
 			c.logEmplacement("upserted", e)
 		}
@@ -146,8 +146,8 @@ func (c *Client) logEmplacement(source string, e *sentinelv1.Emplacement) {
 // retrying "rate limited" and Unavailable. The emplacement cap, a
 // connection that is not sender-managed and a classification above the
 // token are fatal. A success opens the unknown_emplacement grace window.
-func (c *Client) upsert(ctx context.Context, api ingestv1.IngestServiceClient) (*sentinelv1.Emplacement, error) {
-	req := &ingestv1.UpsertEmplacementRequest{Emplacement: upsertMessage(c.cfg)}
+func (c *Client) upsert(ctx context.Context, api ingestv1.IngestServiceClient, sess *ingestv1.GetSessionResponse) (*sentinelv1.Emplacement, error) {
+	req := &ingestv1.UpsertEmplacementRequest{Emplacement: upsertMessage(c.cfg, sess.GetExercise())}
 	var resp *ingestv1.UpsertEmplacementResponse
 	ok, err := c.retrying(ctx, "UpsertEmplacement", func(ctx context.Context) error {
 		var err error
@@ -164,6 +164,9 @@ func (c *Client) upsert(ctx context.Context, api ingestv1.IngestServiceClient) (
 			return fatalf(ExitAuth, "UpsertEmplacement refused (%s): %s; delete an emplacement or pass --emplacement-id", st.Code(), st.Message())
 		case codes.Unauthenticated, codes.PermissionDenied:
 			return fatalf(ExitAuth, "UpsertEmplacement refused (%s): %s", st.Code(), st.Message())
+		case codes.AlreadyExists:
+			return fatalf(ExitFatal, "UpsertEmplacement failed (%s): %s; emplacement names are unique, so pass --name <unique> to create a different one, or --emplacement-id to use the existing one",
+				st.Code(), st.Message())
 		}
 		return fatalf(ExitFatal, "UpsertEmplacement failed (%s): %s", st.Code(), st.Message())
 	})
@@ -180,8 +183,11 @@ func (c *Client) upsert(ctx context.Context, api ingestv1.IngestServiceClient) (
 	return e, nil
 }
 
-// upsertMessage is the emplacement the sensor upserts (ruling R12).
-func upsertMessage(cfg config.Config) *sentinelv1.Emplacement {
+// upsertMessage is the emplacement the sensor upserts (ruling R12). It
+// carries the connection's exercise flag: the service stores the flag as
+// sent, and the emplacement's own SENSOR entity takes it from the row, which
+// is what keeps a simulated site off an outbound connection.
+func upsertMessage(cfg config.Config, exercise bool) *sentinelv1.Emplacement {
 	e := cfg.Emplacement
 	m := &sentinelv1.Emplacement{
 		Name:             e.Name,
@@ -196,6 +202,7 @@ func upsertMessage(cfg config.Config) *sentinelv1.Emplacement {
 			MaxRangeM:       e.RangeKm * 1000,
 			AzimuthWidthDeg: e.Width,
 		},
+		Exercise: exercise,
 	}
 	if cls := cfg.Sensor.Classification; cls != "" {
 		m.Classification = sentinelv1.Classification(sentinelv1.Classification_value["CLASSIFICATION_"+strings.ToUpper(cls)])

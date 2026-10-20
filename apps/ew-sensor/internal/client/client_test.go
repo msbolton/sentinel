@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -360,6 +361,9 @@ func isState(r *ingestv1.Report) bool { return r.GetEmplacementState() != nil }
 
 func TestUpsertThenStreamObservations(t *testing.T) {
 	f := newFake()
+	f.session = func(int) (*ingestv1.GetSessionResponse, error) {
+		return &ingestv1.GetSessionResponse{FeedId: "feed-1", SenderManagedEmplacements: true, Exercise: true}, nil
+	}
 	h := newHarness(t, f, func(c *config.Config, _ *Options) { c.Sensor.Classification = "SECRET" })
 	h.start()
 
@@ -401,6 +405,7 @@ func TestUpsertThenStreamObservations(t *testing.T) {
 		AzimuthReference: sentinelv1.AzimuthReference_AZIMUTH_REFERENCE_TRUE_NORTH,
 		Coverage:         &sentinelv1.Coverage{MinRangeM: 1000, MaxRangeM: 100000, AzimuthWidthDeg: 360},
 		Classification:   sentinelv1.Classification_CLASSIFICATION_SECRET,
+		Exercise:         true, // the session's exercise flag
 	}
 	if !proto.Equal(e, want) {
 		t.Fatalf("upserted %v\nwant %v", e, want)
@@ -410,6 +415,31 @@ func TestUpsertThenStreamObservations(t *testing.T) {
 	}
 	if !strings.Contains(h.logs.String(), "seed") && !strings.Contains(h.logs.String(), "session") {
 		t.Fatalf("no session log line: %s", h.logs.String())
+	}
+}
+
+// The upserted emplacement inherits the connection's exercise flag: the
+// service keeps the flag as sent, and the emplacement's own SENSOR entity,
+// which the outbound exercise policy checks, takes it from the row.
+func TestUpsertCarriesConnectionExerciseFlag(t *testing.T) {
+	for _, exercise := range []bool{false, true} {
+		t.Run(fmt.Sprintf("exercise=%v", exercise), func(t *testing.T) {
+			f := newFake()
+			f.session = func(int) (*ingestv1.GetSessionResponse, error) {
+				return &ingestv1.GetSessionResponse{FeedId: "feed-1", SenderManagedEmplacements: true, Exercise: exercise}, nil
+			}
+			h := newHarness(t, f, nil)
+			h.start()
+			f.next(t)
+			if err := h.stop(); err != nil {
+				t.Fatalf("Run = %v", err)
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if len(f.upserts) != 1 || f.upserts[0].GetExercise() != exercise {
+				t.Fatalf("upserts = %v, want one with exercise=%v", f.upserts, exercise)
+			}
+		})
 	}
 }
 
@@ -753,6 +783,50 @@ func TestUpsertFatalErrors(t *testing.T) {
 				t.Fatalf("upserts %d streams %d, want 1 and 0", upserts, streams)
 			}
 		})
+	}
+}
+
+func TestUpsertNameTakenSuggestsAWayOut(t *testing.T) {
+	f := newFake()
+	f.upsert = func(int, *sentinelv1.Emplacement) (*ingestv1.UpsertEmplacementResponse, error) {
+		return nil, status.Error(codes.AlreadyExists, "an emplacement already has that name")
+	}
+	h := newHarness(t, f, nil)
+	h.start()
+	err := h.wait()
+	if ExitCode(err) != ExitFatal {
+		t.Fatalf("Run = %v, exit %d, want %d", err, ExitCode(err), ExitFatal)
+	}
+	for _, w := range []string{"already has that name", "--name", "--emplacement-id"} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("error %q does not mention %q", err, w)
+		}
+	}
+	if _, upserts, streams := f.counts(); upserts != 1 || streams != 0 {
+		t.Fatalf("upserts %d streams %d, want 1 and 0", upserts, streams)
+	}
+}
+
+func TestBoundEmplacementWithoutCoverageWarns(t *testing.T) {
+	f := newFake()
+	bare := boundEmplacement("EMP-B")
+	bare.Coverage = nil
+	f.session = sessionWith(false, bare)
+	h := newHarness(t, f, nil)
+	h.start()
+	f.next(t)
+	if !strings.Contains(h.logs.String(), "has no coverage on the server") {
+		t.Fatalf("no coverage warning:\n%s", h.logs.String())
+	}
+
+	// A bound emplacement that has coverage does not warn.
+	g := newFake()
+	g.session = sessionWith(false, boundEmplacement("EMP-B"))
+	h2 := newHarness(t, g, nil)
+	h2.start()
+	g.next(t)
+	if strings.Contains(h2.logs.String(), "has no coverage on the server") {
+		t.Fatalf("unexpected coverage warning:\n%s", h2.logs.String())
 	}
 }
 
