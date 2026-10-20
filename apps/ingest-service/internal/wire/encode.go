@@ -166,6 +166,14 @@ func platform(o *obs.Observation) *sentinelv1.PlatformDetail {
 		return &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Uav{Uav: &sentinelv1.UavDetail{
 			Make: u.Make, Model: u.Model, SerialNumber: u.SerialNumber, MacAddress: u.MACAddress, OperatingFrequency: u.OperatingFrequency, FrequencyRange: u.FrequencyRange,
 		}}}
+	case o.RF != nil:
+		r := o.RF
+		return &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Rf{Rf: &sentinelv1.RfDetail{
+			FrequencyHz: r.FrequencyHz, BandwidthHz: copyFloat(r.BandwidthHz),
+			EmitterType: r.EmitterType, Modulation: r.Modulation,
+			PriUs: copyFloat(r.PriUs), PulseWidthUs: copyFloat(r.PulseWidthUs),
+			ScanType: r.ScanType, PowerDbm: copyFloat(r.PowerDbm),
+		}}}
 	}
 	return nil
 }

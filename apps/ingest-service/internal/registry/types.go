@@ -129,6 +129,9 @@ type CommonOptions struct {
 	// Exercise marks everything the connection brings in as synthetic
 	// (exercise or simulation); ORed onto each observation.
 	Exercise bool `json:"exercise"`
+	// Military marks the connection as a military feed so the client renders
+	// its entities with MIL-STD-2525D symbols.
+	Military bool `json:"military"`
 	// Direction narrows a "both" driver to one way; "" keeps the driver's.
 	Direction string `json:"direction"`
 	// Policy is the outbound sharing policy (entity types, feeds, boxes,

@@ -1,8 +1,11 @@
 package wire
 
 import (
+	"math"
+
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/sentinel/go-common/geo"
 	"github.com/sentinel/proto-gen/pbjson"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
@@ -53,12 +56,33 @@ func FromProto(m *sentinelv1.Observation) *obs.Observation {
 	if r := m.GetOrientation(); r != nil {
 		o.Orientation = &[3]float64{r.GetYaw(), r.GetPitch(), r.GetRoll()}
 	}
-	if u := m.GetUncertainty(); u != nil {
-		ce := u.GetCircularError()
-		o.CircularError = &ce
-	}
 	if c := m.GetPositionCovariance(); c != nil {
 		o.PosCovariance = &[6]float64{c.GetPnPn(), c.GetPnPe(), c.GetPnPu(), c.GetPePe(), c.GetPePu(), c.GetPuPu()}
+	}
+	if u := m.GetUncertainty(); u != nil {
+		if o.PosCovariance == nil && u.GetSemiMajor() > 0 && u.GetSemiMinor() > 0 &&
+			!math.IsInf(u.GetSemiMajor(), 0) && !math.IsInf(u.GetSemiMinor(), 0) &&
+			!math.IsNaN(u.GetOrientation()) && !math.IsInf(u.GetOrientation(), 0) {
+			maj, min := u.GetSemiMajor(), u.GetSemiMinor()
+			if maj < min {
+				maj, min = min, maj
+			}
+			if cNN, cNE, cEE := geo.Cov2FromEllipse(maj, min, u.GetOrientation()); !math.IsNaN(cNN) && !math.IsNaN(cNE) && !math.IsNaN(cEE) &&
+				!math.IsInf(cNN, 0) && !math.IsInf(cNE, 0) && !math.IsInf(cEE, 0) {
+				o.PosCovariance = &[6]float64{cNN, cNE, 0, cEE, 0, 0}
+			}
+		}
+		ce := u.GetCircularError()
+		if ce == 0 && o.PosCovariance != nil {
+			if derived := geo.CEP(o.PosCovariance[0], o.PosCovariance[1], o.PosCovariance[3]); derived > 0 && !math.IsNaN(derived) && !math.IsInf(derived, 0) {
+				ce = derived
+			}
+		}
+		o.CircularError = &ce
+	} else if o.PosCovariance != nil && finiteCov(*o.PosCovariance) && o.PosCovariance[0] >= 0 && o.PosCovariance[3] >= 0 && o.PosCovariance[5] >= 0 && (o.PosCovariance[0] > 0 || o.PosCovariance[3] > 0) {
+		if ce := geo.CEP(o.PosCovariance[0], o.PosCovariance[1], o.PosCovariance[3]); ce > 0 && !math.IsNaN(ce) && !math.IsInf(ce, 0) {
+			o.CircularError = &ce
+		}
 	}
 	if c := m.GetPositionVelocityCovariance(); c != nil {
 		o.PosVelCovariance = &[9]float64{c.GetPnVn(), c.GetPnVe(), c.GetPnVu(), c.GetPeVn(), c.GetPeVe(), c.GetPeVu(), c.GetPuVn(), c.GetPuVe(), c.GetPuVu()}
@@ -137,7 +161,24 @@ func platformFrom(o *obs.Observation, p *sentinelv1.PlatformDetail) {
 			Make: u.GetMake(), Model: u.GetModel(), SerialNumber: u.GetSerialNumber(), MACAddress: u.GetMacAddress(),
 			OperatingFrequency: u.GetOperatingFrequency(), FrequencyRange: u.GetFrequencyRange(),
 		}
+	case *sentinelv1.PlatformDetail_Rf:
+		r := d.Rf
+		o.RF = &obs.RFData{
+			FrequencyHz: r.GetFrequencyHz(), BandwidthHz: copyFloat(r.BandwidthHz),
+			EmitterType: r.GetEmitterType(), Modulation: r.GetModulation(),
+			PriUs: copyFloat(r.PriUs), PulseWidthUs: copyFloat(r.PulseWidthUs),
+			ScanType: r.GetScanType(), PowerDbm: copyFloat(r.PowerDbm),
+		}
 	}
+}
+
+func finiteCov(c [6]float64) bool {
+	for _, v := range c {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return false
+		}
+	}
+	return true
 }
 
 // enumName is the bare enum name, or "" for the zero (unspecified) value and

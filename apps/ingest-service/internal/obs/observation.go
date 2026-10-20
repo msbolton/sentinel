@@ -32,6 +32,7 @@ const (
 	EntityVessel    = "VESSEL"
 	EntityVehicle   = "VEHICLE"
 	EntityPerson    = "PERSON"
+	EntitySignal    = "SIGNAL"
 	EntitySensor    = "SENSOR"
 	EntitySatellite = "SATELLITE"
 	EntityUnknown   = "UNKNOWN"
@@ -154,6 +155,7 @@ type Observation struct {
 	Link16 *Link16Data
 	CoT    *CoTData
 	UAV    *UAVData
+	RF     *RFData
 
 	RawContentType string
 	Raw            []byte
