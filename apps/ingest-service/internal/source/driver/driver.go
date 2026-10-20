@@ -248,6 +248,12 @@ type Health struct {
 	Connected bool   // transport or remote reachable per the last attempt
 	LastError string // last transport or poll error; "" when fine
 	Detail    map[string]any
+	// Emplacements is the heartbeat state of each active emplacement bound to
+	// the connection, for a driver whose senders heartbeat them (grpc), and
+	// is not empty whenever the connection has such emplacements. The
+	// supervisor rolls the connection's health up from it instead of from
+	// report age, and writes it to the status as detail.emplacements.
+	Emplacements []emplacement.Liveness
 }
 
 // Factory builds a driver for a feed.
