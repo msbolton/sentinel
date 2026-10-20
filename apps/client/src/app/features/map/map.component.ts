@@ -815,9 +815,15 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private handleEntityEvent(event: EntityEvent): void {
     switch (event.type) {
       case 'created':
-      case 'updated':
-        this.addOrUpdateCesiumEntity(event.entity);
+      case 'updated': {
+        const prev = this.entityMap.get(event.entity.id)?._sentinelEntity as Entity | undefined;
+        const merged =
+          prev && event.entity.affiliation == null && prev.affiliation != null
+            ? { ...event.entity, affiliation: prev.affiliation }
+            : event.entity;
+        this.addOrUpdateCesiumEntity(merged);
         break;
+      }
       case 'deleted':
         this.removeCesiumEntity(event.entity.id);
         break;

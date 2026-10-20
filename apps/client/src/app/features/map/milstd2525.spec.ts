@@ -2,6 +2,7 @@ import ms from 'milsymbol';
 import { Affiliation, EntityType, TrackEnvironment } from '../../shared/models/entity.model';
 import { Feed } from '../../shared/models/feed.model';
 import {
+  hasSymbolCached,
   isFromMilitaryFeed,
   MAX_SYMBOL_CACHE_SIZE,
   sidcFor,
@@ -157,11 +158,21 @@ describe('milstd2525', () => {
     });
 
     it('bounds the symbol image cache at MAX_SYMBOL_CACHE_SIZE with LRU eviction', () => {
-      for (let i = 0; i < MAX_SYMBOL_CACHE_SIZE + 20; i++) {
+      const firstKey = '10065200001103008001';
+      const secondKey = '10065200001103008002';
+      symbolImage(firstKey);
+      symbolImage(secondKey);
+      for (let i = 0; i < MAX_SYMBOL_CACHE_SIZE - 2; i++) {
         const suffix = String(i).padStart(4, '0');
         symbolImage(`1006520000110300${suffix}`);
       }
-      expect(symbolCacheSize()).toBeLessThanOrEqual(MAX_SYMBOL_CACHE_SIZE);
+      // Touch firstKey so secondKey becomes the oldest entry
+      symbolImage(firstKey);
+      // Insert one more entry beyond MAX_SYMBOL_CACHE_SIZE
+      symbolImage('10065200001103009999');
+      expect(symbolCacheSize()).toBe(MAX_SYMBOL_CACHE_SIZE);
+      expect(hasSymbolCached(firstKey)).toBe(true);
+      expect(hasSymbolCached(secondKey)).toBe(false);
     });
   });
 

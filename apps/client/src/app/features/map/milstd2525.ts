@@ -13,6 +13,12 @@ export function symbolCacheSize(): number {
   return symbolCache.size;
 }
 
+/** Visible for tests: whether a symbol key is currently in the cache. */
+export function hasSymbolCached(sidc: string, size = 32): boolean {
+  const key = size === 32 ? sidc : `${sidc}@${size}`;
+  return symbolCache.has(key);
+}
+
 /**
  * True when any feed in `feedId`, `lastFeedId` or `sources[].feedId` is a
  * loaded feed with `config.military === true`.

@@ -107,7 +107,7 @@ func (s *IdentityStore) createOne(ctx context.Context, tx pgx.Tx, spec identity.
 		INSERT INTO sentinel.entities
 			("entityType", name, source, classification, "feedId", "sourceEntityId", "trackEnvironment",
 			 "countryOfOrigin", "primaryIdentityType", "primaryIdentityValue", metadata, affiliations, "ageoutState", exercise, affiliation)
-		VALUES ($1, $2, $3, COALESCE(NULLIF(upper($10), ''), 'UNCLASSIFIED'), $4, $5, NULLIF($6, ''), NULLIF($7, ''), $8, $9, '{}'::jsonb, ARRAY[]::text[], 'LIVE', $11, NULLIF($12, ''))
+		VALUES ($1, $2, $3, COALESCE(NULLIF(upper($10), ''), 'UNCLASSIFIED'), $4, $5, NULLIF($6, ''), NULLIF($7, ''), $8, $9, '{}'::jsonb, ARRAY[]::text[], 'LIVE', $11, COALESCE(NULLIF($12, ''), 'UNKNOWN'))
 		RETURNING id`,
 		entityType, name, source, spec.FeedID, spec.SourceEntityID,
 		spec.TrackEnvironment, spec.CountryOfOrigin, spec.Key.Type, spec.Key.Value, spec.Classification, spec.Exercise, spec.Affiliation).Scan(&id)

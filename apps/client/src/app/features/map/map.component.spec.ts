@@ -355,34 +355,50 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     expect((component as any).trackTrails.get('sig-1').toArray()).toHaveLength(1);
   });
 
-  it('retains HOSTILE 2525D symbol across live WebSocket entity updates carrying affiliation', () => {
+  it('updates 2525D affiliation when carried on stream and preserves prior affiliation when omitted', () => {
     feedsSignal.set([{ id: 'ew-1', config: { military: true } } as unknown as Feed]);
     fixture.detectChanges();
 
-    const initial = baseSignalEntity({ affiliation: Affiliation.HOSTILE });
-    (component as any).addOrUpdateCesiumEntity(initial);
+    const suspect = baseSignalEntity({ affiliation: Affiliation.SUSPECT });
+    (component as any).addOrUpdateCesiumEntity(suspect);
 
-    const hostileUrl = symbolDataUrl(sidcFor(initial));
-    const unknownUrl = symbolDataUrl(sidcFor({ ...initial, affiliation: Affiliation.UNKNOWN }));
+    const suspectUrl = symbolDataUrl(sidcFor(suspect));
+    const hostileUrl = symbolDataUrl(sidcFor({ ...suspect, affiliation: Affiliation.HOSTILE }));
+    const unknownUrl = symbolDataUrl(sidcFor({ ...suspect, affiliation: Affiliation.UNKNOWN }));
+    expect(suspectUrl).not.toBe(hostileUrl);
     expect(hostileUrl).not.toBe(unknownUrl);
 
     const cesiumEnt = (component as any).entityMap.get('sig-1');
-    expect(cesiumEnt.billboard.image).toBe(hostileUrl);
+    expect(cesiumEnt.billboard.image).toBe(suspectUrl);
 
-    // Simulate a gateway WebSocket EntityEvent update (which carries affiliation: 'HOSTILE')
-    const liveUpdate: Entity = JSON.parse(
+    // 1. Stream update carrying new affiliation ('HOSTILE') updates the 2525D symbol to hostile
+    const promoteToHostile: Entity = JSON.parse(
       JSON.stringify({
-        ...initial,
-        position: { latitude: 50.82, longitude: -1.08 },
+        ...suspect,
+        position: { latitude: 50.81, longitude: -1.09 },
         affiliation: 'HOSTILE',
       }),
     );
     (component as any).handleEntityEvent({
       type: 'updated',
-      entity: liveUpdate,
+      entity: promoteToHostile,
       timestamp: '2026-10-20T12:00:05Z',
     });
+    expect(cesiumEnt.billboard.image).toBe(hostileUrl);
 
+    // 2. Stream update omitting affiliation preserves the stored 'HOSTILE' affiliation instead of reverting to UNKNOWN
+    const withoutAffiliation: Entity = JSON.parse(
+      JSON.stringify({
+        ...suspect,
+        position: { latitude: 50.82, longitude: -1.08 },
+        affiliation: undefined,
+      }),
+    );
+    (component as any).handleEntityEvent({
+      type: 'updated',
+      entity: withoutAffiliation,
+      timestamp: '2026-10-20T12:00:10Z',
+    });
     expect(cesiumEnt.billboard.image).toBe(hostileUrl);
   });
 });

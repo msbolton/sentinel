@@ -393,8 +393,11 @@ func TestAffiliationStickyAndCovarianceCEPClears(t *testing.T) {
 	t0 := time.Now().UTC().Truncate(time.Millisecond)
 	icao := "TSA" + t0.Format("150405")
 
-	// 1. Affiliation: NULL takes the reported value; once set (e.g. HOSTILE),
-	// a later fused update carrying FRIEND / FRIENDLY does not overwrite it.
+	// 1. Affiliation:
+	// - a new entity with no affiliation stores 'UNKNOWN';
+	// - default 'UNKNOWN' takes HOSTILE;
+	// - PENDING -> SUSPECT -> HOSTILE follows the feed;
+	// - a report with no affiliation keeps the stored one.
 	r1 := report("test-ew", icao, t0, 50.0, -1.0)
 	spec := fusion.SpecFor(r1)
 	spec.Affiliation = ""
@@ -405,30 +408,44 @@ func TestAffiliationStickyAndCovarianceCEPClears(t *testing.T) {
 	entityID := created[r1.Key]
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM sentinel.entities WHERE id = $1`, entityID) })
 
-	res, err := ents.ApplyFused(ctx, []store.FusedUpdate{{
-		EntityID: entityID, ObservedAt: t0, FeedID: "test-ew", Source: "SIGINT", SourceEntityID: r1.Obs.SourceEntityId,
-		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.0, Lon: -1.0, Affiliation: "HOSTILE",
-		Kinematics: json.RawMessage(`{}`),
-	}})
-	if err != nil || len(res) != 1 || res[0].Record.Affiliation == nil || *res[0].Record.Affiliation != "HOSTILE" {
-		t.Fatalf("expected NULL affiliation to take HOSTILE, got %+v (err=%v)", res, err)
+	initialRec, err := ents.FindByID(ctx, entityID)
+	if err != nil || initialRec == nil || initialRec.Affiliation == nil || *initialRec.Affiliation != "UNKNOWN" {
+		t.Fatalf("new entity with no affiliation must store 'UNKNOWN', got %+v (err=%v)", initialRec, err)
 	}
 
-	res, err = ents.ApplyFused(ctx, []store.FusedUpdate{{
-		EntityID: entityID, ObservedAt: t0.Add(time.Second), FeedID: "test-ew", Source: "SIGINT", SourceEntityID: r1.Obs.SourceEntityId,
-		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.01, Lon: -1.01, Affiliation: "FRIEND",
-		Kinematics: json.RawMessage(`{}`),
-	}})
-	if err != nil || len(res) != 1 || res[0].Record.Affiliation == nil || *res[0].Record.Affiliation != "HOSTILE" {
-		t.Fatalf("expected HOSTILE affiliation to survive FRIEND update, got %+v (err=%v)", res, err)
+	applyAff := func(aff string, step time.Duration) *store.EntityRecord {
+		res, err := ents.ApplyFused(ctx, []store.FusedUpdate{{
+			EntityID: entityID, ObservedAt: t0.Add(step), FeedID: "test-ew", Source: "SIGINT", SourceEntityID: r1.Obs.SourceEntityId,
+			KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.0, Lon: -1.0, Affiliation: aff,
+			Kinematics: json.RawMessage(`{}`),
+		}})
+		if err != nil || len(res) != 1 {
+			t.Fatalf("ApplyFused(affiliation=%q) = %+v (err=%v)", aff, res, err)
+		}
+		return res[0].Record
+	}
+
+	// Default 'UNKNOWN' takes HOSTILE.
+	if rec := applyAff("HOSTILE", 0); rec.Affiliation == nil || *rec.Affiliation != "HOSTILE" {
+		t.Fatalf("expected default 'UNKNOWN' to take HOSTILE, got %v", rec.Affiliation)
+	}
+	// PENDING -> SUSPECT -> HOSTILE follows the feed.
+	for i, want := range []string{"PENDING", "SUSPECT", "HOSTILE"} {
+		if rec := applyAff(want, time.Duration(i+1)*time.Second); rec.Affiliation == nil || *rec.Affiliation != want {
+			t.Fatalf("step %d: expected affiliation %q, got %v", i, want, rec.Affiliation)
+		}
+	}
+	// A report with no affiliation keeps the stored one ('HOSTILE').
+	if rec := applyAff("", 4*time.Second); rec.Affiliation == nil || *rec.Affiliation != "HOSTILE" {
+		t.Fatalf("expected empty affiliation report to keep HOSTILE, got %v", rec.Affiliation)
 	}
 
 	// 2. circularError: an AIS/CoT-style track without positionCovariance keeps
 	// its scalar CE across a report with no CE; a covariance-derived CE clears
 	// when a later report has neither CE nor positionCovariance.
 	ce50 := 50.0
-	res, err = ents.ApplyFused(ctx, []store.FusedUpdate{{
-		EntityID: entityID, ObservedAt: t0.Add(2 * time.Second), FeedID: "test-ew", Source: "COT", SourceEntityID: r1.Obs.SourceEntityId,
+	res, err := ents.ApplyFused(ctx, []store.FusedUpdate{{
+		EntityID: entityID, ObservedAt: t0.Add(5 * time.Second), FeedID: "test-ew", Source: "COT", SourceEntityID: r1.Obs.SourceEntityId,
 		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.02, Lon: -1.02,
 		CircularError: &ce50, Kinematics: json.RawMessage(`{}`),
 	}})
@@ -438,7 +455,7 @@ func TestAffiliationStickyAndCovarianceCEPClears(t *testing.T) {
 
 	// Next report on same feed with no CE and no covariance preserves scalar CE 50.
 	res, err = ents.ApplyFused(ctx, []store.FusedUpdate{{
-		EntityID: entityID, ObservedAt: t0.Add(3 * time.Second), FeedID: "test-ew", Source: "COT", SourceEntityID: r1.Obs.SourceEntityId,
+		EntityID: entityID, ObservedAt: t0.Add(6 * time.Second), FeedID: "test-ew", Source: "COT", SourceEntityID: r1.Obs.SourceEntityId,
 		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.03, Lon: -1.03,
 		CircularError: nil, Kinematics: json.RawMessage(`{}`),
 	}})
@@ -449,7 +466,7 @@ func TestAffiliationStickyAndCovarianceCEPClears(t *testing.T) {
 	// Report carrying positionCovariance and covariance-derived CE sets both.
 	ce1474 := 1474.0
 	res, err = ents.ApplyFused(ctx, []store.FusedUpdate{{
-		EntityID: entityID, ObservedAt: t0.Add(4 * time.Second), FeedID: "test-ew", Source: "SIGINT", SourceEntityID: r1.Obs.SourceEntityId,
+		EntityID: entityID, ObservedAt: t0.Add(7 * time.Second), FeedID: "test-ew", Source: "SIGINT", SourceEntityID: r1.Obs.SourceEntityId,
 		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.04, Lon: -1.04,
 		CircularError: &ce1474,
 		Kinematics:    json.RawMessage(`{"positionCovariance":{"pnPn":500,"pnPe":25,"pePe":200}}`),
@@ -460,7 +477,7 @@ func TestAffiliationStickyAndCovarianceCEPClears(t *testing.T) {
 
 	// Subsequent report with neither CE nor positionCovariance clears circularError to nil.
 	res, err = ents.ApplyFused(ctx, []store.FusedUpdate{{
-		EntityID: entityID, ObservedAt: t0.Add(5 * time.Second), FeedID: "test-ew", Source: "SIGINT", SourceEntityID: r1.Obs.SourceEntityId,
+		EntityID: entityID, ObservedAt: t0.Add(8 * time.Second), FeedID: "test-ew", Source: "SIGINT", SourceEntityID: r1.Obs.SourceEntityId,
 		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.05, Lon: -1.05,
 		CircularError: nil, Kinematics: json.RawMessage(`{}`),
 	}})
