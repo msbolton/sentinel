@@ -148,7 +148,7 @@ func shipRig(t *testing.T, cfg map[string]any, tok ingesttoken.Token, ships ...e
 }
 
 // A mobile emplacement's own report moves its SENSOR entity: one observation
-// a second at most, fused with the mirror's through EMPLACEMENT:<id>, and its
+// a second at most, fused with its other reports through EMPLACEMENT:<id>, and its
 // position written through Touch at most every 10 s.
 func TestStateEmitsTheSensorAndTouches(t *testing.T) {
 	r, w, clk, st := shipRig(t, nil, ingesttoken.Token{}, emp("ship", "grpc-1", "MOBILE", "RF", "UNCLASSIFIED"))

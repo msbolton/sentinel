@@ -157,6 +157,11 @@ type Observation struct {
 	UAV    *UAVData
 	RF     *RFData
 
+	// Generic is decoder or service output with no typed block, sent as a
+	// GenericDetail: a site's heartbeat (emplacement.MarkSite). Only service
+	// code sets it; wire.FromProto never copies a sender's.
+	Generic map[string]string
+
 	RawContentType string
 	Raw            []byte
 	RawTruncated   bool

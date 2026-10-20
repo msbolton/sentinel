@@ -244,12 +244,10 @@ func TestRunnerRepeatSuppressionCanBeTurnedOff(t *testing.T) {
 			pub := &memPublisher{}
 			drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
 				first := fix("e-1", 50, -4, ts)
-				first.EmplacementID = "e-1"
 				if err := sink.Emit(ctx, first); err != nil {
 					return err
 				}
 				second := fix("e-1", 50, -4, ts.Add(100*time.Millisecond))
-				second.EmplacementID = "e-1"
 				second.DisplayName = "renamed"
 				return sink.Emit(ctx, second)
 			}}
@@ -434,5 +432,30 @@ func TestNoRepeatSuppressionComesFromTheDefinition(t *testing.T) {
 	}
 	if noRepeatSuppression("stream") || noRepeatSuppression("no-such-driver") {
 		t.Error("suppression is off for a driver that did not ask")
+	}
+}
+
+// A site's own report (an emplacement's SENSOR observation) is never
+// suppressed as a repeat: a re-publish keeps the position and changes what
+// the entity says.
+func TestRunnerNeverSuppressesASiteReport(t *testing.T) {
+	ts := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	pub := &memPublisher{}
+	drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+		for i := 0; i < 2; i++ {
+			o := fix("e-1", 50, -4, ts)
+			o.EmplacementID = "e-1"
+			if err := sink.Emit(ctx, o); err != nil {
+				return err
+			}
+		}
+		return nil
+	}}
+	r := NewRunner("f", "grpc", drv, pub, nil, nil, RunnerOptions{})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(pub.observations()); got != 2 {
+		t.Fatalf("%d site reports forwarded, want 2", got)
 	}
 }

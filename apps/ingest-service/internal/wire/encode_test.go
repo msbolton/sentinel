@@ -122,3 +122,16 @@ func TestEmplacementFieldsOnWire(t *testing.T) {
 		t.Errorf("no polar must leave the field unset")
 	}
 }
+
+// A site's heartbeat travels as a GenericDetail, with its operational status.
+func TestGenericDetailOnWire(t *testing.T) {
+	o := &obs.Observation{FeedID: "f", SourceEntityID: "e-1", OperationalStatus: "INACTIVE",
+		Generic: map[string]string{"heartbeat": "offline", "silentSince": "2026-10-20T14:02:00Z"}}
+	m := ToProto(o)
+	if g := m.GetPlatform().GetGeneric(); g == nil || g.GetFields()["silentSince"] != "2026-10-20T14:02:00Z" || g.GetFields()["heartbeat"] != "offline" {
+		t.Fatalf("platform = %v", m.GetPlatform())
+	}
+	if m.GetOperationalStatus() != sentinelv1.OperationalStatus_OPERATIONAL_STATUS_INACTIVE {
+		t.Fatalf("operational status = %v", m.GetOperationalStatus())
+	}
+}

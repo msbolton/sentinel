@@ -15,10 +15,10 @@ import (
 
 	"github.com/sentinel/go-common/classification"
 	"github.com/sentinel/go-common/geo"
+	"github.com/sentinel/ingest-service/internal/emplacement"
 	"github.com/sentinel/ingest-service/internal/source/decoder"
 	"github.com/sentinel/ingest-service/internal/source/decoder/sentinelobs"
 	"github.com/sentinel/ingest-service/internal/source/driver"
-	"github.com/sentinel/ingest-service/internal/source/driver/emplacementmirror"
 	"github.com/sentinel/ingest-service/internal/source/transport"
 	ingestv1 "github.com/sentinel/proto-gen/sentinel/ingest/v1"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
@@ -210,7 +210,7 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 	if bound {
 		o.EmplacementID, o.SensorID = e.ID, e.ID
 		if o.Source == "" {
-			o.Source = emplacementmirror.SourceFor(e.SensorType)
+			o.Source = emplacement.SourceFor(e.SensorType)
 		}
 		o.Exercise = e.Exercise
 		if classification.Rank(e.Classification) > classification.Rank(o.Classification) {

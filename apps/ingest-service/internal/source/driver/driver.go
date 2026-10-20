@@ -78,9 +78,6 @@ type Deps struct {
 	// Tokens authenticates senders for the drivers that take ingest tokens
 	// (nil when there is none).
 	Tokens TokenSource
-	// Feeds tells a driver what the other connections are configured as, for
-	// the drivers that report on a connection's behalf (nil when there is none).
-	Feeds FeedSource
 	// EmplacementWriter writes emplacements for the drivers whose senders
 	// manage or move their own (nil when there is none).
 	EmplacementWriter EmplacementWriter
@@ -130,18 +127,6 @@ type EmplacementSource interface {
 	// Ready is closed after the first load. Until then the view is empty, so
 	// a caller that serves senders answers Unavailable.
 	Ready() <-chan struct{}
-}
-
-// FeedSource is what a driver may ask about the connections the supervisor
-// lists (feed.Supervisor).
-type FeedSource interface {
-	// Exercise reports whether the connection feedID is marked exercise.
-	// known is false for a connection the supervisor does not list.
-	Exercise(feedID string) (exercise, known bool)
-	// OnExerciseChange calls fn with the id of every connection whose
-	// exercise marking changed (including one that was added or removed
-	// while marked). fn must not block. The returned func unregisters it.
-	OnExerciseChange(fn func(feedID string)) (cancel func())
 }
 
 // TokenSource authenticates the senders of the drivers that take ingest
@@ -331,16 +316,19 @@ type Definition struct {
 	New          Factory
 	// Listen is set by drivers whose feeds may bind a port.
 	Listen ListenFunc
-	// Internal drivers run Sentinel's own built-in feeds (the emplacements
-	// mirror): nobody creates a feed with one, and the client's new-connection
-	// picker leaves them out.
+	// Internal drivers run Sentinel's own built-in feeds: nobody creates a
+	// feed with one, and the client's new-connection picker leaves them out.
+	// None ships today.
 	Internal bool
 	// NoRepeatSuppression turns the runner's repeat suppression off for the
 	// driver's feeds. Suppression drops a report that repeats the last
-	// position within a second; a driver whose reports carry changes other
-	// than position (the emplacements mirror, after an edit) sets it so no
-	// change is lost.
+	// position within a second. A site's own report is never suppressed.
 	NoRepeatSuppression bool
+	// Heartbeats means the driver publishes the SENSOR entities of the
+	// emplacements bound to its connections itself, from their heartbeats
+	// (grpc). For the other inbound drivers the runner's SitePublisher
+	// reports the fixed ones.
+	Heartbeats bool
 }
 
 // HasCapability reports whether the definition advertises cap.

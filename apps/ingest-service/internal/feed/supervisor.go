@@ -242,9 +242,6 @@ type Supervisor struct {
 	logger  *zap.Logger
 	metrics *metrics.Metrics
 	opts    Options
-	// exercise is the exercise marking of every listed connection, handed to
-	// the drivers as their driver.FeedSource.
-	exercise *exerciseFlags
 
 	mu      sync.Mutex
 	running map[string]*instance
@@ -279,6 +276,13 @@ func driverDirection(id string) driver.Direction {
 func noRepeatSuppression(id string) bool {
 	d, ok := driver.Lookup(id)
 	return ok && d.NoRepeatSuppression
+}
+
+// heartbeats reports whether the registered driver publishes its
+// connections' sites itself from their heartbeats (false for an unknown driver).
+func heartbeats(id string) bool {
+	d, ok := driver.Lookup(id)
+	return ok && d.Heartbeats
 }
 
 // outboundTuning mirrors config.outbound.
@@ -346,7 +350,7 @@ func New(reg Registry, pub Publisher, logger *zap.Logger, m *metrics.Metrics, op
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Supervisor{reg: reg, pub: pub, logger: logger, metrics: m, opts: opts.withDefaults(), exercise: newExerciseFlags(), running: map[string]*instance{}, waitingSince: map[string]time.Time{}, unplaced: map[string]int{}}
+	return &Supervisor{reg: reg, pub: pub, logger: logger, metrics: m, opts: opts.withDefaults(), running: map[string]*instance{}, waitingSince: map[string]time.Time{}, unplaced: map[string]int{}}
 }
 
 // ReplicaID returns this replica's id.
@@ -511,8 +515,6 @@ func (s *Supervisor) Reconcile(ctx context.Context) {
 		s.logger.Warn("reconcile: listing feeds failed", zap.Error(err))
 		return
 	}
-	// Before anything starts, so a driver that reads it finds its feeds listed.
-	s.exercise.set(feeds)
 	desired := map[string]registry.Feed{}
 	connections := map[string]bool{}
 	for _, f := range feeds {
@@ -722,7 +724,7 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 	common := spec.Common()
 	logger := s.logger.With(zap.String("feed", spec.ID), zap.String("driver", spec.Driver))
 	deps := driver.Deps{Logger: logger, Shapes: s.opts.Shapes, ListenerHost: s.opts.ListenerHost,
-		ReloadSecrets: s.secretReloader(spec), SecretReloadEvery: s.opts.SecretReloadEvery, Emplacements: s.opts.Emplacements, Tokens: s.opts.Tokens, Feeds: s.exercise,
+		ReloadSecrets: s.secretReloader(spec), SecretReloadEvery: s.opts.SecretReloadEvery, Emplacements: s.opts.Emplacements, Tokens: s.opts.Tokens,
 		EmplacementWriter: s.opts.EmplacementWriter}
 	if s.opts.Density != nil {
 		deps.Density = s.opts.Density(spec.ID, common.Classification)
@@ -737,8 +739,12 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 		fail(fmt.Errorf("building outbound pump: %w", err))
 		return
 	}
+	var sites *SitePublisher
+	if s.opts.Emplacements != nil && spec.Direction(driverDirection(spec.Driver)).Inbound() && !heartbeats(spec.Driver) {
+		sites = NewSitePublisher(spec.ID, s.opts.Emplacements, SitesEvery)
+	}
 	runner := NewRunner(spec.ID, spec.Driver, drv, s.pub, s.metrics, logger, RunnerOptions{RawPolicy: common.RawPayload, RawMax: s.opts.RawMax, FencingToken: inst.token, Classification: common.Classification, Exercise: common.Exercise, Pump: pump,
-		NoRepeatSuppression: noRepeatSuppression(spec.Driver)})
+		NoRepeatSuppression: noRepeatSuppression(spec.Driver), Sites: sites})
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})

@@ -35,8 +35,9 @@ func (s *service) emplacements(a authed) []*sentinelv1.Emplacement {
 	for _, e := range s.d.emps.ByFeed(s.d.feedID) {
 		if classification.Rank(e.Classification) <= ceiling {
 			m := emplacementProto(e)
-			// What the mirror reports: a connection's emplacements are exercise
-			// when it is, whatever an operator left on the row.
+			// The connection's exercise flag is ORed onto every report it makes,
+			// its emplacements' SENSOR entities included, whatever an operator
+			// left on the row: say so to the sender.
 			m.Exercise = m.Exercise || s.d.cfg.Exercise
 			out = append(out, m)
 		}

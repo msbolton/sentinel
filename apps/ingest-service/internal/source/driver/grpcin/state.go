@@ -11,7 +11,6 @@ import (
 	"github.com/sentinel/go-common/classification"
 	"github.com/sentinel/go-common/geo"
 	"github.com/sentinel/ingest-service/internal/emplacement"
-	"github.com/sentinel/ingest-service/internal/source/driver/emplacementmirror"
 	ingestv1 "github.com/sentinel/proto-gen/sentinel/ingest/v1"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 )
@@ -85,7 +84,7 @@ func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.
 	// The SENSOR observation is rated on server time for the same reason.
 	if s.d.sensorDue(e.ID, now) {
 		e.Position, e.Altitude = pos, alt
-		o := emplacementmirror.Observation(e, reportAt)
+		o := emplacement.Observation(e, reportAt)
 		o.Decoder = Decoder
 		o.ReceivedAt = now
 		if f.heading != nil {

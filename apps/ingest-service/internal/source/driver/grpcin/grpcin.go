@@ -57,6 +57,7 @@ func init() {
 		SecretFields: []string{"tlsCert", "tlsKey", "clientCa"},
 		ConfigSchema: schema,
 		Listen:       listen,
+		Heartbeats:   true,
 		New:          New,
 	})
 }

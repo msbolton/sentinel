@@ -63,7 +63,7 @@ func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmp
 	in := inputOf(m)
 	if s.d.cfg.Exercise {
 		// An exercise connection's emplacements are exercise: the row matches
-		// the sensor entity the mirror reports for it.
+		// the SENSOR entity the connection reports for it.
 		on := true
 		in.Exercise = &on
 	}
