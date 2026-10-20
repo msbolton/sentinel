@@ -52,6 +52,7 @@ type Entity struct {
 	AgeoutState       string   `json:"ageoutState"`
 	LastObservedAt    *string  `json:"lastObservedAt"`
 	LastSeenAt        *string  `json:"lastSeenAt"`
+	Exercise          bool     `json:"exercise"`
 }
 
 // Point is the entity-service position shape.

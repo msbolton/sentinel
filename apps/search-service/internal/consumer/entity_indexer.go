@@ -147,7 +147,7 @@ func DocumentFromEntity(en *sentinelv1.Entity) *opensearch.EntityDocument {
 	if en == nil || en.Id == "" {
 		return nil
 	}
-	doc := &opensearch.EntityDocument{ID: en.Id, Name: en.Name, EntityType: pbjson.EnumName(en.EntityType)}
+	doc := &opensearch.EntityDocument{ID: en.Id, Name: en.Name, EntityType: pbjson.EnumName(en.EntityType), Exercise: en.GetExercise()}
 	set := func(dst **string, v string) {
 		if v != "" {
 			s := v

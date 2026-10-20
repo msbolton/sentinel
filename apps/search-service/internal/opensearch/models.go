@@ -25,6 +25,7 @@ type EntityDocument struct {
 	FeedID              *string                `json:"feedId,omitempty"`
 	AgeoutState         *string                `json:"ageoutState,omitempty"`
 	Identities          []string               `json:"identities,omitempty"` // "ICAO24:A1B2C3"
+	Exercise            bool                   `json:"exercise,omitempty"`
 }
 
 // GeoPoint represents a geographic point for OpenSearch.
