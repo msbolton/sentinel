@@ -3,7 +3,7 @@
 SHELL := /bin/bash
 
 # Go services
-GO_SERVICES := api-gateway ingest-service entity-service track-service search-service link-analysis-service alert-service analytics-service
+GO_SERVICES := api-gateway ingest-service entity-service track-service search-service link-analysis-service alert-service analytics-service ew-sensor
 
 # ============================================================================
 # SENTINEL - Geospatial Intelligence Platform

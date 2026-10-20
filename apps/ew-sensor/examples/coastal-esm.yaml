@@ -1,0 +1,120 @@
+# Fixed coastal ESM site looking west out to sea.
+#
+#   ew-sensor --config examples/coastal-esm.yaml --addr localhost:50051 --token "$SENTINEL_INGEST_TOKEN"
+#
+# The address and token come from flags or the environment (EW_SENSOR_ADDR,
+# EW_SENSOR_TOKEN, SENTINEL_INGEST_TOKEN), never from a file you commit.
+
+connection:
+  # Plaintext h2c, for a local stack. The token then travels in clear; for
+  # anything else set `tls: true` (and optionally `ca:`) instead.
+  insecure: true
+
+emplacement:
+  name: Coastal ESM Site
+  lat: 36.600
+  lon: -121.950
+  alt: 45                # metres above the ellipsoid
+  boresight: 270         # due west, out to sea
+  width: 120             # sector from 210 to 330 degrees true
+  rangeKm: 150
+  minRangeKm: 2
+  mobility: FIXED
+  azimuthReference: TRUE_NORTH
+
+sensor:
+  rate: 1                # ticks per second
+  pd: 0.9                # probability of detection per emitter per tick
+  sigmaM: 250            # position error at the reference range
+  classification: UNCLASSIFIED
+  sendTimestamps: false  # keep false unless this host's clock is NTP-disciplined
+
+emitters:
+  # Merchant-style X-band surface search radar on a patrolling vessel.
+  - id: esm-search-1
+    displayName: Surface search radar
+    emitterType: RADAR_SEARCH
+    frequencyHz: 9.41e9
+    bandwidthHz: 20e6
+    priUs: 1000
+    pulseWidthUs: 0.5
+    modulation: PULSE
+    scanType: CIRCULAR
+    powerDbm: -62
+    affiliation: UNKNOWN
+    trackEnvironment: SEA_SURFACE
+    start: {lat: 36.750, lon: -122.900}
+    motion:
+      type: waypoints
+      speedKts: 14
+      waypoints:
+        - {lat: 36.600, lon: -122.950}
+        - {lat: 36.450, lon: -123.000}
+        - {lat: 36.700, lon: -123.050}
+
+  # Fire-control radar: narrow, fast PRF, fixed beam. Loiters.
+  - id: esm-track-1
+    displayName: Fire-control radar
+    emitterType: RADAR_TRACK
+    frequencyHz: 10.2e9
+    bandwidthHz: 50e6
+    priUs: 250
+    pulseWidthUs: 0.2
+    modulation: PULSE
+    scanType: FIXED
+    powerDbm: -55
+    affiliation: HOSTILE
+    trackEnvironment: SEA_SURFACE
+    start: {lat: 36.720, lon: -122.800}
+    motion:
+      type: random-walk
+      speedKts: 6
+
+  # X-band military SATCOM terminal on an anchored platform.
+  - id: esm-satcom-1
+    displayName: SATCOM terminal
+    emitterType: SATCOM
+    frequencyHz: 7.95e9
+    bandwidthHz: 25e6
+    modulation: OFDM
+    scanType: FIXED
+    powerDbm: -78
+    affiliation: UNKNOWN
+    trackEnvironment: SEA_SURFACE
+    start: {lat: 36.300, lon: -122.600}
+    motion:
+      type: static
+
+  # Tactical datalink (L-band, frequency hopping) from an inbound aircraft.
+  - id: esm-link-1
+    displayName: Tactical datalink
+    emitterType: COMMS_DATALINK
+    frequencyHz: 1.13e9
+    bandwidthHz: 3e6
+    modulation: FHSS
+    scanType: FIXED
+    powerDbm: -70
+    affiliation: HOSTILE
+    trackEnvironment: AIR
+    start: {lat: 36.900, lon: -123.300}
+    motion:
+      type: waypoints
+      speedKts: 240
+      waypoints:
+        - {lat: 36.800, lon: -122.600}
+        - {lat: 36.700, lon: -122.300}
+
+  # Wideband noise jammer on an anchored vessel, sweeping the X band.
+  - id: esm-jammer-1
+    displayName: Noise jammer
+    emitterType: JAMMER
+    frequencyHz: 9.4e9
+    bandwidthHz: 400e6
+    modulation: CHIRP
+    scanType: FIXED
+    powerDbm: -45
+    affiliation: HOSTILE
+    trackEnvironment: SEA_SURFACE
+    start: {lat: 36.450, lon: -123.100}
+    motion:
+      type: static

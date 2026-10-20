@@ -225,11 +225,11 @@ describe('send guide', () => {
 
     it('builds the ew-sensor command line', () => {
       expect(ewSensorCommand({ host: 'listener.example', port: 6200, tls: false, requireClientCert: false, allow: [] }))
-        .toBe('ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure');
+        .toBe('ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure --config examples/coastal-esm.yaml');
       expect(ewSensorCommand({ host: '', port: 6200, tls: true, requireClientCert: false, allow: [] }))
-        .toBe('ew-sensor --addr listener:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem');
+        .toBe('ew-sensor --addr listener:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem --config examples/coastal-esm.yaml');
       expect(ewSensorCommand({ host: 'listener.example', port: 6200, tls: true, requireClientCert: true, allow: [] }))
-        .toBe('ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem --cert client.pem --key client-key.pem');
+        .toBe('ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem --cert client.pem --key client-key.pem --config examples/coastal-esm.yaml');
     });
 
     it('brackets an IPv6 listener host and quotes it for the shell', () => {
