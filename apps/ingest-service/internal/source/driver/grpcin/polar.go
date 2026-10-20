@@ -2,6 +2,7 @@ package grpcin
 
 import (
 	"math"
+	"slices"
 	"time"
 
 	"github.com/sentinel/go-common/geo"
@@ -17,13 +18,17 @@ type origin struct {
 	heading *float64
 }
 
+// maxPolarRangeM bounds a measured range: past it (about half the Earth's
+// circumference) the geometry overflows or means nothing.
+const maxPolarRangeM = 2e7
+
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 // badPolar reports a measurement nothing can be made of. It is read from the
 // message before Validate, which would otherwise drop it silently and let
 // the report through without it.
 func badPolar(p *sentinelv1.PolarMeasurement) bool {
-	if !finite(p.GetRangeM()) || p.GetRangeM() < 0 || !finite(p.GetAzimuthDeg()) {
+	if !finite(p.GetRangeM()) || p.GetRangeM() < 0 || p.GetRangeM() > maxPolarRangeM || !finite(p.GetAzimuthDeg()) {
 		return true
 	}
 	if el := p.ElevationDeg; el != nil && (!finite(*el) || *el < -90 || *el > 90) {
@@ -98,6 +103,9 @@ func convert(o *obs.Observation, e emplacement.Emplacement, org origin) string {
 		}
 		target, el = t, solved
 	}
+	if !finite(target.Lat) || !finite(target.Lon) || !finite(target.Alt) {
+		return "bad_polar"
+	}
 	o.SetPosition(target.Lat, target.Lon)
 	o.Altitude = obs.Float(target.Alt)
 	pick := func(sent, stored *float64) *float64 {
@@ -111,7 +119,8 @@ func convert(o *obs.Observation, e emplacement.Emplacement, org origin) string {
 		AzimuthDeg:   pick(p.SigmaAzimuthDeg, e.DefaultSigma.AzimuthDeg),
 		ElevationDeg: pick(p.SigmaElevationDeg, e.DefaultSigma.ElevationDeg),
 	}
-	if cov, ok := geo.PolarCovarianceNEU(az, el, p.RangeM, sigma); ok {
+	// A covariance with a non-finite term is dropped, as sentinelobs does.
+	if cov, ok := geo.PolarCovarianceNEU(az, el, p.RangeM, sigma); ok && slices.IndexFunc(cov[:], func(v float64) bool { return !finite(v) }) < 0 {
 		o.PosCovariance = &cov
 	}
 	return ""

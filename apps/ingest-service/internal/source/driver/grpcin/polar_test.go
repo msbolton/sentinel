@@ -151,3 +151,99 @@ func TestRefusedReportsDoNotTouch(t *testing.T) {
 		t.Fatalf("%d touches after an accepted report, want 1", n)
 	}
 }
+
+func polarRig(t *testing.T, cfg map[string]any, e emplacement.Emplacement) (*rig, ingestv1.IngestService_StreamReportsClient) {
+	t.Helper()
+	r := start(t, cfg, nil, tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1"}), &fakeEmplacements{rows: []emplacement.Emplacement{e}}, nil)
+	return r, openStream(t, r, secretA)
+}
+
+func TestPolarNeverYieldsNonFiniteValues(t *testing.T) {
+	r, st := polarRig(t, nil, emp("radar", "grpc-1", "FIXED", "RADAR", "UNCLASSIFIED"))
+	if ack := send(t, st, polarReport("too far", 90, 3e7, nil)); ack.GetReason() != "bad_polar" {
+		t.Errorf("range 3e7: %v, want bad_polar", ack)
+	}
+	huge := polarReport("huge sigma", 90, 1000, nil)
+	huge.GetObservation().Polar.Sigma = &sentinelv1.PolarSigma{RangeM: ptr(1e200)}
+	if ack := send(t, st, huge); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
+		t.Fatalf("huge sigma: %v", ack)
+	}
+	o := r.sink.emitted()[0]
+	if !o.HasPosition || o.PosCovariance != nil {
+		t.Errorf("position %v covariance %v: want a position and no covariance", o.HasPosition, o.PosCovariance)
+	}
+}
+
+func TestAltitudeOnlyPolarIsPlacedAtThatAltitude(t *testing.T) {
+	r, st := polarRig(t, nil, emp("radar", "grpc-1", "FIXED", "RADAR", "UNCLASSIFIED"))
+	rep := polarReport("high", 90, 10000, nil)
+	rep.GetObservation().Position = &sentinelv1.Coordinate{AltitudeMeters: ptr(3000.0)}
+	if ack := send(t, st, rep); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
+		t.Fatal(ack)
+	}
+	o := r.sink.emitted()[0]
+	if !o.HasPosition || o.Latitude == 0 || o.Altitude == nil || math.Abs(*o.Altitude-3000) > 1 {
+		t.Errorf("position %v,%v altitude %v: want a point about 3000 m up from the emplacement", o.Latitude, o.Longitude, o.Altitude)
+	}
+}
+
+func TestPolarCovarianceOrientation(t *testing.T) {
+	e := emp("radar", "grpc-1", "FIXED", "RADAR", "UNCLASSIFIED")
+	e.DefaultSigma = emplacement.Sigma{RangeM: ptr(50.0), AzimuthDeg: ptr(1.0)}
+	r, st := polarRig(t, nil, e)
+	only := func(id string, az float64, s *sentinelv1.PolarSigma) *[6]float64 {
+		rep := polarReport(id, az, 10000, ptr(0.0))
+		rep.GetObservation().Polar.Sigma = s
+		if ack := send(t, st, rep); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
+			t.Fatal(ack)
+		}
+		em := r.sink.emitted()
+		return em[len(em)-1].PosCovariance
+	}
+	tiny := 1e-6
+	// Range sigma only, due east: the error is east-west. [nn ne nu ee eu uu]
+	c := only("range", 90, &sentinelv1.PolarSigma{RangeM: ptr(50.0), AzimuthDeg: &tiny, ElevationDeg: &tiny})
+	if c == nil || math.Abs(c[3]-2500) > 5 || math.Abs(c[0]) > 1 {
+		t.Errorf("range sigma at az 90: %v, want ee about 2500 and nn about 0", c)
+	}
+	// Azimuth sigma only, due east: the error is north-south.
+	want := math.Pow(10000*math.Pi/180, 2)
+	c = only("azimuth", 90, &sentinelv1.PolarSigma{RangeM: &tiny, AzimuthDeg: ptr(1.0), ElevationDeg: &tiny})
+	if c == nil || math.Abs(c[0]-want) > want*0.01 {
+		t.Errorf("azimuth sigma at az 90: %v, want nn about %v", c, want)
+	}
+	// A sent sigma wins over the default (50 m, 1 degree) on its own axis;
+	// the unsent axes keep the default.
+	c = only("sent wins", 90, &sentinelv1.PolarSigma{RangeM: ptr(10.0)})
+	if c == nil || math.Abs(c[3]-100) > 5 || math.Abs(c[0]-want) > want*0.01 {
+		t.Errorf("sent range sigma 10, default azimuth 1: %v, want ee about 100 and nn about %v", c, want)
+	}
+}
+
+func TestCoverageAcrossTheNorthSeam(t *testing.T) {
+	e := emp("radar", "grpc-1", "FIXED", "RADAR", "UNCLASSIFIED")
+	e.BoresightDeg = 350
+	e.Coverage = emplacement.Coverage{MaxRangeM: 20000, AzimuthWidthDeg: 40}
+	_, st := polarRig(t, map[string]any{"enforceCoverage": true}, e)
+	for _, tc := range []struct {
+		az   float64
+		want string
+	}{{10, ""}, {335, ""}, {30, "outside_coverage"}, {320, "outside_coverage"}} {
+		if ack := send(t, st, polarReport("az", tc.az, 10000, ptr(0.0))); ack.GetReason() != tc.want {
+			t.Errorf("azimuth %v: %v, want %q", tc.az, ack, tc.want)
+		}
+	}
+}
+
+func TestUnboundPolarWithAPositionKeepsIt(t *testing.T) {
+	r := start(t, nil, nil, tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1"}), &fakeEmplacements{}, nil)
+	st := openStream(t, r, secretA)
+	rep := polarReport("p", 90, 1000, nil)
+	rep.GetObservation().Position = &sentinelv1.Coordinate{Latitude: 1, Longitude: 2}
+	if ack := send(t, st, rep); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
+		t.Fatal(ack)
+	}
+	if o := r.sink.emitted()[0]; o.Latitude != 1 || o.Longitude != 2 || o.Polar == nil {
+		t.Errorf("position %v,%v polar %v", o.Latitude, o.Longitude, o.Polar)
+	}
+}

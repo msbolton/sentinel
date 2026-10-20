@@ -219,6 +219,11 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 		if at.IsZero() {
 			at = o.ReceivedAt
 		}
+		// A position of exactly 0,0 with an altitude carries only the
+		// target's altitude: the polar places it, at that altitude.
+		if o.Polar != nil && o.HasPosition && o.Latitude == 0 && o.Longitude == 0 && o.Altitude != nil {
+			o.HasPosition = false
+		}
 		org, why := s.originOf(e, at)
 		if o.Polar != nil && !o.HasPosition {
 			if why != "" {
@@ -241,15 +246,15 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 			}
 		}
 	}
-	// Only an accepted report counts as its emplacement reporting.
-	if bound {
-		s.d.touch(ctx, e.ID, nil, nil, o.ReceivedAt)
-	}
 	if raw, err := proto.Marshal(m); err == nil {
 		o.Raw = raw
 	}
 	if err := s.sink.Emit(ctx, o); err != nil {
 		return nil, err
+	}
+	// Only an accepted report counts as its emplacement reporting.
+	if bound {
+		s.d.touch(ctx, e.ID, nil, nil, o.ReceivedAt)
 	}
 	s.d.reportsOK.Add(1)
 	s.sink.Succeeded(1)
