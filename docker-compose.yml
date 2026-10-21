@@ -954,6 +954,9 @@ services:
       KEYCLOAK_URL: http://localhost:8080
       KEYCLOAK_REALM: sentinel
       GEOSERVER_URL: http://localhost:8600/geoserver
+      # Map keys: written to /config.json at container start (apps/client/docker-entrypoint.d)
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+      CESIUM_ION_ACCESS_TOKEN: ${CESIUM_ION_ACCESS_TOKEN:-}
     ports:
       - "4200:4200"
     depends_on:
