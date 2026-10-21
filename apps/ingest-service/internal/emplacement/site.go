@@ -19,6 +19,10 @@ const (
 	FieldHeartbeatIntervalSec = "heartbeatIntervalSec"
 	FieldLastHeartbeatAt      = "lastHeartbeatAt"
 	FieldSilentSince          = "silentSince"
+	// FieldBearings is a camera site's bearing lines, a JSON array newest
+	// first, and FieldBearingTTLSec how long each lasts (integer seconds).
+	FieldBearings      = "bearings"
+	FieldBearingTTLSec = "bearingTtlSec"
 )
 
 // Observation is the SENSOR report of e at time at: its site entity, under

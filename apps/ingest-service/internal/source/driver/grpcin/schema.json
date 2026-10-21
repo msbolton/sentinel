@@ -17,6 +17,7 @@
     "maxEmplacements": { "type": "integer", "minimum": 1, "maximum": 256, "default": 16, "title": "Most emplacements senders may manage" },
     "enforceCoverage": { "type": "boolean", "default": false, "title": "Refuse reports outside the emplacement's coverage" },
     "ownshipToleranceMs": { "type": "integer", "minimum": 0, "maximum": 60000, "default": 2000, "title": "Ownship tolerance (ms)", "description": "How far past a mobile emplacement's newest position report its measurements may be placed." },
+    "bearingTtlSec": { "type": "integer", "minimum": 1, "maximum": 300, "default": 10, "title": "Bearing time to live (s)", "description": "How long a camera's bearing line (a detection that could not be placed) stays on its site without a newer detection." },
     "backpressure": { "type": "string", "enum": ["block"], "title": "Backpressure policy", "description": "A gRPC connection always blocks: each report is acked once it is queued." },
     "tls": {
       "type": "object",

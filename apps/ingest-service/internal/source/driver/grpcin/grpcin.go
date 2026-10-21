@@ -86,8 +86,11 @@ type Config struct {
 	EnforceCoverage bool `json:"enforceCoverage"`
 	// OwnshipToleranceMs is how far past a mobile emplacement's newest
 	// position report its measurements may be placed (default 2000).
-	OwnshipToleranceMs *int        `json:"ownshipToleranceMs"`
-	TLS                *TLSOptions `json:"tls"`
+	OwnshipToleranceMs *int `json:"ownshipToleranceMs"`
+	// BearingTTLSec is how long a camera's bearing line stays on its site
+	// without a newer detection (default 10, 1 to 300).
+	BearingTTLSec *int        `json:"bearingTtlSec"`
+	TLS           *TLSOptions `json:"tls"`
 	// Classification is the common key: the feed's level, the floor every
 	// report is raised to.
 	Classification string `json:"classification"`
@@ -198,10 +201,20 @@ type Driver struct {
 	connected atomic.Bool
 	stopping  atomic.Bool
 
+	// bearings are each site's bearing lines (bearings.go), bearingSeq keys
+	// those without a track id, and bearingTTL is how long one lasts.
+	bearingsMu sync.Mutex
+	bearings   map[string]*siteBearings
+	bearingSeq uint64
+	bearingTTL time.Duration
+
 	reportsOK    atomic.Int64
 	deadLettered atomic.Int64
 	rejectedMu   sync.Mutex
 	rejected     map[string]int64
+	// bearingCounts counts the bearings recorded, by reason.
+	bearingCountMu sync.Mutex
+	bearingCounts  map[string]int64
 }
 
 func intOr(p *int, def int) int {
@@ -241,6 +254,10 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	}
 	if tol := intOr(c.OwnshipToleranceMs, defaultOwnshipToleranceMs); tol < 0 || tol > maxOwnshipToleranceMs {
 		return nil, fmt.Errorf("feed %s: ownshipToleranceMs must be 0 to %d", spec.FeedID, maxOwnshipToleranceMs)
+	}
+	ttl := intOr(c.BearingTTLSec, defaultBearingTTLSec)
+	if ttl < minBearingTTLSec || ttl > maxBearingTTLSec {
+		return nil, fmt.Errorf("feed %s: bearingTtlSec must be %d to %d", spec.FeedID, minBearingTTLSec, maxBearingTTLSec)
 	}
 	maxEmps := c.MaxEmplacements
 	if maxEmps == 0 {
@@ -292,6 +309,9 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 		cacheWait:     cacheWait,
 		tolerance:     time.Duration(intOr(c.OwnshipToleranceMs, defaultOwnshipToleranceMs)) * time.Millisecond,
 		rejected:      map[string]int64{}, idleTimeout: idleTimeout,
+		bearings:      map[string]*siteBearings{},
+		bearingTTL:    time.Duration(ttl) * time.Second,
+		bearingCounts: map[string]int64{},
 	}
 	if d.logger == nil {
 		d.logger = zap.NewNop()

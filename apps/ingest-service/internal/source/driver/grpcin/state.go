@@ -129,6 +129,7 @@ func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.
 		}
 		o.Velocity = f.vel
 		emplacement.MarkSite(o, emplacement.HeartbeatOnline, now, interval)
+		s.d.markBearings(o, e.ID, now)
 		if raw, err := proto.Marshal(m); err == nil {
 			o.Raw, o.RawContentType = raw, contentType
 		}

@@ -263,12 +263,13 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 			}
 			if o.Polar.DirectionOnly {
 				// A detection placed on the terrain goes on as a position
-				// does; a bearing is accepted and emits nothing.
+				// does; a bearing is accepted and goes on the site instead.
 				var b *bearing
 				var why string
 				b, why, org = s.place(ctx, o, e, org)
 				switch {
 				case b != nil:
+					s.d.addBearing(e.ID, *b)
 					return s.accepted(ctx, ack, e.ID, o.ReceivedAt), nil
 				case why != "":
 					return s.reject(ack, why), nil

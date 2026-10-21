@@ -579,3 +579,18 @@ func TestMobileOriginAltitudeIsKnownOnlyWhenSent(t *testing.T) {
 		t.Errorf("bearing %+v reason %q, want no_origin_altitude", b, why)
 	}
 }
+
+// An air target seen from an origin at or below the ground under it meets
+// the ground at once: its line is the maximum range, never about 0 m.
+func TestDirectionOnlyAirTargetFromBelowGroundIsMaxRange(t *testing.T) {
+	s := placer(t, plateau(), nil)
+	for name, alt := range map[string]float64{"below": plateauM - 50, "on": plateauM} {
+		e := camera(ptr(alt))
+		o := dirObs(90, -5)
+		o.EntityType = "DRONE"
+		b, why := s.placeDirectionOnly(context.Background(), o, e, fixedOrigin(e))
+		if b == nil || why != reasonAirTarget || b.LengthM != 30000 {
+			t.Errorf("%s the ground: bearing %+v reason %q, want an air_target bearing 30000 m long", name, b, why)
+		}
+	}
+}

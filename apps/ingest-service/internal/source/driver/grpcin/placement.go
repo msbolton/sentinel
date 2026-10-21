@@ -131,7 +131,9 @@ func (s *service) place(ctx context.Context, o *obs.Observation, e emplacement.E
 	if isAirborne(o) {
 		length := maxRange
 		if why == "" && terr != nil {
-			if hit, err := terr.Intersect(tctx, org.at, az, el, maxRange); err == nil && hit.Found {
+			// A hit nearer than minHitRangeM is the origin at or below
+			// the ground, not where the line ends.
+			if hit, err := terr.Intersect(tctx, org.at, az, el, maxRange); err == nil && hit.Found && hit.RangeM >= minHitRangeM {
 				length = hit.RangeM
 			}
 		}
