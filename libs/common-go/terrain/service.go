@@ -1,0 +1,346 @@
+package terrain
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"net/http"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"go.uber.org/zap"
+)
+
+// ErrUnavailable means there is no height for a point right now: the tile
+// could not be fetched or decoded in time, the tile list is unknown, or the
+// point is land that GLO-30 does not cover. It is never returned for sea.
+var ErrUnavailable = errors.New("terrain unavailable")
+
+// failureTTL is how long a failed fetch is remembered before trying again.
+const failureTTL = 30 * time.Second
+
+// Config sets up a Service backed by Copernicus GLO-30.
+type Config struct {
+	SourceURL     string        // default "https://copernicus-dem-30m.s3.amazonaws.com"
+	CacheDir      string        // required for New
+	MaxCacheBytes int64         // default 2 GiB
+	FetchTimeout  time.Duration // default 60s
+	MemTiles      int           // decoded tiles kept in memory, default 4
+	HTTPClient    *http.Client
+	Logger        *zap.Logger
+}
+
+// Stats counts the service's work. Hits and Misses count height lookups on
+// listed tiles answered from, or not from, the decoded tiles in memory.
+// Downloads and Failures count tile fetches; CacheBytes is the size of the
+// tiles in the cache directory.
+type Stats struct{ Hits, Misses, Downloads, Failures, CacheBytes int64 }
+
+// Service answers ground heights. It is safe for concurrent use.
+type Service struct {
+	cfg    Config
+	static func(lat, lon float64) float64
+	log    *zap.Logger
+	client *http.Client
+	now    func() time.Time
+
+	hits, misses, downloads, failures atomic.Int64
+	warnOnce                          sync.Once
+
+	mu        sync.Mutex
+	mem       *memLRU
+	disk      map[tileID]*diskEntry
+	diskBytes int64
+	diskOK    bool
+
+	index        map[tileID]struct{}
+	indexLoading *flight[map[tileID]struct{}]
+	indexFailed  time.Time
+
+	loading map[tileID]*flight[*raster]
+	failed  map[tileID]time.Time
+}
+
+// flight is one piece of work that concurrent callers share. Its result
+// fields are written before done is closed and read only after.
+type flight[T any] struct {
+	done chan struct{}
+	val  T
+	err  error
+}
+
+func newFlight[T any]() *flight[T] { return &flight[T]{done: make(chan struct{})} }
+
+// wait blocks until the flight lands or ctx ends. The work carries on
+// either way.
+func (f *flight[T]) wait(ctx context.Context) (T, error) {
+	select {
+	case <-f.done:
+		return f.val, f.err
+	case <-ctx.Done():
+		var zero T
+		return zero, ctx.Err()
+	}
+}
+
+// New returns a Service that fetches Copernicus GLO-30 tiles on demand and
+// caches them in cfg.CacheDir. If the directory cannot be written, the
+// service still works, keeping tiles in memory only.
+func New(cfg Config) (*Service, error) {
+	if cfg.CacheDir == "" {
+		return nil, errors.New("terrain: CacheDir is required")
+	}
+	if cfg.SourceURL == "" {
+		cfg.SourceURL = DefaultSourceURL
+	}
+	cfg.SourceURL = strings.TrimRight(cfg.SourceURL, "/")
+	if cfg.MaxCacheBytes <= 0 {
+		cfg.MaxCacheBytes = 2 << 30
+	}
+	if cfg.FetchTimeout <= 0 {
+		cfg.FetchTimeout = 60 * time.Second
+	}
+	if cfg.MemTiles <= 0 {
+		cfg.MemTiles = 4
+	}
+	if cfg.HTTPClient == nil {
+		cfg.HTTPClient = &http.Client{}
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = zap.NewNop()
+	}
+	s := &Service{
+		cfg:     cfg,
+		log:     cfg.Logger,
+		client:  cfg.HTTPClient,
+		now:     time.Now,
+		mem:     newMemLRU(cfg.MemTiles),
+		disk:    map[tileID]*diskEntry{},
+		diskOK:  true,
+		loading: map[tileID]*flight[*raster]{},
+		failed:  map[tileID]time.Time{},
+	}
+	s.openCacheDir()
+	return s, nil
+}
+
+// NewStatic returns a Service whose heights come from a function, already
+// ellipsoidal, with no network or disk. It is for tests and simulations.
+func NewStatic(hae func(lat, lon float64) float64) *Service {
+	return &Service{static: hae, now: time.Now}
+}
+
+func unavailable(err error) error { return fmt.Errorf("%w: %w", ErrUnavailable, err) }
+
+// HeightHAE returns the ground height in metres above the WGS84 ellipsoid.
+// Sea, meaning any tile GLO-30 does not list outside a known gap, is 0 m
+// above mean sea level. Waiting for a tile honours ctx; a download the
+// caller gives up on carries on and is cached for the next call.
+func (s *Service) HeightHAE(ctx context.Context, lat, lon float64) (float64, error) {
+	if math.IsNaN(lat) || math.IsNaN(lon) || math.IsInf(lon, 0) || lat < -90 || lat > 90 {
+		return 0, fmt.Errorf("terrain: no height for position (%g, %g)", lat, lon)
+	}
+	if s.static != nil {
+		return s.static(lat, lon), nil
+	}
+	id := tileOf(lat, lon)
+
+	s.mu.Lock()
+	r := s.memGetLocked(id)
+	s.mu.Unlock()
+	if r != nil {
+		s.hits.Add(1)
+		return MSLToHAE(lat, lon, s.interpolate(ctx, id, r, lat, lon)), nil
+	}
+
+	idx, err := s.tileIndex(ctx)
+	if err != nil {
+		return 0, unavailable(err)
+	}
+	if _, listed := idx[id]; !listed {
+		if inKnownGap(id) {
+			return 0, fmt.Errorf("%w: %s is in a known gap in GLO-30", ErrUnavailable, id.key())
+		}
+		return MSLToHAE(lat, lon, 0), nil
+	}
+
+	s.misses.Add(1)
+	r, err = s.tile(ctx, id)
+	if err != nil {
+		return 0, unavailable(err)
+	}
+	return MSLToHAE(lat, lon, s.interpolate(ctx, id, r, lat, lon)), nil
+}
+
+// interpolate reads a height from tile id, fetching neighbouring tiles only
+// for a point in the strip past the tile's outermost pixel centres. A
+// neighbour that is unlisted is sea; one that is in a known gap or cannot be
+// had within ctx is left out, and the tile's own edge value is used.
+func (s *Service) interpolate(ctx context.Context, id tileID, r *raster, lat, lon float64) float64 {
+	if r.interior(lat, lon) {
+		return heightAt(id, r, lat, lon, noNeighbours)
+	}
+	got := map[tileID]*raster{id: r}
+	return heightAt(id, r, lat, lon, func(nid tileID) *raster {
+		if v, ok := got[nid]; ok {
+			return v
+		}
+		var v *raster
+		if idx, err := s.tileIndex(ctx); err == nil {
+			if _, listed := idx[nid]; !listed {
+				if !inKnownGap(nid) {
+					v = seaRaster(nid)
+				}
+			} else if t, err := s.tile(ctx, nid); err == nil {
+				v = t
+			}
+		}
+		got[nid] = v
+		return v
+	})
+}
+
+// memGetLocked returns a decoded tile from memory, marking it used.
+func (s *Service) memGetLocked(id tileID) *raster {
+	r := s.mem.get(id)
+	if r != nil {
+		if e, ok := s.disk[id]; ok {
+			e.used = s.now()
+		}
+	}
+	return r
+}
+
+// tileIndex returns the set of listed tiles, loading it once.
+func (s *Service) tileIndex(ctx context.Context) (map[tileID]struct{}, error) {
+	s.mu.Lock()
+	if s.index != nil {
+		idx := s.index
+		s.mu.Unlock()
+		return idx, nil
+	}
+	if !s.indexFailed.IsZero() && s.now().Sub(s.indexFailed) < failureTTL {
+		s.mu.Unlock()
+		return nil, errors.New("terrain: tile list fetch failed recently")
+	}
+	f := s.indexLoading
+	if f == nil {
+		f = newFlight[map[tileID]struct{}]()
+		s.indexLoading = f
+		go func() {
+			idx, err := s.loadIndex()
+			s.mu.Lock()
+			s.indexLoading = nil
+			if err != nil {
+				s.indexFailed = s.now()
+				s.log.Warn("terrain tile list unavailable", zap.Error(err))
+			} else {
+				s.index = idx
+			}
+			s.mu.Unlock()
+			f.val, f.err = idx, err
+			close(f.done)
+		}()
+	}
+	s.mu.Unlock()
+	return f.wait(ctx)
+}
+
+// tile returns a decoded listed tile, sharing one load among all callers.
+func (s *Service) tile(ctx context.Context, id tileID) (*raster, error) {
+	s.mu.Lock()
+	if r := s.memGetLocked(id); r != nil { // landed since the caller looked
+		s.mu.Unlock()
+		return r, nil
+	}
+	if at, ok := s.failed[id]; ok {
+		if s.now().Sub(at) < failureTTL {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("terrain: %s failed recently", id.key())
+		}
+		delete(s.failed, id)
+	}
+	f := s.loading[id]
+	if f == nil {
+		f = newFlight[*raster]()
+		s.loading[id] = f
+		go s.runLoad(id, f)
+	}
+	s.mu.Unlock()
+	return f.wait(ctx)
+}
+
+func (s *Service) runLoad(id tileID, f *flight[*raster]) {
+	r, err := s.loadTile(id)
+	s.mu.Lock()
+	delete(s.loading, id)
+	if err != nil {
+		s.failed[id] = s.now()
+		s.failures.Add(1)
+		s.log.Warn("terrain tile unavailable", zap.String("tile", id.key()), zap.Error(err))
+	} else {
+		s.mem.put(id, r)
+	}
+	s.mu.Unlock()
+	f.val, f.err = r, err
+	close(f.done)
+}
+
+// Preload makes sure every listed tile in a box is cached, downloading what
+// is missing, and returns how many listed tiles the box holds that are now
+// ready. Sea and known gaps are not counted. It waits within ctx; downloads
+// still running when ctx ends carry on.
+func (s *Service) Preload(ctx context.Context, south, west, north, east float64) (int, error) {
+	if s.static != nil {
+		return 0, nil
+	}
+	idx, err := s.tileIndex(ctx)
+	if err != nil {
+		return 0, unavailable(err)
+	}
+	ready := 0
+	var errs []error
+	for _, id := range tilesInBox(south, west, north, east) {
+		if _, listed := idx[id]; !listed {
+			continue
+		}
+		s.mu.Lock()
+		_, onDisk := s.disk[id]
+		inMem := s.mem.byID[id] != nil
+		onDisk = onDisk && s.diskOK
+		s.mu.Unlock()
+		if onDisk || inMem {
+			ready++
+			continue
+		}
+		if _, err := s.tile(ctx, id); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", id.key(), err))
+			if ctx.Err() != nil {
+				break
+			}
+			continue
+		}
+		ready++
+	}
+	if len(errs) > 0 {
+		return ready, unavailable(errors.Join(errs...))
+	}
+	return ready, nil
+}
+
+// Stats returns the counters so far.
+func (s *Service) Stats() Stats {
+	st := Stats{
+		Hits:      s.hits.Load(),
+		Misses:    s.misses.Load(),
+		Downloads: s.downloads.Load(),
+		Failures:  s.failures.Load(),
+	}
+	s.mu.Lock()
+	st.CacheBytes = s.diskBytes
+	s.mu.Unlock()
+	return st
+}
