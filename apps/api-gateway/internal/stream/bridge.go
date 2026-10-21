@@ -210,6 +210,7 @@ func EntityFromProto(en *sentinelv1.Entity) Entity {
 		MilStd2525dSymbol: en.MilStd_2525DSymbol,
 		Metadata:          map[string]interface{}{},
 		Affiliations:      en.Affiliations,
+		Affiliation:       enumOrEmpty(en.Affiliation),
 		CreatedAt:         orNow(tsString(en.CreatedAt)),
 		UpdatedAt:         orNow(tsString(en.UpdatedAt)),
 		LastSeenAt:        tsString(en.LastSeenAt),
@@ -219,7 +220,9 @@ func EntityFromProto(en *sentinelv1.Entity) Entity {
 		OperationalStatus: enumOrEmpty(en.OperationalStatus),
 		CircularError:     en.CircularError,
 		FeedID:            en.FeedId,
+		LastFeedID:        en.LastFeedId,
 		AgeoutState:       enumOrEmpty(en.AgeoutState),
+		Exercise:          en.Exercise,
 	}
 	if e.Affiliations == nil {
 		e.Affiliations = []string{}
@@ -230,9 +233,23 @@ func EntityFromProto(en *sentinelv1.Entity) Entity {
 	if en.Position != nil {
 		e.Position = &Position{Latitude: en.Position.Latitude, Longitude: en.Position.Longitude, Altitude: en.Position.AltitudeMeters}
 	}
-	if en.Kinematics != nil && en.Kinematics.Velocity != nil {
-		v := en.Kinematics.Velocity
-		e.Kinematics = map[string]interface{}{"velocity": map[string]interface{}{"north": v.North, "east": v.East, "up": v.Up}}
+	if en.Kinematics != nil {
+		kin := map[string]interface{}{}
+		if v := en.Kinematics.Velocity; v != nil {
+			kin["velocity"] = map[string]interface{}{"north": v.North, "east": v.East, "up": v.Up}
+		}
+		if a := en.Kinematics.Acceleration; a != nil {
+			kin["acceleration"] = map[string]interface{}{"north": a.North, "east": a.East, "up": a.Up}
+		}
+		if c := en.Kinematics.PositionCovariance; c != nil {
+			kin["positionCovariance"] = map[string]interface{}{
+				"pnPn": c.PnPn, "pnPe": c.PnPe, "pnPu": c.PnPu,
+				"pePe": c.PePe, "pePu": c.PePu, "puPu": c.PuPu,
+			}
+		}
+		if len(kin) > 0 {
+			e.Kinematics = kin
+		}
 	}
 	for _, s := range en.Sources {
 		if s == nil || s.FeedId == "" {

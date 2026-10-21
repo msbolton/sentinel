@@ -118,3 +118,17 @@ FROM (VALUES
 WHERE NOT EXISTS (
   SELECT 1 FROM sentinel.feed_ageout_config c WHERE c."feedId" = v.feed AND c."sourceType" = v.src
 );
+
+-- A demo emplacement: a fixed coastal radar with no connection, so it is
+-- inactive (an active emplacement needs one) and the Connections page lists
+-- it under Unassigned. Its id is fixed so the seed adds it once; one deleted
+-- since stays deleted, and a live emplacement already using the name is left
+-- alone.
+INSERT INTO sentinel.emplacements (id, name, description, mobility, "sensorType", position, "boresightDeg", "azimuthReference", coverage, classification, active, "createdBy")
+SELECT '6f0c2a1e-5b7d-4c39-9e84-2d1b7a3c5e90'::uuid, 'Lizard Point radar', 'Demo coastal radar covering the western approaches to the Channel.',
+       'FIXED', 'RADAR', ST_SetSRID(ST_MakePoint(-5.2, 49.96), 4326), 200, 'TRUE_NORTH',
+       '{"minRangeM": 0, "maxRangeM": 60000, "azimuthWidthDeg": 120}'::jsonb, 'UNCLASSIFIED', FALSE, 'seed'
+WHERE NOT EXISTS (
+  SELECT 1 FROM sentinel.emplacements e WHERE lower(e.name) = lower('Lizard Point radar') AND e."deletedAt" IS NULL
+)
+ON CONFLICT (id) DO NOTHING;

@@ -39,6 +39,8 @@ describe('proto-gen golden fixtures', () => {
     expect(ev.producer).toBe('entity-service');
     expect(ev.position?.entity?.name).toBe('UAL123');
     expect(ev.position?.entity?.platforms['adsb']?.adsb?.squawk).toBe('1200');
+    expect(ev.position?.entity?.platforms['rf']?.rf?.frequencyHz).toBe(9_410_000_000);
+    expect(ev.position?.entity?.platforms['rf']?.rf?.emitterType).toBe('RADAR_SEARCH');
     expect(ev.position?.observation?.feedId).toBe('opensky');
     expect(ev.created).toBeUndefined();
   });

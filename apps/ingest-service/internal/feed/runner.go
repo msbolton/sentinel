@@ -39,16 +39,24 @@ type RunnerOptions struct {
 	RawPolicy string // none|bounded|full (bounded)
 	RawMax    int    // bytes kept under bounded (4096)
 	Dedupe    *dedupe.Options
+	// NoRepeatSuppression forwards every report, repeated position or not
+	// (from the driver definition's flag of the same name).
+	NoRepeatSuppression bool
 	// FencingToken is the lease token stamped on every observation; 0
 	// when the feed runs without a lease.
 	FencingToken int64
 	// Classification is the feed's default level (bare Classification
 	// name). Observations below it are raised to it; "" means UNCLASSIFIED.
 	Classification string
+	// Exercise is the connection's flag, ORed onto every observation.
+	Exercise bool
 	// Pump is the outbound half of a connection (nil for a plain source).
 	// It runs beside the driver; when either stops with an error the other
 	// is cancelled and the supervisor restarts the connection.
 	Pump *outbound.Pump
+	// Sites reports the connection's fixed emplacements when its driver does
+	// not heartbeat them (nil for grpc, outbound connections and tests).
+	Sites *SitePublisher
 }
 
 // Stats is what a runner has counted so far. The Outbound fields are zero
@@ -109,6 +117,12 @@ func NewRunner(feedID, driverID string, drv driver.Driver, pub Publisher, m *met
 // Run runs the driver until ctx ends. A panic inside the driver is
 // recovered and returned as an error so the supervisor can restart it.
 func (r *Runner) Run(ctx context.Context) error {
+	if r.opts.Sites != nil {
+		sctx, stop := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { defer close(done); r.opts.Sites.Run(sctx, r) }()
+		defer func() { stop(); <-done }()
+	}
 	if r.opts.Pump == nil {
 		return r.runDriver(ctx)
 	}
@@ -189,9 +203,11 @@ func (r *Runner) Emit(ctx context.Context, o *obs.Observation) error {
 	if o.Classification == "" {
 		o.Classification = obs.ClassUnclassified
 	}
+	o.Exercise = o.Exercise || r.opts.Exercise
+	dropForeignEmplacements(o)
 	o.EnsureIdentity()
 	r.boundRaw(o)
-	if !r.filter.Allow(o, time.Now()) {
+	if !r.opts.NoRepeatSuppression && !isSiteReport(o) && !r.filter.Allow(o, time.Now()) {
 		if r.metrics != nil {
 			r.metrics.DuplicatesTotal.WithLabelValues(r.feedID).Inc()
 		}
@@ -213,6 +229,29 @@ func (r *Runner) Emit(ctx context.Context, o *obs.Observation) error {
 		r.metrics.ObservationsTotal.WithLabelValues(r.feedID, r.driverID).Inc()
 	}
 	return nil
+}
+
+// dropForeignEmplacements removes every EMPLACEMENT identity that does not
+// name the emplacement the service says the report came from. Only service
+// code sets EmplacementID, so a sender's own claim to an emplacement is
+// dropped: it could otherwise fuse into that emplacement's entity, or hide
+// its track behind one.
+func dropForeignEmplacements(o *obs.Observation) {
+	kept := o.Identities[:0]
+	for _, id := range o.Identities {
+		if id.Type == obs.IdentityEmplacement && id.Value != o.EmplacementID {
+			continue
+		}
+		kept = append(kept, id)
+	}
+	o.Identities = kept
+}
+
+// isSiteReport reports whether o is an emplacement's own SENSOR report, its
+// site entity. It is never suppressed as a repeat: a re-publish keeps the
+// position and changes what the entity says (its heartbeat state, a name).
+func isSiteReport(o *obs.Observation) bool {
+	return o.EmplacementID != "" && o.SourceEntityID == o.EmplacementID
 }
 
 func (r *Runner) boundRaw(o *obs.Observation) {

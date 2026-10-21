@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sentinel/go-common/classification"
 	"github.com/sentinel/go-common/middleware"
 
 	"github.com/sentinel/ingest-service/internal/registry"
@@ -537,5 +538,38 @@ func TestClearedFor(t *testing.T) {
 	// A config that cannot be read has no classification to be above.
 	if !clearedBy("", registry.Feed{Config: json.RawMessage(`not json`)}) {
 		t.Error("a feed whose config cannot be read should rank as UNCLASSIFIED")
+	}
+}
+
+// A connection's emplacements are shown as the API shows the emplacements
+// themselves: none above the caller's clearance, and names blanked when the
+// caller is not cleared for the connection.
+func TestVisibleEmplacements(t *testing.T) {
+	detail := json.RawMessage(`{"reportsOk":3,"emplacements":[` +
+		`{"id":"a","name":"Coastal","classification":"UNCLASSIFIED","state":"online","intervalSec":5},` +
+		`{"id":"b","name":"Secret site","classification":"SECRET","state":"offline","intervalSec":5}]}`)
+	type entry struct {
+		ID, Name, State string
+	}
+	read := func(raw json.RawMessage) (int, []entry) {
+		var d struct {
+			ReportsOk    int     `json:"reportsOk"`
+			Emplacements []entry `json:"emplacements"`
+		}
+		if err := json.Unmarshal(raw, &d); err != nil {
+			t.Fatal(err)
+		}
+		return d.ReportsOk, d.Emplacements
+	}
+	n, got := read(visibleEmplacements(detail, classification.Rank("CONFIDENTIAL"), true))
+	if n != 3 || len(got) != 1 || got[0].ID != "a" || got[0].Name != "Coastal" {
+		t.Fatalf("CONFIDENTIAL caller: %d %+v", n, got)
+	}
+	_, got = read(visibleEmplacements(detail, classification.Rank("TOP_SECRET"), false))
+	if len(got) != 2 || got[0].Name != "" || got[1].Name != "" || got[1].State != "offline" {
+		t.Fatalf("a caller not cleared for the connection: %+v", got)
+	}
+	if s := string(visibleEmplacements(json.RawMessage(`{"x":1}`), 0, false)); s != `{"x":1}` {
+		t.Fatalf("a detail without emplacements changed: %s", s)
 	}
 }

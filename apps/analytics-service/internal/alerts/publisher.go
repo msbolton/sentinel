@@ -5,11 +5,15 @@ package alerts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/sentinel/go-common/classification"
 	"github.com/sentinel/go-common/kafka"
 	"github.com/sentinel/proto-gen/pbjson"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
@@ -26,24 +30,66 @@ type Producer interface {
 	ProduceProto(topic, key string, msg proto.Message, producer string, extra map[string]string) error
 }
 
+// EntityMarks reads the entity's exercise mark and level. An unknown entity
+// is reported as pgx.ErrNoRows.
+type EntityMarks interface {
+	EntityMarks(ctx context.Context, id string) (exercise bool, classification string, err error)
+}
+
 // Publisher builds and sends alert events.
 type Publisher struct {
 	producer Producer
+	marks    EntityMarks
+	logger   *zap.Logger
 }
 
-// NewPublisher creates a publisher over the shared Kafka producer.
-func NewPublisher(producer Producer) *Publisher {
-	return &Publisher{producer: producer}
+// NewPublisher creates a publisher over the shared Kafka producer. Each
+// alert is stamped from marks with its entity's exercise flag and level.
+func NewPublisher(producer Producer, marks EntityMarks, logger *zap.Logger) *Publisher {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &Publisher{producer: producer, marks: marks, logger: logger}
 }
 
 // PublishFinding sends the finding as a triggered alert whose id is the
-// finding's id.
-func (p *Publisher) PublishFinding(_ context.Context, f *store.Finding) error {
+// finding's id. The alert carries its entity's exercise mark, and the
+// higher of the finding's level and the entity's, because the finding's own
+// level can be stale (fixes seeded after a restart are UNCLASSIFIED) and the
+// outbound pump reads this topic without the alert service in between.
+func (p *Publisher) PublishFinding(ctx context.Context, f *store.Finding) error {
 	ev := Event(f)
+	p.stamp(ctx, f, ev.Alert)
 	if err := p.producer.ProduceProto(kafka.TopicAlertEvents, f.EntityID, ev, ProducerName, nil); err != nil {
 		return fmt.Errorf("publish finding %s: %w", f.ID, err)
 	}
 	return nil
+}
+
+// stamp sets the alert's exercise flag and classification from the entity.
+// A missing entity is not exercise. Any other lookup failure is treated as
+// exercise so an outbound connection never receives what it might owe a
+// refusal; the finding's own level is then all there is to go on.
+func (p *Publisher) stamp(ctx context.Context, f *store.Finding, alert *sentinelv1.Alert) {
+	exercise, level, err := p.marks.EntityMarks(ctx, f.EntityID)
+	switch {
+	case err == nil:
+	case errors.Is(err, pgx.ErrNoRows):
+		exercise, level = false, ""
+	default:
+		p.logger.Warn("entity marks lookup failed; alert marked exercise",
+			zap.String("findingId", f.ID), zap.String("entityId", f.EntityID), zap.Error(err))
+		exercise, level = true, ""
+	}
+	alert.Exercise = exercise
+	if classification.Rank(level) > classification.Rank(f.Classification) {
+		alert.Classification = classificationEnum(level)
+	}
+}
+
+func classificationEnum(level string) sentinelv1.Classification {
+	c, _ := pbjson.ParseEnum[sentinelv1.Classification](classification.Normalize(level))
+	return c
 }
 
 // AlertType maps a finding kind to the alert type consumers already know.

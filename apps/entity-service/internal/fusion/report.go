@@ -21,6 +21,7 @@ const (
 	RejectStaleFix        = "STALE_FIX"        // the entity already had a newer fix
 	RejectInvalidPosition = "INVALID_POSITION" // NaN or out of range
 	RejectNoPosition      = "NO_POSITION"      // a static report; attributes applied, nothing moved
+	RejectEntityDeleted   = "ENTITY_DELETED"   // resolved to an entity deleted since; the next report creates a new one
 )
 
 // maxFuture caps how far ahead of receipt a source timestamp may claim.
@@ -137,7 +138,9 @@ func SpecFor(r *Report) identity.NewEntity {
 		SourceEntityID:   o.SourceEntityId,
 		TrackEnvironment: enumOrEmpty(o.TrackEnvironment),
 		CountryOfOrigin:  o.CountryOfOrigin,
+		Affiliation:      enumOrEmpty(o.Affiliation),
 		Classification:   enumOrEmpty(o.Classification),
+		Exercise:         o.GetExercise(),
 		SeenAt:           r.ReceivedAt,
 	}
 }

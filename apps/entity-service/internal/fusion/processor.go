@@ -20,6 +20,8 @@ import (
 type EntityWriter interface {
 	ApplyFused(ctx context.Context, updates []store.FusedUpdate) ([]store.FusedResult, error)
 	ApplyStatic(ctx context.Context, updates []store.StaticUpdate) ([]store.FusedResult, error)
+	MarkExercise(ctx context.Context, ids []string) ([]store.EntityRecord, error)
+	DeletedAmong(ctx context.Context, ids []string) (map[string]bool, error)
 }
 
 // ObservationWriter persists every report.
@@ -149,6 +151,18 @@ func (p *Processor) ProcessBatch(ctx context.Context, observations []*sentinelv1
 		}
 	}
 
+	if err := p.forgetDeleted(ctx, reports, res.IDs, applied, staticApplied); err != nil {
+		return stats, err
+	}
+
+	// An exercise report marks its entity whatever became of its fix: the
+	// upserts carry the mark only for the winner, and a duplicate or stale
+	// exercise report would otherwise leave the entity looking live.
+	marked, err := p.markExercise(ctx, reports, res.IDs, applied, staticApplied)
+	if err != nil {
+		return stats, err
+	}
+
 	// Persist every report and the per-feed provenance.
 	rows := make([]store.ObservationRow, 0, len(reports))
 	srcRows := make([]store.SourceRow, 0, len(reports))
@@ -216,7 +230,53 @@ func (p *Processor) ProcessBatch(ctx context.Context, observations []*sentinelv1
 			p.events.Position(entity, ref)
 		}
 	}
+	// Entities marked by a report that did not carry the mark itself.
+	for _, rec := range marked {
+		p.events.Updated(events.EntityProto(&rec, nil, nil), []string{"exercise"})
+	}
 	return stats, nil
+}
+
+// markExercise marks the entities of exercise reports whose upsert did not
+// already carry the mark. It patches the applied results so the events of
+// this batch show the mark, and returns the rows it changed.
+func (p *Processor) markExercise(ctx context.Context, reports []*Report, ids map[Key]string, applied, staticApplied map[string]store.FusedResult) ([]store.EntityRecord, error) {
+	// ApplyStatic runs after ApplyFused, so a mark its row carries may be
+	// newer than the fused result's snapshot of the same entity.
+	for id, s := range staticApplied {
+		if a, ok := applied[id]; ok && s.Record.Exercise {
+			a.Record.Exercise = true
+		}
+	}
+	var todo []string
+	seen := map[string]bool{}
+	for _, r := range reports {
+		id := ids[r.Key]
+		if id == "" || seen[id] || !r.Obs.GetExercise() {
+			continue
+		}
+		seen[id] = true
+		if a, ok := applied[id]; ok && a.Record.Exercise {
+			continue
+		}
+		if a, ok := staticApplied[id]; ok && a.Record.Exercise {
+			continue
+		}
+		todo = append(todo, id)
+	}
+	recs, err := p.entities.MarkExercise(ctx, todo)
+	if err != nil {
+		return nil, fmt.Errorf("marking exercise entities: %w", err)
+	}
+	for _, rec := range recs {
+		if a, ok := applied[rec.ID]; ok {
+			a.Record.Exercise = true
+		}
+		if a, ok := staticApplied[rec.ID]; ok {
+			a.Record.Exercise = true
+		}
+	}
+	return recs, nil
 }
 
 func fusedUpdate(id string, r *Report) store.FusedUpdate {
@@ -226,9 +286,10 @@ func fusedUpdate(id string, r *Report) store.FusedUpdate {
 		KeyType: r.Key.Type, KeyValue: r.Key.Value, Name: o.DisplayName,
 		Lat: o.Position.Latitude, Lon: o.Position.Longitude, Altitude: o.Position.AltitudeMeters,
 		Heading: o.Heading, SpeedKnots: o.SpeedKnots, Course: o.Course,
-		TrackEnvironment: enumOrEmpty(o.TrackEnvironment), CountryOfOrigin: o.CountryOfOrigin,
+		TrackEnvironment: enumOrEmpty(o.TrackEnvironment), CountryOfOrigin: o.CountryOfOrigin, Affiliation: enumOrEmpty(o.Affiliation),
 		Platform: platformJSON(o), Kinematics: kinematicsJSON(o),
-		Classification: enumOrEmpty(o.Classification),
+		Classification: enumOrEmpty(o.Classification), Exercise: o.GetExercise(),
+		OperationalStatus: enumOrEmpty(o.OperationalStatus),
 	}
 	if o.Uncertainty != nil && o.Uncertainty.CircularError != 0 {
 		ce := o.Uncertainty.CircularError
@@ -239,7 +300,7 @@ func fusedUpdate(id string, r *Report) store.FusedUpdate {
 
 func staticUpdate(id string, r *Report) store.StaticUpdate {
 	o := r.Obs
-	return store.StaticUpdate{EntityID: id, FeedID: o.FeedId, Source: pbjson.EnumName(o.Source), SourceEntityID: o.SourceEntityId, Name: o.DisplayName, CountryOfOrigin: o.CountryOfOrigin, Platform: platformJSON(o), Classification: enumOrEmpty(o.Classification)}
+	return store.StaticUpdate{EntityID: id, FeedID: o.FeedId, Source: pbjson.EnumName(o.Source), SourceEntityID: o.SourceEntityId, Name: o.DisplayName, CountryOfOrigin: o.CountryOfOrigin, Platform: platformJSON(o), Classification: enumOrEmpty(o.Classification), Exercise: o.GetExercise()}
 }
 
 func observationRow(id string, r *Report) store.ObservationRow {
@@ -330,7 +391,10 @@ func platformJSON(o *sentinelv1.Observation) json.RawMessage {
 }
 
 func kinematicsJSON(o *sentinelv1.Observation) json.RawMessage {
-	if o.Velocity == nil && o.Acceleration == nil {
+	if o.Velocity == nil && o.Acceleration == nil && o.PositionCovariance == nil {
+		if o.Position != nil {
+			return json.RawMessage(`{}`)
+		}
 		return nil
 	}
 	k := map[string]interface{}{}
@@ -339,6 +403,12 @@ func kinematicsJSON(o *sentinelv1.Observation) json.RawMessage {
 	}
 	if a := o.Acceleration; a != nil {
 		k["acceleration"] = map[string]float64{"north": a.North, "east": a.East, "up": a.Up}
+	}
+	if c := o.PositionCovariance; c != nil {
+		k["positionCovariance"] = map[string]float64{
+			"pnPn": c.PnPn, "pnPe": c.PnPe, "pnPu": c.PnPu,
+			"pePe": c.PePe, "pePu": c.PePu, "puPu": c.PuPu,
+		}
 	}
 	b, _ := json.Marshal(k)
 	return b
@@ -350,4 +420,55 @@ func enumOrEmpty(e protoreflect.Enum) string {
 		return ""
 	}
 	return pbjson.EnumName(e)
+}
+
+// forgetDeleted finds the reports whose update applied nothing because their
+// entity is deleted (a delete on another replica, or one that raced the
+// cache), rejects them as ENTITY_DELETED and drops their keys from the
+// resolver cache, so the next report creates a fresh entity.
+func (p *Processor) forgetDeleted(ctx context.Context, reports []*Report, ids map[Key]string, applied, staticApplied map[string]store.FusedResult) error {
+	var missed []*Report
+	var candidates []string
+	seen := map[string]bool{}
+	for _, r := range reports {
+		id := ids[r.Key]
+		if id == "" {
+			continue
+		}
+		stale := r.Reject == RejectStaleFix
+		if _, ok := applied[id]; ok {
+			stale = false
+		}
+		_, staticOK := staticApplied[id]
+		staticMissed := r.Reject == RejectNoPosition && !staticOK
+		if !stale && !staticMissed {
+			continue
+		}
+		missed = append(missed, r)
+		if !seen[id] {
+			seen[id] = true
+			candidates = append(candidates, id)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	dead, err := p.entities.DeletedAmong(ctx, candidates)
+	if err != nil {
+		return fmt.Errorf("checking deleted entities: %w", err)
+	}
+	if len(dead) == 0 {
+		return nil
+	}
+	var forget []Key
+	for _, r := range missed {
+		if dead[ids[r.Key]] {
+			r.Valid = false
+			r.Reject = RejectEntityDeleted
+			forget = append(forget, r.Key)
+		}
+	}
+	p.resolver.Forget(forget...)
+	p.logger.Debug("forgot keys of deleted entities", zap.Int("keys", len(forget)))
+	return nil
 }

@@ -30,6 +30,8 @@ def test_entity_event_fixture():
     assert ev.producer == "entity-service"
     assert ev.position.entity.name == "UAL123"
     assert ev.position.entity.platforms["adsb"].adsb.squawk == "1200"
+    assert ev.position.entity.platforms["rf"].rf.frequency_hz == 9_410_000_000
+    assert ev.position.entity.platforms["rf"].rf.emitter_type == "RADAR_SEARCH"
     assert ev.position.observation.feed_id == "opensky"
 
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/sentinel/entity-service/internal/identity"
 )
@@ -115,5 +116,82 @@ func TestResolveLostRaceUsesWinner(t *testing.T) {
 	res, _ := r.Resolve(context.Background(), []*Report{a})
 	if res.IDs[a.Key] != "e-other" || len(res.Created) != 0 {
 		t.Fatalf("res = %+v", res)
+	}
+}
+
+// The built-in emplacements feed and the gRPC connection that reports a
+// mobile emplacement's own position both name it by EMPLACEMENT: one entity.
+func TestResolveEmplacementFromTwoFeedsIsOneEntity(t *testing.T) {
+	store := newMemIdentities()
+	r := NewResolver(store, 100, time.Hour)
+	mk := func(feed string) *Report {
+		return Prepare(&sentinelv1.Observation{FeedId: feed, SourceEntityId: "e-1", SourceTimestamp: timestamppb.New(t0),
+			Identities: []*sentinelv1.Identity{{Type: sentinelv1.IdentityType_IDENTITY_TYPE_EMPLACEMENT, Value: "e-1"}},
+			Position:   &sentinelv1.Coordinate{Latitude: 1, Longitude: 1}}, nil)
+	}
+	a, b := mk("emplacements"), mk("grpc-1")
+	res, err := r.Resolve(context.Background(), []*Report{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IDs[a.Key] == "" || res.IDs[a.Key] != res.IDs[b.Key] || len(res.Created) != 1 {
+		t.Fatalf("ids=%v created=%v", res.IDs, res.Created)
+	}
+}
+
+func TestInvalidateDropsCachedKeys(t *testing.T) {
+	mem := newMemIdentities()
+	r := NewResolver(mem, 100, time.Hour)
+	rep := Prepare(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "ABC123", t0, 1, 1), nil)
+	if _, err := r.Resolve(context.Background(), []*Report{rep}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Resolve(context.Background(), []*Report{rep}); err != nil {
+		t.Fatal(err)
+	}
+	if mem.lookups != 1 {
+		t.Fatalf("lookups before invalidate = %d, want 1 (cached)", mem.lookups)
+	}
+	r.Invalidate()
+	if _, err := r.Resolve(context.Background(), []*Report{rep}); err != nil {
+		t.Fatal(err)
+	}
+	if mem.lookups != 2 {
+		t.Fatalf("lookups after invalidate = %d, want 2", mem.lookups)
+	}
+}
+
+// invalidatingLookup runs a callback inside Lookup, the window between a
+// store read and the resolver caching its answer.
+type invalidatingLookup struct {
+	*memIdentities
+	during func()
+}
+
+func (s *invalidatingLookup) Lookup(ctx context.Context, keys []Key) (map[Key]string, error) {
+	out, err := s.memIdentities.Lookup(ctx, keys)
+	if s.during != nil {
+		s.during()
+		s.during = nil
+	}
+	return out, err
+}
+
+func TestInvalidateDuringResolveIsNotOverwritten(t *testing.T) {
+	mem := newMemIdentities()
+	store := &invalidatingLookup{memIdentities: mem}
+	r := NewResolver(store, 100, time.Hour)
+	rep := Prepare(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "ABC124", t0, 1, 1), nil)
+	mem.ids[rep.Key] = "dead"
+	// A delete commits and invalidates after the lookup read the old id.
+	store.during = r.Invalidate
+	if _, err := r.Resolve(context.Background(), []*Report{rep}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Resolve(context.Background(), []*Report{rep}); err != nil {
+		t.Fatal(err)
+	}
+	if mem.lookups != 2 {
+		t.Fatalf("lookups = %d, want 2: a resolve that straddled Invalidate must not cache its answer", mem.lookups)
 	}
 }

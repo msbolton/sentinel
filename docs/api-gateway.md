@@ -65,8 +65,9 @@ Everything below requires a bearer token (or the dev bypass). The gateway forwar
 | `/api/v1/alerts/**` | alert-service | PATCH acknowledge/resolve and rule writes: `sentinel-analyst`, `sentinel-admin` |
 | `/api/v1/links/**` | link-analysis-service | POST/DELETE: `sentinel-analyst`, `sentinel-admin` |
 | `/api/v1/search/**` | search-service | read only |
-| `/api/v1/feeds/**` → `/feeds/**` (incl. `GET /feeds/ports`, port hints for a listening connection, and `GET /feeds/{id}/deadletters`, a connection's newest dead letters) | ingest-service | POST/PUT/PATCH/DELETE: `sentinel-operator`, `sentinel-admin`. `GET /feeds/{id}/deadletters` also needs one of those roles and a clearance at or above the feed's, which the ingest service checks from the propagated identity (see `docs/feeds.md`) |
+| `/api/v1/feeds/**` → `/feeds/**` (incl. `GET /feeds/ports`, port hints for a listening connection, and `GET /feeds/{id}/deadletters`, a connection's newest dead letters, and `/feeds/{id}/tokens`, a gRPC connection's ingest tokens) | ingest-service | POST/PUT/PATCH/DELETE: `sentinel-operator`, `sentinel-admin`, which covers creating and revoking tokens. `GET /feeds/{id}/deadletters` and `GET /feeds/{id}/tokens` also need one of those roles and a clearance at or above the feed's, which the ingest service checks from the propagated identity (see `docs/feeds.md`) |
 | `/api/v1/drivers/**` → `/drivers/**` | ingest-service | read only: the driver catalog with config schemas |
+| `/api/v1/emplacements/**` → `/emplacements/**` | ingest-service | `GET /emplacements` (query `feedId`, `mobility`, `active`), `POST /emplacements`, `GET`/`PATCH`/`DELETE /emplacements/{id}`. POST/PATCH: `sentinel-operator`, `sentinel-admin`; DELETE: `sentinel-admin`. PATCH takes `If-Match: "<version>"` and returns 412 on a stale version; responses carry `ETag: "<version>"`. A row carries `heartbeat` and `silentSince` for an active emplacement bound to a `grpc` connection. Reads hide emplacements above the caller's clearance (404), and writes cannot set a classification above it (422) |
 | `/api/v1/analytics/**` | analytics-service | PATCH findings (confirm/dismiss): `sentinel-analyst`, `sentinel-admin` |
 
 The role table lives in `internal/server/policy.go`. Note that `GET /api/v1/links/communities` returns an empty list: the Apache AGE community detection was not carried over to Go.
@@ -138,7 +139,7 @@ Every frame is a JSON envelope: `{ "type": string, "data": object, "ts": RFC3339
 |------|------|-------------|
 | `connection:ack` | `{ clientId, viewport, serverTime }` | Sent on connect; the initial viewport is the whole globe |
 | `viewport:updated`, `entity:subscribed`, `entity:unsubscribed` | | Acknowledgements |
-| `entity:batch` | `EntityEvent[]` | Created, updated and position events coalesced over 200 ms, filtered per client; every entity carries `feedId`, `ageoutState`, `identities` and `lastObservedAt` |
+| `entity:batch` | `EntityEvent[]` | Created, updated and position events coalesced over 200 ms, filtered per client; every entity carries `feedId`, `ageoutState`, `identities` and `lastObservedAt` (`exercise: true` when the entity is exercise data, omitted when false) |
 | `entity:deleted` | `EntityEvent` | Broadcast to all clients; `bulk` and `count` are set for a clear-all |
 | `events.entity.stale`, `events.entity.agedout`, `events.entity.restored` | `{ id, feedId, ageoutState, lastSeenAt }[]` | Broadcast to all clients, coalesced into one array frame per type per 200 ms flush (the ageout pass can emit a thousand per cycle) |
 | `alert:new` | `Alert` | New alert from `alerts.events`, whichever service produced it |
@@ -173,7 +174,7 @@ The authenticated user carries realm roles plus the `sentinel-api` client roles,
 
 | Method | Path | Roles | Notes |
 |--------|------|-------|-------|
-| GET | `/api/v1/export/entities.geojson` | any | FeatureCollection of live entities with a position (`[lon, lat, alt]` points; properties `name`, `entityType`, `classification`, `feedId`, `lastFeedId`, `source`, `heading`, `speedKnots`, `course`, `altitude`, `sidc`, `affiliation`, `trackEnvironment`, `countryOfOrigin`, `ageoutState`, `lastObservedAt`). Query `bbox=west,south,east,north`, `types=`, `feeds=`, `page` (1), `limit` (1000, max 5000). `X-Total-Count` header. Reads through the entity service with the caller's identity, so the clearance ceiling applies |
+| GET | `/api/v1/export/entities.geojson` | any | FeatureCollection of live entities with a position (`[lon, lat, alt]` points; properties `name`, `entityType`, `classification`, `exercise`, `feedId`, `lastFeedId`, `source`, `heading`, `speedKnots`, `course`, `altitude`, `sidc`, `affiliation`, `trackEnvironment`, `countryOfOrigin`, `ageoutState`, `lastObservedAt`). Query `bbox=west,south,east,north`, `types=`, `feeds=`, `page` (1), `limit` (1000, max 5000). `X-Total-Count` header. Reads through the entity service with the caller's identity, so the clearance ceiling applies |
 | GET | `/api/v1/export/entities.kml` | any | The same as KML Placemarks (ExtendedData, `TimeStamp`, absolute altitude). With `link=1&refresh=30` it returns a `NetworkLink` document that reopens the plain URL every `refresh` seconds (min 5) and after the view stops, passing the view as `bbox`; every other parameter, including `api_key`, is kept in the link |
 | GET | `/api/v1/auth/api-keys` | any user token | The caller's live keys (`id`, `name`, `prefix`, `classification`, `createdAt`, `expiresAt`, `lastUsedAt`) |
 | POST | `/api/v1/auth/api-keys` | any user token | Body `{ name, classification?, expiresInDays? }`. 201 with the key plus `secret` (`sk_…`, shown once). A key carries the viewer role only and `classification = min(requested, caller's clearance)` |

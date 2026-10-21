@@ -92,9 +92,9 @@ func (x *RawPayload) GetTruncated() bool {
 //
 // Vocabulary (kept stable so consumers can switch on them):
 //
-//	driver:  stream | opensky | intelsky | celestrak | aisstream | httpjson | tak
+//	driver:  stream | opensky | intelsky | celestrak | aisstream | httpjson | tak | emplacement
 //	decoder: json | nmea-gps | nmea-ais | cot | sbs | beast | link16 |
-//	         opensky-states | intelsky | tle-sgp4 | aisstream
+//	         opensky-states | intelsky | tle-sgp4 | aisstream | emplacement
 type Observation struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Deterministic id: uuid5(feed_id|source_entity_id|source_timestamp|decoder).
@@ -150,8 +150,17 @@ type Observation struct {
 	// the decoder when the source carries a higher level. Entities take the
 	// highest level any contributing observation carried.
 	Classification Classification `protobuf:"varint,34,opt,name=classification,proto3,enum=sentinel.v1.Classification" json:"classification,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Emplacement the report came from. Set by the ingest service from the
+	// authenticated session; a value a sender puts here is ignored.
+	EmplacementId string `protobuf:"bytes,35,opt,name=emplacement_id,json=emplacementId,proto3" json:"emplacement_id,omitempty"`
+	// A measurement relative to the emplacement, kept for audit. When position
+	// is unset the ingest service derives it from this and the emplacement.
+	Polar *PolarMeasurement `protobuf:"bytes,36,opt,name=polar,proto3" json:"polar,omitempty"`
+	// The report is synthetic (exercise or simulation). Set by the ingest
+	// service from the connection; a value a sender puts here is ignored.
+	Exercise      bool `protobuf:"varint,37,opt,name=exercise,proto3" json:"exercise,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Observation) Reset() {
@@ -422,16 +431,37 @@ func (x *Observation) GetClassification() Classification {
 	return Classification_CLASSIFICATION_UNSPECIFIED
 }
 
+func (x *Observation) GetEmplacementId() string {
+	if x != nil {
+		return x.EmplacementId
+	}
+	return ""
+}
+
+func (x *Observation) GetPolar() *PolarMeasurement {
+	if x != nil {
+		return x.Polar
+	}
+	return nil
+}
+
+func (x *Observation) GetExercise() bool {
+	if x != nil {
+		return x.Exercise
+	}
+	return false
+}
+
 var File_sentinel_v1_observation_proto protoreflect.FileDescriptor
 
 const file_sentinel_v1_observation_proto_rawDesc = "" +
 	"\n" +
-	"\x1dsentinel/v1/observation.proto\x12\vsentinel.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x18sentinel/v1/common.proto\x1a\x18sentinel/v1/entity.proto\x1a\x1asentinel/v1/platform.proto\"a\n" +
+	"\x1dsentinel/v1/observation.proto\x12\vsentinel.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x18sentinel/v1/common.proto\x1a\x1dsentinel/v1/emplacement.proto\x1a\x18sentinel/v1/entity.proto\x1a\x1asentinel/v1/platform.proto\"a\n" +
 	"\n" +
 	"RawPayload\x12!\n" +
 	"\fcontent_type\x18\x01 \x01(\tR\vcontentType\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x12\x1c\n" +
-	"\ttruncated\x18\x03 \x01(\bR\ttruncated\"\xda\x0e\n" +
+	"\ttruncated\x18\x03 \x01(\bR\ttruncated\"\xd2\x0f\n" +
 	"\vObservation\x12%\n" +
 	"\x0eobservation_id\x18\x01 \x01(\tR\robservationId\x12\x17\n" +
 	"\afeed_id\x18\x02 \x01(\tR\x06feedId\x12\x16\n" +
@@ -475,7 +505,10 @@ const file_sentinel_v1_observation_proto_rawDesc = "" +
 	"\n" +
 	"replica_id\x18  \x01(\tR\treplicaId\x12#\n" +
 	"\rfencing_token\x18! \x01(\x03R\ffencingToken\x12C\n" +
-	"\x0eclassification\x18\" \x01(\x0e2\x1b.sentinel.v1.ClassificationR\x0eclassificationB\n" +
+	"\x0eclassification\x18\" \x01(\x0e2\x1b.sentinel.v1.ClassificationR\x0eclassification\x12%\n" +
+	"\x0eemplacement_id\x18# \x01(\tR\remplacementId\x123\n" +
+	"\x05polar\x18$ \x01(\v2\x1d.sentinel.v1.PolarMeasurementR\x05polar\x12\x1a\n" +
+	"\bexercise\x18% \x01(\bR\bexerciseB\n" +
 	"\n" +
 	"\b_headingB\x0e\n" +
 	"\f_speed_knotsB\t\n" +
@@ -516,6 +549,7 @@ var file_sentinel_v1_observation_proto_goTypes = []any{
 	(*Dimensions)(nil),                 // 18: sentinel.v1.Dimensions
 	(*PlatformDetail)(nil),             // 19: sentinel.v1.PlatformDetail
 	(Classification)(0),                // 20: sentinel.v1.Classification
+	(*PolarMeasurement)(nil),           // 21: sentinel.v1.PolarMeasurement
 }
 var file_sentinel_v1_observation_proto_depIdxs = []int32{
 	2,  // 0: sentinel.v1.Observation.source:type_name -> sentinel.v1.EntitySource
@@ -539,11 +573,12 @@ var file_sentinel_v1_observation_proto_depIdxs = []int32{
 	19, // 18: sentinel.v1.Observation.platform:type_name -> sentinel.v1.PlatformDetail
 	0,  // 19: sentinel.v1.Observation.raw:type_name -> sentinel.v1.RawPayload
 	20, // 20: sentinel.v1.Observation.classification:type_name -> sentinel.v1.Classification
-	21, // [21:21] is the sub-list for method output_type
-	21, // [21:21] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	21, // 21: sentinel.v1.Observation.polar:type_name -> sentinel.v1.PolarMeasurement
+	22, // [22:22] is the sub-list for method output_type
+	22, // [22:22] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_sentinel_v1_observation_proto_init() }
@@ -552,6 +587,7 @@ func file_sentinel_v1_observation_proto_init() {
 		return
 	}
 	file_sentinel_v1_common_proto_init()
+	file_sentinel_v1_emplacement_proto_init()
 	file_sentinel_v1_entity_proto_init()
 	file_sentinel_v1_platform_proto_init()
 	file_sentinel_v1_observation_proto_msgTypes[1].OneofWrappers = []any{}

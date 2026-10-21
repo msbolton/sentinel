@@ -1036,10 +1036,111 @@ func (x *UavDetail) GetFrequencyRange() float64 {
 	return 0
 }
 
+// RfDetail carries intercepted RF / electronic-warfare emitter parameters.
+type RfDetail struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	FrequencyHz   float64                `protobuf:"fixed64,1,opt,name=frequency_hz,json=frequencyHz,proto3" json:"frequency_hz,omitempty"`            // center frequency, Hz
+	BandwidthHz   *float64               `protobuf:"fixed64,2,opt,name=bandwidth_hz,json=bandwidthHz,proto3,oneof" json:"bandwidth_hz,omitempty"`      // instantaneous bandwidth, Hz
+	EmitterType   string                 `protobuf:"bytes,3,opt,name=emitter_type,json=emitterType,proto3" json:"emitter_type,omitempty"`              // e.g. RADAR_SEARCH, RADAR_TRACK, SATCOM, JAMMER
+	Modulation    string                 `protobuf:"bytes,4,opt,name=modulation,proto3" json:"modulation,omitempty"`                                   // e.g. PULSE, CW, FM, CHIRP, FHSS, OFDM
+	PriUs         *float64               `protobuf:"fixed64,5,opt,name=pri_us,json=priUs,proto3,oneof" json:"pri_us,omitempty"`                        // pulse repetition interval, microseconds
+	PulseWidthUs  *float64               `protobuf:"fixed64,6,opt,name=pulse_width_us,json=pulseWidthUs,proto3,oneof" json:"pulse_width_us,omitempty"` // pulse width, microseconds
+	ScanType      string                 `protobuf:"bytes,7,opt,name=scan_type,json=scanType,proto3" json:"scan_type,omitempty"`                       // e.g. CIRCULAR, SECTOR, RASTER, ELECTRONIC, FIXED
+	PowerDbm      *float64               `protobuf:"fixed64,8,opt,name=power_dbm,json=powerDbm,proto3,oneof" json:"power_dbm,omitempty"`               // received or estimated ERP, dBm
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RfDetail) Reset() {
+	*x = RfDetail{}
+	mi := &file_sentinel_v1_platform_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RfDetail) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RfDetail) ProtoMessage() {}
+
+func (x *RfDetail) ProtoReflect() protoreflect.Message {
+	mi := &file_sentinel_v1_platform_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RfDetail.ProtoReflect.Descriptor instead.
+func (*RfDetail) Descriptor() ([]byte, []int) {
+	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RfDetail) GetFrequencyHz() float64 {
+	if x != nil {
+		return x.FrequencyHz
+	}
+	return 0
+}
+
+func (x *RfDetail) GetBandwidthHz() float64 {
+	if x != nil && x.BandwidthHz != nil {
+		return *x.BandwidthHz
+	}
+	return 0
+}
+
+func (x *RfDetail) GetEmitterType() string {
+	if x != nil {
+		return x.EmitterType
+	}
+	return ""
+}
+
+func (x *RfDetail) GetModulation() string {
+	if x != nil {
+		return x.Modulation
+	}
+	return ""
+}
+
+func (x *RfDetail) GetPriUs() float64 {
+	if x != nil && x.PriUs != nil {
+		return *x.PriUs
+	}
+	return 0
+}
+
+func (x *RfDetail) GetPulseWidthUs() float64 {
+	if x != nil && x.PulseWidthUs != nil {
+		return *x.PulseWidthUs
+	}
+	return 0
+}
+
+func (x *RfDetail) GetScanType() string {
+	if x != nil {
+		return x.ScanType
+	}
+	return ""
+}
+
+func (x *RfDetail) GetPowerDbm() float64 {
+	if x != nil && x.PowerDbm != nil {
+		return *x.PowerDbm
+	}
+	return 0
+}
+
 // PlatformDetail is the protocol-specific block attached to one observation.
 // An entity fused from several feeds keeps one PlatformDetail per kind, keyed
 // by the oneof field name ("ais", "adsb", "tle", "link16", "cot", "uav",
-// "generic").
+// "generic", "rf").
 type PlatformDetail struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Detail:
@@ -1051,6 +1152,7 @@ type PlatformDetail struct {
 	//	*PlatformDetail_Cot
 	//	*PlatformDetail_Uav
 	//	*PlatformDetail_Generic
+	//	*PlatformDetail_Rf
 	Detail        isPlatformDetail_Detail `protobuf_oneof:"detail"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1058,7 +1160,7 @@ type PlatformDetail struct {
 
 func (x *PlatformDetail) Reset() {
 	*x = PlatformDetail{}
-	mi := &file_sentinel_v1_platform_proto_msgTypes[6]
+	mi := &file_sentinel_v1_platform_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1070,7 +1172,7 @@ func (x *PlatformDetail) String() string {
 func (*PlatformDetail) ProtoMessage() {}
 
 func (x *PlatformDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_sentinel_v1_platform_proto_msgTypes[6]
+	mi := &file_sentinel_v1_platform_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1083,7 +1185,7 @@ func (x *PlatformDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlatformDetail.ProtoReflect.Descriptor instead.
 func (*PlatformDetail) Descriptor() ([]byte, []int) {
-	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{6}
+	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *PlatformDetail) GetDetail() isPlatformDetail_Detail {
@@ -1156,6 +1258,15 @@ func (x *PlatformDetail) GetGeneric() *GenericDetail {
 	return nil
 }
 
+func (x *PlatformDetail) GetRf() *RfDetail {
+	if x != nil {
+		if x, ok := x.Detail.(*PlatformDetail_Rf); ok {
+			return x.Rf
+		}
+	}
+	return nil
+}
+
 type isPlatformDetail_Detail interface {
 	isPlatformDetail_Detail()
 }
@@ -1188,6 +1299,10 @@ type PlatformDetail_Generic struct {
 	Generic *GenericDetail `protobuf:"bytes,7,opt,name=generic,proto3,oneof"`
 }
 
+type PlatformDetail_Rf struct {
+	Rf *RfDetail `protobuf:"bytes,8,opt,name=rf,proto3,oneof"`
+}
+
 func (*PlatformDetail_Ais) isPlatformDetail_Detail() {}
 
 func (*PlatformDetail_Adsb) isPlatformDetail_Detail() {}
@@ -1202,6 +1317,8 @@ func (*PlatformDetail_Uav) isPlatformDetail_Detail() {}
 
 func (*PlatformDetail_Generic) isPlatformDetail_Detail() {}
 
+func (*PlatformDetail_Rf) isPlatformDetail_Detail() {}
+
 // GenericDetail holds decoder output that has no typed block, as flat
 // string key/values so it can still be indexed and displayed.
 type GenericDetail struct {
@@ -1213,7 +1330,7 @@ type GenericDetail struct {
 
 func (x *GenericDetail) Reset() {
 	*x = GenericDetail{}
-	mi := &file_sentinel_v1_platform_proto_msgTypes[7]
+	mi := &file_sentinel_v1_platform_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1225,7 +1342,7 @@ func (x *GenericDetail) String() string {
 func (*GenericDetail) ProtoMessage() {}
 
 func (x *GenericDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_sentinel_v1_platform_proto_msgTypes[7]
+	mi := &file_sentinel_v1_platform_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1238,7 +1355,7 @@ func (x *GenericDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenericDetail.ProtoReflect.Descriptor instead.
 func (*GenericDetail) Descriptor() ([]byte, []int) {
-	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{7}
+	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *GenericDetail) GetFields() map[string]string {
@@ -1375,7 +1492,23 @@ const file_sentinel_v1_platform_proto_rawDesc = "" +
 	"\vmac_address\x18\x04 \x01(\tR\n" +
 	"macAddress\x12/\n" +
 	"\x13operating_frequency\x18\x05 \x01(\x01R\x12operatingFrequency\x12'\n" +
-	"\x0ffrequency_range\x18\x06 \x01(\x01R\x0efrequencyRange\"\xe6\x02\n" +
+	"\x0ffrequency_range\x18\x06 \x01(\x01R\x0efrequencyRange\"\xdb\x02\n" +
+	"\bRfDetail\x12!\n" +
+	"\ffrequency_hz\x18\x01 \x01(\x01R\vfrequencyHz\x12&\n" +
+	"\fbandwidth_hz\x18\x02 \x01(\x01H\x00R\vbandwidthHz\x88\x01\x01\x12!\n" +
+	"\femitter_type\x18\x03 \x01(\tR\vemitterType\x12\x1e\n" +
+	"\n" +
+	"modulation\x18\x04 \x01(\tR\n" +
+	"modulation\x12\x1a\n" +
+	"\x06pri_us\x18\x05 \x01(\x01H\x01R\x05priUs\x88\x01\x01\x12)\n" +
+	"\x0epulse_width_us\x18\x06 \x01(\x01H\x02R\fpulseWidthUs\x88\x01\x01\x12\x1b\n" +
+	"\tscan_type\x18\a \x01(\tR\bscanType\x12 \n" +
+	"\tpower_dbm\x18\b \x01(\x01H\x03R\bpowerDbm\x88\x01\x01B\x0f\n" +
+	"\r_bandwidth_hzB\t\n" +
+	"\a_pri_usB\x11\n" +
+	"\x0f_pulse_width_usB\f\n" +
+	"\n" +
+	"_power_dbm\"\x8f\x03\n" +
 	"\x0ePlatformDetail\x12*\n" +
 	"\x03ais\x18\x01 \x01(\v2\x16.sentinel.v1.AisDetailH\x00R\x03ais\x12-\n" +
 	"\x04adsb\x18\x02 \x01(\v2\x17.sentinel.v1.AdsbDetailH\x00R\x04adsb\x12*\n" +
@@ -1383,7 +1516,8 @@ const file_sentinel_v1_platform_proto_rawDesc = "" +
 	"\x06link16\x18\x04 \x01(\v2\x19.sentinel.v1.Link16DetailH\x00R\x06link16\x12*\n" +
 	"\x03cot\x18\x05 \x01(\v2\x16.sentinel.v1.CotDetailH\x00R\x03cot\x12*\n" +
 	"\x03uav\x18\x06 \x01(\v2\x16.sentinel.v1.UavDetailH\x00R\x03uav\x126\n" +
-	"\ageneric\x18\a \x01(\v2\x1a.sentinel.v1.GenericDetailH\x00R\agenericB\b\n" +
+	"\ageneric\x18\a \x01(\v2\x1a.sentinel.v1.GenericDetailH\x00R\ageneric\x12'\n" +
+	"\x02rf\x18\b \x01(\v2\x15.sentinel.v1.RfDetailH\x00R\x02rfB\b\n" +
 	"\x06detail\"\x8a\x01\n" +
 	"\rGenericDetail\x12>\n" +
 	"\x06fields\x18\x01 \x03(\v2&.sentinel.v1.GenericDetail.FieldsEntryR\x06fields\x1a9\n" +
@@ -1403,7 +1537,7 @@ func file_sentinel_v1_platform_proto_rawDescGZIP() []byte {
 	return file_sentinel_v1_platform_proto_rawDescData
 }
 
-var file_sentinel_v1_platform_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_sentinel_v1_platform_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_sentinel_v1_platform_proto_goTypes = []any{
 	(*AisDetail)(nil),       // 0: sentinel.v1.AisDetail
 	(*AdsbDetail)(nil),      // 1: sentinel.v1.AdsbDetail
@@ -1411,26 +1545,28 @@ var file_sentinel_v1_platform_proto_goTypes = []any{
 	(*Link16Detail)(nil),    // 3: sentinel.v1.Link16Detail
 	(*CotDetail)(nil),       // 4: sentinel.v1.CotDetail
 	(*UavDetail)(nil),       // 5: sentinel.v1.UavDetail
-	(*PlatformDetail)(nil),  // 6: sentinel.v1.PlatformDetail
-	(*GenericDetail)(nil),   // 7: sentinel.v1.GenericDetail
-	nil,                     // 8: sentinel.v1.GenericDetail.FieldsEntry
-	(NavigationalStatus)(0), // 9: sentinel.v1.NavigationalStatus
+	(*RfDetail)(nil),        // 6: sentinel.v1.RfDetail
+	(*PlatformDetail)(nil),  // 7: sentinel.v1.PlatformDetail
+	(*GenericDetail)(nil),   // 8: sentinel.v1.GenericDetail
+	nil,                     // 9: sentinel.v1.GenericDetail.FieldsEntry
+	(NavigationalStatus)(0), // 10: sentinel.v1.NavigationalStatus
 }
 var file_sentinel_v1_platform_proto_depIdxs = []int32{
-	9, // 0: sentinel.v1.AisDetail.nav_status:type_name -> sentinel.v1.NavigationalStatus
-	0, // 1: sentinel.v1.PlatformDetail.ais:type_name -> sentinel.v1.AisDetail
-	1, // 2: sentinel.v1.PlatformDetail.adsb:type_name -> sentinel.v1.AdsbDetail
-	2, // 3: sentinel.v1.PlatformDetail.tle:type_name -> sentinel.v1.TleDetail
-	3, // 4: sentinel.v1.PlatformDetail.link16:type_name -> sentinel.v1.Link16Detail
-	4, // 5: sentinel.v1.PlatformDetail.cot:type_name -> sentinel.v1.CotDetail
-	5, // 6: sentinel.v1.PlatformDetail.uav:type_name -> sentinel.v1.UavDetail
-	7, // 7: sentinel.v1.PlatformDetail.generic:type_name -> sentinel.v1.GenericDetail
-	8, // 8: sentinel.v1.GenericDetail.fields:type_name -> sentinel.v1.GenericDetail.FieldsEntry
-	9, // [9:9] is the sub-list for method output_type
-	9, // [9:9] is the sub-list for method input_type
-	9, // [9:9] is the sub-list for extension type_name
-	9, // [9:9] is the sub-list for extension extendee
-	0, // [0:9] is the sub-list for field type_name
+	10, // 0: sentinel.v1.AisDetail.nav_status:type_name -> sentinel.v1.NavigationalStatus
+	0,  // 1: sentinel.v1.PlatformDetail.ais:type_name -> sentinel.v1.AisDetail
+	1,  // 2: sentinel.v1.PlatformDetail.adsb:type_name -> sentinel.v1.AdsbDetail
+	2,  // 3: sentinel.v1.PlatformDetail.tle:type_name -> sentinel.v1.TleDetail
+	3,  // 4: sentinel.v1.PlatformDetail.link16:type_name -> sentinel.v1.Link16Detail
+	4,  // 5: sentinel.v1.PlatformDetail.cot:type_name -> sentinel.v1.CotDetail
+	5,  // 6: sentinel.v1.PlatformDetail.uav:type_name -> sentinel.v1.UavDetail
+	8,  // 7: sentinel.v1.PlatformDetail.generic:type_name -> sentinel.v1.GenericDetail
+	6,  // 8: sentinel.v1.PlatformDetail.rf:type_name -> sentinel.v1.RfDetail
+	9,  // 9: sentinel.v1.GenericDetail.fields:type_name -> sentinel.v1.GenericDetail.FieldsEntry
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_sentinel_v1_platform_proto_init() }
@@ -1439,7 +1575,8 @@ func file_sentinel_v1_platform_proto_init() {
 		return
 	}
 	file_sentinel_v1_common_proto_init()
-	file_sentinel_v1_platform_proto_msgTypes[6].OneofWrappers = []any{
+	file_sentinel_v1_platform_proto_msgTypes[6].OneofWrappers = []any{}
+	file_sentinel_v1_platform_proto_msgTypes[7].OneofWrappers = []any{
 		(*PlatformDetail_Ais)(nil),
 		(*PlatformDetail_Adsb)(nil),
 		(*PlatformDetail_Tle)(nil),
@@ -1447,6 +1584,7 @@ func file_sentinel_v1_platform_proto_init() {
 		(*PlatformDetail_Cot)(nil),
 		(*PlatformDetail_Uav)(nil),
 		(*PlatformDetail_Generic)(nil),
+		(*PlatformDetail_Rf)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1454,7 +1592,7 @@ func file_sentinel_v1_platform_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sentinel_v1_platform_proto_rawDesc), len(file_sentinel_v1_platform_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

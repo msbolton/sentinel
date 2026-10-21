@@ -1,0 +1,397 @@
+package emplacement
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/sentinel/go-common/classification"
+	"github.com/sentinel/go-common/middleware"
+)
+
+// FeedInfo is what binding an emplacement needs to know of a connection.
+type FeedInfo struct {
+	Exists, Inbound bool
+	// Driver is the connection's driver id.
+	Driver string
+}
+
+// FeedCheck looks a connection up, for binding an emplacement to the
+// connection that reports as it.
+type FeedCheck func(ctx context.Context, feedID string) (FeedInfo, error)
+
+// BindableDriver is the one driver an emplacement may be bound to until the
+// TCP/UDP (sub-project 2) and TAK (sub-project 3) heartbeats exist: only it
+// reports its emplacements' heartbeats.
+const BindableDriver = "grpc"
+
+// FeedLiveness is what the owning replica last reported of a connection's
+// emplacements.
+type FeedLiveness struct {
+	Driver string
+	// Emplacements is detail.emplacements of the connection's status. It is
+	// nil when the connection has no fresh status (it never ran, it is
+	// stopped, or its replica went silent); then the rows' own heartbeat
+	// times are read instead.
+	Emplacements []Liveness
+}
+
+// LivenessSource lists every connection's FeedLiveness by connection id.
+type LivenessSource func(ctx context.Context) (map[string]FeedLiveness, error)
+
+// Handler serves the emplacement routes of the management API.
+type Handler struct {
+	store Store
+	feeds FeedCheck
+	// Liveness fills the computed heartbeat and silentSince; nil leaves them out.
+	Liveness LivenessSource
+	logger   *zap.Logger
+}
+
+// NewHandler wires the handler; logger may be nil.
+func NewHandler(store Store, feeds FeedCheck, logger *zap.Logger) *Handler {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &Handler{store: store, feeds: feeds, logger: logger}
+}
+
+// RegisterRoutes mounts the routes on mux, each wrapped by guard (the
+// management API's service-token and role check).
+func (h *Handler) RegisterRoutes(mux *http.ServeMux, guard func(http.Handler) http.Handler) {
+	route := func(pattern string, fn http.HandlerFunc) { mux.Handle(pattern, guard(fn)) }
+	route("GET /emplacements", h.list)
+	route("POST /emplacements", h.create)
+	route("GET /emplacements/{id}", h.get)
+	route("PATCH /emplacements/{id}", h.patch)
+	route("DELETE /emplacements/{id}", h.remove)
+}
+
+var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+func clearance(r *http.Request) int {
+	return classification.Rank(middleware.Classification(r.Context()))
+}
+
+// visible reports whether the caller's clearance reaches e's classification.
+// An emplacement above it does not exist for them: 404, never 403.
+func visible(r *http.Request, e Emplacement) bool {
+	return classification.Rank(e.Classification) <= clearance(r)
+}
+
+func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := Filter{FeedID: q.Get("feedId"), Mobility: strings.ToUpper(q.Get("mobility"))}
+	if v := q.Get("active"); v != "" {
+		b := v == "true"
+		f.Active = &b
+	}
+	list, err := h.store.List(r.Context(), f)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	out := make([]Emplacement, 0, len(list))
+	for _, e := range list {
+		if visible(r, e) {
+			out = append(out, e)
+		}
+	}
+	h.annotate(r.Context(), out)
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	e, err := h.store.Get(r.Context(), id)
+	if err == nil && !visible(r, e) {
+		err = ErrNotFound
+	}
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	h.writeAnnotated(w, r, http.StatusOK, e)
+}
+
+func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
+	var in Input
+	if err := decodeBody(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	e := New()
+	in.Apply(&e)
+	e.CreatedBy = middleware.UserID(r.Context())
+	if err := h.check(r, &e, nil); err != nil {
+		h.fail(w, err)
+		return
+	}
+	out, err := h.store.Create(r.Context(), e)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	h.logger.Info("emplacement created", zap.String("id", out.ID), zap.String("name", out.Name))
+	h.writeAnnotated(w, r, http.StatusCreated, out)
+}
+
+func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	ifVersion, ok := ifMatch(w, r)
+	if !ok {
+		return
+	}
+	var in Input
+	if err := decodeBody(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// The version is compared here, after the visibility check, not by the
+	// store: a store that compares first would answer 412 for an emplacement
+	// above the caller's clearance, revealing that it exists and, by trying
+	// versions, which one it is. fn runs under the store's row lock, so the
+	// check and the write stay atomic.
+	out, err := h.store.Update(r.Context(), id, 0, func(e *Emplacement) error {
+		if !visible(r, *e) {
+			return ErrNotFound
+		}
+		if ifVersion > 0 && e.Version != ifVersion {
+			return ErrVersionConflict
+		}
+		// A sender reports where its mobile emplacement is; a position set
+		// by hand would be overwritten at its next report, so it is ignored
+		// while the emplacement stays mobile. A person making it fixed is
+		// choosing where it is, and that position applies.
+		if e.Mobility == MobilityMobile && e.SenderManaged() &&
+			(in.Mobility == nil || strings.ToUpper(strings.TrimSpace(*in.Mobility)) == MobilityMobile) {
+			in.Position, in.Altitude = nil, nil
+		}
+		prev := e.FeedID
+		in.Apply(e)
+		// A new connection knows nothing of the emplacement's heartbeats.
+		if !sameFeed(prev, e.FeedID) {
+			e.LastHeartbeatAt, e.HeartbeatIntervalSec = nil, nil
+		}
+		return h.check(r, e, prev)
+	})
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	h.writeAnnotated(w, r, http.StatusOK, out)
+}
+
+func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	e, err := h.store.Get(r.Context(), id)
+	if err == nil && !visible(r, e) {
+		err = ErrNotFound
+	}
+	if err == nil {
+		err = h.store.Delete(r.Context(), id)
+	}
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// annotate fills the computed heartbeat and silentSince of the active
+// emplacements bound to a grpc connection; the others carry neither. A
+// failure to read the statuses leaves them out and is logged.
+func (h *Handler) annotate(ctx context.Context, list []Emplacement) {
+	if h.Liveness == nil || len(list) == 0 {
+		return
+	}
+	feeds, err := h.Liveness(ctx)
+	if err != nil {
+		h.logger.Warn("reading the connections' heartbeats failed", zap.Error(err))
+		return
+	}
+	now := time.Now()
+	for i := range list {
+		annotate(&list[i], feeds, now)
+	}
+}
+
+func annotate(e *Emplacement, feeds map[string]FeedLiveness, now time.Time) {
+	if !e.Active || e.FeedID == nil {
+		return
+	}
+	f, ok := feeds[*e.FeedID]
+	if !ok || f.Driver != BindableDriver {
+		return
+	}
+	state, last := RowState(*e, now), e.LastHeartbeatAt
+	for _, l := range f.Emplacements {
+		if l.ID == e.ID {
+			state, last = l.State, l.LastHeartbeatAt
+			break
+		}
+	}
+	e.Heartbeat = state
+	if state == HeartbeatOffline && last != nil {
+		at := *last
+		e.SilentSince = &at
+	}
+}
+
+// writeAnnotated writes one emplacement with its computed heartbeat.
+func (h *Handler) writeAnnotated(w http.ResponseWriter, r *http.Request, status int, e Emplacement) {
+	one := []Emplacement{e}
+	h.annotate(r.Context(), one)
+	writeEmplacement(w, status, one[0])
+}
+
+// CheckWrite validates e as it would be stored and holds it to what the
+// writer may write: no classification above ceilingRank, and a binding only
+// to a connection that takes data in. The HTTP API passes the caller's
+// clearance; the grpc driver passes the sender's token ceiling.
+func CheckWrite(ctx context.Context, e *Emplacement, ceilingRank int, feeds FeedCheck) error {
+	ve := &ValidationError{}
+	if err := Validate(e); err != nil {
+		if !errors.As(err, &ve) {
+			return err
+		}
+	}
+	if classification.Valid(e.Classification) && classification.Rank(e.Classification) > ceilingRank {
+		ve.Problems = append(ve.Problems, Problem{Path: "/classification", Message: "is above your clearance"})
+	}
+	if e.FeedID != nil {
+		info, err := feeds(ctx, *e.FeedID)
+		switch {
+		case err != nil:
+			return err
+		case !info.Exists:
+			ve.Problems = append(ve.Problems, Problem{Path: "/feedId", Message: "names no connection"})
+		case !info.Inbound:
+			ve.Problems = append(ve.Problems, Problem{Path: "/feedId", Message: "names a connection that does not take data in"})
+		}
+	}
+	if len(ve.Problems) > 0 {
+		return ve
+	}
+	return nil
+}
+
+// check is CheckWrite with the caller's clearance. A write that binds e to a
+// connection it was not bound to (prev) is refused for a connection whose
+// driver does not heartbeat its emplacements yet; a row bound to one before
+// that rule keeps being editable.
+func (h *Handler) check(r *http.Request, e *Emplacement, prev *string) error {
+	err := CheckWrite(r.Context(), e, clearance(r), h.feeds)
+	if e.FeedID == nil || sameFeed(prev, e.FeedID) {
+		return err
+	}
+	ve := &ValidationError{}
+	if err != nil && !errors.As(err, &ve) {
+		return err
+	}
+	info, ferr := h.feeds(r.Context(), *e.FeedID)
+	if ferr != nil {
+		return ferr
+	}
+	if info.Exists && info.Inbound && info.Driver != BindableDriver {
+		ve.Problems = append(ve.Problems, Problem{Path: "/feedId",
+			Message: "names a " + info.Driver + " connection: emplacements can be bound only to grpc connections for now"})
+	}
+	if len(ve.Problems) > 0 {
+		return ve
+	}
+	return nil
+}
+
+// sameFeed reports whether two bindings name the same connection (or none).
+func sameFeed(a, b *string) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
+}
+
+func pathID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	// Lower case is the form the rows, the store's notifications and every
+	// replica's cache key on; an upper-case uuid names the same row.
+	id := strings.ToLower(r.PathValue("id"))
+	if !uuidRe.MatchString(id) {
+		writeError(w, http.StatusBadRequest, "the id must be a uuid")
+		return "", false
+	}
+	return id, true
+}
+
+// ifMatch reads If-Match ("3", 3 or W/"3"); absent means no check (0).
+func ifMatch(w http.ResponseWriter, r *http.Request) (int, bool) {
+	raw := strings.TrimSpace(r.Header.Get("If-Match"))
+	if raw == "" {
+		return 0, true
+	}
+	v, err := strconv.Atoi(strings.Trim(strings.TrimPrefix(raw, "W/"), `"`))
+	if err != nil || v < 1 {
+		writeError(w, http.StatusBadRequest, "If-Match must be the emplacement's version")
+		return 0, false
+	}
+	return v, true
+}
+
+func decodeBody(r *http.Request, v any) error {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		return errors.New("reading body")
+	}
+	dec := json.NewDecoder(strings.NewReader(string(body)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("invalid JSON body: %v", err)
+	}
+	return nil
+}
+
+func (h *Handler) fail(w http.ResponseWriter, err error) {
+	var ve *ValidationError
+	switch {
+	case errors.As(err, &ve):
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "invalid emplacement", "details": ve.Problems})
+	case errors.Is(err, ErrNotFound):
+		writeError(w, http.StatusNotFound, "emplacement not found")
+	case errors.Is(err, ErrVersionConflict):
+		writeError(w, http.StatusPreconditionFailed, ErrVersionConflict.Error())
+	case errors.Is(err, ErrNameTaken):
+		writeError(w, http.StatusConflict, ErrNameTaken.Error())
+	default:
+		h.logger.Error("emplacement request failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "internal error")
+	}
+}
+
+func writeEmplacement(w http.ResponseWriter, status int, e Emplacement) {
+	w.Header().Set("ETag", strconv.Quote(strconv.Itoa(e.Version)))
+	writeJSON(w, status, e)
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}

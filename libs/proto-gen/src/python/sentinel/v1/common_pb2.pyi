@@ -83,6 +83,7 @@ class IdentityType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     IDENTITY_TYPE_FEED_LOCAL: _ClassVar[IdentityType]
     IDENTITY_TYPE_CALLSIGN: _ClassVar[IdentityType]
     IDENTITY_TYPE_REGISTRATION: _ClassVar[IdentityType]
+    IDENTITY_TYPE_EMPLACEMENT: _ClassVar[IdentityType]
 
 class AgeoutState(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -144,6 +145,7 @@ IDENTITY_TYPE_LINK16_TN: IdentityType
 IDENTITY_TYPE_FEED_LOCAL: IdentityType
 IDENTITY_TYPE_CALLSIGN: IdentityType
 IDENTITY_TYPE_REGISTRATION: IdentityType
+IDENTITY_TYPE_EMPLACEMENT: IdentityType
 AGEOUT_STATE_UNSPECIFIED: AgeoutState
 AGEOUT_STATE_LIVE: AgeoutState
 AGEOUT_STATE_STALE: AgeoutState

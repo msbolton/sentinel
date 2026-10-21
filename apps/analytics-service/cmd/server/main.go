@@ -104,7 +104,7 @@ func main() {
 	// findings that reach the alerting severity, or are confirmed, go out on
 	// alerts.events under the finding's own id.
 	findingStore := store.NewFindingStore(pool)
-	engine := detect.NewEngine(baselines, findingStore, coverageStore, alerts.NewPublisher(producer), counters, cfg.Detectors, logger)
+	engine := detect.NewEngine(baselines, findingStore, coverageStore, alerts.NewPublisher(producer, entityStore, logger), counters, cfg.Detectors, logger)
 	if fixes, err := entityStore.LastFixes(context.Background(), time.Now().Add(-cfg.Baseline.ActiveWindow)); err != nil {
 		logger.Warn("last fixes not seeded; silence before this start is not judged", zap.Error(err))
 	} else {

@@ -16,6 +16,19 @@ describe('listenOf', () => {
     expect(listenOf('tcp', { port: 6001 })).toBeNull();
   });
 
+  it('grpc always listens, over tcp, like udp', () => {
+    expect(listenOf('grpc', { port: 6200, allow: ['10.0.0.0/8'] })).toEqual({
+      protocol: 'tcp',
+      port: 6200,
+      host: '',
+      portPath: '/config/port',
+      allowPath: '/config/allow',
+      allow: ['10.0.0.0/8'],
+      mutualTls: false,
+    });
+    expect(listenOf('grpc', { port: 6200, tls: { enabled: true, requireClientCert: true } })?.mutualTls).toBe(true);
+  });
+
   it('udp always listens', () => {
     expect(listenOf('udp', { port: 10110 })).toEqual({
       protocol: 'udp',

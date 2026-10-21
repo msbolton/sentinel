@@ -180,7 +180,13 @@ func splitArray(line []byte) ([]json.RawMessage, error) {
 	return elements, nil
 }
 
-func (d *Decoder) observation(m *sentinelv1.Observation, contentType string) (*obs.Observation, error) {
+// Validate turns a received sentinel.v1.Observation into an observation the
+// way this decoder does: it refuses one with neither a source entity id nor
+// an identity (missing_identity) or with a position outside WGS84
+// (bad_position), drops non-finite values, and fills in the source when the
+// message has none. Decoder is set to Name; a caller that is not this
+// decoder (the grpc driver) sets its own afterwards.
+func Validate(m *sentinelv1.Observation, contentType, defaultSource string) (*obs.Observation, error) {
 	o := wire.FromProto(m)
 	if o.SourceEntityID == "" && len(o.Identities) == 0 {
 		return nil, decoder.Reject("missing_identity", errors.New("the message needs source_entity_id or at least one identity"))
@@ -197,11 +203,15 @@ func (d *Decoder) observation(m *sentinelv1.Observation, contentType string) (*o
 	}
 	dropNonFinite(o)
 	if o.Source == "" {
-		o.Source = d.defaultSource
+		o.Source = defaultSource
 	}
 	o.Decoder = Name
 	o.RawContentType = contentType
 	return o, nil
+}
+
+func (d *Decoder) observation(m *sentinelv1.Observation, contentType string) (*obs.Observation, error) {
+	return Validate(m, contentType, d.defaultSource)
 }
 
 // Close releases nothing.

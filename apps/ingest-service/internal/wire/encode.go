@@ -4,6 +4,7 @@
 package wire
 
 import (
+	"maps"
 	"strconv"
 
 	"google.golang.org/protobuf/proto"
@@ -78,6 +79,16 @@ func ToProto(o *obs.Observation) *sentinelv1.Observation {
 	}
 	if d := o.Dimensions; d != nil {
 		m.Dimensions = &sentinelv1.Dimensions{Length: d[0], Width: d[1], Height: d[2]}
+	}
+	m.EmplacementId, m.Exercise = o.EmplacementID, o.Exercise
+	if p := o.Polar; p != nil {
+		m.Polar = &sentinelv1.PolarMeasurement{
+			RangeM: p.RangeM, AzimuthDeg: p.AzimuthDeg, ElevationDeg: p.ElevationDeg, RangeRateMps: p.RangeRateMps,
+			AzimuthReference: parse[sentinelv1.AzimuthReference](p.AzimuthRef),
+		}
+		if p.SigmaRangeM != nil || p.SigmaAzimuthDeg != nil || p.SigmaElevationDeg != nil {
+			m.Polar.Sigma = &sentinelv1.PolarSigma{RangeM: p.SigmaRangeM, AzimuthDeg: p.SigmaAzimuthDeg, ElevationDeg: p.SigmaElevationDeg}
+		}
 	}
 	m.Platform = platform(o)
 	if len(o.Raw) > 0 {
@@ -156,6 +167,16 @@ func platform(o *obs.Observation) *sentinelv1.PlatformDetail {
 		return &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Uav{Uav: &sentinelv1.UavDetail{
 			Make: u.Make, Model: u.Model, SerialNumber: u.SerialNumber, MacAddress: u.MACAddress, OperatingFrequency: u.OperatingFrequency, FrequencyRange: u.FrequencyRange,
 		}}}
+	case o.RF != nil:
+		r := o.RF
+		return &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Rf{Rf: &sentinelv1.RfDetail{
+			FrequencyHz: r.FrequencyHz, BandwidthHz: copyFloat(r.BandwidthHz),
+			EmitterType: r.EmitterType, Modulation: r.Modulation,
+			PriUs: copyFloat(r.PriUs), PulseWidthUs: copyFloat(r.PulseWidthUs),
+			ScanType: r.ScanType, PowerDbm: copyFloat(r.PowerDbm),
+		}}}
+	case len(o.Generic) > 0:
+		return &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Generic{Generic: &sentinelv1.GenericDetail{Fields: maps.Clone(o.Generic)}}}
 	}
 	return nil
 }

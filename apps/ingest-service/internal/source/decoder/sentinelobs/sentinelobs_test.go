@@ -187,8 +187,13 @@ func TestDropNonFiniteCoversEveryFloat(t *testing.T) {
 		case e.Kind() == reflect.Struct:
 			f.Set(reflect.New(e))
 			for j := 0; j < e.NumField(); j++ {
-				if f.Elem().Field(j).Kind() == reflect.Float64 {
-					f.Elem().Field(j).SetFloat(math.NaN())
+				g := f.Elem().Field(j)
+				switch {
+				case g.Kind() == reflect.Float64:
+					g.SetFloat(math.NaN())
+				case g.Kind() == reflect.Pointer && g.Type().Elem().Kind() == reflect.Float64:
+					g.Set(reflect.New(g.Type().Elem()))
+					g.Elem().SetFloat(math.NaN())
 				}
 			}
 		}
@@ -204,11 +209,56 @@ func TestDropNonFiniteCoversEveryFloat(t *testing.T) {
 			t.Errorf("%s kept a non-finite value", name)
 		case reflect.Struct:
 			for j := 0; j < e.NumField(); j++ {
-				if g := f.Elem().Field(j); g.Kind() == reflect.Float64 && g.Float() != 0 {
+				g := f.Elem().Field(j)
+				if g.Kind() == reflect.Float64 && g.Float() != 0 {
 					t.Errorf("%s.%s = %v", name, e.Field(j).Name, g.Float())
+				}
+				if g.Kind() == reflect.Pointer && g.Type().Elem().Kind() == reflect.Float64 && !g.IsNil() {
+					t.Errorf("%s.%s kept a non-finite value: %v", name, e.Field(j).Name, g.Elem().Float())
 				}
 			}
 		}
+	}
+}
+
+func TestDropNonFiniteClampsAndValidatesCovarianceAndRF(t *testing.T) {
+	neg := &obs.Observation{PosCovariance: &[6]float64{-1, 0, 0, 100, 0, 0}}
+	dropNonFinite(neg)
+	if neg.PosCovariance != nil {
+		t.Errorf("negative variance kept: %v", neg.PosCovariance)
+	}
+
+	unbounded := &obs.Observation{PosCovariance: &[6]float64{100, 500, 0, 400, 0, 1e20}}
+	dropNonFinite(unbounded)
+	if unbounded.PosCovariance == nil {
+		t.Fatal("expected valid diagonal variances to be clamped, not dropped")
+	}
+	if unbounded.PosCovariance[1] != 200 || unbounded.PosCovariance[5] != maxCovariance {
+		t.Errorf("clamped covariance = %v, want cNE=200 and cUU=%v", unbounded.PosCovariance, maxCovariance)
+	}
+
+	nan, bw := math.NaN(), 20e6
+	rfObs := &obs.Observation{RF: &obs.RFData{FrequencyHz: nan, BandwidthHz: &bw, PriUs: &nan}}
+	dropNonFinite(rfObs)
+	if rfObs.RF == nil || rfObs.RF.FrequencyHz != 0 || rfObs.RF.BandwidthHz == nil || *rfObs.RF.BandwidthHz != 20e6 || rfObs.RF.PriUs != nil {
+		t.Errorf("RF after dropNonFinite = %+v", rfObs.RF)
+	}
+}
+
+// A non-finite polar range or azimuth drops the whole measurement; other
+// non-finite polar optionals become absent and finite ones are kept.
+func TestDropNonFinitePolar(t *testing.T) {
+	nan, el := math.NaN(), 2.5
+	o := &obs.Observation{Polar: &obs.Polar{RangeM: nan, AzimuthDeg: 45}}
+	dropNonFinite(o)
+	if o.Polar != nil {
+		t.Errorf("a NaN range must drop the polar measurement, got %+v", o.Polar)
+	}
+	o.Polar = &obs.Polar{RangeM: 100, AzimuthDeg: 45, ElevationDeg: &nan, RangeRateMps: &el, SigmaAzimuthDeg: &nan}
+	dropNonFinite(o)
+	if o.Polar == nil || o.Polar.RangeM != 100 || o.Polar.ElevationDeg != nil || o.Polar.SigmaAzimuthDeg != nil ||
+		o.Polar.RangeRateMps == nil || *o.Polar.RangeRateMps != 2.5 {
+		t.Errorf("polar optionals = %+v", o.Polar)
 	}
 }
 
@@ -581,5 +631,22 @@ func TestProtobufFramesAreNotReadAsArrays(t *testing.T) {
 	out, err := newDecoder(t, `{}`).Decode(transport.Frame{Payload: jsonArray(jsonObservation(t, nil))})
 	if out != nil || err == nil || errors.Is(err, decoder.ErrSkip) {
 		t.Errorf("out %v err %v, want an error", out, err)
+	}
+}
+
+func TestValidateIsTheDecodersCheck(t *testing.T) {
+	ok := &sentinelv1.Observation{Identities: []*sentinelv1.Identity{{Type: sentinelv1.IdentityType_IDENTITY_TYPE_MMSI, Value: "244123456"}},
+		Position: &sentinelv1.Coordinate{Latitude: 51, Longitude: 2}}
+	o, err := Validate(ok, "application/x-protobuf", "GPS")
+	if err != nil || o.SourceEntityID != "MMSI:244123456" || o.Source != "GPS" || o.Decoder != Name || o.RawContentType != "application/x-protobuf" {
+		t.Fatalf("validate ok = %+v, %v", o, err)
+	}
+
+	if _, err := Validate(&sentinelv1.Observation{}, "", ""); decoder.RejectReason(err) != "missing_identity" {
+		t.Fatalf("no identity: %v", err)
+	}
+	bad := &sentinelv1.Observation{SourceEntityId: "x", Position: &sentinelv1.Coordinate{Latitude: math.NaN(), Longitude: 0}}
+	if _, err := Validate(bad, "", ""); decoder.RejectReason(err) != "bad_position" {
+		t.Fatalf("NaN latitude: %v", err)
 	}
 }

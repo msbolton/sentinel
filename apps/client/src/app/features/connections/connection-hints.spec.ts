@@ -56,6 +56,19 @@ describe('connectionHints', () => {
     expect(allowHints(undefined, { port: 6100 })).toEqual([]);
   });
 
+  it('gives a gRPC connection the hints of a TCP listener', () => {
+    // no port yet: the server's free TCP port; a taken one: a warning with the next free port to take instead
+    expect(connectionHints({ driverId: 'grpc', config: { allow }, ports })).toEqual([
+      expect.objectContaining({ path: '/config/port', action: { label: 'Use 6500', value: 6500 } }),
+    ]);
+    expect(connectionHints({ driverId: 'grpc', config: { port: 6001, allow }, ports })).toEqual([
+      expect.objectContaining({ path: '/config/port', level: 'warn', message: 'Port 6001/tcp is already used by Radar feed (radar).', action: { label: 'Use 6003', value: 6003 } }),
+    ]);
+    // an open allowlist is warned about, as for tcp
+    expect(connectionHints({ driverId: 'grpc', config: { port: 6100 }, ports: null }).map((h) => h.path)).toEqual(['/config/allow']);
+    expect(connectionHints({ driverId: 'grpc', config: { port: 6100, allow }, ports })).toEqual([]);
+  });
+
   it('names no port in the allowlist warning while there is none', () => {
     const [warning] = connectionHints({ driverId: 'tcp', config: { mode: 'listen' }, ports: null });
 

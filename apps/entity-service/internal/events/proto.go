@@ -73,6 +73,7 @@ func EntityProto(rec *store.EntityRecord, identities []*sentinelv1.Identity, sou
 		Description:           str(rec.Description),
 		Source:                parseEnum[sentinelv1.EntitySource](rec.Source),
 		Classification:        parseEnum[sentinelv1.Classification](rec.Classification),
+		Exercise:              rec.Exercise,
 		Heading:               rec.Heading,
 		SpeedKnots:            rec.SpeedKnots,
 		Course:                rec.Course,
@@ -150,7 +151,8 @@ func parseEnum[E interface {
 }
 
 // kinematicsProto reads the kinematics JSONB ({"velocity": {north, east,
-// up}, "acceleration": {...}}).
+// up}, "acceleration": {...}, "positionCovariance": {pnPn, pnPe, pnPu,
+// pePe, pePu, puPu}}).
 func kinematicsProto(k map[string]interface{}) *sentinelv1.KinematicState {
 	vec := func(v interface{}) (float64, float64, float64, bool) {
 		m, ok := v.(map[string]interface{})
@@ -172,7 +174,19 @@ func kinematicsProto(k map[string]interface{}) *sentinelv1.KinematicState {
 	if n, e, u, ok := vec(k["acceleration"]); ok {
 		out.Acceleration = &sentinelv1.GeodeticAcceleration{North: n, East: e, Up: u}
 	}
-	if out.Velocity == nil && out.Acceleration == nil {
+	if m, ok := k["positionCovariance"].(map[string]interface{}); ok {
+		f := func(key string) float64 {
+			if x, ok := m[key].(float64); ok {
+				return x
+			}
+			return 0
+		}
+		out.PositionCovariance = &sentinelv1.PositionCovariance{
+			PnPn: f("pnPn"), PnPe: f("pnPe"), PnPu: f("pnPu"),
+			PePe: f("pePe"), PePu: f("pePu"), PuPu: f("puPu"),
+		}
+	}
+	if out.Velocity == nil && out.Acceleration == nil && out.PositionCovariance == nil {
 		return nil
 	}
 	return out
@@ -217,6 +231,14 @@ func platformsProto(pd map[string]interface{}) map[string]*sentinelv1.PlatformDe
 		case "uav":
 			d := &sentinelv1.UavDetail{}
 			detail.Detail = &sentinelv1.PlatformDetail_Uav{Uav: d}
+			inner = d
+		case "rf":
+			d := &sentinelv1.RfDetail{}
+			detail.Detail = &sentinelv1.PlatformDetail_Rf{Rf: d}
+			inner = d
+		case "generic":
+			d := &sentinelv1.GenericDetail{}
+			detail.Detail = &sentinelv1.PlatformDetail_Generic{Generic: d}
 			inner = d
 		default:
 			continue

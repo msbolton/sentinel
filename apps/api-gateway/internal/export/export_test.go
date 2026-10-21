@@ -97,6 +97,40 @@ func TestGeoJSON(t *testing.T) {
 	}
 }
 
+func TestGeoJSONExerciseProperty(t *testing.T) {
+	src := &fakeSource{entities: sample(2)}
+	src.entities[0].Exercise = true
+	rec := serve(t, src, "/api/v1/export/entities.geojson")
+	var fc struct {
+		Features []struct {
+			Properties map[string]any `json:"properties"`
+		} `json:"features"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &fc); err != nil || len(fc.Features) != 2 {
+		t.Fatalf("body %s err %v", rec.Body.String(), err)
+	}
+	if fc.Features[0].Properties["exercise"] != true {
+		t.Errorf("exercise entity properties = %+v", fc.Features[0].Properties)
+	}
+	if _, present := fc.Features[1].Properties["exercise"]; present {
+		t.Errorf("live entity properties = %+v", fc.Features[1].Properties)
+	}
+}
+
+// An entity-service response with no exercise key reads as not exercise.
+func TestEntityDecodesExerciseKey(t *testing.T) {
+	var with, without Entity
+	if err := json.Unmarshal([]byte(`{"id":"a","exercise":true}`), &with); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(`{"id":"b"}`), &without); err != nil {
+		t.Fatal(err)
+	}
+	if !with.Exercise || without.Exercise {
+		t.Errorf("with=%v without=%v", with.Exercise, without.Exercise)
+	}
+}
+
 func TestGeoJSONPagingAcrossUpstreamPages(t *testing.T) {
 	src := &fakeSource{entities: sample(2500)}
 	rec := serve(t, src, "/api/v1/export/entities.geojson?limit=2000&page=1")

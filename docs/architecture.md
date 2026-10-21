@@ -132,7 +132,7 @@ sequenceDiagram
 
 1. **Desired state** is a row in `sentinel.feeds`: id, driver, validated `config`, `secret_refs`, `enabled`, `version`. The operator's Connections page and the management API write it; Postgres LISTEN/NOTIFY tells every ingest replica.
 2. **Ownership.** Each enabled feed runs on exactly one replica, chosen by rendezvous hashing over the live ordinary replicas (the listener replicas, which run nothing else, for a connection that binds a port; or pinned). The owner renews a `feed_leases` row; acquisition bumps a fencing token that travels on every observation and guards status writes.
-3. **Driver.** The supervisor builds the driver from the catalog, wraps it in a runner and starts it. Pollers (`opensky`, `intelsky`, `celestrak`, `httpjson`) call an API on a schedule; `aisstream` keeps WebSocket subscriptions that follow the viewports and a watchlist; `stream` composes a transport, a framer and a decoder from config; `tcp` and `udp` take what external systems send (Sentinel's own `sentinel.v1.Observation` or a device format) and, because they bind a port the operator chooses, run only on a listener replica (`INGEST_LISTENER`, on the host's network); `tak` owns one session to a TAK Server.
+3. **Driver.** The supervisor builds the driver from the catalog, wraps it in a runner and starts it. Pollers (`opensky`, `intelsky`, `celestrak`, `httpjson`) call an API on a schedule; `aisstream` keeps WebSocket subscriptions that follow the viewports and a watchlist; `stream` composes a transport, a framer and a decoder from config; `tcp` and `udp` take what external systems send (Sentinel's own `sentinel.v1.Observation` or a device format) and `grpc` takes reports from senders that authenticate with an ingest token and acks each once it is queued; because they bind a port the operator chooses, all three run only on a listener replica (`INGEST_LISTENER`, on the host's network); `tak` owns one session to a TAK Server.
 4. **Runner.** Stamps provenance (feed id, driver, receive time, lease token) and the feed's classification (a decoder may only raise it), guarantees an identity, bounds the raw payload, suppresses repeated fixes, computes a deterministic observation id and publishes to `observations.raw` keyed by identity. Undecodable payloads go to `observations.dlq` with the reason, decoder and sender in headers; operators read the newest of a connection's through `GET /api/v1/feeds/{id}/deadletters`.
 5. **Area of interest.** Drivers with the `area` capability poll, or in CelesTrak's case emit, only what connected map clients can see. The gateway aggregates client viewports and pushes them to every such feed with a 90 s lease, so polling stops when nobody is looking or the gateway dies.
 6. **Fusion.** The entity service resolves the observation's identities to an entity (creating one when needed), applies the newest-fix-wins rule across feeds, replicas and out-of-order delivery, keeps the highest classification any feed reported, records the contributing feed in `entity_sources`, and emits one typed event per change on `entities.events`.
@@ -144,15 +144,16 @@ A connection is a feed whose driver declares direction `out` or `both`. The repl
 
 ```
 entities.events, alerts.events ──▶ consumer group sentinel-conn-<feedId>
-      │ policy: loop guard → re-export guard → classification ceiling → entity types → feeds → area boxes
+      │ policy: loop guard → re-export guard → exercise → classification ceiling → entity types → feeds → area boxes
       │ per-entity coalescing (newest snapshot waits, removals never dropped)
-      │ per-entity spacing, global rate limit, lag drop, policy-exit grace
+      │ per-entity spacing, global rate limit, lag drop, policy-exit grace (none for exercise)
       ▼
 driver.Consumer.HandleEntity / HandleAlert ──▶ remote (CoT over the TAK session)
 ```
 
 - The pump's own consumer group means offsets survive restarts and lease handovers, and a slow remote never stalls another connection.
 - Loop prevention: an entity that came from this connection is never sent back on it; entities contributed by any sending connection are not re-exported elsewhere unless the policy says so; outbound CoT carries a `<_sentinel site>` marker and the CoT decoder skips events bearing this site's id.
+- Exercise isolation: entities marked `exercise` and alerts about them (stamped `exercise` by `alert-service` or `analytics-service`, or naming an entity or related entity the pump has seen as exercise; an entity lookup failure when making an alert marks it exercise so it fails closed) are denied unless `policy.allowExercise` is set. A tracked entity that becomes exercise is removed at once, with no grace period.
 - `deleted` and `aged_out` events become removals; an entity that stops passing the policy is removed after a grace period; while the driver reports it is not connected the pump pauses and keeps its queue.
 - Counters appear in `feed_status.detail.outbound` and on the Connections page.
 
@@ -270,11 +271,13 @@ sentinel/
 │   ├── common-go/             shared Go module
 │   │   ├── classification/    level order, Rank, Min, Intersect
 │   │   ├── config/            environment helpers
+│   │   ├── geo/               WGS84 frames, polar to position, position uncertainty
 │   │   ├── health/            liveness and readiness handlers
 │   │   ├── httputil/          JSON responses, pagination
 │   │   ├── ids/               deterministic ids
 │   │   ├── kafka/             batch consumer, producer, headers, keys, topic constants
-│   │   └── middleware/        identity-header auth, CORS
+│   │   ├── middleware/        identity-header auth, CORS
+│   │   └── secrettoken/       API key and ingest token secrets: generate, hash, compare
 │   └── proto-gen/             generated code: src/go, src/ts, src/python, golden fixtures in testdata/
 ├── proto/sentinel/v1/         the contract: observation, entity, events, alert, track, link, platform, common
 ├── db/

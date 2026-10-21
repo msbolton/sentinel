@@ -5,15 +5,11 @@
 package apikeys
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/base64"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/sentinel/api-gateway/internal/auth"
+	"github.com/sentinel/go-common/secrettoken"
 )
 
 // ErrInvalidKey is returned for an unknown, revoked or expired key.
@@ -42,33 +38,18 @@ type Created struct {
 // Generate makes a new secret ("sk_" + 32 random bytes, base64url) with its
 // display prefix and storage hash.
 func Generate() (secret, prefix string, hash []byte, err error) {
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return "", "", nil, err
-	}
-	secret = auth.APIKeyPrefix + base64.RawURLEncoding.EncodeToString(raw)
-	return secret, Prefix(secret), Hash(secret), nil
+	return secrettoken.Generate(auth.APIKeyPrefix)
 }
 
 // Hash is the storage form of a secret.
-func Hash(secret string) []byte {
-	sum := sha256.Sum256([]byte(secret))
-	return sum[:]
-}
+func Hash(secret string) []byte { return secrettoken.Hash(secret) }
 
 // Prefix is the part of a secret shown in lists so an owner can tell keys
 // apart: "sk_" plus eight characters.
-func Prefix(secret string) string {
-	if len(secret) <= 11 {
-		return secret
-	}
-	return secret[:11]
-}
+func Prefix(secret string) string { return secrettoken.Display(secret, auth.APIKeyPrefix) }
 
 // Valid reports whether a presented secret has the expected shape.
-func Valid(secret string) bool {
-	return strings.HasPrefix(secret, auth.APIKeyPrefix) && len(secret) == len(auth.APIKeyPrefix)+43
-}
+func Valid(secret string) bool { return secrettoken.Valid(secret, auth.APIKeyPrefix) }
 
 // Principal is the user a key acts as: the owner's identity, the viewer
 // role only, the classification fixed at issue time.
@@ -95,4 +76,4 @@ func (k Key) Usable(now time.Time, revokedAt *time.Time) bool {
 }
 
 // hashEqual compares two hashes in constant time.
-func hashEqual(a, b []byte) bool { return subtle.ConstantTimeCompare(a, b) == 1 }
+func hashEqual(a, b []byte) bool { return secrettoken.Equal(a, b) }

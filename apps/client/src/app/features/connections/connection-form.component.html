@@ -12,11 +12,11 @@
   <div class="drawer-body">
     @if (step() === 1) {
       <p class="intro">Each driver speaks one protocol. Pick the one that matches where the data comes from, or where it should go.</p>
-      @if (drivers().length === 0) {
+      @if (creatableDrivers().length === 0) {
         <p class="muted">No drivers available. The ingest service may still be starting.</p>
       } @else {
         <div class="driver-list">
-          @for (d of drivers(); track d.id) {
+          @for (d of creatableDrivers(); track d.id) {
             <button type="button" class="driver-card" (click)="selectDriver(d.id)">
               <span class="driver-head">
                 <span class="driver-name">{{ d.name }}</span>
@@ -125,6 +125,28 @@
               <p class="help">Stamped on everything this connection brings in. Capped at your clearance.</p>
             }
             @for (msg of configProblemsFor('classification'); track msg) {
+              <p class="error">Server: {{ msg }}</p>
+            }
+          </div>
+
+          <div class="field" data-pointer="/config/exercise">
+            <label class="check" for="feed-exercise">
+              <input id="feed-exercise" type="checkbox" formControlName="exercise" />
+              <span>Exercise data</span>
+            </label>
+            <p class="help">Everything this connection brings in is synthetic; its entities are marked EXERCISE.</p>
+            @for (msg of configProblemsFor('exercise'); track msg) {
+              <p class="error">Server: {{ msg }}</p>
+            }
+          </div>
+
+          <div class="field" data-pointer="/config/military">
+            <label class="check" for="feed-military">
+              <input id="feed-military" type="checkbox" formControlName="military" />
+              <span>Military source</span>
+            </label>
+            <p class="help">Draw entities from this connection with MIL-STD-2525D tactical symbols on the map.</p>
+            @for (msg of configProblemsFor('military'); track msg) {
               <p class="error">Server: {{ msg }}</p>
             }
           </div>

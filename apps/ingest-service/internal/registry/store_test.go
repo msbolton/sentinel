@@ -157,6 +157,30 @@ func TestEnsureBuiltins(t *testing.T) {
 	}
 }
 
+func TestThereIsNoEmplacementsBuiltin(t *testing.T) {
+	for _, b := range Builtins {
+		if b.ID == "emplacements" || b.Driver == "emplacement" {
+			t.Errorf("builtin %s (driver %s) is the retired emplacements mirror", b.ID, b.Driver)
+		}
+	}
+}
+
+// An older pod that restarts during a rollout inserts the mirror feed again;
+// the next EnsureBuiltins of a new one removes it.
+func TestEnsureBuiltinsRemovesTheRetiredMirror(t *testing.T) {
+	s, ctx := testStore(t)
+	if _, err := s.Pool().Exec(ctx, `INSERT INTO sentinel.feeds (id, name, description, driver, config, secret_refs, enabled, builtin)
+		VALUES ('emplacements', 'Emplacements', '', 'emplacement', '{}', '{}', TRUE, TRUE) ON CONFLICT (id) DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureBuiltins(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Get(ctx, "emplacements"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the retired mirror feed is still there: %v", err)
+	}
+}
+
 // LiveReplicas reports every unexpired replica with its role: an ordinary
 // replica, a dedicated listener and a listener that also takes ordinary feeds.
 func TestLiveReplicasReportsRoles(t *testing.T) {

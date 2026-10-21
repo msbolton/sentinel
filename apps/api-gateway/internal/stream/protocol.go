@@ -77,6 +77,7 @@ type Entity struct {
 	MilStd2525dSymbol string                 `json:"milStd2525dSymbol,omitempty"`
 	Metadata          map[string]interface{} `json:"metadata"`
 	Affiliations      []string               `json:"affiliations"`
+	Affiliation       string                 `json:"affiliation,omitempty"`
 	CreatedAt         string                 `json:"createdAt"`
 	UpdatedAt         string                 `json:"updatedAt"`
 	LastSeenAt        string                 `json:"lastSeenAt,omitempty"`
@@ -85,16 +86,19 @@ type Entity struct {
 	PlatformData      map[string]interface{} `json:"platformData,omitempty"`
 	OperationalStatus string                 `json:"operationalStatus,omitempty"`
 	CircularError     *float64               `json:"circularError,omitempty"`
-	// Kinematics carries {"velocity": {north, east, up}} in m/s when known,
-	// matching the client's KinematicState shape.
+	// Kinematics carries {"velocity": {north, east, up}, "positionCovariance": {...}}
+	// when known, matching the client's KinematicState shape.
 	Kinematics map[string]interface{} `json:"kinematics,omitempty"`
 	// Provenance and liveness from the fused entity.
 	FeedID         string           `json:"feedId,omitempty"`
+	LastFeedID     string           `json:"lastFeedId,omitempty"`
 	AgeoutState    string           `json:"ageoutState,omitempty"`
 	Identities     []EntityIdentity `json:"identities,omitempty"`
 	LastObservedAt string           `json:"lastObservedAt,omitempty"`
 	// Sources lists every feed that contributed to the fused entity.
 	Sources []EntitySourceRef `json:"sources,omitempty"`
+	// Exercise marks a simulated or training entity. Absent means live.
+	Exercise bool `json:"exercise,omitempty"`
 }
 
 // EntitySourceRef is one feed's contribution to a fused entity.

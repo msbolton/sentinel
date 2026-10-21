@@ -22,8 +22,10 @@ import (
 	"github.com/sentinel/ingest-service/internal/density"
 	"github.com/sentinel/ingest-service/internal/dlq"
 	"github.com/sentinel/ingest-service/internal/drivers"
+	"github.com/sentinel/ingest-service/internal/emplacement"
 	"github.com/sentinel/ingest-service/internal/feed"
 	"github.com/sentinel/ingest-service/internal/health"
+	"github.com/sentinel/ingest-service/internal/ingesttoken"
 	kafkaproducer "github.com/sentinel/ingest-service/internal/kafka"
 	"github.com/sentinel/ingest-service/internal/lease"
 	"github.com/sentinel/ingest-service/internal/metrics"
@@ -129,6 +131,22 @@ func main() {
 
 	catalog := drivers.Default()
 
+	// Emplacements: the store behind the management API, and the cache the
+	// drivers that report as emplacements read.
+	empStore := emplacement.NewPGStore(reg.Pool())
+	empCache := emplacement.NewCache(empStore, reg.Pool(), logger)
+	go empCache.Run(ctx)
+
+	// Ingest tokens: the store behind the token routes, and the cache the
+	// grpc driver authenticates senders with.
+	tokStore := ingesttoken.NewPGStore(reg.Pool())
+	tokCache := ingesttoken.NewCache(tokStore, reg.Pool(), logger)
+	tokDone := make(chan struct{})
+	go func() {
+		defer close(tokDone)
+		tokCache.Run(ctx)
+	}()
+
 	// Supervisor: runs the feeds this replica owns and reports status.
 	supOpts := feed.Options{
 		ReplicaID:         cfg.ReplicaID,
@@ -145,6 +163,9 @@ func main() {
 		SecretPolicy:      secretPolicy,
 		SecretReloadEvery: time.Duration(cfg.TLSReloadSec) * time.Second,
 		Shapes:            outbound.NewShapeStore(reg.Pool()),
+		Emplacements:      empCache,
+		Tokens:            tokCache,
+		EmplacementWriter: empStore,
 		Density:           density.New(producer, commonkafka.TopicDensityEvents).For,
 		ConsumerFactory: func(groupID, clientID string) (outbound.Consumer, error) {
 			return commonkafka.NewBatchConsumer(cfg.KafkaBrokers, groupID, clientID, "latest", commonkafka.BatchOptions{MaxMessages: 200, MaxWait: 200 * time.Millisecond, MaxRetries: 1}, logger.With(zap.String("group", groupID)))
@@ -179,8 +200,12 @@ func main() {
 		mgmtHandler.StaleAfter = cfg.LeaseTTL
 	}
 	mgmtHandler.Reserved = reserved
+	mgmtHandler.Tokens = tokStore
 	mgmtHandler.UseSecretPolicy(secretPolicy)
 	mgmtHandler.RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
+	empHandler := emplacement.NewHandler(empStore, feedCheck(reg, catalog), logger)
+	empHandler.Liveness = livenessSource(reg, mgmtHandler.StaleAfter, time.Now)
+	empHandler.RegisterRoutes(mux, mgmt.Auth(mgmt.AuthOptions{ServiceToken: cfg.ServiceToken}))
 
 	httpServer := &http.Server{
 		Addr:         cfg.HTTPAddr,
@@ -209,7 +234,7 @@ func main() {
 	}
 
 	// Graceful shutdown, bounded by SHUTDOWN_TIMEOUT_SEC: readiness 503 →
-	// supervisor stops drivers → publisher drains → HTTP shutdown → producer
+	// supervisor stops drivers → token cache flushes → publisher drains → HTTP shutdown → producer
 	// flushes → dead-letter reader closes.
 	logger.Info("initiating graceful shutdown", zap.Duration("timeout", cfg.ShutdownTimeout))
 	deadline := time.Now().Add(cfg.ShutdownTimeout)
@@ -219,6 +244,13 @@ func main() {
 	case <-supervisorDone:
 	case <-time.After(time.Until(deadline)):
 		logger.Warn("feed supervisor did not stop in time")
+	}
+	// The token cache writes its last lastUsedAt batch (up to 5 s) once the
+	// context is cancelled; wait for it before the pool closes.
+	select {
+	case <-tokDone:
+	case <-time.After(max(time.Until(deadline), 0)):
+		logger.Warn("ingest token cache did not finish its last write in time")
 	}
 	// With Kafka unreachable nothing drains: the shards cannot hand their
 	// observations over and a flush delivers none. So the publisher waits only
@@ -324,4 +356,53 @@ func newLogger() (*zap.Logger, error) {
 	}
 
 	return cfg.Build()
+}
+
+// feedCheck looks a connection up for an emplacement binding: whether it
+// exists, takes data in (its effective direction, after config.direction
+// narrows a bidirectional driver) and which driver it runs.
+func feedCheck(reg *registry.Store, catalog *drivers.Catalog) emplacement.FeedCheck {
+	return func(ctx context.Context, id string) (emplacement.FeedInfo, error) {
+		f, err := reg.Get(ctx, id)
+		if errors.Is(err, registry.ErrNotFound) {
+			return emplacement.FeedInfo{}, nil
+		}
+		if err != nil {
+			return emplacement.FeedInfo{}, err
+		}
+		info, ok := catalog.Get(f.Driver)
+		if !ok {
+			return emplacement.FeedInfo{Exists: true, Driver: f.Driver}, nil
+		}
+		return emplacement.FeedInfo{Exists: true, Inbound: f.Direction(info.Dir()).Inbound(), Driver: f.Driver}, nil
+	}
+}
+
+// feedLister is the part of the registry livenessSource reads.
+type feedLister interface {
+	List(ctx context.Context) ([]registry.Feed, error)
+}
+
+// livenessSource reads each connection's emplacement heartbeats from its
+// status row, which the replica that runs it rewrites every few seconds. A
+// row older than staleAfter belongs to a replica that went silent and is not
+// believed, so the emplacements' own rows are read instead.
+func livenessSource(reg feedLister, staleAfter time.Duration, now func() time.Time) emplacement.LivenessSource {
+	return func(ctx context.Context) (map[string]emplacement.FeedLiveness, error) {
+		feeds, err := reg.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[string]emplacement.FeedLiveness, len(feeds))
+		for _, f := range feeds {
+			fl := emplacement.FeedLiveness{Driver: f.Driver}
+			if st := f.Status; st != nil && st.Owner != "" && st.UpdatedAt != nil && now().Sub(*st.UpdatedAt) <= staleAfter {
+				if list, ok := emplacement.LivenessFromDetail(st.Detail); ok {
+					fl.Emplacements = list
+				}
+			}
+			out[f.ID] = fl
+		}
+		return out, nil
+	}
 }

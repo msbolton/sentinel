@@ -27,11 +27,12 @@ The fused track: one row per object the platform knows about. Feeds update it th
 | `"sourceEntityId"` | `VARCHAR(255)` | `NULL` | The source's own id for the object |
 | `"primaryIdentityType"` / `"primaryIdentityValue"` | `VARCHAR` | `NULL` | The canonical identity the entity was created from (ICAO24, MMSI, NORAD_ID, COT_UID, FEED_LOCAL) |
 | `classification` | `VARCHAR(50)` | `'UNCLASSIFIED'` | Security classification |
+| `exercise` | `BOOLEAN` | `FALSE` | Synthetic (exercise or simulation) mark; sticky (`e.exercise OR b.exercise`), also set when a duplicate or stale exercise report resolves to the entity, and never cleared |
 | `position` | `geometry(Point, 4326)` | `NULL` | WGS84 point |
-| `altitude`, `heading`, `"speedKnots"`, `course`, `pitch`, `roll` | `DOUBLE PRECISION` | `NULL` | Last accepted kinematics |
-| `kinematics` | `JSONB` | `{}` | Velocity, acceleration and covariance of the last fix |
-| `"platformData"` | `JSONB` | `{}` | Platform detail (ADS-B, AIS, TLE, CoT, Link 16) |
-| `"trackEnvironment"`, `affiliation`, `"operationalStatus"`, `"countryOfOrigin"` | `VARCHAR` | | Classification attributes |
+| `altitude`, `heading`, `"speedKnots"`, `course`, `pitch`, `roll`, `"circularError"` | `DOUBLE PRECISION` | `NULL` | Last accepted kinematics and 95th-percentile horizontal circular error radius (`"circularError"`, metres; derived from the 95% error ellipse or 2×2 North-East covariance via exact bivariate-normal $R_{95}$ when not given directly; cleared to `NULL` when a fix without covariance or CE replaces a covariance-backed fix, while scalar CE from non-covariance feeds is preserved across fixes without CE) |
+| `kinematics` | `JSONB` | `{}` | Velocity, acceleration and `positionCovariance` (`pnPn`, `pnPe`, `pnPu`, `pePe`, `pePu`, `puPu` in m²) of the last fix; cleared to `{}` when a new fix arrives without them |
+| `"platformData"` | `JSONB` | `{}` | Platform detail (ADS-B, AIS, TLE, CoT, Link 16, UAV, RF) |
+| `"trackEnvironment"`, `affiliation`, `"operationalStatus"`, `"countryOfOrigin"` | `VARCHAR` | | Classification attributes (`affiliation` defaults to `'UNKNOWN'` on creation and updates with each non-empty feed report via `COALESCE(NULLIF(b.affiliation, ''), e.affiliation)`) |
 | `"ageoutState"` | `VARCHAR(20)` | `'LIVE'` | LIVE, STALE or AGED_OUT |
 | `"lastObservedAt"` | `TIMESTAMPTZ` | `NULL` | Source timestamp of the last accepted observation; a fix older than it is rejected as `STALE_FIX` |
 | `"lastSeenAt"` | `TIMESTAMPTZ` | `NULL` | When the last report arrived |
@@ -42,7 +43,7 @@ Indexes: GiST on `position`; B-tree on `"entityType"`, `source`, `classification
 
 ### sentinel.entity_identities / sentinel.entity_sources
 
-`entity_identities` maps a natural identifier (`"identityType"`, `"identityValue"`, primary key) to an entity, with first and last seen times. An observation whose canonical identity matches joins that entity regardless of the feed it came from; a secondary identity (callsign, registration, IMO) that would merge two entities is counted, not applied. `entity_sources` keeps one row per entity and feed with the source's own id, the last observed and received times and an observation count; the ageout threshold of an entity is the largest threshold over its sources.
+`entity_identities` maps a natural identifier (`"identityType"`, `"identityValue"`, primary key) to an entity, with first and last seen times. An observation whose canonical identity matches joins that entity regardless of the feed it came from; a secondary identity (callsign, registration, IMO) that would merge two entities is counted, not applied. A soft delete keeps the entity's identity rows, but a deleted entity's identities are released to the next report that carries them: that report creates a new entity and the canonical identity row moves to it. A replica that still caches the deleted entity's id drops it when a report for it fails to apply (that report is stored as `ENTITY_DELETED`), so the next report creates the new entity; the replica that served the delete drops its cache at once. `entity_sources` keeps one row per entity and feed with the source's own id, the last observed and received times and an observation count; the ageout threshold of an entity is the largest threshold over its sources.
 
 ### sentinel.observations
 
@@ -53,7 +54,7 @@ One row per report from any feed, accepted or not; a TimescaleDB hypertable on `
 | `"observationId"`, `"observedAt"` | Primary key. The id is a UUIDv5 over feed id, source entity id, source timestamp and decoder, so a redelivered report is a no-op |
 | `"receivedAt"`, `"ingestedAt"` | When the ingest replica received it and when the entity-service stored it |
 | `"entityId"`, `"feedId"`, `driver`, `decoder`, `"sourceEntityId"`, `source`, `"sensorId"` | Provenance |
-| `accepted`, `"rejectReason"` | `DUPLICATE`, `STALE_FIX` or `INVALID_POSITION` when not accepted |
+| `accepted`, `"rejectReason"` | `DUPLICATE`, `STALE_FIX`, `INVALID_POSITION` or `ENTITY_DELETED` (resolved to an entity deleted since) when not accepted |
 | `position`, `altitude`, `heading`, `"speedKnots"`, `course`, velocities, accelerations, errors, covariances | The fix as reported |
 | `identities` | JSON array of `{type, value}` |
 | `platform` | Platform detail as JSON |
@@ -88,11 +89,60 @@ The feed registry (see `docs/feeds.md`).
 
 Stale and age-out thresholds in milliseconds, per feed (`"feedId"`), per source type (`"sourceType"`) or global, with partial unique indexes for each level. The entity-service seeds the defaults.
 
+### sentinel.emplacements (`db/schema/72_emplacements.sql`)
+
+The places observations come from (see `docs/emplacements.md`). One row per emplacement; a delete sets `"deletedAt"` (soft delete). `db/seed/seed.sql` adds one demo emplacement, `Lizard Point radar` (fixed, inserted inactive, no connection), under a fixed id, so re-running the seed neither duplicates it nor brings it back once deleted.
+
+| Column | Content |
+|--------|---------|
+| `id` | UUID primary key, generated |
+| `name` | Up to 255 bytes |
+| `description` | Free text, default empty |
+| `mobility` | `FIXED` or `MOBILE`; a CHECK requires a `position` when `FIXED` |
+| `"sensorType"` | `RADAR`, `EO_IR`, `RF`, `ACOUSTIC`, `AIS_RECEIVER`, `ADSB_RECEIVER`, `HUMAN` or `OTHER` |
+| `position` | `geometry(Point, 4326)`, null for a mobile emplacement with no fix. A mobile emplacement's reports over a `grpc` connection write it, at most every 10 s, with no version change |
+| `altitude` | Metres above the WGS84 ellipsoid |
+| `"boresightDeg"` | Centre of the coverage sector in [0, 360), measured from `"azimuthReference"` |
+| `"azimuthReference"` | `TRUE_NORTH` (default) or `PLATFORM` |
+| `coverage` | JSONB `{minRangeM, maxRangeM, azimuthWidthDeg, elevationMinDeg?, elevationMaxDeg?}`; `{}` when unknown |
+| `"defaultSigma"` | JSONB `{rangeM?, azimuthDeg?, elevationDeg?}`, the standard deviations used for reports that carry none |
+| `"feedId"` | The connection (`feeds.id`) the emplacement is bound to; `ON DELETE RESTRICT`. Deleting the connection first soft-deletes the emplacements its senders made (`"createdBy"` starts `ingest-token:`) and unbinds and deactivates the others, in the same transaction, raising `version` and sending a NOTIFY for each. The CHECK `emplacements_active_needs_feed` requires an active, live row to have a connection |
+| `classification` | `UNCLASSIFIED` (default) to `TOP_SECRET`; callers above it neither see nor edit the row |
+| `exercise` | Whether the emplacement belongs to an exercise, default false |
+| `active` | Whether it is reported, default true |
+| `"lastReportAt"` | When it last reported over its `grpc` connection (the earlier of the report's time and the server's), written at most every 10 s with no version change and no NOTIFY; null until it has |
+| `"heartbeatIntervalSec"` | The interval the emplacement last declared in its heartbeat, written with `"lastHeartbeatAt"`; null until its first heartbeat and after a change of connection |
+| `"lastHeartbeatAt"` | When its last heartbeat arrived (server time), written at most every interval and every 10 s with no version change and no NOTIFY; never moved back |
+| `"createdBy"`, `"createdAt"`, `"updatedAt"` | Provenance and timestamps; `"createdBy"` is `ingest-token:<token id>` for an emplacement a sender made over gRPC |
+| `"deletedAt"` | Set by a delete |
+| `version` | Starts at 1 and rises on every write; the API's ETag and `If-Match` |
+
+A partial unique index on `lower(name)` where `"deletedAt" IS NULL` keeps live names unique whatever their case and frees a deleted emplacement's name. A GIST index covers `position`, and a partial index covers `"feedId"` for live rows. Each write sends a NOTIFY on the channel `sentinel_emplacements` with the payload `{"id": "<uuid>", "op": "upsert"|"delete"}`; every ingest replica follows it to keep its cache current. The file also removes the retired `emplacements` feed and its `feed_ageout_config` rows; site entities use the global per-source thresholds.
+
+### sentinel.ingest_tokens (`db/schema/76_ingest_tokens.sql`)
+
+The bearer tokens senders present to a gRPC connection (`si_` followed by 43 base64url characters). Only the SHA-256 of the secret is stored (`hash`, unique); the secret is shown once, in the response that creates the token, and cannot be read back.
+
+| Column | Content |
+|--------|---------|
+| `id` | UUID primary key, generated |
+| `"feedId"` | The connection (`feeds.id`) the token belongs to; `ON DELETE CASCADE` |
+| `name` | Up to 255 bytes |
+| `prefix` | The first characters of the secret, for lists |
+| `hash` | SHA-256 of the secret, unique |
+| `classification` | The token's ceiling, `UNCLASSIFIED` (default) to `TOP_SECRET`: no report above it is accepted |
+| `"createdBy"`, `"createdAt"` | Provenance and creation time |
+| `"lastUsedAt"` | When the token last authenticated |
+| `"expiresAt"` | Optional expiry |
+| `"revokedAt"` | Set by a revoke; revoking again keeps the first time |
+
+An index covers `"feedId"`. Every create and revoke sends a NOTIFY on the channel `sentinel_ingest_tokens` with the payload `{"id","feedId","op"}` (`op` is `create` or `revoke`); each ingest replica's token cache re-reads that feed's tokens on it. Deleting a feed removes its tokens by cascade and sends no token notice, so the cache also follows `sentinel_feeds` and re-reads the feed's tokens on every feed notice. Writes to `"lastUsedAt"` are batched (about every 60 seconds, per replica) and send no notice. As a guard against a silent LISTEN connection, a connected cache also reloads every token every two minutes.
+
 ### sentinel.alerts and sentinel.alert_rules
 
 | Column | Description |
 |--------|-------------|
-| `alerts.id`, `"alertType"`, `severity`, `title`, `description`, `"entityId"`, `"relatedEntityIds"`, `position`, `"ruleId"`, `metadata`, `"createdAt"`, `"acknowledgedAt"`, `"acknowledgedBy"`, `"resolvedAt"` | An alert from any producer; analytics alerts carry `anomalyType` and `score` in `metadata` and keep the producer's id |
+| `alerts.id`, `"alertType"`, `severity`, `title`, `description`, `"entityId"`, `"relatedEntityIds"`, `position`, `"ruleId"`, `metadata`, `classification`, `exercise`, `"createdAt"`, `"acknowledgedAt"`, `"acknowledgedBy"`, `"resolvedAt"` | An alert from any producer; analytics alerts carry `anomalyType` and `score` in `metadata` and keep the producer's id. `exercise` is stamped where the alert is made (by `alert-service` from the primary and related entities, and by `analytics-service` from an entity lookup that also raises the alert's classification to the entity's; a lookup error marks the alert `exercise` so outbound connections fail closed) |
 | `alert_rules.id`, `name`, `"ruleType"`, `config`, `"monitoredEntityTypes"`, `severity`, `enabled`, timestamps | Rule definitions (geofence polygons, thresholds) |
 
 ### sentinel.links
@@ -116,7 +166,7 @@ What the analytics service has learned about each entity and where it departs fr
 
 ### GIS views (`db/schema/90_gis_views.sql`)
 
-`sentinel.entities_live` presents live, non-deleted entities with a position in snake_case for GeoServer (`entity_type`, `classification`, `classification_rank`, `feed_id`, `last_feed_id`, `source`, `affiliation`, `track_environment`, `heading`, `speed_knots`, `course`, `altitude`, `sidc`, `ageout_state`, `last_observed_at`, `last_seen_at`, `lat`, `lon`, `geom`). `entities_live_u`, `_c`, `_s` and `_ts` filter it by rank; `locations_geo` adds a `geom` point to locations. `gt_pk_metadata` tells GeoTools the views' primary key. The role `sentinel_gis` may read the views only, never `entities`. `09_gis_views_drop.sql` drops the views at the start of an apply so column changes on the tables go through; the views are recreated at the end.
+`sentinel.entities_live` presents live, non-deleted entities with a position in snake_case for GeoServer (`entity_type`, `classification`, `classification_rank`, `feed_id`, `last_feed_id`, `source`, `affiliation`, `track_environment`, `heading`, `speed_knots`, `course`, `altitude`, `sidc`, `ageout_state`, `exercise`, `last_observed_at`, `last_seen_at`, `lat`, `lon`, `geom`). `entities_live_u`, `_c`, `_s` and `_ts` filter it by rank; `locations_geo` adds a `geom` point to locations. `gt_pk_metadata` tells GeoTools the views' primary key. The role `sentinel_gis` may read the views only, never `entities`. `09_gis_views_drop.sql` drops the views at the start of an apply so column changes on the tables go through; the views are recreated at the end.
 
 ### sentinel.api_keys
 

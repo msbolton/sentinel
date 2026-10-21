@@ -18,6 +18,8 @@ import (
 
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
+	"github.com/sentinel/ingest-service/internal/emplacement"
+	"github.com/sentinel/ingest-service/internal/ingesttoken"
 	"github.com/sentinel/ingest-service/internal/obs"
 )
 
@@ -70,6 +72,23 @@ type Deps struct {
 	// SecretReloadEvery is how often a driver reads rotated secrets again
 	// (INGEST_TLS_RELOAD_SEC); 0 means never.
 	SecretReloadEvery time.Duration
+	// Emplacements is the in-memory view of the emplacements table, for the
+	// drivers that report as emplacements (nil when there is none).
+	Emplacements EmplacementSource
+	// Tokens authenticates senders for the drivers that take ingest tokens
+	// (nil when there is none).
+	Tokens TokenSource
+	// EmplacementWriter writes emplacements for the drivers whose senders
+	// manage or move their own (nil when there is none).
+	EmplacementWriter EmplacementWriter
+}
+
+// EmplacementWriter writes emplacements for the drivers whose senders manage
+// or move their own (grpc): position reports through Touch, and the
+// emplacements senders create and update through the Store. *emplacement.PGStore is the real one.
+type EmplacementWriter interface {
+	emplacement.Store
+	emplacement.Toucher
 }
 
 // DensityPublisher sends a feed's density grids to the density.events
@@ -95,6 +114,33 @@ type Location struct {
 type ShapeSource interface {
 	Geofences(ctx context.Context) ([]Geofence, error)
 	Locations(ctx context.Context) ([]Location, error)
+}
+
+// EmplacementSource is the ingest service's in-memory view of the
+// emplacements table (emplacement.Cache).
+type EmplacementSource interface {
+	All() []emplacement.Emplacement
+	Get(id string) (emplacement.Emplacement, bool)
+	// ByFeed lists the emplacements bound to a feed.
+	ByFeed(feedID string) []emplacement.Emplacement
+	OnChange(fn func(id string)) (cancel func())
+	// Ready is closed after the first load. Until then the view is empty, so
+	// a caller that serves senders answers Unavailable.
+	Ready() <-chan struct{}
+}
+
+// TokenSource authenticates the senders of the drivers that take ingest
+// tokens (grpc). *ingesttoken.Cache is the real one.
+type TokenSource interface {
+	// Authenticate returns the usable token a secret names. It does not
+	// check which feed the token belongs to: the driver does.
+	Authenticate(secret string) (ingesttoken.Token, bool)
+	// OnRevoke calls fn once for each token that is revoked or deleted
+	// (with its feed). fn must not block.
+	OnRevoke(fn func(ingesttoken.Token)) (cancel func())
+	// Ready is closed once the tokens have loaded; until then nothing
+	// authenticates, and the driver answers Unavailable.
+	Ready() <-chan struct{}
 }
 
 // Sink receives what a driver produces. Implementations are safe for
@@ -187,6 +233,12 @@ type Health struct {
 	Connected bool   // transport or remote reachable per the last attempt
 	LastError string // last transport or poll error; "" when fine
 	Detail    map[string]any
+	// Emplacements is the heartbeat state of each active emplacement bound to
+	// the connection, for a driver whose senders heartbeat them (grpc), and
+	// is not empty whenever the connection has such emplacements. The
+	// supervisor rolls the connection's health up from it instead of from
+	// report age, and writes it to the status as detail.emplacements.
+	Emplacements []emplacement.Liveness
 }
 
 // Factory builds a driver for a feed.
@@ -264,6 +316,19 @@ type Definition struct {
 	New          Factory
 	// Listen is set by drivers whose feeds may bind a port.
 	Listen ListenFunc
+	// Internal drivers run Sentinel's own built-in feeds: nobody creates a
+	// feed with one, and the client's new-connection picker leaves them out.
+	// None ships today.
+	Internal bool
+	// NoRepeatSuppression turns the runner's repeat suppression off for the
+	// driver's feeds. Suppression drops a report that repeats the last
+	// position within a second. A site's own report is never suppressed.
+	NoRepeatSuppression bool
+	// Heartbeats means the driver publishes the SENSOR entities of the
+	// emplacements bound to its connections itself, from their heartbeats
+	// (grpc). For the other inbound drivers the runner's SitePublisher
+	// reports the fixed ones.
+	Heartbeats bool
 }
 
 // HasCapability reports whether the definition advertises cap.

@@ -62,6 +62,11 @@ CREATE INDEX IF NOT EXISTS idx_alerts_created  ON sentinel.alerts ("createdAt" D
 ALTER TABLE sentinel.alerts ADD COLUMN IF NOT EXISTS classification VARCHAR(50) NOT NULL DEFAULT 'UNCLASSIFIED';
 CREATE INDEX IF NOT EXISTS idx_alerts_classification ON sentinel.alerts (classification);
 
+-- Set where the alert is made, from its primary and related entities: an alert
+-- about an exercise entity is exercise data, and outbound connections refuse it
+-- unless they allow exercise data.
+ALTER TABLE sentinel.alerts ADD COLUMN IF NOT EXISTS exercise BOOLEAN NOT NULL DEFAULT FALSE;
+
 CREATE TABLE IF NOT EXISTS sentinel.alert_rules (
   id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name                   VARCHAR(255) NOT NULL,

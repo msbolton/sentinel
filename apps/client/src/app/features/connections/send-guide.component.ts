@@ -5,9 +5,14 @@ import { Feed } from '../../shared/models/feed.model';
 import {
   COUNTERS,
   FRAMING_NOTES,
+  INGEST_PROTO_FILES,
   PROTO_FILES,
   endpointLabel,
+  ewSensorCommand,
   goSnippet,
+  grpcEndpoint,
+  grpcTarget,
+  grpcurlCommand,
   JSON_BATCH_MAX,
   jsonBatchExample,
   jsonExample,
@@ -75,7 +80,7 @@ function isSender(v: unknown): v is Sender {
   return typeof v === 'object' && v !== null && typeof (v as Sender).remote === 'string';
 }
 
-/** How to send to a TCP or UDP connection, and who is sending. */
+/** How to send to a TCP, UDP or gRPC connection, and who is sending. */
 @Component({
   selector: 'app-send-guide',
   standalone: true,
@@ -87,6 +92,7 @@ function isSender(v: unknown): v is Sender {
 export class SendGuideComponent {
   readonly feed = input.required<Feed>();
   readonly protoFiles = PROTO_FILES;
+  readonly ingestProtoFiles = INGEST_PROTO_FILES;
   readonly senderTime = senderTime;
 
   /** Starts every id in this guide, so two open guides never share one. */
@@ -96,6 +102,22 @@ export class SendGuideComponent {
   private copiedTimer: ReturnType<typeof setTimeout> | undefined;
 
   readonly target = computed(() => sendTarget(this.feed()));
+
+  readonly grpc = computed(() => grpcTarget(this.feed()));
+  readonly grpcEndpoint = computed(() => {
+    const g = this.grpc();
+    return g ? grpcEndpoint(g) : '';
+  });
+  /** A grpcurl call to GetSession: the quickest check that a token works. */
+  readonly grpcurl = computed<Snippet | null>(() => {
+    const g = this.grpc();
+    return g ? { key: 'grpcurl', title: 'Check a token with grpcurl (run it from the directory that holds proto/)', text: grpcurlCommand(g) } : null;
+  });
+  /** The EW sensor simulator pointed at this connection. */
+  readonly ewSensor = computed<Snippet | null>(() => {
+    const g = this.grpc();
+    return g ? { key: 'ew-sensor', title: 'Send simulated sensor reports with ew-sensor', text: ewSensorCommand(g) } : null;
+  });
   readonly endpoint = computed(() => {
     const t = this.target();
     return t ? endpointLabel(t) : '';

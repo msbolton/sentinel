@@ -38,7 +38,7 @@ const EMPTY_SECRETS: Record<string, string> = {};
 const EMPTY_POLICY: ConnectionPolicy = {};
 
 /** Config keys the form owns itself; the schema form never builds or emits them. */
-const OWN_CONFIG_KEYS = ['classification', 'direction', 'policy'];
+const OWN_CONFIG_KEYS = ['classification', 'exercise', 'military', 'direction', 'policy'];
 /** Config keys that only mean something for a connection that sends. */
 const SENDING_ONLY_KEYS = ['outbound'];
 
@@ -85,6 +85,8 @@ export class ConnectionFormComponent {
   readonly classificationOptions = computed(() => levelsUpTo(this.clearance()));
 
   readonly drivers = this.feedService.drivers;
+  /** The drivers a new connection may use: every one but Sentinel's internal ones. */
+  readonly creatableDrivers = computed(() => this.drivers().filter((d) => !d.internal));
   readonly selectedDriverId = signal<string | null>(null);
   readonly driver = computed(() => {
     const id = this.selectedDriverId();
@@ -103,6 +105,10 @@ export class ConnectionFormComponent {
     description: new FormControl('', { nonNullable: true, validators: [Validators.maxLength(500)] }),
     enabled: new FormControl(true, { nonNullable: true }),
     classification: new FormControl<string>('UNCLASSIFIED', { nonNullable: true, validators: [Validators.required] }),
+    /** Everything this connection brings in is synthetic; its entities are marked exercise. */
+    exercise: new FormControl(false, { nonNullable: true }),
+    /** Entities from this connection are drawn with MIL-STD-2525D symbols on the map. */
+    military: new FormControl(false, { nonNullable: true }),
     /** Narrows a driver that can do both; empty keeps the driver's own. */
     direction: new FormControl<'' | FeedDirection>('', { nonNullable: true }),
   });
@@ -266,8 +272,8 @@ export class ConnectionFormComponent {
       .map((p) => p.message);
   }
 
-  /** Server messages for a config key this form owns (classification, direction). */
-  configProblemsFor(key: 'classification' | 'direction'): string[] {
+  /** Server messages for a config key this form owns (classification, exercise, military, direction). */
+  configProblemsFor(key: 'classification' | 'exercise' | 'military' | 'direction'): string[] {
     return this.problems()
       .filter((p) => isUnder(p.path, `/config/${key}`))
       .map((p) => p.message);
@@ -292,6 +298,12 @@ export class ConnectionFormComponent {
     const v = this.form.getRawValue();
     const { config: schemaConfig, secretRefs } = this.schemaState();
     const config: Record<string, unknown> = { ...schemaConfig, classification: v.classification };
+    if (v.exercise) {
+      config['exercise'] = true;
+    }
+    if (v.military) {
+      config['military'] = true;
+    }
     if (this.driverCanNarrow() && v.direction !== '') {
       config['direction'] = v.direction;
     }
@@ -383,13 +395,15 @@ export class ConnectionFormComponent {
         description: feed.description ?? '',
         enabled: feed.enabled,
         classification: typeof stored === 'string' && stored !== '' ? stored : 'UNCLASSIFIED',
+        exercise: feed.config?.['exercise'] === true,
+        military: feed.config?.['military'] === true,
         direction: direction === 'in' || direction === 'out' || direction === 'both' ? direction : '',
       });
       this.form.controls.id.disable();
     } else {
       this.selectedDriverId.set(null);
       this.step.set(1);
-      this.form.reset({ name: '', id: '', description: '', enabled: true, classification: 'UNCLASSIFIED', direction: '' });
+      this.form.reset({ name: '', id: '', description: '', enabled: true, classification: 'UNCLASSIFIED', exercise: false, military: false, direction: '' });
       this.form.controls.id.enable();
     }
   }

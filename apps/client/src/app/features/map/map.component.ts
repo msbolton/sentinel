@@ -5,6 +5,8 @@ import {
   ViewChild,
   ElementRef,
   signal,
+  computed,
+  Signal,
   effect,
   NgZone,
   ChangeDetectionStrategy,
@@ -16,7 +18,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, NavigationEnd } from '@angular/router';
 import { EntityDetailPanelComponent } from '../../shared/components/entity-detail-panel.component';
 import { IconComponent } from '../../shared/components/icon.component';
-import { Subscription, debounceTime, Subject, throttleTime, bufferTime, filter } from 'rxjs';
+import { Subscription, debounceTime, Subject, throttleTime, bufferTime, filter, timer, interval, switchMap, catchError, EMPTY } from 'rxjs';
 import {
   Entity,
   EntityType,
@@ -60,8 +62,16 @@ import { pathRuns } from './flight-path';
 import { CLUSTER_CONFIG, CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, drawClusterDisc, syncLabelGlyphClusterShow } from './entity-clusters';
 import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine, type GeoPoint } from './drop-line';
 import { formatAltitude } from '../../shared/geo-format';
+import { entityLabel } from './entity-label';
 import { GeofenceService } from '../../core/services/geofence.service';
 import { DRAFT_ID, GeofenceLayer } from './geofence-layer';
+import { EMPLACEMENT_DRAFT_ID, EmplacementLayer, emplacementDrawingOf, siteEntityOf, sitesShown } from './emplacement-layer';
+import { EmplacementService } from '../../core/services/emplacement.service';
+import { emplacementIdOf, rowHeartbeatOf, siteHeartbeatOf } from '../../shared/models/emplacement.model';
+import { FeedService } from '../../core/services/feed.service';
+import { ellipseFromCovariance } from './uncertainty';
+import { isFromMilitaryFeed, sidcFor, symbolDataUrl } from './milstd2525';
+import { locationDotDataUrl } from './location-dot';
 import { GeofenceDrawTool } from './geofence-draw';
 import { GeofenceToolbarComponent } from './geofence-toolbar.component';
 import { DrawSession, addPoint, canFinish, draftFromSession, finishShape, newSession, setAnchor, setCursor, setRadius } from './geofence-draw-state';
@@ -205,6 +215,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private clusterSources = new Map<string, any>();
   /** Saved geofences drawn on the globe; see geofence-layer.ts. */
   private geofenceLayer: GeofenceLayer | null = null;
+  private emplacementLayer: EmplacementLayer | null = null;
+  /** The SENSOR entities that stand for loaded emplacements, by entity id; the emplacement layer draws them. */
+  private readonly emplacementEntities = new Map<string, Entity>();
+  /** The ids of the emplacements loaded now; only their entities are left to the emplacement layer. */
+  private loadedEmplacementIds: ReadonlySet<string> = new Set();
   /** The geofence being drawn, or null; see geofence-draw-state.ts and geofence-draw.ts. */
   readonly drawSession = signal<DrawSession | null>(null);
   private drawTool: GeofenceDrawTool | null = null;
@@ -232,6 +247,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private flightPathLines: any[] = [];
   private flightPathKey = '';
 
+  /**
+   * Set of feed IDs configured with `config.military === true`. Uses a value
+   * equality comparator so periodic `FeedService.poll()` refreshes that do not
+   * change military flags do not trigger a billboard resync.
+   */
+  private readonly militaryFeedIds: Signal<ReadonlySet<string>>;
+
   constructor(
     private readonly ngZone: NgZone,
     private readonly router: Router,
@@ -246,7 +268,34 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly mapViewport: MapViewportService,
     private readonly geofences: GeofenceService,
     private readonly flightPath: FlightPathService,
+    private readonly emplacements: EmplacementService,
+    private readonly feedService: FeedService,
   ) {
+    this.militaryFeedIds = computed<ReadonlySet<string>>(
+      () => {
+        const ids = new Set<string>();
+        for (const f of this.feedService.feeds()) {
+          if (f.config?.['military'] === true) {
+            ids.add(f.id);
+          }
+        }
+        return ids;
+      },
+      {
+        equal: (a, b) => {
+          if (a.size !== b.size) return false;
+          for (const id of a) {
+            if (!b.has(id)) return false;
+          }
+          return true;
+        },
+      },
+    );
+    // Re-sync billboards only when the set of military feed IDs actually changes.
+    effect(() => {
+      this.militaryFeedIds();
+      this.ngZone.runOutsideAngular(() => untracked(() => this.resyncMilitarySymbols()));
+    });
     // Entities stay in the viewer when their layer is hidden (show=false) so
     // dead reckoning keeps advancing them; this flips `show` when the user's
     // hidden set changes.
@@ -293,6 +342,34 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.ngZone.runOutsideAngular(() => untracked(() => this.geofenceLayer?.sync(zones, selectedId, (id) => this.geofenceAnchorPosition(id), draft)));
     });
 
+    // Emplacements, their coverage and the form's unsaved preview, each site
+    // under its connection's layer toggle.
+    effect(() => {
+      // Read the signals here so the effect re-runs on each; the method re-reads them untracked.
+      this.emplacements.emplacements();
+      this.emplacements.selectedId();
+      this.emplacements.draft();
+      this.emplacements.showCoverage();
+      this.layerVisibility.hidden();
+      untracked(() => {
+        this.syncLoadedEmplacements();
+        this.resyncEmplacements();
+      });
+    });
+    // Emplacements change rarely: refresh them every 30 s while the map is shown.
+    this.subscriptions.add(
+      timer(0, 30_000)
+        .pipe(switchMap(() => this.emplacements.load().pipe(catchError(() => EMPTY))))
+        .subscribe(),
+    );
+    // A site goes silent with no event to say so: look again every 3 s.
+    this.subscriptions.add(interval(3_000).subscribe(() => this.ngZone.runOutsideAngular(() => this.resyncEmplacements())));
+    // "Show on map" from an emplacement editor: fly there once the viewer is up.
+    effect(() => {
+      this.emplacements.focus();
+      untracked(() => this.ngZone.runOutsideAngular(() => this.flyToFocus()));
+    });
+
     // A selected aircraft, drone or satellite shows how high it flies: a line to the ground.
     effect(() => {
       const selected = this.selectedEntity();
@@ -316,6 +393,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   async ngAfterViewInit(): Promise<void> {
     await this.initCesium();
+    if (!this.feedService.hasLoaded && !this.feedService.loading()) {
+      this.feedService.load().subscribe({ error: () => undefined });
+    }
     this.geofences.load().subscribe({ error: () => undefined });
     this.setupEventHandlers();
     this.subscribeToEntities();
@@ -353,6 +433,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     this.geofenceLayer?.destroy();
     this.geofenceLayer = null;
+    this.emplacementLayer?.destroy();
+    this.emplacementLayer = null;
     this.clearOrbitOverlay();
     this.clearFlightPath();
     if (this.ageoutConfigTimer) clearInterval(this.ageoutConfigTimer);
@@ -399,8 +481,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.viewer = new Cesium.Viewer(container, viewerOptions);
       this.setupClusterSources();
       this.geofenceLayer = new GeofenceLayer(this.viewer, Cesium);
+      this.emplacementLayer = new EmplacementLayer(this.viewer, Cesium);
       this.drawTool = new GeofenceDrawTool(this.viewer, Cesium);
       this.geofenceLayer.sync(this.geofences.zones(), this.geofences.selectedId(), (id) => this.geofenceAnchorPosition(id));
+      this.resyncEmplacements();
+      this.flyToFocus();
 
       // Set dark atmosphere
       this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
@@ -460,6 +545,19 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         const zoneId = pickedObject.id._sentinelGeofence as string;
         this.viewer.selectedEntity = undefined; // the zone's handles mark the selection, not the viewer's bracket
         if (zoneId !== DRAFT_ID) this.ngZone.run(() => this.geofences.select(zoneId));
+        return;
+      }
+      if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelEmplacement) {
+        // A site selects its SENSOR entity, so the detail panel shows it.
+        const id = pickedObject.id._sentinelEmplacement as string;
+        this.viewer.selectedEntity = undefined;
+        if (id !== EMPLACEMENT_DRAFT_ID) {
+          const site = siteEntityOf(this.emplacementEntities.values(), id);
+          this.ngZone.run(() => {
+            this.emplacements.select(id);
+            this.selectedEntity.set(site); // null when the site is not on the stream: never keep an unrelated selection
+          });
+        }
         return;
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelDensity) {
@@ -718,9 +816,15 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private handleEntityEvent(event: EntityEvent): void {
     switch (event.type) {
       case 'created':
-      case 'updated':
-        this.addOrUpdateCesiumEntity(event.entity);
+      case 'updated': {
+        const prev = this.entityMap.get(event.entity.id)?._sentinelEntity as Entity | undefined;
+        const merged =
+          prev && event.entity.affiliation == null && prev.affiliation != null
+            ? { ...event.entity, affiliation: prev.affiliation }
+            : event.entity;
+        this.addOrUpdateCesiumEntity(merged);
         break;
+      }
       case 'deleted':
         this.removeCesiumEntity(event.entity.id);
         break;
@@ -729,6 +833,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   private addOrUpdateCesiumEntity(entity: Entity): void {
     if (!this.viewer || !this.Cesium) return;
+    // A loaded emplacement's own SENSOR entity is drawn by the emplacement layer.
+    if (emplacementDrawingOf(entity, this.loadedEmplacementIds)) {
+      this.emplacementEntities.set(entity.id, entity);
+      return;
+    }
     if (!entity.position) {
       console.warn(`[Map] Entity ${entity.id} has no position, skipping`);
       return;
@@ -767,10 +876,19 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       : Cesium.HeightReference.CLAMP_TO_GROUND;
 
     // Vessels point along their heading only while moving or when they report a true heading.
-    const headingDeg = entity.entityType === EntityType.VESSEL
-      ? vesselHeading(entity)
-      : HEADING_ROTATED_TYPES.has(entity.entityType) ? entity.heading ?? null : null;
+    // MIL-STD-2525D symbols stay north-up.
+    const uses2525 = this.usesMilStdSymbol(entity);
+    const untintedBillboard = uses2525 || this.isMilitaryAircraft(entity);
+    const headingDeg = uses2525
+      ? null
+      : entity.entityType === EntityType.VESSEL
+        ? vesselHeading(entity)
+        : HEADING_ROTATED_TYPES.has(entity.entityType) ? entity.heading ?? null : null;
     const rotation = headingDeg != null ? -Cesium.Math.toRadians(headingDeg) : 0;
+    const signalEllipse = this.buildSignalEllipse(entity, cesiumColor, isStale);
+    const ellipseKey = signalEllipse
+      ? `${signalEllipse.semiMajorAxis}:${signalEllipse.semiMinorAxis}:${signalEllipse.rotation}:${isStale}`
+      : '';
 
     const existing = this.entityMap.get(entity.id);
     const shown = this.layerVisibility.isVisible(entity);
@@ -792,7 +910,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         ? Cesium.Cartesian3.fromDegrees(satPosition.lon, satPosition.lat, satPosition.height)
         : position;
 
-    const labelText = satPosition ? this.satelliteLabel(entity.name, satPosition.height) : entity.name;
+    const labelText = entityLabel(entity.name, entity.exercise, satPosition ? formatAltitude(satPosition.height) : undefined);
 
     if (existing) {
       // Update existing entity
@@ -803,11 +921,19 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         existing.label.text = labelText;
       }
       if (existing.billboard) {
+        existing.billboard.image = this.getBillboardImage(entity);
         existing.billboard.rotation = rotation;
-        existing.billboard.color = (this.isMilitaryAircraft(entity) ? this.Cesium.Color.WHITE : cesiumColor).withAlpha(billboardAlpha);
+        existing.billboard.color = (untintedBillboard ? this.Cesium.Color.WHITE : cesiumColor).withAlpha(billboardAlpha);
       }
+      existing._uses2525 = uses2525;
       if (existing.label) {
         existing.label.fillColor = this.Cesium.Color.WHITE.withAlpha(billboardAlpha);
+      }
+      if (existing._ellipseKey !== ellipseKey) {
+        existing._ellipseKey = ellipseKey;
+        existing.ellipse = signalEllipse
+          ? (Cesium.EllipseGraphics ? new Cesium.EllipseGraphics(signalEllipse) : signalEllipse)
+          : undefined;
       }
       // An entity first seen without an altitude was clamped to ground;
       // lift it once a fix with altitude arrives (and vice versa).
@@ -846,13 +972,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         billboard: {
           image: this.getBillboardImage(entity),
           scale: 0.5,
-          color: (this.isMilitaryAircraft(entity) ? Cesium.Color.WHITE : cesiumColor).withAlpha(billboardAlpha),
+          color: (untintedBillboard ? Cesium.Color.WHITE : cesiumColor).withAlpha(billboardAlpha),
           heightReference: heightRef,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
           verticalOrigin: Cesium.VerticalOrigin.CENTER,
           rotation,
           alignedAxis: Cesium.Cartesian3.UNIT_Z,
         },
+        ellipse: signalEllipse,
         label: {
           text: labelText,
           font: '12px JetBrains Mono, monospace',
@@ -886,6 +1013,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       cesiumEntity._posProp = posProp;
       cesiumEntity._heightRef = heightRef;
       cesiumEntity._labelText = labelText;
+      cesiumEntity._uses2525 = uses2525;
+      cesiumEntity._ellipseKey = ellipseKey;
       this.entityMap.set(entity.id, cesiumEntity);
     }
 
@@ -964,7 +1093,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       }
       if (cesiumEntity.show === false) return;
       cesiumEntity._posProp.setValue(Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.height, undefined, this.drScratch));
-      const text = this.satelliteLabel(cesiumEntity._sentinelEntity?.name ?? '', pos.height);
+      const text = entityLabel(cesiumEntity._sentinelEntity?.name ?? '', cesiumEntity._sentinelEntity?.exercise, formatAltitude(pos.height));
       if (cesiumEntity._labelText !== text && cesiumEntity.label) {
         cesiumEntity._labelText = text;
         cesiumEntity.label.text = text;
@@ -1150,6 +1279,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   private removeCesiumEntity(entityId: string): void {
+    this.emplacementEntities.delete(entityId);
     this.deadReckoning.remove(entityId);
     this.satellites.remove(entityId);
     if (entityId === this.orbit.forId) this.clearOrbitOverlay();
@@ -1331,6 +1461,72 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     return stored?.position ? [stored.position.longitude, stored.position.latitude] : null;
   }
 
+  /** Where a mobile emplacement is now: its SENSOR entity's last fix, while it is on the stream. */
+  private emplacementPosition(emplacementId: string): { lon: number; lat: number; heading: number | null } | null {
+    for (const e of this.emplacementEntities.values()) {
+      if (e.position && e.ageoutState !== 'AGED_OUT' && emplacementIdOf(e) === emplacementId) {
+        return { lon: e.position.longitude, lat: e.position.latitude, heading: e.heading ?? null };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Keep the loaded emplacement ids in step with the list. When they change,
+   * an entity drawn as an ordinary one that now stands for a loaded emplacement
+   * goes to the emplacement layer, and one left to the layer whose emplacement
+   * is no longer loaded is drawn as an ordinary entity again.
+   */
+  private syncLoadedEmplacements(): void {
+    const ids = new Set(this.emplacements.emplacements().map((e) => e.id));
+    if (ids.size === this.loadedEmplacementIds.size && [...ids].every((id) => this.loadedEmplacementIds.has(id))) return;
+    this.loadedEmplacementIds = ids;
+    for (const [id, cesiumEntity] of [...this.entityMap]) {
+      const entity = cesiumEntity._sentinelEntity as Entity | undefined;
+      if (entity && emplacementDrawingOf(entity, ids)) {
+        this.removeCesiumEntity(id);
+        this.emplacementEntities.set(id, entity);
+      }
+    }
+    for (const [id, entity] of [...this.emplacementEntities]) {
+      if (!emplacementDrawingOf(entity, ids)) {
+        this.emplacementEntities.delete(id);
+        this.addOrUpdateCesiumEntity(entity);
+      }
+    }
+    this.scheduleRender();
+  }
+
+  /**
+   * Redraw the emplacement layer from the service's state: the sites whose
+   * connection's layer is shown, each greyed while silent. The heartbeat is
+   * judged from its SENSOR entity against the server's clock; the REST row
+   * only bootstraps it until the entity is on the stream.
+   */
+  private resyncEmplacements(): void {
+    const list = sitesShown(this.emplacements.emplacements(), this.layerVisibility.hidden());
+    const rows = new Map(list.map((e) => [e.id, e]));
+    const selectedId = this.emplacements.selectedId();
+    const draft = this.emplacements.draft();
+    const coverage = this.emplacements.showCoverage();
+    const now = this.wsService.serverNow();
+    const heartbeat = (id: string) => {
+      const row = rows.get(id);
+      return siteHeartbeatOf(siteEntityOf(this.emplacementEntities.values(), id), now) ?? (row ? rowHeartbeatOf(row) : null);
+    };
+    this.ngZone.runOutsideAngular(() =>
+      this.emplacementLayer?.sync(list, selectedId, draft, coverage, (id) => this.emplacementPosition(id), heartbeat),
+    );
+  }
+
+  /** "Show on map" from an emplacement editor: fly there once, when the viewer is up. */
+  private flyToFocus(): void {
+    const focus = this.emplacements.focus();
+    if (!focus || !this.viewer || !this.Cesium) return;
+    this.emplacements.focus.set(null);
+    this.viewer.camera.flyTo({ destination: this.Cesium.Cartesian3.fromDegrees(focus.lon, focus.lat, 60_000), duration: 1.2 });
+  }
+
   /** Redraw the geofence layer from the service's current state. */
   private resyncGeofences(): void {
     this.ngZone.runOutsideAngular(() => this.geofenceLayer?.sync(this.geofences.zones(), this.geofences.selectedId(), (id) => this.geofenceAnchorPosition(id), this.geofences.draft()));
@@ -1429,12 +1625,6 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (!cartesian) return null;
     const carto = Cesium.Cartographic.fromCartesian(cartesian);
     return [Cesium.Math.toDegrees(carto.longitude), Cesium.Math.toDegrees(carto.latitude)];
-  }
-
-  // --- Satellite altitude -------------------------------------------------------
-
-  private satelliteLabel(name: string, heightM: number): string {
-    return `${name} · ${formatAltitude(heightM)}`;
   }
 
   /** Show the drop line under the selected aircraft, drone or satellite, or none. */
@@ -1645,6 +1835,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
           }
         }
         this.entityMap.clear();
+        this.emplacementEntities.clear();
         this.trackTrails.clear();
         this.deadReckoning.clear();
         this.satellites.clear();
@@ -1713,7 +1904,62 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       && (entity.source === EntitySource.INTELSKY || entity.source === EntitySource.ADSB_LOL);
   }
 
+  /** True when the entity's connection is marked military and should be drawn with MIL-STD-2525D symbols. */
+  private usesMilStdSymbol(entity: Entity): boolean {
+    return isFromMilitaryFeed(entity, this.feedService.feeds());
+  }
+
+  private resyncMilitarySymbols(): void {
+    if (!this.viewer || !this.Cesium || this.entityMap.size === 0) return;
+    let changed = false;
+    for (const cesiumEntity of this.entityMap.values()) {
+      const entity = cesiumEntity._sentinelEntity as Entity | undefined;
+      if (!entity || !cesiumEntity.billboard) continue;
+      const uses2525 = this.usesMilStdSymbol(entity);
+      if (cesiumEntity._uses2525 === uses2525) continue;
+      cesiumEntity._uses2525 = uses2525;
+      const cesiumColor = this.entityColor(entity);
+      const isStale = this.isEntityStale(entity);
+      const billboardAlpha = isStale ? 0.4 : 1.0;
+      const untintedBillboard = uses2525 || this.isMilitaryAircraft(entity);
+      const headingDeg = uses2525
+        ? null
+        : entity.entityType === EntityType.VESSEL
+          ? vesselHeading(entity)
+          : HEADING_ROTATED_TYPES.has(entity.entityType) ? entity.heading ?? null : null;
+      const rotation = headingDeg != null ? -this.Cesium.Math.toRadians(headingDeg) : 0;
+      cesiumEntity.billboard.image = this.getBillboardImage(entity);
+      cesiumEntity.billboard.rotation = rotation;
+      cesiumEntity.billboard.color = (untintedBillboard ? this.Cesium.Color.WHITE : cesiumColor).withAlpha(billboardAlpha);
+      changed = true;
+    }
+    if (changed) {
+      this.scheduleRender();
+    }
+  }
+
+  private buildSignalEllipse(entity: Entity, cesiumColor: any, isStale: boolean): any | undefined {
+    if (entity.entityType !== EntityType.SIGNAL || !this.Cesium) return undefined;
+    const axes = ellipseFromCovariance(entity.kinematics?.positionCovariance);
+    if (!axes) return undefined;
+    const fillAlpha = isStale ? 0.05 : 0.12;
+    const outlineAlpha = isStale ? 0.22 : 0.55;
+    return {
+      semiMajorAxis: axes.semiMajorM,
+      semiMinorAxis: axes.semiMinorM,
+      rotation: axes.rotationRad,
+      height: 0,
+      heightReference: this.Cesium.HeightReference.CLAMP_TO_GROUND,
+      material: cesiumColor.withAlpha(fillAlpha),
+      outline: true,
+      outlineColor: cesiumColor.withAlpha(outlineAlpha),
+    };
+  }
+
   private getBillboardImage(entity: Entity): string {
+    if (this.usesMilStdSymbol(entity)) {
+      return symbolDataUrl(sidcFor(entity));
+    }
     const isMilAircraft = this.isMilitaryAircraft(entity);
     const cacheKey = isMilAircraft ? 'MIL_AIRCRAFT' : entity.entityType;
 
@@ -1908,13 +2154,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (this.userLocationEntity) {
       this.userLocationEntity.position = position;
     } else {
-      // Blue dot SVG with pulse ring — similar to Apple Maps
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-        <circle cx="32" cy="32" r="28" fill="rgba(59,130,246,0.12)" stroke="rgba(59,130,246,0.3)" stroke-width="1"/>
-        <circle cx="32" cy="32" r="18" fill="rgba(59,130,246,0.2)" stroke="rgba(59,130,246,0.4)" stroke-width="1"/>
-        <circle cx="32" cy="32" r="9" fill="#3b82f6" stroke="white" stroke-width="2.5"/>
-      </svg>`;
-      const dataUrl = 'data:image/svg+xml;base64,' + btoa(svg);
+      const dataUrl = locationDotDataUrl('#3b82f6');
 
       this.userLocationEntity = this.viewer.entities.add({
         position,

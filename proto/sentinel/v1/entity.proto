@@ -249,6 +249,11 @@ message Entity {
   // Protocol-specific detail blocks, one per kind, keyed by the
   // PlatformDetail oneof field name ("adsb", "ais", ...).
   map<string, PlatformDetail> platforms = 40;
+
+  // The entity is synthetic: an exercise or simulation contributed to it. Once
+  // set it stays set; outbound connections do not send it unless their
+  // policy allows exercise data.
+  bool exercise = 41;
 }
 
 // SourceContribution summarises what one feed has contributed to a fused entity.

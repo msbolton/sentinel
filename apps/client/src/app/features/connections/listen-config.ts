@@ -31,7 +31,7 @@ function stringsOf(v: unknown): string[] {
 
 /**
  * Whether a feed of this driver and config listens on a port, and where. The tcp driver listens in
- * listen mode only, udp always does, and stream when its transport is a tcpserver or udp.
+ * listen mode only, udp and grpc always do, and stream when its transport is a tcpserver or udp.
  */
 export function listenOf(driverId: string | undefined, config: Record<string, unknown>): ListenInfo | null {
   const c = recordOf(config);
@@ -40,6 +40,9 @@ export function listenOf(driverId: string | undefined, config: Record<string, un
       return c['mode'] === 'listen' ? flatListen('tcp', c) : null;
     case 'udp':
       return flatListen('udp', c);
+    case 'grpc':
+      // gRPC runs over HTTP/2 on a TCP port, and keeps its port, bind address and allowlist where tcp does.
+      return flatListen('tcp', c);
     case 'stream': {
       const transport = recordOf(c['transport']);
       const kind = transport['kind'];

@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package sentinel.ingest.v1;
+
+import "sentinel/v1/common.proto";
+import "sentinel/v1/emplacement.proto";
+import "sentinel/v1/observation.proto";
+
+option go_package = "github.com/sentinel/proto-gen/sentinel/ingest/v1;ingestv1";
+
+// IngestService is how an external sender (a sensor bridge, sentinel-sim)
+// reports to one Sentinel gRPC connection. Every call carries the
+// connection's ingest token as `authorization: Bearer si_…` metadata.
+service IngestService {
+  // GetSession says what the token's connection allows.
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  // ListEmplacements lists the emplacements bound to the connection.
+  rpc ListEmplacements(ListEmplacementsRequest) returns (ListEmplacementsResponse);
+  // UpsertEmplacement creates or updates an emplacement bound to the
+  // connection; refused unless the connection allows sender-managed ones.
+  // An id (or name when id is empty or unknown) is matched case-insensitively
+  // (ignoring surrounding whitespace) against sender-managed emplacements on
+  // this connection.
+  rpc UpsertEmplacement(UpsertEmplacementRequest) returns (UpsertEmplacementResponse);
+  // StreamReports takes reports and answers each with an ack.
+  rpc StreamReports(stream StreamReportsRequest) returns (stream StreamReportsResponse);
+  // Publish takes a batch of reports and acks each, for simple senders.
+  rpc Publish(PublishRequest) returns (PublishResponse);
+}
+
+message GetSessionRequest {}
+
+message GetSessionResponse {
+  string feed_id = 1;
+  repeated sentinel.v1.Emplacement emplacements = 2;
+  sentinel.v1.Classification classification_floor = 3;
+  bool exercise = 4;
+  bool sender_managed_emplacements = 5;
+  uint32 max_message_bytes = 6;
+  uint32 max_messages_per_sec = 7;
+}
+
+message ListEmplacementsRequest {}
+
+message ListEmplacementsResponse {
+  repeated sentinel.v1.Emplacement emplacements = 1;
+}
+
+message UpsertEmplacementRequest {
+  sentinel.v1.Emplacement emplacement = 1;
+}
+
+message UpsertEmplacementResponse {
+  sentinel.v1.Emplacement emplacement = 1;
+}
+
+// Report is one thing a sender says: an observation, or a mobile
+// emplacement's own position. client_ref comes back on the ack.
+// emplacement_id names the emplacement the report comes from (matched
+// case-insensitively, ignoring surrounding whitespace); the service
+// checks it against the emplacements bound to the connection (an empty one
+// means the connection's only emplacement, when it has exactly one).
+// For an emplacement_state body, its own emplacement_id must be empty or
+// equal this one; an empty one takes this one.
+message Report {
+  string client_ref = 1;
+  oneof body {
+    sentinel.v1.Observation observation = 2;
+    sentinel.v1.EmplacementState emplacement_state = 3;
+  }
+  string emplacement_id = 4;
+}
+
+// AckStatus is what happened to one report.
+enum AckStatus {
+  ACK_STATUS_UNSPECIFIED = 0;
+  // Accepted into the ingest service's publisher queue. Not yet durable:
+  // a crash before the queue drains can lose it. Also covers a report the
+  // service recognised as a repeat of the previous one.
+  ACK_STATUS_OK = 1;
+  ACK_STATUS_REJECTED = 2;
+  ACK_STATUS_DEAD_LETTERED = 3;
+}
+
+message Ack {
+  string client_ref = 1;
+  AckStatus status = 2;
+  // Why a report was not accepted: unknown_emplacement, no_heartbeat (the
+  // report's emplacement has not heartbeat within three of its intervals),
+  // stale_ownship, clock_skew (EmplacementState.time >5s ahead of or >60s
+  // behind server time), …
+  string reason = 3;
+  // The emplacement the report was resolved to, when it was (informational).
+  string emplacement_id = 4;
+}
+
+message StreamReportsRequest {
+  Report report = 1;
+}
+
+message StreamReportsResponse {
+  Ack ack = 1;
+}
+
+message PublishRequest {
+  repeated Report reports = 1;
+}
+
+message PublishResponse {
+  repeated Ack acks = 1;
+}

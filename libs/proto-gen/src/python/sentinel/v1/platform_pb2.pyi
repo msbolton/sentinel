@@ -229,8 +229,28 @@ class UavDetail(_message.Message):
     frequency_range: float
     def __init__(self, make: _Optional[str] = ..., model: _Optional[str] = ..., serial_number: _Optional[str] = ..., mac_address: _Optional[str] = ..., operating_frequency: _Optional[float] = ..., frequency_range: _Optional[float] = ...) -> None: ...
 
+class RfDetail(_message.Message):
+    __slots__ = ("frequency_hz", "bandwidth_hz", "emitter_type", "modulation", "pri_us", "pulse_width_us", "scan_type", "power_dbm")
+    FREQUENCY_HZ_FIELD_NUMBER: _ClassVar[int]
+    BANDWIDTH_HZ_FIELD_NUMBER: _ClassVar[int]
+    EMITTER_TYPE_FIELD_NUMBER: _ClassVar[int]
+    MODULATION_FIELD_NUMBER: _ClassVar[int]
+    PRI_US_FIELD_NUMBER: _ClassVar[int]
+    PULSE_WIDTH_US_FIELD_NUMBER: _ClassVar[int]
+    SCAN_TYPE_FIELD_NUMBER: _ClassVar[int]
+    POWER_DBM_FIELD_NUMBER: _ClassVar[int]
+    frequency_hz: float
+    bandwidth_hz: float
+    emitter_type: str
+    modulation: str
+    pri_us: float
+    pulse_width_us: float
+    scan_type: str
+    power_dbm: float
+    def __init__(self, frequency_hz: _Optional[float] = ..., bandwidth_hz: _Optional[float] = ..., emitter_type: _Optional[str] = ..., modulation: _Optional[str] = ..., pri_us: _Optional[float] = ..., pulse_width_us: _Optional[float] = ..., scan_type: _Optional[str] = ..., power_dbm: _Optional[float] = ...) -> None: ...
+
 class PlatformDetail(_message.Message):
-    __slots__ = ("ais", "adsb", "tle", "link16", "cot", "uav", "generic")
+    __slots__ = ("ais", "adsb", "tle", "link16", "cot", "uav", "generic", "rf")
     AIS_FIELD_NUMBER: _ClassVar[int]
     ADSB_FIELD_NUMBER: _ClassVar[int]
     TLE_FIELD_NUMBER: _ClassVar[int]
@@ -238,6 +258,7 @@ class PlatformDetail(_message.Message):
     COT_FIELD_NUMBER: _ClassVar[int]
     UAV_FIELD_NUMBER: _ClassVar[int]
     GENERIC_FIELD_NUMBER: _ClassVar[int]
+    RF_FIELD_NUMBER: _ClassVar[int]
     ais: AisDetail
     adsb: AdsbDetail
     tle: TleDetail
@@ -245,7 +266,8 @@ class PlatformDetail(_message.Message):
     cot: CotDetail
     uav: UavDetail
     generic: GenericDetail
-    def __init__(self, ais: _Optional[_Union[AisDetail, _Mapping]] = ..., adsb: _Optional[_Union[AdsbDetail, _Mapping]] = ..., tle: _Optional[_Union[TleDetail, _Mapping]] = ..., link16: _Optional[_Union[Link16Detail, _Mapping]] = ..., cot: _Optional[_Union[CotDetail, _Mapping]] = ..., uav: _Optional[_Union[UavDetail, _Mapping]] = ..., generic: _Optional[_Union[GenericDetail, _Mapping]] = ...) -> None: ...
+    rf: RfDetail
+    def __init__(self, ais: _Optional[_Union[AisDetail, _Mapping]] = ..., adsb: _Optional[_Union[AdsbDetail, _Mapping]] = ..., tle: _Optional[_Union[TleDetail, _Mapping]] = ..., link16: _Optional[_Union[Link16Detail, _Mapping]] = ..., cot: _Optional[_Union[CotDetail, _Mapping]] = ..., uav: _Optional[_Union[UavDetail, _Mapping]] = ..., generic: _Optional[_Union[GenericDetail, _Mapping]] = ..., rf: _Optional[_Union[RfDetail, _Mapping]] = ...) -> None: ...
 
 class GenericDetail(_message.Message):
     __slots__ = ("fields",)

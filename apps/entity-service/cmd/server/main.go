@@ -104,7 +104,7 @@ func main() {
 	})
 	healthHandler.RegisterRoutes(mux)
 
-	entityHandler := handler.NewEntityHandler(entityStore, observationStore, publisher, logger)
+	entityHandler := handler.NewEntityHandler(entityStore, observationStore, publisher, resolver, logger)
 	entityHandler.RegisterRoutes(mux)
 
 	ageoutConfigHandler := handler.NewAgeoutConfigHandler(ageoutConfigStore, logger)

@@ -43,6 +43,8 @@ type Info struct {
 	// SecretFields are secret_refs keys the driver expects; they must never
 	// appear in config.
 	SecretFields []string `json:"secretFields"`
+	// Internal drivers run built-in feeds only; no feed may be created on one.
+	Internal bool `json:"internal"`
 	// OpaqueConfig and HeaderMaps scope the key-case rule (see driver.Definition).
 	OpaqueConfig []string `json:"-"`
 	HeaderMaps   []string `json:"-"`
@@ -126,7 +128,7 @@ func Build(defs []driver.Definition) (*Catalog, error) {
 		if err != nil {
 			return nil, fmt.Errorf("compiling %s schema: %w", d.ID, err)
 		}
-		info := Info{ID: d.ID, Name: d.Name, Description: d.Description, Source: d.Source, Direction: string(d.Direction.Normalize()), Capabilities: d.Capabilities, ConfigSchema: raw, SecretFields: d.SecretFields, OpaqueConfig: d.OpaqueConfig, HeaderMaps: d.HeaderMaps, AreaTTL: d.AreaTTL}
+		info := Info{ID: d.ID, Name: d.Name, Description: d.Description, Source: d.Source, Direction: string(d.Direction.Normalize()), Capabilities: d.Capabilities, ConfigSchema: raw, SecretFields: d.SecretFields, Internal: d.Internal, OpaqueConfig: d.OpaqueConfig, HeaderMaps: d.HeaderMaps, AreaTTL: d.AreaTTL}
 		if info.Capabilities == nil {
 			info.Capabilities = []string{}
 		}

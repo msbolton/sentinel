@@ -196,6 +196,121 @@ func TestClassificationHighWaterMark(t *testing.T) {
 	}
 }
 
+// An entity's exercise mark only goes from false to true: no later live
+// report, fused or static, clears it.
+func TestExerciseIsSticky(t *testing.T) {
+	pool, ctx := testPool(t)
+	ids := store.NewIdentityStore(pool, nil)
+	ents := store.NewEntityStore(pool, nil)
+	t0 := time.Now().UTC().Truncate(time.Millisecond)
+	icao := "TSX" + t0.Format("150405")
+
+	r1 := report("test-ex", icao, t0, 41.9, -87.9)
+	spec := fusion.SpecFor(r1)
+	if spec.Exercise {
+		t.Fatal("a live report must not produce an exercise spec")
+	}
+	created, _, err := ids.CreateEntities(ctx, []identity.NewEntity{spec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entityID := created[r1.Key]
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM sentinel.entities WHERE id = $1`, entityID) })
+	if rec, err := ents.FindByID(ctx, entityID); err != nil || rec == nil || rec.Exercise {
+		t.Fatalf("live entity = %+v %v", rec, err)
+	}
+
+	apply := func(exercise bool, at time.Time) store.FusedResult {
+		res, err := ents.ApplyFused(ctx, []store.FusedUpdate{{EntityID: entityID, ObservedAt: at, FeedID: "test-ex", Source: "OPENSKY", SourceEntityID: r1.Obs.SourceEntityId,
+			KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "X", Lat: 1, Lon: 1, Exercise: exercise}})
+		if err != nil || len(res) != 1 {
+			t.Fatalf("apply exercise=%v = %+v %v", exercise, res, err)
+		}
+		return res[0]
+	}
+	if r := apply(false, t0.Add(time.Second)); r.Record.Exercise {
+		t.Fatalf("live update marked the entity: %+v", r.Record)
+	}
+	if r := apply(true, t0.Add(2*time.Second)); !r.Record.Exercise {
+		t.Fatalf("exercise update did not mark the entity: %+v", r.Record)
+	}
+	if r := apply(false, t0.Add(3*time.Second)); !r.Record.Exercise {
+		t.Fatalf("live update cleared the mark: %+v", r.Record)
+	}
+	static, err := ents.ApplyStatic(ctx, []store.StaticUpdate{{EntityID: entityID, FeedID: "test-ex", Source: "OPENSKY", SourceEntityID: "x"}})
+	if err != nil || len(static) != 1 || !static[0].Record.Exercise {
+		t.Fatalf("live static update cleared the mark: %+v %v", static, err)
+	}
+
+	// A static exercise update marks a live entity too.
+	r2 := report("test-ex", icao+"B", t0, 42, -87)
+	created2, _, err := ids.CreateEntities(ctx, []identity.NewEntity{fusion.SpecFor(r2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2 := created2[r2.Key]
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM sentinel.entities WHERE id = $1`, id2) })
+	static2, err := ents.ApplyStatic(ctx, []store.StaticUpdate{{EntityID: id2, FeedID: "test-ex", Source: "OPENSKY", SourceEntityID: "y", Exercise: true}})
+	if err != nil || len(static2) != 1 || !static2[0].Record.Exercise {
+		t.Fatalf("static exercise update = %+v %v", static2, err)
+	}
+
+	// An entity whose first report is exercise is created marked.
+	r3 := report("test-ex", icao+"C", t0, 43, -87)
+	r3.Obs.Exercise = true
+	spec3 := fusion.SpecFor(r3)
+	if !spec3.Exercise {
+		t.Fatal("exercise report must produce an exercise spec")
+	}
+	created3, _, err := ids.CreateEntities(ctx, []identity.NewEntity{spec3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id3 := created3[r3.Key]
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM sentinel.entities WHERE id = $1`, id3) })
+	if rec, err := ents.FindByID(ctx, id3); err != nil || rec == nil || !rec.Exercise {
+		t.Fatalf("exercise-born entity = %+v %v", rec, err)
+	}
+}
+
+// MarkExercise marks live entities once, and leaves deleted ones alone.
+func TestMarkExercise(t *testing.T) {
+	pool, ctx := testPool(t)
+	ids := store.NewIdentityStore(pool, nil)
+	ents := store.NewEntityStore(pool, nil)
+	t0 := time.Now().UTC().Truncate(time.Millisecond)
+	icao := "TSM" + t0.Format("150405")
+
+	ra := report("test-mx", icao, t0, 41.9, -87.9)
+	rb := report("test-mx", icao+"D", t0, 42.9, -87.9)
+	created, _, err := ids.CreateEntities(ctx, []identity.NewEntity{fusion.SpecFor(ra), fusion.SpecFor(rb)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, gone := created[ra.Key], created[rb.Key]
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM sentinel.entities WHERE id = ANY($1::uuid[])`, []string{live, gone})
+	})
+	if _, err := pool.Exec(ctx, `UPDATE sentinel.entities SET deleted = true WHERE id = $1`, gone); err != nil {
+		t.Fatal(err)
+	}
+
+	if recs, err := ents.MarkExercise(ctx, nil); err != nil || recs != nil {
+		t.Fatalf("empty ids = %v %v", recs, err)
+	}
+	recs, err := ents.MarkExercise(ctx, []string{live, gone})
+	if err != nil || len(recs) != 1 || recs[0].ID != live || !recs[0].Exercise {
+		t.Fatalf("first mark = %+v %v", recs, err)
+	}
+	if recs, err := ents.MarkExercise(ctx, []string{live, gone}); err != nil || len(recs) != 0 {
+		t.Fatalf("second mark = %+v %v", recs, err)
+	}
+	var deletedMarked bool
+	if err := pool.QueryRow(ctx, `SELECT exercise FROM sentinel.entities WHERE id = $1`, gone).Scan(&deletedMarked); err != nil || deletedMarked {
+		t.Fatalf("deleted entity exercise = %v %v", deletedMarked, err)
+	}
+}
+
 // Reads apply the caller's clearance as a ceiling.
 func TestCeilingOnReads(t *testing.T) {
 	pool, ctx := testPool(t)
@@ -268,5 +383,224 @@ func TestCeilingOnReads(t *testing.T) {
 		if c.Classification == "SECRET" || c.Classification == "TOP_SECRET" {
 			t.Errorf("counts leak %s rows to a CONFIDENTIAL caller", c.Classification)
 		}
+	}
+}
+
+func TestAffiliationStickyAndCovarianceCEPClears(t *testing.T) {
+	pool, ctx := testPool(t)
+	ids := store.NewIdentityStore(pool, nil)
+	ents := store.NewEntityStore(pool, nil)
+	t0 := time.Now().UTC().Truncate(time.Millisecond)
+	icao := "TSA" + t0.Format("150405")
+
+	// 1. Affiliation:
+	// - a new entity with no affiliation stores 'UNKNOWN';
+	// - default 'UNKNOWN' takes HOSTILE;
+	// - PENDING -> SUSPECT -> HOSTILE follows the feed;
+	// - a report with no affiliation keeps the stored one.
+	r1 := report("test-ew", icao, t0, 50.0, -1.0)
+	spec := fusion.SpecFor(r1)
+	spec.Affiliation = ""
+	created, _, err := ids.CreateEntities(ctx, []identity.NewEntity{spec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entityID := created[r1.Key]
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM sentinel.entities WHERE id = $1`, entityID) })
+
+	initialRec, err := ents.FindByID(ctx, entityID)
+	if err != nil || initialRec == nil || initialRec.Affiliation == nil || *initialRec.Affiliation != "UNKNOWN" {
+		t.Fatalf("new entity with no affiliation must store 'UNKNOWN', got %+v (err=%v)", initialRec, err)
+	}
+
+	applyAff := func(aff string, step time.Duration) *store.EntityRecord {
+		res, err := ents.ApplyFused(ctx, []store.FusedUpdate{{
+			EntityID: entityID, ObservedAt: t0.Add(step), FeedID: "test-ew", Source: "SIGINT", SourceEntityID: r1.Obs.SourceEntityId,
+			KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.0, Lon: -1.0, Affiliation: aff,
+			Kinematics: json.RawMessage(`{}`),
+		}})
+		if err != nil || len(res) != 1 {
+			t.Fatalf("ApplyFused(affiliation=%q) = %+v (err=%v)", aff, res, err)
+		}
+		return res[0].Record
+	}
+
+	// Default 'UNKNOWN' takes HOSTILE.
+	if rec := applyAff("HOSTILE", 0); rec.Affiliation == nil || *rec.Affiliation != "HOSTILE" {
+		t.Fatalf("expected default 'UNKNOWN' to take HOSTILE, got %v", rec.Affiliation)
+	}
+	// PENDING -> SUSPECT -> HOSTILE follows the feed.
+	for i, want := range []string{"PENDING", "SUSPECT", "HOSTILE"} {
+		if rec := applyAff(want, time.Duration(i+1)*time.Second); rec.Affiliation == nil || *rec.Affiliation != want {
+			t.Fatalf("step %d: expected affiliation %q, got %v", i, want, rec.Affiliation)
+		}
+	}
+	// A report with no affiliation keeps the stored one ('HOSTILE').
+	if rec := applyAff("", 4*time.Second); rec.Affiliation == nil || *rec.Affiliation != "HOSTILE" {
+		t.Fatalf("expected empty affiliation report to keep HOSTILE, got %v", rec.Affiliation)
+	}
+
+	// 2. circularError: an AIS/CoT-style track without positionCovariance keeps
+	// its scalar CE across a report with no CE; a covariance-derived CE clears
+	// when a later report has neither CE nor positionCovariance.
+	ce50 := 50.0
+	res, err := ents.ApplyFused(ctx, []store.FusedUpdate{{
+		EntityID: entityID, ObservedAt: t0.Add(5 * time.Second), FeedID: "test-ew", Source: "COT", SourceEntityID: r1.Obs.SourceEntityId,
+		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.02, Lon: -1.02,
+		CircularError: &ce50, Kinematics: json.RawMessage(`{}`),
+	}})
+	if err != nil || len(res) != 1 || res[0].Record.CircularError == nil || *res[0].Record.CircularError != 50.0 {
+		t.Fatalf("expected scalar CE 50, got %+v (err=%v)", res, err)
+	}
+
+	// Next report on same feed with no CE and no covariance preserves scalar CE 50.
+	res, err = ents.ApplyFused(ctx, []store.FusedUpdate{{
+		EntityID: entityID, ObservedAt: t0.Add(6 * time.Second), FeedID: "test-ew", Source: "COT", SourceEntityID: r1.Obs.SourceEntityId,
+		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.03, Lon: -1.03,
+		CircularError: nil, Kinematics: json.RawMessage(`{}`),
+	}})
+	if err != nil || len(res) != 1 || res[0].Record.CircularError == nil || *res[0].Record.CircularError != 50.0 {
+		t.Fatalf("expected scalar CE 50 to survive report without CE, got %+v (err=%v)", res, err)
+	}
+
+	// Report carrying positionCovariance and covariance-derived CE sets both.
+	ce1474 := 1474.0
+	res, err = ents.ApplyFused(ctx, []store.FusedUpdate{{
+		EntityID: entityID, ObservedAt: t0.Add(7 * time.Second), FeedID: "test-ew", Source: "SIGINT", SourceEntityID: r1.Obs.SourceEntityId,
+		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.04, Lon: -1.04,
+		CircularError: &ce1474,
+		Kinematics:    json.RawMessage(`{"positionCovariance":{"pnPn":500,"pnPe":25,"pePe":200}}`),
+	}})
+	if err != nil || len(res) != 1 || res[0].Record.CircularError == nil || *res[0].Record.CircularError != 1474.0 {
+		t.Fatalf("expected covariance CE 1474, got %+v (err=%v)", res, err)
+	}
+
+	// Subsequent report with neither CE nor positionCovariance clears circularError to nil.
+	res, err = ents.ApplyFused(ctx, []store.FusedUpdate{{
+		EntityID: entityID, ObservedAt: t0.Add(8 * time.Second), FeedID: "test-ew", Source: "SIGINT", SourceEntityID: r1.Obs.SourceEntityId,
+		KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "Emitter", Lat: 50.05, Lon: -1.05,
+		CircularError: nil, Kinematics: json.RawMessage(`{}`),
+	}})
+	if err != nil || len(res) != 1 || res[0].Record.CircularError != nil {
+		t.Fatalf("expected covariance-derived CE to clear when covariance clears, got %v (err=%v)", res[0].Record.CircularError, err)
+	}
+}
+
+// Review focus 3: a silent site's re-publish carries the same source time as
+// its last online one and still lands: the entity turns INACTIVE and its
+// generic detail is replaced, silentSince with it.
+func TestSiteStatusFollowsItsConnection(t *testing.T) {
+	pool, ctx := testPool(t)
+	ids := store.NewIdentityStore(pool, nil)
+	ents := store.NewEntityStore(pool, nil)
+	t0 := time.Now().UTC().Truncate(time.Millisecond)
+	icao := "TSO" + t0.Format("150405")
+	r1 := report("test-op", icao, t0, 41.9, -87.9)
+	created, _, err := ids.CreateEntities(ctx, []identity.NewEntity{fusion.SpecFor(r1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entityID := created[r1.Key]
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM sentinel.entities WHERE id = $1`, entityID)
+	})
+	apply := func(status, platform string, at time.Time) *store.EntityRecord {
+		t.Helper()
+		res, err := ents.ApplyFused(ctx, []store.FusedUpdate{{EntityID: entityID, ObservedAt: at, FeedID: "test-op", Source: "OPENSKY",
+			SourceEntityID: r1.Obs.SourceEntityId, KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "X", Lat: 1, Lon: 1,
+			OperationalStatus: status, Platform: json.RawMessage(platform)}})
+		if err != nil || len(res) != 1 {
+			t.Fatalf("apply %s = %+v %v", status, res, err)
+		}
+		return res[0].Record
+	}
+	rec := apply("OPERATIONAL", `{"generic":{"fields":{"heartbeat":"online"}}}`, t0)
+	if rec.OperationalStatus == nil || *rec.OperationalStatus != "OPERATIONAL" {
+		t.Fatalf("online: %v", rec.OperationalStatus)
+	}
+	rec = apply("INACTIVE", `{"generic":{"fields":{"heartbeat":"offline","silentSince":"x"}}}`, t0)
+	if rec.OperationalStatus == nil || *rec.OperationalStatus != "INACTIVE" {
+		t.Fatalf("a re-publish at the same time did not land: %v", rec.OperationalStatus)
+	}
+	rec = apply("", `{"generic":{"fields":{"heartbeat":"online"}}}`, t0.Add(time.Second))
+	if *rec.OperationalStatus != "INACTIVE" {
+		t.Fatalf("a report with no status changed it: %v", *rec.OperationalStatus)
+	}
+	fields, _ := rec.PlatformData["generic"].(map[string]interface{})["fields"].(map[string]interface{})
+	if _, ok := fields["silentSince"]; ok || fields["heartbeat"] != "online" {
+		t.Fatalf("generic detail = %v, want the newest one only", rec.PlatformData["generic"])
+	}
+}
+
+// A soft-deleted entity releases its identity: the next report that carries
+// it creates a new entity and the identity row moves to it.
+func TestCreateEntitiesRebindsDeletedEntitysIdentity(t *testing.T) {
+	pool, ctx := testPool(t)
+	ids := store.NewIdentityStore(pool, nil)
+	ents := store.NewEntityStore(pool, nil)
+	t0 := time.Now().UTC().Truncate(time.Millisecond)
+	icao := "RVV" + t0.Format("150405")
+
+	r1 := report("test-revive", icao, t0, 41.9, -87.9)
+	first, _, err := ids.CreateEntities(ctx, []identity.NewEntity{fusion.SpecFor(r1)})
+	if err != nil || first[r1.Key] == "" {
+		t.Fatalf("create = %v %v", first, err)
+	}
+	oldID := first[r1.Key]
+	if err := ents.SoftDelete(ctx, oldID); err != nil {
+		t.Fatal(err)
+	}
+
+	r2 := report("test-revive", icao, t0.Add(time.Minute), 42.0, -88.0)
+	again, isNew, err := ids.CreateEntities(ctx, []identity.NewEntity{fusion.SpecFor(r2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newID := again[r2.Key]
+	if newID == "" || newID == oldID || !isNew[r2.Key] {
+		t.Fatalf("after delete: id %q (old %q) created %v; want a new entity", newID, oldID, isNew[r2.Key])
+	}
+	var bound string
+	var firstSeen time.Time
+	if err := pool.QueryRow(ctx, `SELECT "entityId", "firstSeenAt" FROM sentinel.entity_identities WHERE "identityType" = $1 AND "identityValue" = $2`,
+		r2.Key.Type, r2.Key.Value).Scan(&bound, &firstSeen); err != nil {
+		t.Fatal(err)
+	}
+	if bound != newID {
+		t.Fatalf("identity bound to %q, want %q", bound, newID)
+	}
+	if !firstSeen.Equal(fusion.SpecFor(r2).SeenAt) {
+		t.Fatalf("firstSeenAt = %v, want %v", firstSeen, fusion.SpecFor(r2).SeenAt)
+	}
+	var oldDeleted, newDeleted bool
+	if err := pool.QueryRow(ctx, `SELECT deleted FROM sentinel.entities WHERE id = $1`, oldID).Scan(&oldDeleted); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT deleted FROM sentinel.entities WHERE id = $1`, newID).Scan(&newDeleted); err != nil {
+		t.Fatal(err)
+	}
+	if !oldDeleted || newDeleted {
+		t.Fatalf("old deleted=%v new deleted=%v; want true/false", oldDeleted, newDeleted)
+	}
+	dead, err := ents.DeletedAmong(ctx, []string{oldID, newID})
+	if err != nil || len(dead) != 1 || !dead[oldID] {
+		t.Fatalf("DeletedAmong = %v %v, want only %q", dead, err, oldID)
+	}
+	found, err := ids.Lookup(ctx, []identity.Key{r2.Key})
+	if err != nil || found[r2.Key] != newID {
+		t.Fatalf("lookup = %v %v, want %q", found, err, newID)
+	}
+
+	// The race case: a live entity holds the key, so creating returns it.
+	third, isNew3, err := ids.CreateEntities(ctx, []identity.NewEntity{fusion.SpecFor(r2)})
+	if err != nil || third[r2.Key] != newID || isNew3[r2.Key] {
+		t.Fatalf("live holder: %v %v %v; want %q not created", third, isNew3, err, newID)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sentinel.entities WHERE "feedId" = 'test-revive' AND "primaryIdentityValue" = $1`, r2.Key.Value).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("entities for key = %d, want 2 (old deleted + new live)", n)
 	}
 }

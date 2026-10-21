@@ -135,3 +135,15 @@ type UAVData struct {
 	OperatingFrequency float64
 	FrequencyRange     float64
 }
+
+// RFData carries intercepted RF / electronic-warfare emitter parameters.
+type RFData struct {
+	FrequencyHz  float64
+	BandwidthHz  *float64
+	EmitterType  string
+	Modulation   string
+	PriUs        *float64
+	PulseWidthUs *float64
+	ScanType     string
+	PowerDbm     *float64
+}

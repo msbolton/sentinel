@@ -18,7 +18,10 @@ export interface SendTarget {
 }
 
 /** The proto files a sender needs, served from assets/proto/sentinel/v1/. */
-export const PROTO_FILES = ['observation.proto', 'common.proto', 'entity.proto', 'platform.proto'];
+export const PROTO_FILES = ['observation.proto', 'common.proto', 'entity.proto', 'platform.proto', 'emplacement.proto'];
+
+/** The ingest contract's files, served from assets/proto/ next to PROTO_FILES. */
+export const INGEST_PROTO_FILES = ['sentinel/ingest/v1/ingest_service.proto'];
 
 /** What the examples say until the listener's host is known. */
 const LISTENER_HOST = 'LISTENER_HOST';
@@ -66,6 +69,58 @@ export function sendTarget(feed: Feed): SendTarget | null {
     requireClientCert: tlsOn && !!tls['requireClientCert'],
     allow: stringsOf(config['allow']),
   };
+}
+
+/** Where a gRPC connection listens, for the send guide. */
+export interface GrpcTarget {
+  host: string;
+  port: number;
+  tls: boolean;
+  requireClientCert: boolean;
+  allow: string[];
+}
+
+/** The gRPC target of a grpc connection, or null for any other driver. */
+export function grpcTarget(feed: Feed): GrpcTarget | null {
+  if (feed.driver !== 'grpc') return null;
+  const config = recordOf(feed.config);
+  const running = recordOf(recordOf(feed.status?.detail)['listen']);
+  const tls = recordOf(config['tls']);
+  return {
+    host: String(running['host'] ?? ''),
+    port: Number(running['port'] ?? config['port'] ?? 0),
+    tls: !!tls['enabled'],
+    requireClientCert: !!tls['enabled'] && !!tls['requireClientCert'],
+    allow: stringsOf(config['allow']),
+  };
+}
+
+/** "host:port"; the host is "listener" until the connection runs. */
+export function grpcEndpoint(t: GrpcTarget): string {
+  return joinHostPort(t.host || 'listener', t.port);
+}
+
+/** A grpcurl call to GetSession: the quickest check that a token works. */
+export function grpcurlCommand(t: GrpcTarget): string {
+  const security = !t.tls ? '-plaintext' : t.requireClientCert ? '-cacert ca.pem -cert client.pem -key client-key.pem' : '-cacert ca.pem';
+  return [
+    'grpcurl',
+    security,
+    '-import-path proto -proto sentinel/ingest/v1/ingest_service.proto',
+    '-H "authorization: Bearer $SENTINEL_INGEST_TOKEN"',
+    shellQuote(grpcEndpoint(t)),
+    'sentinel.ingest.v1.IngestService/GetSession',
+  ].join(' ');
+}
+
+/**
+ * The EW sensor simulator's command line for this connection. The CLI needs an emplacement
+ * position, so the line names the bundled example config, which resolves in the image
+ * (WORKDIR /app) and from apps/ew-sensor; the flags override what it sets.
+ */
+export function ewSensorCommand(t: GrpcTarget): string {
+  const security = !t.tls ? '--insecure' : t.requireClientCert ? '--tls --ca ca.pem --cert client.pem --key client-key.pem' : '--tls --ca ca.pem';
+  return `ew-sensor --addr ${shellQuote(grpcEndpoint(t))} --token "$SENTINEL_INGEST_TOKEN" ${security} --config examples/coastal-esm.yaml`;
 }
 
 /**

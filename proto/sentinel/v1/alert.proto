@@ -107,6 +107,11 @@ message Alert {
 
   // Classification inherited from the primary entity when the alert fired.
   Classification classification = 14;
+
+  // True when the alert is about an exercise entity (the primary one or a
+  // related one). Set by the service that makes the alert, never by a sender;
+  // outbound connections refuse a marked alert unless they allow exercise data.
+  bool exercise = 15;
 }
 
 // CreateAlertRuleRequest registers a new geofence-based alert rule.

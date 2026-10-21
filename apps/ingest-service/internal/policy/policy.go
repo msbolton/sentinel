@@ -1,7 +1,8 @@
 // Package policy decides what an outbound connection may send. It is pure:
 // a parsed policy, a little context about the connection, and an entity or
 // alert in, a decision out. The checks run cheapest first and the first
-// denial wins, so the reason names the rule that stopped the entity.
+// denial wins, so the reason names the rule that stopped the entity: loop,
+// re-export, exercise, classification ceiling, type, feed, then boxes.
 package policy
 
 import (
@@ -45,12 +46,15 @@ func (a AlertPolicy) On() bool { return a.Enabled == nil || *a.Enabled }
 
 // Policy is config.policy of a connection. Empty lists mean no restriction.
 type Policy struct {
-	EntityTypes           []string    `json:"entityTypes"`
-	Feeds                 []string    `json:"feeds"`
-	Boxes                 []Box       `json:"boxes"`
-	ClassificationCeiling string      `json:"classificationCeiling"`
-	Reexport              bool        `json:"reexport"`
-	Alerts                AlertPolicy `json:"alerts"`
+	EntityTypes           []string `json:"entityTypes"`
+	Feeds                 []string `json:"feeds"`
+	Boxes                 []Box    `json:"boxes"`
+	ClassificationCeiling string   `json:"classificationCeiling"`
+	Reexport              bool     `json:"reexport"`
+	// AllowExercise lets exercise (synthetic) entities and their alerts go
+	// out; by default they never leave Sentinel.
+	AllowExercise bool        `json:"allowExercise"`
+	Alerts        AlertPolicy `json:"alerts"`
 }
 
 // Context is what the evaluator knows about the connection itself.
@@ -68,6 +72,7 @@ type Context struct {
 const (
 	ReasonLoop           = "loop"
 	ReasonReexport       = "reexport"
+	ReasonExercise       = "exercise"
 	ReasonClassification = "classification"
 	ReasonType           = "type"
 	ReasonFeed           = "feed"
@@ -120,6 +125,10 @@ func Evaluate(p Policy, c Context, e *sentinelv1.Entity) Decision {
 	if !p.Reexport && contributed(e, func(id string) bool { return c.ConnectionFeedIDs[id] }) {
 		return deny(ReasonReexport)
 	}
+	// Exercise: synthetic data stays in Sentinel unless the policy allows it.
+	if e.GetExercise() && !p.AllowExercise {
+		return deny(ReasonExercise)
+	}
 	if classification.Rank(pbjson.EnumName(e.Classification)) > classification.Rank(p.ClassificationCeiling) {
 		return deny(ReasonClassification)
 	}
@@ -143,8 +152,13 @@ func Evaluate(p Policy, c Context, e *sentinelv1.Entity) Decision {
 // AllowAlert decides whether an alert may be sent. tracked says whether the
 // alert's entity is currently exported on this connection; an alert about
 // an untracked entity still passes when its own position is inside the
-// policy's boxes.
-func AllowAlert(p Policy, c Context, a *sentinelv1.Alert, tracked bool) Decision {
+// policy's boxes. exercise says the alert is about an exercise entity, as
+// far as the caller knows; such an alert never leaves unless the policy
+// allows exercise data, whatever else would let it through.
+func AllowAlert(p Policy, c Context, a *sentinelv1.Alert, tracked, exercise bool) Decision {
+	if exercise && !p.AllowExercise {
+		return deny(ReasonExercise)
+	}
 	if a == nil || !p.Alerts.On() {
 		return deny(ReasonAlertsOff)
 	}

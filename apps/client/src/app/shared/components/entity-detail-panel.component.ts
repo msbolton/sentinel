@@ -2,7 +2,9 @@ import { Component, computed, CUSTOM_ELEMENTS_SCHEMA, DestroyRef, effect, inject
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { CommonModule } from '@angular/common';
 import { AnalyticsService } from '../../core/services/analytics.service';
+import { Router } from '@angular/router';
 import { AuthService } from '../../core/services/auth.service';
+import { EmplacementService } from '../../core/services/emplacement.service';
 import { FeedService } from '../../core/services/feed.service';
 import { LocationService } from '../../core/services/location.service';
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
@@ -10,6 +12,8 @@ import { FlightPathService } from '../../core/services/flight-path.service';
 import { FLIGHT_PATH_DAYS } from '../models/flight-path.model';
 import { pathSummary } from '../../features/map/flight-path';
 import { Entity, EntitySource } from '../models/entity.model';
+import { SiteHeartbeat, emplacementIdOf, formatZulu, siteHeartbeatOf } from '../models/emplacement.model';
+import { WebSocketService } from '../../core/services/websocket.service';
 import { EntityBaseline, EntityPlace, Finding, findingKindLabel, formatDuration, formatMetres } from '../models/finding.model';
 import { Location } from '../models/location.model';
 import { formatAltitude, formatCoordinate } from '../geo-format';
@@ -67,6 +71,9 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
           <div class="header-chips">
             <span class="chips">
               <span class="chip chip-entity-type" [ngClass]="e.entityType">{{ e.entityType }}</span>
+              @if (e.exercise) {
+                <span class="chip chip-exercise" title="Exercise data: synthetic, not a live track">EXERCISE</span>
+              }
               @if (e.affiliation) {
                 <span class="chip chip-affiliation-id" [ngClass]="affiliationColor()">{{ e.affiliation }}</span>
               }
@@ -309,6 +316,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                       @case ('cot') { CoT Data }
                       @case ('link16') { Link 16 Data }
                       @case ('uav') { UAV Data }
+                      @case ('rf') { RF }
                     }
                   </h4>
                   @if (!isOpen('platformDetails')) {
@@ -526,6 +534,34 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                           }
                         }
                       }
+                      @case ('rf') {
+                        @if (e.platformData?.rf; as rf) {
+                          @if (formatRfHz(rf.frequencyHz); as freq) {
+                            <div class="field-row"><span class="field-label">Frequency</span><span class="field-value mono">{{ freq }}</span></div>
+                          }
+                          @if (formatRfHz(rf.bandwidthHz); as bw) {
+                            <div class="field-row"><span class="field-label">Bandwidth</span><span class="field-value mono">{{ bw }}</span></div>
+                          }
+                          @if (rf.emitterType) {
+                            <div class="field-row"><span class="field-label">Emitter Type</span><span class="field-value mono">{{ rf.emitterType }}</span></div>
+                          }
+                          @if (rf.modulation) {
+                            <div class="field-row"><span class="field-label">Modulation</span><span class="field-value mono">{{ rf.modulation }}</span></div>
+                          }
+                          @if (formatRfPri(rf.priUs); as pri) {
+                            <div class="field-row"><span class="field-label">PRI / PRF</span><span class="field-value mono">{{ pri }}</span></div>
+                          }
+                          @if (formatRfPulseWidth(rf.pulseWidthUs); as pw) {
+                            <div class="field-row"><span class="field-label">Pulse Width</span><span class="field-value mono">{{ pw }}</span></div>
+                          }
+                          @if (formatRfScan(rf.scanType, rf.scanRateRpm); as scan) {
+                            <div class="field-row"><span class="field-label">Scan</span><span class="field-value mono">{{ scan }}</span></div>
+                          }
+                          @if (formatRfPower(rf.powerDbm); as pwr) {
+                            <div class="field-row"><span class="field-label">Power</span><span class="field-value mono">{{ pwr }}</span></div>
+                          }
+                        }
+                      }
                     }
                   </div>
                 }
@@ -615,6 +651,22 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                     <span class="field-label">Source</span>
                     <span class="chip chip-source">{{ e.source }}</span>
                   </div>
+                  @if (emplacementName(); as name) {
+                    <div class="field-row">
+                      <span class="field-label">Emplacement</span>
+                      @if (canOpenConnection() && connectionId(); as connId) {
+                        <button type="button" class="field-value field-link" [title]="'Open its connection, ' + connId" (click)="openConnection()">{{ name }}</button>
+                      } @else {
+                        <span class="field-value">{{ name }}</span>
+                      }
+                    </div>
+                  }
+                  @if (siteHeartbeat(); as hb) {
+                    <div class="field-row">
+                      <span class="field-label">Heartbeat</span>
+                      <span class="field-value mono">{{ heartbeatLabel(hb) }}</span>
+                    </div>
+                  }
                   @if (cotUid(); as uid) {
                     <div class="field-row">
                       <span class="field-label">TAK uid</span>
@@ -1026,6 +1078,17 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       }
     }
 
+    .field-link {
+      background: none;
+      border: 0;
+      padding: 0;
+      font: inherit;
+      color: var(--accent-blue);
+      cursor: pointer;
+      text-align: right;
+      &:hover { text-decoration: underline; }
+    }
+
     .behaviour-note {
       margin: 0;
       font-size: 0.78rem;
@@ -1260,6 +1323,15 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       line-height: 1.5;
     }
 
+    .chip-exercise {
+      background: color-mix(in srgb, var(--accent-yellow) 20%, transparent);
+      color: var(--accent-yellow);
+      border-color: color-mix(in srgb, var(--accent-yellow) 40%, transparent);
+      font-family: var(--font-mono);
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
     .chip-country {
       background: color-mix(in srgb, var(--text-muted) 15%, transparent);
       color: var(--text-secondary);
@@ -1344,6 +1416,53 @@ export class EntityDetailPanelComponent {
   private readonly analytics = inject(AnalyticsService);
   private readonly auth = inject(AuthService);
   private readonly locations = inject(LocationService);
+  private readonly emplacementService = inject(EmplacementService);
+  private readonly router = inject(Router);
+
+  /** The emplacement row a SENSOR entity stands for, when it is loaded. */
+  private emplacementRow = computed(() => {
+    const id = emplacementIdOf(this.entity() ?? {});
+    if (!id) return null;
+    return this.emplacementService.emplacements().find((e) => e.id === id) ?? null;
+  });
+
+  /** The emplacement a SENSOR entity stands for, by name when it is loaded. */
+  protected emplacementName = computed(() => {
+    const id = emplacementIdOf(this.entity() ?? {});
+    if (!id) return null;
+    return this.emplacementRow()?.name ?? id;
+  });
+
+  /**
+   * The connection a site belongs to: its row's, since the entity's feedId is
+   * the first feed that ever reported it and an operator may have rebound it
+   * since; the entity's when the row is not loaded.
+   */
+  protected connectionId = computed(() => this.emplacementRow()?.feedId ?? this.entity()?.feedId ?? null);
+
+  private readonly ws = inject(WebSocketService);
+
+  /** A site entity's heartbeat, judged against the server's clock, every second. */
+  protected siteHeartbeat = computed(() => {
+    this.now();
+    return siteHeartbeatOf(this.entity(), this.ws.serverNow());
+  });
+
+  /** Emplacements are edited inside their connection, which operators and admins manage. */
+  protected canOpenConnection = computed(() => this.auth.hasAnyRole('sentinel-operator', 'sentinel-admin'));
+
+  protected openConnection(): void {
+    const feedId = this.connectionId();
+    if (feedId) void this.router.navigate(['/connections'], { queryParams: { open: feedId } });
+  }
+
+  protected heartbeatLabel(hb: SiteHeartbeat): string {
+    const state =
+      hb.state === 'online' ? 'online'
+      : hb.state === 'offline' ? (hb.silentSince ? `offline since ${formatZulu(hb.silentSince, this.ws.serverNow())}` : 'offline')
+      : 'awaiting first heartbeat';
+    return `${state} · every ${hb.intervalSec} s`;
+  }
   protected readonly orbit = inject(OrbitOverlayService);
   protected readonly flightPath = inject(FlightPathService);
   protected readonly flightPathDays = FLIGHT_PATH_DAYS;
@@ -1371,9 +1490,10 @@ export class EntityDetailPanelComponent {
     effect(() => {
       const e = this.entity();
       // A satellite's platform section holds the orbit toggles, a vessel's its
-      // voyage and a military aircraft's its flight path: open them.
+      // voyage, a signal emitter's its RF parameters, and a military aircraft's
+      // its flight path: open them.
       const pd = e?.platformData;
-      this.expandedSections.set({ ...DEFAULT_SECTIONS, platformDetails: !!(pd?.tle || pd?.ais || (pd?.adsb && e?.source === EntitySource.INTELSKY)) });
+      this.expandedSections.set({ ...DEFAULT_SECTIONS, platformDetails: !!(pd?.tle || pd?.ais || pd?.rf || (pd?.adsb && e?.source === EntitySource.INTELSKY)) });
     });
     // Behaviour: the baseline and open findings of the shown entity. A
     // request counter drops answers for an entity that is no longer shown.
@@ -1472,6 +1592,7 @@ export class EntityDetailPanelComponent {
     else if (pd.cot) parts.push(pd.cot.cotType);
     else if (pd.link16) parts.push(pd.link16.jSeriesLabel);
     else if (pd.uav) parts.push(pd.uav.make, pd.uav.model);
+    else if (pd.rf) parts.push(this.formatRfHz(pd.rf.frequencyHz), pd.rf.emitterType);
     return parts.filter((p): p is string => typeof p === 'string' && p !== '').join(' · ');
   });
 
@@ -1617,6 +1738,7 @@ export class EntityDetailPanelComponent {
     if (pd.link16) return 'link16' as const;
     if (pd.cot) return 'cot' as const;
     if (pd.uav) return 'uav' as const;
+    if (pd.rf) return 'rf' as const;
     return null;
   });
 
@@ -1665,6 +1787,41 @@ export class EntityDetailPanelComponent {
   protected vesselTypeText(shipType: number | undefined, shipTypeName: string): string {
     const category = VESSEL_CATEGORY_LABELS[vesselCategory(shipType)];
     return shipTypeName && shipTypeName !== category ? `${category} · ${shipTypeName}` : category;
+  }
+
+  // --- RF -------------------------------------------------------------------
+
+  protected formatRfHz(hz: number | undefined): string {
+    if (hz == null || !Number.isFinite(hz) || hz <= 0) return '';
+    if (hz >= 1e9) return `${Number((hz / 1e9).toFixed(3))} GHz`;
+    if (hz >= 1e6) return `${Number((hz / 1e6).toFixed(3))} MHz`;
+    if (hz >= 1e3) return `${Number((hz / 1e3).toFixed(3))} kHz`;
+    return `${Number(hz.toFixed(1))} Hz`;
+  }
+
+  protected formatRfPri(priUs: number | undefined): string {
+    if (priUs == null || !Number.isFinite(priUs) || priUs <= 0) return '';
+    const prf = this.formatRfHz(1e6 / priUs);
+    return `${Number(priUs.toFixed(2))} µs (${prf})`;
+  }
+
+  protected formatRfPulseWidth(pwUs: number | undefined): string {
+    if (pwUs == null || !Number.isFinite(pwUs) || pwUs <= 0) return '';
+    return `${Number(pwUs.toFixed(2))} µs`;
+  }
+
+  protected formatRfScan(scanType?: string, scanRateRpm?: number): string {
+    const parts: string[] = [];
+    if (scanType) parts.push(scanType);
+    if (scanRateRpm != null && Number.isFinite(scanRateRpm) && scanRateRpm > 0) {
+      parts.push(`${Number(scanRateRpm.toFixed(1))} rpm`);
+    }
+    return parts.join(' · ');
+  }
+
+  protected formatRfPower(powerDbm: number | undefined): string {
+    if (powerDbm == null || !Number.isFinite(powerDbm)) return '';
+    return `${Number(powerDbm.toFixed(1))} dBm`;
   }
 
   protected affiliationColor = computed(() => {

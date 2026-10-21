@@ -175,6 +175,122 @@ func TestRunnerDeadLetterProvenance(t *testing.T) {
 	}
 }
 
+// Only service code sets EmplacementID, so an EMPLACEMENT identity is kept
+// only when it names that emplacement. A sender's own is dropped before the
+// canonical key is chosen, so it can neither fuse into an emplacement's entity
+// nor hide its track behind one.
+func TestRunnerDropsEmplacementIdentitiesTheServiceDidNotSet(t *testing.T) {
+	ts := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	pub := &memPublisher{}
+	drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+		forged := fix("a", 40, -80, ts)
+		forged.AddIdentity(obs.IdentityEmplacement, "e-1")
+		forged.AddIdentity(obs.IdentityMMSI, "235000001")
+		if err := sink.Emit(ctx, forged); err != nil {
+			return err
+		}
+		bare := fix("b", 41, -80, ts)
+		bare.AddIdentity(obs.IdentityEmplacement, "e-2")
+		if err := sink.Emit(ctx, bare); err != nil {
+			return err
+		}
+		own := fix("e-3", 42, -80, ts)
+		own.EmplacementID = "e-3"
+		own.AddIdentity(obs.IdentityEmplacement, "e-3")
+		own.AddIdentity(obs.IdentityEmplacement, "e-4")
+		return sink.Emit(ctx, own)
+	}}
+	r := NewRunner("f", "d", drv, pub, nil, nil, RunnerOptions{})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := pub.observations()
+	if len(got) != 3 {
+		t.Fatalf("%d observations, want 3", len(got))
+	}
+	if want := []obs.Identity{{Type: obs.IdentityMMSI, Value: "235000001"}}; !sameIdentities(got[0].Identities, want) {
+		t.Errorf("forged identities = %v, want %v", got[0].Identities, want)
+	}
+	if want := []obs.Identity{{Type: obs.IdentityFeedLocal, Value: "f:b"}}; !sameIdentities(got[1].Identities, want) {
+		t.Errorf("bare identities = %v, want %v", got[1].Identities, want)
+	}
+	if want := []obs.Identity{{Type: obs.IdentityEmplacement, Value: "e-3"}}; !sameIdentities(got[2].Identities, want) {
+		t.Errorf("service identities = %v, want %v", got[2].Identities, want)
+	}
+}
+
+func sameIdentities(a, b []obs.Identity) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// A feed whose driver turns repeat suppression off forwards a report that
+// repeats the last position within the window; an ordinary feed drops it.
+func TestRunnerRepeatSuppressionCanBeTurnedOff(t *testing.T) {
+	ts := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		off  bool
+		want int
+	}{{"ordinary feed", false, 1}, {"suppression off", true, 2}} {
+		t.Run(tc.name, func(t *testing.T) {
+			pub := &memPublisher{}
+			drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+				first := fix("e-1", 50, -4, ts)
+				if err := sink.Emit(ctx, first); err != nil {
+					return err
+				}
+				second := fix("e-1", 50, -4, ts.Add(100*time.Millisecond))
+				second.DisplayName = "renamed"
+				return sink.Emit(ctx, second)
+			}}
+			r := NewRunner("f", "emplacement", drv, pub, nil, nil, RunnerOptions{NoRepeatSuppression: tc.off})
+			if err := r.Run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(pub.observations()); got != tc.want {
+				t.Fatalf("%d observations forwarded, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunnerORsTheConnectionsExercise(t *testing.T) {
+	ts := time.Unix(1700000000, 0)
+	for _, tc := range []struct {
+		name          string
+		conn, emitted bool
+		want          bool
+	}{
+		{"live connection, live report", false, false, false},
+		{"exercise connection marks every report", true, false, true},
+		{"an exercise report stays exercise", false, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pub := &memPublisher{}
+			drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+				o := fix("a", 40, -80, ts)
+				o.Exercise = tc.emitted
+				return sink.Emit(ctx, o)
+			}}
+			r := NewRunner("f", "d", drv, pub, nil, nil, RunnerOptions{Exercise: tc.conn})
+			if err := r.Run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := pub.observations()[0].Exercise; got != tc.want {
+				t.Fatalf("exercise = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunnerStampsClassification(t *testing.T) {
 	ts := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
@@ -304,5 +420,42 @@ func TestRunnerDoesNotWarnWhenThePublisherIsClosing(t *testing.T) {
 		if got := logs.FilterMessage("observation not published").Len() > 0; got != tc.warn {
 			t.Errorf("%s: warned = %v, want %v", name, got, tc.warn)
 		}
+	}
+}
+
+// The supervisor takes the flag from the driver's definition.
+func TestNoRepeatSuppressionComesFromTheDefinition(t *testing.T) {
+	driver.Register(driver.Definition{ID: "test-no-repeat-suppression", NoRepeatSuppression: true,
+		New: func(driver.Spec, driver.Deps) (driver.Driver, error) { return nil, nil }})
+	if !noRepeatSuppression("test-no-repeat-suppression") {
+		t.Error("a driver that sets NoRepeatSuppression keeps suppression on")
+	}
+	if noRepeatSuppression("stream") || noRepeatSuppression("no-such-driver") {
+		t.Error("suppression is off for a driver that did not ask")
+	}
+}
+
+// A site's own report (an emplacement's SENSOR observation) is never
+// suppressed as a repeat: a re-publish keeps the position and changes what
+// the entity says.
+func TestRunnerNeverSuppressesASiteReport(t *testing.T) {
+	ts := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	pub := &memPublisher{}
+	drv := &scriptedDriver{run: func(ctx context.Context, sink driver.Sink) error {
+		for i := 0; i < 2; i++ {
+			o := fix("e-1", 50, -4, ts)
+			o.EmplacementID = "e-1"
+			if err := sink.Emit(ctx, o); err != nil {
+				return err
+			}
+		}
+		return nil
+	}}
+	r := NewRunner("f", "grpc", drv, pub, nil, nil, RunnerOptions{})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(pub.observations()); got != 2 {
+		t.Fatalf("%d site reports forwarded, want 2", got)
 	}
 }

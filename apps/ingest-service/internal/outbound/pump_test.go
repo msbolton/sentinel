@@ -11,9 +11,13 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	commonkafka "github.com/sentinel/go-common/kafka"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
+	"github.com/sentinel/ingest-service/internal/metrics"
 	"github.com/sentinel/ingest-service/internal/policy"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 )
@@ -106,15 +110,20 @@ func (r *recorder) wait(t *testing.T, n int) []driver.EntityUpdate {
 	}
 }
 
-func entityMsg(t *testing.T, eventType, id, feed string, lat float64, at time.Time) *ckafka.Message {
+func entityMsg(t *testing.T, eventType, id, feed string, lat float64, at time.Time, opts ...func(*sentinelv1.Entity)) *ckafka.Message {
 	t.Helper()
 	e := &sentinelv1.Entity{Id: id, EntityType: sentinelv1.EntityType_ENTITY_TYPE_AIRCRAFT, FeedId: feed, LastFeedId: feed, Position: &sentinelv1.Coordinate{Latitude: lat, Longitude: 0}}
+	for _, o := range opts {
+		o(e)
+	}
 	ev := &sentinelv1.EntityEvent{EntityId: id, EventTime: timestamppb.New(at)}
 	switch eventType {
 	case "created":
 		ev.Event = &sentinelv1.EntityEvent_Created{Created: &sentinelv1.EntityCreated{Entity: e}}
 	case "position":
 		ev.Event = &sentinelv1.EntityEvent_Position{Position: &sentinelv1.EntityPosition{Entity: e}}
+	case "updated":
+		ev.Event = &sentinelv1.EntityEvent_Updated{Updated: &sentinelv1.EntityUpdated{Entity: e}}
 	case "deleted":
 		ev.Event = &sentinelv1.EntityEvent_Deleted{Deleted: &sentinelv1.EntityDeleted{}}
 	case "aged_out":
@@ -130,9 +139,16 @@ func entityMsg(t *testing.T, eventType, id, feed string, lat float64, at time.Ti
 	return &ckafka.Message{TopicPartition: ckafka.TopicPartition{Topic: &topic}, Value: b, Headers: []ckafka.Header{{Key: commonkafka.HeaderEventType, Value: []byte(eventType)}}}
 }
 
-func alertMsg(t *testing.T, entityID string, at time.Time) *ckafka.Message {
+// exercise marks an entity built by entityMsg as exercise data.
+func exercise(e *sentinelv1.Entity) { e.Exercise = true }
+
+func alertMsg(t *testing.T, entityID string, at time.Time, opts ...func(*sentinelv1.Alert)) *ckafka.Message {
 	t.Helper()
-	ev := &sentinelv1.AlertEvent{EventTime: timestamppb.New(at), Alert: &sentinelv1.Alert{AlertId: "a1", EntityId: entityID, Severity: sentinelv1.AlertSeverity_ALERT_SEVERITY_HIGH, AlertType: sentinelv1.AlertType_ALERT_TYPE_SPEED_ANOMALY}}
+	a := &sentinelv1.Alert{AlertId: "a1", EntityId: entityID, Severity: sentinelv1.AlertSeverity_ALERT_SEVERITY_HIGH, AlertType: sentinelv1.AlertType_ALERT_TYPE_SPEED_ANOMALY}
+	for _, o := range opts {
+		o(a)
+	}
+	ev := &sentinelv1.AlertEvent{EventTime: timestamppb.New(at), Alert: a}
 	b, _ := proto.Marshal(ev)
 	topic := commonkafka.TopicAlertEvents
 	return &ckafka.Message{TopicPartition: ckafka.TopicPartition{Topic: &topic}, Value: b}
@@ -140,9 +156,15 @@ func alertMsg(t *testing.T, entityID string, at time.Time) *ckafka.Message {
 
 func startPump(t *testing.T, o Options, rec *recorder) (*Pump, *fakeConsumer, context.CancelFunc) {
 	t.Helper()
+	return startPumpWith(t, o, rec, nil)
+}
+
+// startPumpWith is startPump with metrics, for tests that assert on them.
+func startPumpWith(t *testing.T, o Options, rec *recorder, m *metrics.Metrics) (*Pump, *fakeConsumer, context.CancelFunc) {
+	t.Helper()
 	fc := &fakeConsumer{ready: make(chan struct{})}
 	factory := func(groupID, clientID string) (Consumer, error) { fc.groupID = groupID; return fc, nil }
-	p := New(o, rec, factory, nil, nil)
+	p := New(o, rec, factory, m, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- p.Run(ctx) }()
@@ -220,6 +242,108 @@ func TestPumpAlertsFollowTracking(t *testing.T) {
 	}
 }
 
+func TestPumpDeniesAlertsAboutExerciseEntities(t *testing.T) {
+	boxes := []policy.Box{{North: 10, South: -10, East: 10, West: -10}}
+	inBox := func(a *sentinelv1.Alert) { a.Position = &sentinelv1.Coordinate{Latitude: 1, Longitude: 0} }
+	now := time.Now()
+
+	t.Run("denied by default", func(t *testing.T) {
+		rec := newRecorder()
+		m := metrics.New(prometheus.NewRegistry())
+		p, fc, _ := startPumpWith(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{Boxes: boxes}, Context: policy.Context{SelfFeedID: "tak"}}, rec, m)
+		// The entity is exercise and so is denied; the alert about it would
+		// pass the untracked box rule, so only the exercise mark stops it.
+		fc.deliver(t, entityMsg(t, "created", "e1", "opensky", 1, now, exercise))
+		fc.deliver(t, alertMsg(t, "e1", now, inBox))
+		// A live entity's untracked alert inside the boxes still passes.
+		fc.deliver(t, alertMsg(t, "live", now, inBox))
+		rec.wait(t, 1)
+		rec.mu.Lock()
+		alerts, updates := rec.alerts, len(rec.updates)
+		rec.mu.Unlock()
+		if len(alerts) != 1 || alerts[0].Alert.EntityId != "live" || updates != 0 {
+			t.Fatalf("alerts=%v updates=%d stats=%+v", alerts, updates, p.Stats())
+		}
+		if st := p.Stats(); st.Denied != 2 || st.Tracked != 0 {
+			t.Fatalf("stats=%+v", st)
+		}
+		if got := testutil.ToFloat64(m.OutboundDeniedTotal.WithLabelValues("tak", policy.ReasonExercise)); got != 2 {
+			t.Fatalf("denied{exercise} = %v, want 2", got)
+		}
+		// Once the entity is gone the mark is forgotten with it.
+		fc.deliver(t, entityMsg(t, "aged_out", "e1", "opensky", 1, now))
+		fc.deliver(t, alertMsg(t, "e1", now, inBox))
+		rec.wait(t, 2)
+		if st := p.Stats(); st.Denied != 2 {
+			t.Fatalf("after age-out: %+v", st)
+		}
+	})
+
+	t.Run("sent when allowed", func(t *testing.T) {
+		rec := newRecorder()
+		p, fc, _ := startPump(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{Boxes: boxes, AllowExercise: true}, Context: policy.Context{SelfFeedID: "tak"}}, rec)
+		fc.deliver(t, entityMsg(t, "created", "e1", "opensky", 1, now, exercise), alertMsg(t, "e1", now, inBox))
+		rec.wait(t, 2)
+		rec.mu.Lock()
+		alerts := len(rec.alerts)
+		rec.mu.Unlock()
+		if alerts != 1 || p.Stats().Denied != 0 || p.Stats().Tracked != 1 {
+			t.Fatalf("alerts=%d stats=%+v", alerts, p.Stats())
+		}
+	})
+}
+
+func TestPumpDeniesAlertsAboutRelatedExerciseEntities(t *testing.T) {
+	rec := newRecorder()
+	p, fc, _ := startPump(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{Boxes: []policy.Box{{North: 10, South: -10, East: 10, West: -10}}}, Context: policy.Context{SelfFeedID: "tak"}}, rec)
+	now := time.Now()
+	inBox := func(a *sentinelv1.Alert) { a.Position = &sentinelv1.Coordinate{Latitude: 1, Longitude: 0} }
+	related := func(ids ...string) func(*sentinelv1.Alert) {
+		return func(a *sentinelv1.Alert) { inBox(a); a.RelatedEntityIds = ids }
+	}
+	fc.deliver(t, entityMsg(t, "created", "ex", "sim", 1, now, exercise)) // denied, remembered
+	fc.deliver(t, alertMsg(t, "live", now, related("other", "ex")))       // about a live entity near an exercise one
+	fc.deliver(t, alertMsg(t, "live", now, related("other")))             // only live entities involved
+	rec.wait(t, 1)
+	rec.mu.Lock()
+	alerts := append([]*sentinelv1.AlertEvent(nil), rec.alerts...)
+	rec.mu.Unlock()
+	if len(alerts) != 1 || len(alerts[0].Alert.RelatedEntityIds) != 1 || p.Stats().Denied != 2 {
+		t.Fatalf("alerts=%v stats=%+v", alerts, p.Stats())
+	}
+}
+
+func TestPumpRemovesATrackedEntityAtOnceWhenItBecomesExercise(t *testing.T) {
+	rec := newRecorder()
+	box := []policy.Box{{North: 10, South: -10, East: 10, West: -10}}
+	// The grace period is long enough that only the immediate path can remove.
+	p, fc, _ := startPump(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{Boxes: box}, Context: policy.Context{SelfFeedID: "tak"}, ExitGrace: time.Hour}, rec)
+	now := time.Now()
+	fc.deliver(t, entityMsg(t, "created", "e1", "opensky", 1, now))
+	rec.wait(t, 1)
+	// A live entity gets one exercise report.
+	fc.deliver(t, entityMsg(t, "updated", "e1", "opensky", 1, now, exercise))
+	got := rec.wait(t, 2)
+	if len(got) != 2 || got[1].Kind != driver.RemoveEntity || got[1].EntityID != "e1" || got[1].Reason != "policy" {
+		t.Fatalf("updates = %+v", got)
+	}
+	if st := p.Stats(); st.Tracked != 0 || st.Denied != 1 {
+		t.Fatalf("stats = %+v", st)
+	}
+	// Later reports of it (the entity service keeps the mark) stay home, and
+	// so do its alerts.
+	fc.deliver(t, entityMsg(t, "position", "e1", "opensky", 1, now, exercise), alertMsg(t, "e1", now, func(a *sentinelv1.Alert) {
+		a.Position = &sentinelv1.Coordinate{Latitude: 1, Longitude: 0}
+	}))
+	time.Sleep(100 * time.Millisecond)
+	rec.mu.Lock()
+	updates, alerts := len(rec.updates), len(rec.alerts)
+	rec.mu.Unlock()
+	if updates != 2 || alerts != 0 || p.Stats().Denied != 3 {
+		t.Fatalf("updates=%d alerts=%d stats=%+v", updates, alerts, p.Stats())
+	}
+}
+
 func TestPumpPolicyExitGraceAndLag(t *testing.T) {
 	rec := newRecorder()
 	p, fc, _ := startPump(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{Boxes: []policy.Box{{North: 10, South: -10, East: 10, West: -10}}}, Context: policy.Context{SelfFeedID: "tak"}, ExitGrace: 50 * time.Millisecond, MaxLag: time.Minute}, rec)
@@ -275,5 +399,96 @@ func TestPumpPausesWhileNotConnected(t *testing.T) {
 	}
 	if st := p.Stats(); st.LastError != "boom" {
 		t.Fatalf("last error = %+v", st)
+	}
+}
+
+// An alert is stamped exercise where it is made, so a pump that has never seen
+// the entity (after a restart, a lease move or an age-out) still refuses it.
+func TestPumpDeniesAlertsStampedExercise(t *testing.T) {
+	boxes := []policy.Box{{North: 10, South: -10, East: 10, West: -10}}
+	stamped := func(a *sentinelv1.Alert) {
+		a.Position = &sentinelv1.Coordinate{Latitude: 1, Longitude: 0}
+		a.Exercise = true
+	}
+	now := time.Now()
+
+	t.Run("denied by default", func(t *testing.T) {
+		rec := newRecorder()
+		m := metrics.New(prometheus.NewRegistry())
+		p, fc, _ := startPumpWith(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{Boxes: boxes}, Context: policy.Context{SelfFeedID: "tak"}}, rec, m)
+		fc.deliver(t, alertMsg(t, "never-seen", now, stamped))
+		fc.deliver(t, alertMsg(t, "live", now, func(a *sentinelv1.Alert) { a.Position = &sentinelv1.Coordinate{Latitude: 1, Longitude: 0} }))
+		rec.wait(t, 1)
+		rec.mu.Lock()
+		alerts := append([]*sentinelv1.AlertEvent(nil), rec.alerts...)
+		rec.mu.Unlock()
+		if len(alerts) != 1 || alerts[0].Alert.EntityId != "live" || p.Stats().Denied != 1 {
+			t.Fatalf("alerts=%v stats=%+v", alerts, p.Stats())
+		}
+		if got := testutil.ToFloat64(m.OutboundDeniedTotal.WithLabelValues("tak", policy.ReasonExercise)); got != 1 {
+			t.Fatalf("denied{exercise} = %v, want 1", got)
+		}
+	})
+
+	t.Run("sent when allowed", func(t *testing.T) {
+		rec := newRecorder()
+		p, fc, _ := startPump(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{Boxes: boxes, AllowExercise: true}, Context: policy.Context{SelfFeedID: "tak"}}, rec)
+		fc.deliver(t, alertMsg(t, "never-seen", now, stamped))
+		rec.wait(t, 1)
+		rec.mu.Lock()
+		alerts := len(rec.alerts)
+		rec.mu.Unlock()
+		if alerts != 1 || p.Stats().Denied != 0 {
+			t.Fatalf("alerts=%d stats=%+v", alerts, p.Stats())
+		}
+	})
+}
+
+// An event without the flag (a REST update path, an older producer) must not
+// let an entity out that the pump has already seen as exercise.
+func TestPumpKeepsAKnownExerciseEntityHomeWhenALaterEventLacksTheFlag(t *testing.T) {
+	rec := newRecorder()
+	m := metrics.New(prometheus.NewRegistry())
+	box := []policy.Box{{North: 10, South: -10, East: 10, West: -10}}
+	p, fc, _ := startPumpWith(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{Boxes: box}, Context: policy.Context{SelfFeedID: "tak"}}, rec, m)
+	now := time.Now()
+	fc.deliver(t, entityMsg(t, "created", "e1", "sim", 1, now, exercise))
+	// A position event for it with no flag, then a live entity as a marker.
+	fc.deliver(t, entityMsg(t, "position", "e1", "sim", 1, now), entityMsg(t, "created", "live", "opensky", 1, now))
+	rec.wait(t, 1)
+	time.Sleep(100 * time.Millisecond)
+	rec.mu.Lock()
+	updates := append([]driver.EntityUpdate(nil), rec.updates...)
+	rec.mu.Unlock()
+	if len(updates) != 1 || updates[0].EntityID != "live" {
+		t.Fatalf("updates = %+v", updates)
+	}
+	if st := p.Stats(); st.Denied != 2 || st.Tracked != 1 {
+		t.Fatalf("stats = %+v", st)
+	}
+	if got := testutil.ToFloat64(m.OutboundDeniedTotal.WithLabelValues("tak", policy.ReasonExercise)); got != 2 {
+		t.Fatalf("denied{exercise} = %v, want 2", got)
+	}
+}
+
+// When the policy lets exercise out, a later event without the flag is still
+// pushed marked, so a driver that renders exercise sees it.
+func TestPumpPushesAKnownExerciseEntityMarkedWhenAllowed(t *testing.T) {
+	rec := newRecorder()
+	p, fc, _ := startPump(t, Options{FeedID: "tak", ReplicaID: "r1", Policy: policy.Policy{AllowExercise: true}, Context: policy.Context{SelfFeedID: "tak"}}, rec)
+	now := time.Now()
+	fc.deliver(t, entityMsg(t, "created", "e1", "sim", 1, now, exercise))
+	fc.deliver(t, entityMsg(t, "position", "e1", "sim", 2, now))
+	rec.wait(t, 2)
+	rec.mu.Lock()
+	updates := append([]driver.EntityUpdate(nil), rec.updates...)
+	rec.mu.Unlock()
+	if len(updates) != 2 {
+		t.Fatalf("updates = %+v stats=%+v", updates, p.Stats())
+	}
+	for i, u := range updates {
+		if u.Kind != driver.UpsertEntity || !u.Entity.GetExercise() {
+			t.Errorf("update %d = %+v, want an upsert marked exercise", i, u)
+		}
 	}
 }

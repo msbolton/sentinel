@@ -143,10 +143,22 @@ message UavDetail {
   double frequency_range = 6;
 }
 
+// RfDetail carries intercepted RF / electronic-warfare emitter parameters.
+message RfDetail {
+  double frequency_hz = 1;            // center frequency, Hz
+  optional double bandwidth_hz = 2;   // instantaneous bandwidth, Hz
+  string emitter_type = 3;            // e.g. RADAR_SEARCH, RADAR_TRACK, SATCOM, JAMMER
+  string modulation = 4;              // e.g. PULSE, CW, FM, CHIRP, FHSS, OFDM
+  optional double pri_us = 5;         // pulse repetition interval, microseconds
+  optional double pulse_width_us = 6; // pulse width, microseconds
+  string scan_type = 7;               // e.g. CIRCULAR, SECTOR, RASTER, ELECTRONIC, FIXED
+  optional double power_dbm = 8;      // received or estimated ERP, dBm
+}
+
 // PlatformDetail is the protocol-specific block attached to one observation.
 // An entity fused from several feeds keeps one PlatformDetail per kind, keyed
 // by the oneof field name ("ais", "adsb", "tle", "link16", "cot", "uav",
-// "generic").
+// "generic", "rf").
 message PlatformDetail {
   oneof detail {
     AisDetail ais = 1;
@@ -156,6 +168,7 @@ message PlatformDetail {
     CotDetail cot = 5;
     UavDetail uav = 6;
     GenericDetail generic = 7;
+    RfDetail rf = 8;
   }
 }
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/sentinel/ingest-service/internal/config"
 	"github.com/sentinel/ingest-service/internal/dlq"
+	"github.com/sentinel/ingest-service/internal/emplacement"
 	"github.com/sentinel/ingest-service/internal/mgmt"
 	"github.com/sentinel/ingest-service/internal/registry"
 )
@@ -125,4 +126,35 @@ func TestServeDeadLetters(t *testing.T) {
 			t.Errorf("a read after stop: %v, want dlq.ErrClosed", err)
 		}
 	})
+}
+
+type feedList []registry.Feed
+
+func (l feedList) List(context.Context) ([]registry.Feed, error) { return l, nil }
+
+// Review focus 2: a status row older than the stale window belongs to a
+// replica that went silent, and its heartbeats are not believed.
+func TestLivenessSourceBelievesOnlyFreshStatuses(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	fresh, stale := now.Add(-5*time.Second), now.Add(-time.Minute)
+	detail := json.RawMessage(`{"emplacements":[{"id":"e-1","name":"A","classification":"UNCLASSIFIED","state":"online","intervalSec":5}]}`)
+	src := livenessSource(feedList{
+		{ID: "live", Driver: "grpc", Status: &registry.Status{Owner: "r1", UpdatedAt: &fresh, Detail: detail}},
+		{ID: "dead", Driver: "grpc", Status: &registry.Status{Owner: "r2", UpdatedAt: &stale, Detail: detail}},
+		{ID: "never", Driver: "grpc"},
+		{ID: "tcp", Driver: "tcp"},
+	}, 15*time.Second, func() time.Time { return now })
+	got, err := src(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := got["live"].Emplacements; len(l) != 1 || l[0].State != emplacement.HeartbeatOnline {
+		t.Errorf("live = %+v", got["live"])
+	}
+	if got["dead"].Emplacements != nil {
+		t.Error("a silent replica's status was believed")
+	}
+	if got["never"].Emplacements != nil || got["tcp"].Driver != "tcp" {
+		t.Errorf("never = %+v, tcp = %+v", got["never"], got["tcp"])
+	}
 }

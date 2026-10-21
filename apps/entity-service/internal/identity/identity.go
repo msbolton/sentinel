@@ -16,7 +16,7 @@ func (k Key) String() string { return k.Type + ":" + k.Value }
 // Canonical reports whether the key's type is one fusion joins entities on.
 func (k Key) Canonical() bool { return IsCanonical(k.Type) }
 
-var canonicalTypes = map[string]bool{"ICAO24": true, "MMSI": true, "NORAD_ID": true, "COT_UID": true}
+var canonicalTypes = map[string]bool{"ICAO24": true, "MMSI": true, "NORAD_ID": true, "COT_UID": true, "EMPLACEMENT": true}
 
 // IsCanonical reports whether an identity type is a fusion key type.
 func IsCanonical(t string) bool { return canonicalTypes[t] }
@@ -31,7 +31,9 @@ type NewEntity struct {
 	SourceEntityID   string
 	TrackEnvironment string
 	CountryOfOrigin  string
+	Affiliation      string // bare Affiliation name
 	Classification   string // bare Classification name; "" = UNCLASSIFIED
+	Exercise         bool   // the first report was an exercise report
 	SeenAt           time.Time
 }
 

@@ -81,7 +81,15 @@ func goldenEntityEvent() *sentinelv1.EntityEvent {
 				Sources:        []*sentinelv1.SourceContribution{{FeedId: "opensky", Source: obs.Source, SourceEntityId: obs.SourceEntityId, LastObservedAt: obs.SourceTimestamp, LastReceivedAt: obs.ReceivedAt, ObservationCount: 42}},
 				LastObservedAt: obs.SourceTimestamp,
 				LastSeenAt:     obs.ReceivedAt,
-				Platforms:      map[string]*sentinelv1.PlatformDetail{"adsb": obs.Platform},
+				Platforms: map[string]*sentinelv1.PlatformDetail{
+					"adsb": obs.Platform,
+					"rf": {Detail: &sentinelv1.PlatformDetail_Rf{Rf: &sentinelv1.RfDetail{
+						FrequencyHz: 9_410_000_000,
+						EmitterType: "RADAR_SEARCH",
+						Modulation:  "PULSE",
+						PriUs:       proto.Float64(400),
+					}}},
+				},
 			},
 			Observation: &sentinelv1.ObservationRef{ObservationId: obs.ObservationId, FeedId: obs.FeedId, Source: obs.Source, SourceEntityId: obs.SourceEntityId, SourceTimestamp: obs.SourceTimestamp},
 		}},

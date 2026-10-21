@@ -6,6 +6,8 @@ import { ConnectionsComponent } from './connections.component';
 import { AuthService, UserProfile } from '../../core/services/auth.service';
 import { FeedService } from '../../core/services/feed.service';
 import { Feed, FeedDriver } from '../../shared/models/feed.model';
+import { ActivatedRoute, Router, convertToParamMap, ParamMap } from '@angular/router';
+import { Emplacement } from '../../shared/models/emplacement.model';
 
 function makeFeed(over: Partial<Feed> & { id: string }): Feed {
   return {
@@ -38,6 +40,17 @@ function makeFeed(over: Partial<Feed> & { id: string }): Feed {
   };
 }
 
+function makeEmplacement(over: Partial<Emplacement> & { id: string }): Emplacement {
+  return {
+    name: over.id, description: '', mobility: 'FIXED', sensorType: 'RADAR',
+    position: { lat: 50, lon: -4 }, altitude: null, boresightDeg: 0, azimuthReference: 'TRUE_NORTH',
+    coverage: { minRangeM: 0, maxRangeM: 60000, azimuthWidthDeg: 360 }, defaultSigma: {},
+    feedId: null, classification: 'UNCLASSIFIED', exercise: false, active: true,
+    lastReportAt: null, createdBy: 'u', createdAt: '', updatedAt: '', version: 1,
+    ...over,
+  };
+}
+
 const drivers: FeedDriver[] = [
   {
     id: 'opensky',
@@ -56,13 +69,16 @@ describe('ConnectionsComponent', () => {
   let el: HTMLElement;
   let httpMock: HttpTestingController;
   let profile$: BehaviorSubject<UserProfile | null>;
+  let queryParams$: BehaviorSubject<ParamMap>;
+  const router = { navigate: jest.fn().mockResolvedValue(true), navigateByUrl: jest.fn().mockResolvedValue(true) };
 
   /** Signs in with these roles (the page opens for an operator). */
   const signInAs = (...roles: string[]) => profile$.next({ username: 'tester', roles, classificationLevel: 'UNCLASSIFIED' });
 
-  function flushInitial(feeds: Feed[]): void {
+  function flushInitial(feeds: Feed[], emplacements: Emplacement[] = []): void {
     httpMock.expectOne('/api/v1/feeds').flush(feeds);
     httpMock.expectOne('/api/v1/drivers').flush(drivers);
+    httpMock.expectOne('/api/v1/emplacements').flush(emplacements);
     fixture.detectChanges();
   }
 
@@ -77,12 +93,23 @@ describe('ConnectionsComponent', () => {
 
   beforeEach(async () => {
     profile$ = new BehaviorSubject<UserProfile | null>({ username: 'op', roles: ['sentinel-operator'], classificationLevel: 'UNCLASSIFIED' });
+    queryParams$ = new BehaviorSubject<ParamMap>(convertToParamMap({}));
+    router.navigate.mockClear();
     await TestBed.configureTestingModule({
       imports: [ConnectionsComponent],
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
-        { provide: AuthService, useValue: { getClassificationLevel: () => 'UNCLASSIFIED', userProfile$: profile$ } },
+        {
+          provide: AuthService,
+          useValue: {
+            getClassificationLevel: () => 'UNCLASSIFIED',
+            userProfile$: profile$,
+            hasAnyRole: (...want: string[]) => want.some((r) => (profile$.value?.roles ?? []).includes(r)),
+          },
+        },
+        { provide: ActivatedRoute, useValue: { queryParamMap: queryParams$ } },
+        { provide: Router, useValue: router },
       ],
     }).compileComponents();
     httpMock = TestBed.inject(HttpTestingController);
@@ -586,10 +613,50 @@ describe('ConnectionsComponent', () => {
     const req = httpMock.expectOne('/api/v1/feeds/a');
     expect(req.request.method).toBe('DELETE');
     req.flush(null);
+    httpMock.expectOne('/api/v1/emplacements').flush([]); // reloaded after the delete
     fixture.detectChanges();
 
     expect(el.querySelectorAll('tr.feed-row').length).toBe(1);
     expect(() => rowOf('a')).toThrow();
+  });
+
+  it("lists a deleted connection's operator emplacements under Unassigned without a page reload", () => {
+    const bound = makeEmplacement({ id: 'mast', name: 'Mast', feedId: 'grpc-1' });
+    flushInitial([makeFeed({ id: 'grpc-1', driver: 'grpc' }), makeFeed({ id: 'grpc-2', driver: 'grpc' })], [bound]);
+    expect(el.querySelector('.unassigned')).toBeNull();
+
+    component.askDelete(component.rows()[0].feed);
+    component.confirmDelete(component.rows()[0].feed);
+    httpMock.expectOne('/api/v1/feeds/grpc-1').flush(null);
+    // The server unbound and deactivated the operator row.
+    httpMock.expectOne('/api/v1/emplacements').flush([{ ...bound, feedId: null, active: false, version: 2 }]);
+    fixture.detectChanges();
+
+    const unassigned = el.querySelector('.unassigned');
+    expect(unassigned?.querySelector('.emp-name')?.textContent).toContain('Mast');
+  });
+
+  it('reloads the emplacements with the 10 s poll', () => {
+    fixture.destroy();
+    httpMock.match(() => true).filter((r) => !r.cancelled).forEach((r) => r.flush([]));
+    jest.useFakeTimers();
+    try {
+      fixture = TestBed.createComponent(ConnectionsComponent);
+      component = fixture.componentInstance;
+      el = fixture.nativeElement as HTMLElement;
+      fixture.detectChanges();
+      flushInitial([makeFeed({ id: 'grpc-1', driver: 'grpc' })]);
+      expect(el.querySelector('.unassigned')).toBeNull();
+
+      jest.advanceTimersByTime(10_000);
+      httpMock.match('/api/v1/feeds').forEach((r) => r.flush([makeFeed({ id: 'grpc-1', driver: 'grpc' })]));
+      httpMock.expectOne('/api/v1/emplacements').flush([makeEmplacement({ id: 'loose', name: 'Loose', active: false })]);
+      fixture.detectChanges();
+      expect(el.querySelector('.unassigned .emp-name')?.textContent).toContain('Loose');
+    } finally {
+      fixture.destroy();
+      jest.useRealTimers();
+    }
   });
 
   it('surfaces a refused delete', () => {
@@ -626,5 +693,38 @@ describe('ConnectionsComponent', () => {
     flushInitial([]);
     fixture.destroy();
     // no further /api/v1/feeds request is pending; verify() in afterEach confirms it
+  });
+
+  it("summarises a heartbeating connection's sites and words its health as a warning, not staleness", () => {
+    flushInitial([
+      makeFeed({
+        id: 'grpc-1', driver: 'grpc',
+        status: {
+          ...makeFeed({ id: 'x' }).status, state: 'degraded', health: 'warn',
+          detail: { connections: 1, emplacements: [
+            { id: 'a', name: 'A', classification: 'UNCLASSIFIED', state: 'online', intervalSec: 5 },
+            { id: 'b', name: 'B', classification: 'UNCLASSIFIED', state: 'offline', intervalSec: 5 },
+          ] },
+        },
+      }),
+    ]);
+    const row = rowOf('grpc-1');
+    expect(row.querySelector('.highlights')?.textContent).toContain('1 of 2 sites online');
+    expect(row.querySelector('.health-dot')?.getAttribute('title')).toBe('Warning');
+    component.toggleExpanded('grpc-1');
+    fixture.detectChanges();
+    const block = Array.from(el.querySelectorAll('tr.detail-row .detail-block')).find((b) => b.querySelector('h4')?.textContent === 'Driver detail')!;
+    expect(Array.from(block.querySelectorAll('dt')).map((dt) => dt.textContent)).not.toContain('emplacements');
+    httpMock.expectOne('/api/v1/feeds/grpc-1/tokens').flush([]); // an expanded grpc row lists its ingest tokens
+  });
+
+  it('opens the rows named in ?open= and keeps the expanded rows in the URL', () => {
+    queryParams$.next(convertToParamMap({ open: 'grpc-1' }));
+    flushInitial([makeFeed({ id: 'grpc-1', driver: 'grpc' }), makeFeed({ id: 'other' })]);
+    expect(component.isExpanded('grpc-1')).toBe(true);
+    expect(el.querySelector('app-connection-emplacements')).not.toBeNull();
+    component.toggleExpanded('other');
+    expect(router.navigate).toHaveBeenCalledWith([], expect.objectContaining({ queryParams: { open: 'grpc-1,other' }, replaceUrl: true }));
+    httpMock.expectOne('/api/v1/feeds/grpc-1/tokens').flush([]); // an expanded grpc row lists its ingest tokens
   });
 });

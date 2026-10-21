@@ -171,6 +171,23 @@ export interface UAVData {
   frequencyRange?: number;
 }
 
+export interface RFData {
+  frequencyHz?: number;
+  bandwidthHz?: number;
+  powerDbm?: number;
+  modulation?: string;
+  priUs?: number;
+  pulseWidthUs?: number;
+  emitterType?: string;
+  scanType?: string;
+  scanRateRpm?: number;
+}
+
+/** Output with no typed block, as flat strings: a site's heartbeat among them. */
+export interface GenericData {
+  fields?: Record<string, string>;
+}
+
 export interface PlatformData {
   ais?: AISData;
   adsb?: ADSBData;
@@ -178,6 +195,8 @@ export interface PlatformData {
   link16?: Link16Data;
   cot?: CoTData;
   uav?: UAVData;
+  rf?: RFData;
+  generic?: GenericData;
 }
 
 // --- Kinematics ---
@@ -194,7 +213,17 @@ export interface Orientation {
   roll: number;
 }
 
+export interface PositionCovariance {
+  pnPn?: number;
+  pnPe?: number;
+  pnPu?: number;
+  pePe?: number;
+  pePu?: number;
+  puPu?: number;
+}
+
 export interface KinematicState {
   velocity?: GeodeticVelocity;
   acceleration?: { north: number; east: number; up: number };
+  positionCovariance?: PositionCovariance;
 }

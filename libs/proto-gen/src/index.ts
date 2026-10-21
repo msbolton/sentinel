@@ -7,6 +7,7 @@ export * from './ts/sentinel/v1/common';
 export * from './ts/sentinel/v1/platform';
 export * from './ts/sentinel/v1/entity';
 export * from './ts/sentinel/v1/observation';
+export * from './ts/sentinel/v1/emplacement';
 export * from './ts/sentinel/v1/events';
 export * from './ts/sentinel/v1/alert';
 export * from './ts/sentinel/v1/track';

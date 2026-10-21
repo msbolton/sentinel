@@ -1,0 +1,18 @@
+:host { display: block; margin-top: 12px; }
+
+.emplacements-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+h4 { margin: 0 0 6px; font-size: 0.8rem; }
+.form-error { margin: 0; font-size: 0.75rem; color: var(--accent-red); }
+.empty { font-size: 0.8rem; margin: 4px 0; }
+.emp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.emp-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--radius-md);
+  &.inactive { opacity: 0.6; }
+}
+.emp-name { font-size: 0.85rem; font-weight: 500; }
+.emp-actions { margin-left: auto; display: inline-flex; gap: 4px; }
+.emp-editor { list-style: none; padding: 0 0 6px; }
+.interval { font-size: 0.7rem; }
+.badge { font-size: 0.65rem; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-color); color: var(--text-muted); }
+.hb-online { color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 50%, transparent); }
+.hb-offline { color: var(--accent-red); border-color: color-mix(in srgb, var(--accent-red) 50%, transparent); }
+.hb-pending { color: var(--accent-yellow); border-color: color-mix(in srgb, var(--accent-yellow) 50%, transparent); }

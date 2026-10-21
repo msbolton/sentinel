@@ -23,6 +23,7 @@ const (
 	IdentityFeedLocal    = "FEED_LOCAL"
 	IdentityCallsign     = "CALLSIGN"
 	IdentityRegistration = "REGISTRATION"
+	IdentityEmplacement  = "EMPLACEMENT"
 )
 
 // Entity types, spelled as the bare sentinel.v1.EntityType names.
@@ -31,6 +32,7 @@ const (
 	EntityVessel    = "VESSEL"
 	EntityVehicle   = "VEHICLE"
 	EntityPerson    = "PERSON"
+	EntitySignal    = "SIGNAL"
 	EntitySensor    = "SENSOR"
 	EntitySatellite = "SATELLITE"
 	EntityUnknown   = "UNKNOWN"
@@ -79,7 +81,7 @@ type Identity struct {
 // Canonical reports whether the identity type is one fusion joins on.
 func (i Identity) Canonical() bool {
 	switch i.Type {
-	case IdentityICAO24, IdentityMMSI, IdentityNoradID, IdentityCoTUID:
+	case IdentityICAO24, IdentityMMSI, IdentityNoradID, IdentityCoTUID, IdentityEmplacement:
 		return true
 	}
 	return false
@@ -138,12 +140,27 @@ type Observation struct {
 	// configured default and never lowers it.
 	Classification string
 
+	// EmplacementID is the emplacement the report came from. Only the
+	// service sets it (a driver, from its session or its own emplacements);
+	// wire.FromProto never copies a sender's.
+	EmplacementID string
+	// Polar is a measurement relative to the emplacement, kept for audit.
+	Polar *Polar
+	// Exercise marks synthetic data. Only the service sets it.
+	Exercise bool
+
 	AIS    *AISData
 	ADSB   *ADSBData
 	TLE    *TLEData
 	Link16 *Link16Data
 	CoT    *CoTData
 	UAV    *UAVData
+	RF     *RFData
+
+	// Generic is decoder or service output with no typed block, sent as a
+	// GenericDetail: a site's heartbeat (emplacement.MarkSite). Only service
+	// code sets it; wire.FromProto never copies a sender's.
+	Generic map[string]string
 
 	RawContentType string
 	Raw            []byte
@@ -151,6 +168,19 @@ type Observation struct {
 
 	ReplicaID    string
 	FencingToken int64
+}
+
+// Polar mirrors sentinel.v1.PolarMeasurement. AzimuthRef is the bare
+// AzimuthReference name (TRUE_NORTH, PLATFORM) or "".
+type Polar struct {
+	RangeM            float64
+	AzimuthDeg        float64
+	ElevationDeg      *float64
+	RangeRateMps      *float64
+	AzimuthRef        string
+	SigmaRangeM       *float64
+	SigmaAzimuthDeg   *float64
+	SigmaElevationDeg *float64
 }
 
 // observationNamespace is the UUID v5 namespace for observation ids.

@@ -251,10 +251,12 @@ func TestListenerDetailKeysAreNumeric(t *testing.T) {
 		tls                    bool // a listener with TLS: the TLS-only keys
 	}{
 		{"tcp listen", "tcp", `{"mode":"listen","port":6000,"address":"127.0.0.1"}`, false, false},
+		{"grpc", "grpc", `{"port":6005,"address":"127.0.0.1"}`, false, false},
 		{"udp", "udp", `{"port":10110,"address":"127.0.0.1"}`, true, false},
 		{"stream tcpserver", "stream", `{"transport":{"kind":"tcpserver","address":"127.0.0.1:6001"},"framing":"line","decoder":{"name":"nmea-ais"}}`, false, false},
 		{"stream udp", "stream", `{"transport":{"kind":"udp","address":"127.0.0.1:6002"},"framing":"line","decoder":{"name":"nmea-ais"}}`, true, false},
 		{"tcp listen with TLS", "tcp", `{"mode":"listen","port":6003,"address":"127.0.0.1","tls":{"enabled":true}}`, false, true},
+		{"grpc with TLS", "grpc", `{"port":6006,"address":"127.0.0.1","tls":{"enabled":true}}`, false, true},
 		{"stream tcpserver with TLS", "stream", `{"transport":{"kind":"tcpserver","address":"127.0.0.1:6004","tls":{"enabled":true}},"framing":"line","decoder":{"name":"nmea-ais"}}`, false, true},
 	} {
 		spec := driver.Spec{FeedID: "f", Driver: tc.driverID, Config: json.RawMessage(tc.config)}

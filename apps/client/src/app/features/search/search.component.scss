@@ -260,3 +260,12 @@
     font-size: 0.85rem;
   }
 }
+
+.chip-exercise {
+  background: color-mix(in srgb, var(--accent-yellow) 20%, transparent);
+  color: var(--accent-yellow);
+  border-color: color-mix(in srgb, var(--accent-yellow) 40%, transparent);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-transform: uppercase;
+}

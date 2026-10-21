@@ -38,6 +38,11 @@ export const routes: Routes = [
       import('./features/geofences/geofences.component').then((m) => m.GeofencesComponent),
   },
   {
+    // Emplacements are managed inside their connections (Connections page).
+    path: 'emplacements',
+    redirectTo: 'map',
+  },
+  {
     path: 'link-graph',
     canActivate: [roleGuard('sentinel-analyst', 'sentinel-admin')],
     loadComponent: () =>

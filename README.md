@@ -114,6 +114,7 @@ sentinel/
 | [Frontend](docs/frontend.md) | Angular app structure, CesiumJS map, services |
 | [Data Model](docs/data-model.md) | PostgreSQL schema, entity types, Kafka topics |
 | [Development](docs/development.md) | Local setup, Makefile targets, debugging tips |
+| [EW sensor simulator](docs/ew-sensor.md) | `ew-sensor` CLI: simulated ESM sensor streaming RF emitter fixes over gRPC |
 
 ## Key Commands
 

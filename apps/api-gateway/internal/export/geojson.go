@@ -57,6 +57,9 @@ func properties(e Entity) map[string]any {
 	set("countryOfOrigin", e.CountryOfOrigin)
 	set("lastObservedAt", e.LastObservedAt)
 	set("lastSeenAt", e.LastSeenAt)
+	if e.Exercise {
+		p["exercise"] = true
+	}
 	return p
 }
 

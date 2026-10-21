@@ -3,6 +3,8 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { of } from 'rxjs';
+import { Router } from '@angular/router';
+import { EmplacementService } from '../../core/services/emplacement.service';
 import { EntityDetailPanelComponent } from './entity-detail-panel.component';
 import { AnalyticsService } from '../../core/services/analytics.service';
 import { AuthService } from '../../core/services/auth.service';
@@ -202,6 +204,20 @@ describe('EntityDetailPanelComponent', () => {
       expect(pill.textContent?.trim()).toBe('12 s ago');
       const chips = Array.from(el.querySelectorAll('.header-chips .chip')).map((c) => c.textContent?.trim());
       expect(chips).toEqual(['UNIT', 'HOSTILE']);
+    });
+
+    it('badges exercise data in the header chips, and nothing on a live or old entity', () => {
+      fixture.componentRef.setInput('entity', makeEntity({ exercise: true }));
+      fixture.detectChanges();
+      expect(el.querySelector('.header-chips .chip-exercise')?.textContent?.trim()).toBe('EXERCISE');
+
+      fixture.componentRef.setInput('entity', makeEntity());
+      fixture.detectChanges();
+      expect(el.querySelector('.chip-exercise')).toBeNull();
+
+      fixture.componentRef.setInput('entity', makeEntity({ exercise: false }));
+      fixture.detectChanges();
+      expect(el.querySelector('.chip-exercise')).toBeNull();
     });
 
     it('marks a track the feed declared stale even when its timestamp is recent', () => {
@@ -487,5 +503,144 @@ describe('EntityDetailPanelComponent', () => {
       fixture.detectChanges();
       expect(el.querySelector('.path-range')).toBeNull();
     });
+  });
+
+  describe('RF section', () => {
+    const signalEntity = (rf: Record<string, unknown>) =>
+      makeEntity({ entityType: EntityType.SIGNAL, name: 'EMITTER-1', platformData: { rf } as any });
+    const rfRows = () =>
+      Array.from(el.querySelectorAll('.field-row')).map((r) => `${r.querySelector('.field-label')?.textContent?.trim()}: ${r.querySelector('.field-value')?.textContent?.trim()}`);
+
+    it('opens by default when platformData.rf is present and formats frequency, bandwidth, PRI/PRF, scan and power', () => {
+      fixture.componentRef.setInput(
+        'entity',
+        signalEntity({
+          frequencyHz: 9_410_000_000,
+          bandwidthHz: 25_000_000,
+          emitterType: 'RADAR_SEARCH',
+          modulation: 'PULSE',
+          priUs: 400,
+          pulseWidthUs: 1.2,
+          scanType: 'CIRCULAR',
+          scanRateRpm: 12,
+          powerDbm: -62,
+        }),
+      );
+      fixture.detectChanges();
+
+      const section = el.querySelector('[data-section="platformDetails"]') as HTMLElement;
+      expect(section.getAttribute('aria-expanded')).toBe('true');
+      expect(section.querySelector('.section-label')?.textContent?.trim()).toBe('RF');
+
+      const r = rfRows();
+      expect(r).toContain('Frequency: 9.41 GHz');
+      expect(r).toContain('Bandwidth: 25 MHz');
+      expect(r).toContain('Emitter Type: RADAR_SEARCH');
+      expect(r).toContain('Modulation: PULSE');
+      expect(r).toContain('PRI / PRF: 400 µs (2.5 kHz)');
+      expect(r).toContain('Pulse Width: 1.2 µs');
+      expect(r).toContain('Scan: CIRCULAR · 12 rpm');
+      expect(r).toContain('Power: -62 dBm');
+
+      // When collapsed, summary shows frequency and emitter type
+      section.click();
+      fixture.detectChanges();
+      expect(section.querySelector('.section-summary')?.textContent?.trim()).toBe('9.41 GHz · RADAR_SEARCH');
+    });
+
+    it('omits absent or zero RF fields except zero powerDbm', () => {
+      fixture.componentRef.setInput(
+        'entity',
+        signalEntity({
+          frequencyHz: 450,
+          bandwidthHz: 0,
+          priUs: 0,
+          pulseWidthUs: 0,
+          scanType: 'SECTOR',
+          scanRateRpm: 0,
+          powerDbm: 0,
+        }),
+      );
+      fixture.detectChanges();
+
+      const r = rfRows();
+      expect(r).toContain('Frequency: 450 Hz');
+      expect(r).toContain('Scan: SECTOR');
+      expect(r).toContain('Power: 0 dBm');
+      expect(r.some((row) => row.startsWith('Bandwidth:'))).toBe(false);
+      expect(r.some((row) => row.startsWith('PRI / PRF:'))).toBe(false);
+      expect(r.some((row) => row.startsWith('Pulse Width:'))).toBe(false);
+    });
+  });
+
+  it("shows a site's heartbeat and, for an operator, links to its connection", () => {
+    auth.hasAnyRole.mockImplementation((...roles: string[]) => roles.includes('sentinel-operator'));
+    const navigate = jest.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    fixture.componentRef.setInput(
+      'entity',
+      makeEntity({
+        entityType: EntityType.SENSOR,
+        feedId: 'grpc-1',
+        identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }],
+        platformData: { generic: { fields: { heartbeat: 'online', heartbeatIntervalSec: '5', lastHeartbeatAt: secondsAgo(2) } } },
+      }),
+    );
+    fixture.detectChanges();
+    open('origin');
+    httpMock.expectOne('/api/v1/feeds').flush([]);
+    fixture.detectChanges();
+    expect(rows()['Heartbeat']).toBe('online · every 5 s');
+    (el.querySelector('.origin-section .field-link') as HTMLButtonElement).click();
+    expect(navigate).toHaveBeenCalledWith(['/connections'], { queryParams: { open: 'grpc-1' } });
+  });
+
+  it("links a rebound site to its emplacement row's connection, not the entity's first feed", () => {
+    auth.hasAnyRole.mockImplementation((...roles: string[]) => roles.includes('sentinel-operator'));
+    const navigate = jest.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    TestBed.inject(EmplacementService).emplacements.set([
+      {
+        id: 'emp-1', name: 'Mast', description: '', mobility: 'FIXED', sensorType: 'RADAR',
+        position: { lat: 50, lon: -4 }, altitude: null, boresightDeg: 0, azimuthReference: 'TRUE_NORTH',
+        coverage: { minRangeM: 0, maxRangeM: 60000, azimuthWidthDeg: 360 }, defaultSigma: {},
+        feedId: 'grpc-2', classification: 'UNCLASSIFIED', exercise: false, active: true,
+        lastReportAt: null, createdBy: 'u', createdAt: '', updatedAt: '', version: 2,
+      },
+    ]);
+    fixture.componentRef.setInput(
+      'entity',
+      makeEntity({
+        entityType: EntityType.SENSOR,
+        feedId: 'grpc-1',
+        identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }],
+        platformData: { generic: { fields: { heartbeat: 'online', heartbeatIntervalSec: '5', lastHeartbeatAt: secondsAgo(2) } } },
+      }),
+    );
+    fixture.detectChanges();
+    open('origin');
+    httpMock.expectOne('/api/v1/feeds').flush([]);
+    fixture.detectChanges();
+    const link = el.querySelector('.origin-section .field-link') as HTMLButtonElement;
+    expect(link.textContent?.trim()).toBe('Mast');
+    expect(link.getAttribute('title')).toBe('Open its connection, grpc-2');
+    link.click();
+    expect(navigate).toHaveBeenCalledWith(['/connections'], { queryParams: { open: 'grpc-2' } });
+  });
+
+  it("shows a silent site's heartbeat with since when, and no link for a viewer", () => {
+    fixture.componentRef.setInput(
+      'entity',
+      makeEntity({
+        entityType: EntityType.SENSOR,
+        feedId: 'grpc-1',
+        identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }],
+        platformData: { generic: { fields: { heartbeat: 'offline', heartbeatIntervalSec: '5', lastHeartbeatAt: '2026-10-17T14:02:00Z', silentSince: '2026-10-17T14:02:00Z' } } },
+      }),
+    );
+    fixture.detectChanges();
+    open('origin');
+    httpMock.expectOne('/api/v1/feeds').flush([]);
+    fixture.detectChanges();
+    expect(rows()['Heartbeat']).toBe('offline since 14:02Z · every 5 s');
+    expect(el.querySelector('.origin-section .field-link')).toBeNull();
   });
 });
