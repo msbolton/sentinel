@@ -719,6 +719,69 @@ networkPolicy:
   geoserver:
     from: []
 
+# Nightly backups of the chart's PostgreSQL (templates/backup-cronjob.yaml):
+# pg_dump -Fc of each database and pg_dumpall --globals-only (roles and their
+# password hashes) into a timestamped directory on the claim <fullname>-backups,
+# then the directories older than retentionDays are deleted. Rendered only with
+# postgresql.enabled: back up an external database where it runs. The PostgreSQL
+# pod mounts the claim read-only at /backups, so restores run there with
+# pg_restore (docs/infrastructure.md, Backups); turning backups on or off
+# restarts it.
+backup:
+  enabled: true
+  # Cron, in the time zone below (the controller's, usually UTC, when empty).
+  schedule: "30 2 * * *"
+  timeZone: ""
+  databases: [sentinel, keycloak]
+  retentionDays: 7
+  # pg_dump must be the server's major version or newer.
+  image: postgres:16-alpine
+  persistence:
+    size: 20Gi
+    # An existing claim (an NFS share, say) instead of <fullname>-backups.
+    existingClaim: ""
+  # Copies the backup directories to off-node storage after each run with
+  # rclone copy, which adds new files and deletes nothing: expire old copies
+  # with the storage's own lifecycle rules. existingSecret names a Secret with
+  # the key rclone.conf; remote is <remote name in rclone.conf>:<path>.
+  rclone:
+    enabled: false
+    image: rclone/rclone:1.71.2
+    existingSecret: ""
+    remote: ""
+    extraArgs: []
+  # A backup Job before every upgrade (a pre-upgrade hook ahead of the schema
+  # Job), so a failed upgrade can be undone from a dump taken just before it.
+  # A failing backup fails the upgrade. Skipped while the claim does not exist
+  # yet (the install or upgrade that turns backups on).
+  preUpgrade:
+    enabled: false
+  backoffLimit: 2
+  activeDeadlineSeconds: 3600
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  # PostgreSQL's ids (postgresql.podSecurityContext), since its pod mounts the
+  # claim too: the dumps (mode 0600) are readable there for a restore, and the
+  # two pods never change the volume's group back and forth with fsGroup.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+
 # -- GeoServer (OGC WMS/WFS layers over the PostGIS views; config/geoserver) --
 geoserver:
   enabled: false

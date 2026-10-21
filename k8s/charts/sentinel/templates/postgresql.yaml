@@ -163,6 +163,13 @@ spec:
               mountPath: /tmp
             - name: shm
               mountPath: /dev/shm
+            {{- if .Values.backup.enabled }}
+            # The dumps of templates/backup-cronjob.yaml, to restore from with
+            # kubectl exec (docs/infrastructure.md, Backups).
+            - name: backups
+              mountPath: /backups
+              readOnly: true
+            {{- end }}
       volumes:
         - name: initdb
           configMap:
@@ -175,6 +182,11 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: {{ $v.shmSize }}
+        {{- if .Values.backup.enabled }}
+        - name: backups
+          persistentVolumeClaim:
+            claimName: {{ include "sentinel.backupClaim" . }}
+        {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: data

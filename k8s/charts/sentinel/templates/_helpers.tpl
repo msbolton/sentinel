@@ -140,6 +140,14 @@ one postgresql.yaml generates, named like the host.
 {{ default (include "sentinel.postgresHost" .) .Values.postgresql.existingSecret }}
 {{- end }}
 
+{{/*
+The claim the backups are written to: backup.persistence.existingClaim, else
+the <fullname>-backups the chart creates.
+*/}}
+{{- define "sentinel.backupClaim" -}}
+{{ .Values.backup.persistence.existingClaim | default (printf "%s-backups" (include "sentinel.fullname" .)) }}
+{{- end }}
+
 {{- define "sentinel.kafkaBrokers" -}}
 {{ include "sentinel.fullname" . }}-kafka:9092
 {{- end }}
