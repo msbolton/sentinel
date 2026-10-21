@@ -1,5 +1,10 @@
 # Development environment overrides
-# helm upgrade --install sentinel-dev ./k8s/charts/sentinel -f k8s/overlays/dev/values.yaml -n sentinel-dev
+# Needs a service token and the images' registry and tag:
+#   helm upgrade --install sentinel-dev ./k8s/charts/sentinel -f k8s/overlays/dev/values.yaml \
+#     --set ingestService.serviceToken=<token> --set global.imageRegistry=<registry> \
+#     --set global.imageTag=<tag> -n sentinel-dev --create-namespace
+# For a cluster you will actually run, use k8s/overlays/local (k3d) or the
+# production runbook, docs/deployment.md.
 
 global:
   host: sentinel.dev.local
