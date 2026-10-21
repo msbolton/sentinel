@@ -1,0 +1,19 @@
+module github.com/sentinel/sensor-sim
+
+go 1.24.0
+
+replace github.com/sentinel/go-common => ../../libs/common-go
+
+replace github.com/sentinel/proto-gen => ../../libs/proto-gen/src/go
+
+require (
+	github.com/sentinel/go-common v0.0.0
+	github.com/sentinel/proto-gen v0.0.0-00010101000000-000000000000
+	google.golang.org/protobuf v1.36.11
+	gopkg.in/yaml.v3 v3.0.1
+)
+
+require (
+	go.uber.org/multierr v1.10.0 // indirect
+	go.uber.org/zap v1.27.0 // indirect
+)
