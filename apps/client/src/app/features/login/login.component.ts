@@ -1,4 +1,5 @@
 import { Component, OnDestroy, inject, signal } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { Router, ActivatedRoute } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
@@ -57,8 +58,8 @@ import { AuthService } from '../../core/services/auth.service';
               placeholder="Enter password"
               [disabled]="loading()" />
           </div>
-          @if (errorMessage()) {
-            <p class="error-message">{{ errorMessage() }}</p>
+          @if (errorMessage() || initError()) {
+            <p class="error-message">{{ errorMessage() || initError() }}</p>
           }
           <button
             class="sign-in-btn"
@@ -422,6 +423,8 @@ export class LoginComponent implements OnDestroy {
   password = '';
   loading = signal(false);
   errorMessage = signal('');
+  /** Why sign-in is unavailable at all (Keycloak could not be initialised), if it is. */
+  initError = toSignal(this.authService.initError$, { initialValue: null });
 
   ngOnDestroy(): void {
   }
