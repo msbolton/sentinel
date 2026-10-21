@@ -269,6 +269,32 @@ ingestService:
     tickSec: 2
     rebalanceSec: 30
   env: {}
+  # Elevation data for radar and camera detections: Copernicus GLO-30 tiles,
+  # downloaded over HTTPS on first use into a cache folder that both ingest
+  # Deployments mount at /var/cache/sentinel/terrain. Terrain is on while
+  # INGEST_TERRAIN_CACHE_DIR is set, which the chart does when enabled is true;
+  # false renders no cache, and direction-only detections become bearings
+  # (terrain_unavailable). The settings below are the chart's: the same names in
+  # env above are an error, except INGEST_TERRAIN_FETCH_TIMEOUT_SEC (default
+  # 300), which only env sets. docs/feeds.md "Terrain" has the details and the
+  # attribution the data requires.
+  terrain:
+    enabled: true
+    sourceUrl: https://copernicus-dem-30m.s3.amazonaws.com
+    # Without existingClaim the cache is an emptyDir of this size: per pod,
+    # gone when the pod is rescheduled, refetched on demand. Keep it above
+    # cacheMaxMB (the service evicts at that size).
+    cacheSizeLimit: 4Gi
+    cacheMaxMB: 3072
+    # How long a detection waits for a tile before it becomes a bearing.
+    waitMs: 2000
+    # Farthest a direction-only detection is followed to the ground.
+    maxRangeKm: 30
+    # A PersistentVolumeClaim to keep the cache across restarts, or share it
+    # between the replicas (ReadWriteMany). It must be writable by group 10001
+    # (the pod's fsGroup does that on most storage classes). Leave empty for
+    # the emptyDir.
+    existingClaim: ""
   # TAK connection certificates, mounted at mountPath (mode 0440) so feeds can
   # reference them as file:/etc/sentinel/tak/client.pem etc. Either name an
   # existing Secret with keys tak-client-cert, tak-client-key and tak-ca, or set

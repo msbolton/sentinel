@@ -483,6 +483,22 @@ OpenSearch stops accepting writes once the node's disk passes its high watermark
 - Watch it with `df -h /var/lib/rancher` on the node. Keep it below 85%.
 - OpenSearch lifts the block by itself once space is freed.
 
+### Terrain
+
+Radar and camera detections are placed with Copernicus GLO-30 terrain heights (`docs/feeds.md`, Terrain). The ingest pods download 1 degree tiles on first use and keep them in a cache folder, on by default (`ingestService.terrain.enabled`).
+
+- **Network.** The pods need outbound HTTPS to `https://copernicus-dem-30m.s3.amazonaws.com` (`ingestService.terrain.sourceUrl`). The chart restricts ingress only, so nothing to open on the cluster; a firewall or proxy in front of the node must allow it. Where it cannot be reached, detections that need terrain become bearings (`terrain_unavailable`) and `sentinel_ingest_terrain_failures_total` rises. Set `ingestService.terrain.enabled: false` to run without it.
+- **Disk.** Each tile is 15 to 50 MB, a few GB for a region. By default the cache is an `emptyDir` of 4Gi per ingest pod, on the node's disk beside everything else (see Disk above); it is lost when the pod is replaced and fetched again as detections arrive. `cacheMaxMB` (3072) makes the cache delete its oldest tiles before `cacheSizeLimit` (4Gi) would evict the pod. To keep it across restarts, create a PersistentVolumeClaim writable by group 10001 and name it in `ingestService.terrain.existingClaim`; the listener and the ingest pods then share it only if the volume is ReadWriteMany.
+- **Preload.** Fill the cache for a site before its sensors report, so the first detections are not bearings. The command refuses a box whose tiles (50 MB each) exceed `--cache-max-mb`, so pass the chart's cap:
+
+  ```bash
+  kubectl exec -n sentinel deploy/sentinel-ingest-service -- /app/terrain-preload \
+    --cache-dir /var/cache/sentinel/terrain --cache-max-mb 3072 --bbox 54.5,-3.3,54.7,-3.0
+  ```
+
+  `--bbox` is `south,west,north,east`. Each `emptyDir` is its own pod's: run it in every ingest pod, and in `deploy/sentinel-ingest-listener` (the gRPC connections' pod), which does the placing for the connections it runs. With a shared claim once is enough.
+- **Attribution.** Copernicus requires this notice wherever the data, or anything made from it, is shown: "Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved."
+
 ### Keep tokens out of the logs
 
 Two kinds of credential travel in query strings:

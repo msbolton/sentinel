@@ -22,7 +22,7 @@ export class UnassignedEmplacementsComponent {
   protected readonly canWrite = this.service.canWrite;
   protected readonly canDelete = this.service.canDelete;
   protected readonly rows = computed(() => this.service.emplacements().filter((e) => e.feedId === null));
-  /** Only a grpc connection heartbeats its emplacements until TCP/UDP and TAK do. */
+  /** Only a grpc connection heartbeats its emplacements, so only it takes one. */
   protected readonly targets = computed(() => this.feeds.feeds().filter((f) => f.driver === 'grpc'));
   protected readonly chosen = signal<Record<string, string>>({});
   protected readonly error = signal<string | null>(null);

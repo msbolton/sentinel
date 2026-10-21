@@ -356,6 +356,18 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics 
 	for v in $$vals; do for p in $${defaults//,/ }; do \
 		case ",$$v," in *",$$p,"*) ;; *) echo "chart-lint: the prod overlay's INGEST_RESERVED_PORTS lacks $$p of the default list"; exit 1;; esac; \
 	done; done
+	@# Terrain is on while INGEST_TERRAIN_CACHE_DIR is set: both ingest Deployments carry it, with
+	@# its mounted volume, when ingestService.terrain.enabled, and neither when it is not.
+	@for tpl in ingest-service ingest-listener; do \
+		on="$$(helm template sentinel $(CHART) $(CHART_SET) --show-only templates/$$tpl-deployment.yaml)"; \
+		printf '%s\n' "$$on" | grep -q 'name: INGEST_TERRAIN_CACHE_DIR' || { echo "chart-lint: $$tpl has no INGEST_TERRAIN_CACHE_DIR with terrain enabled"; exit 1; }; \
+		printf '%s\n' "$$on" | grep -q 'mountPath: /var/cache/sentinel/terrain' || { echo "chart-lint: $$tpl does not mount the terrain cache"; exit 1; }; \
+		printf '%s\n' "$$on" | grep -A3 'name: terrain-cache$$' | grep -q 'emptyDir:' || { echo "chart-lint: $$tpl's terrain cache is not an emptyDir"; exit 1; }; \
+		claim="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestService.terrain.existingClaim=terrain-pvc --show-only templates/$$tpl-deployment.yaml)"; \
+		printf '%s\n' "$$claim" | grep -q 'claimName: terrain-pvc' || { echo "chart-lint: $$tpl ignores ingestService.terrain.existingClaim"; exit 1; }; \
+		off="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestService.terrain.enabled=false --show-only templates/$$tpl-deployment.yaml)"; \
+		! printf '%s\n' "$$off" | grep -q 'INGEST_TERRAIN\|terrain-cache' || { echo "chart-lint: $$tpl still has terrain settings with terrain disabled"; exit 1; }; \
+	done
 
 # ----------------------------------------------------------------------------
 # Deployment (docs/deployment.md)

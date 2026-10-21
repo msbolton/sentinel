@@ -9,7 +9,7 @@ import (
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 )
 
-// The wire contract sub-projects 2 and 3 build against: the service name and
+// The wire contract senders build against: the service name and
 // its methods, and the Observation field numbers that must never move.
 func TestIngestServiceContract(t *testing.T) {
 	if got := ingestv1.IngestService_ServiceDesc.ServiceName; got != "sentinel.ingest.v1.IngestService" {

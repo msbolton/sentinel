@@ -20,11 +20,15 @@ RUN apk add --no-cache ca-certificates librdkafka
 # numeric USER lets the kubelet check runAsNonRoot. The service reads the files
 # connections name (secretRefs and stream TLS file paths) and binds ports from
 # 1024 up, so it needs no capability. The one path it writes is the terrain
-# cache (INGEST_TERRAIN_CACHE_DIR, when set): mount a volume there that this
-# user can write. The binaries below stay root-owned.
+# cache (INGEST_TERRAIN_CACHE_DIR, when set), which is created here owned by
+# that user: Docker copies a folder's owner into an EMPTY named volume only from
+# the first container that mounts it, and Compose shares terrain-cache with
+# sensor-sim, so the volume is writable whichever container starts first. (On
+# Kubernetes the pod's fsGroup does this.) The binaries below stay root-owned.
 # /app/terrain-preload fills that cache ahead of time:
 #   docker exec ingest /app/terrain-preload --cache-dir "$INGEST_TERRAIN_CACHE_DIR" --bbox south,west,north,east
-RUN addgroup -S -g 10001 sentinel && adduser -S -D -H -u 10001 -G sentinel sentinel
+RUN addgroup -S -g 10001 sentinel && adduser -S -D -H -u 10001 -G sentinel sentinel \
+ && mkdir -p /var/cache/sentinel/terrain && chown -R 10001:10001 /var/cache/sentinel
 COPY --from=builder /ingest-service /ingest-service
 COPY --from=builder /terrain-preload /app/terrain-preload
 USER 10001:10001

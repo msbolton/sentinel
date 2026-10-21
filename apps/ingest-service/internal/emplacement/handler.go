@@ -29,9 +29,9 @@ type FeedInfo struct {
 // connection that reports as it.
 type FeedCheck func(ctx context.Context, feedID string) (FeedInfo, error)
 
-// BindableDriver is the one driver an emplacement may be bound to until the
-// TCP/UDP (sub-project 2) and TAK (sub-project 3) heartbeats exist: only it
-// reports its emplacements' heartbeats.
+// BindableDriver is the one driver an emplacement may be bound to: only it
+// reports its emplacements' heartbeats (the other drivers do not, and no
+// change to that is planned).
 const BindableDriver = "grpc"
 
 // FeedLiveness is what the owning replica last reported of a connection's

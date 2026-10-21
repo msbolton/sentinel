@@ -228,6 +228,56 @@ a duplicate name would fail the server-side apply.
 {{- end }}
 
 {{/*
+The terrain cache of both ingest Deployments (ingestService.terrain): the
+environment, the volume mount and the volume. Terrain is on when
+INGEST_TERRAIN_CACHE_DIR is set, so none of the three renders when it is
+disabled. The settings the chart sets are an error in ingestService.env (a
+duplicate name would fail the server-side apply); INGEST_TERRAIN_FETCH_TIMEOUT_SEC
+is not one of them.
+*/}}
+{{- define "sentinel.ingestTerrainEnv" -}}
+{{- $t := .Values.ingestService.terrain -}}
+{{- if $t.enabled -}}
+{{- range $k := list "INGEST_TERRAIN_CACHE_DIR" "INGEST_TERRAIN_SOURCE_URL" "INGEST_TERRAIN_CACHE_MAX_MB" "INGEST_TERRAIN_WAIT_MS" "INGEST_TERRAIN_MAX_RANGE_KM" }}
+{{- if hasKey $.Values.ingestService.env $k }}
+{{- fail (printf "ingestService.env.%s: the chart sets %s from ingestService.terrain" $k $k) }}
+{{- end }}
+{{- end }}
+- name: INGEST_TERRAIN_CACHE_DIR
+  value: /var/cache/sentinel/terrain
+- name: INGEST_TERRAIN_SOURCE_URL
+  value: {{ $t.sourceUrl | quote }}
+- name: INGEST_TERRAIN_CACHE_MAX_MB
+  value: {{ $t.cacheMaxMB | quote }}
+- name: INGEST_TERRAIN_WAIT_MS
+  value: {{ $t.waitMs | quote }}
+- name: INGEST_TERRAIN_MAX_RANGE_KM
+  value: {{ $t.maxRangeKm | quote }}
+{{- end }}
+{{- end }}
+
+{{- define "sentinel.ingestTerrainMount" -}}
+{{- if .Values.ingestService.terrain.enabled -}}
+- name: terrain-cache
+  mountPath: /var/cache/sentinel/terrain
+{{- end }}
+{{- end }}
+
+{{- define "sentinel.ingestTerrainVolume" -}}
+{{- $t := .Values.ingestService.terrain -}}
+{{- if $t.enabled -}}
+- name: terrain-cache
+  {{- if $t.existingClaim }}
+  persistentVolumeClaim:
+    claimName: {{ $t.existingClaim }}
+  {{- else }}
+  emptyDir:
+    sizeLimit: {{ $t.cacheSizeLimit }}
+  {{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
 The head of a NetworkPolicy for one workload's pods, named
 <fullname>-<component>, for the ingress rules that follow it:
   include "sentinel.networkPolicyMeta" (dict "ctx" $ "component" "web")
