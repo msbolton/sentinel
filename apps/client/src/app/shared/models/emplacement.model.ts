@@ -201,6 +201,122 @@ export function siteHeartbeatOf(
   return { state: 'never', intervalSec, lastHeartbeatAt: null, silentSince: null };
 }
 
+export type BearingReason = 'air_target' | 'no_ground_intersection' | 'terrain_unavailable' | 'no_origin_altitude';
+
+/** One bearing line a camera site carries: a direction, not a position. Azimuth is from true north. */
+export interface SiteBearing {
+  trackId?: string;
+  azimuthDeg: number;
+  elevationDeg: number;
+  sigmaAzDeg?: number;
+  sigmaElDeg?: number;
+  lengthM: number;
+  reason: BearingReason;
+  classification?: string;
+  confidence?: number;
+  band?: string;
+  /** RFC3339. */
+  observedAt: string;
+}
+
+/** What the server uses when a camera feed sets no bearingTtlSec. */
+export const DEFAULT_BEARING_TTL_SEC = 10;
+
+const BEARING_REASONS: BearingReason[] = ['air_target', 'no_ground_intersection', 'terrain_unavailable', 'no_origin_altitude'];
+
+type FieldsCarrier = { platformData?: { generic?: { fields?: Record<string, string> } } } | null | undefined;
+
+/** How long a site's bearings live, in seconds: its bearingTtlSec, else the default. */
+export function bearingTtlOf(entity: FieldsCarrier): number {
+  const ttl = Number(entity?.platformData?.generic?.fields?.['bearingTtlSec']);
+  return Number.isFinite(ttl) && ttl > 0 ? ttl : DEFAULT_BEARING_TTL_SEC;
+}
+
+/** Whether a bearing observed at observedAt has outlived ttlSec by nowMs. An unreadable time is expired. */
+export function bearingExpired(observedAt: string, ttlSec: number, nowMs: number): boolean {
+  const t = Date.parse(observedAt);
+  return Number.isNaN(t) || nowMs >= t + ttlSec * 1000;
+}
+
+function asBearing(x: unknown): SiteBearing | null {
+  if (!x || typeof x !== 'object') return null;
+  const b = x as SiteBearing;
+  if (!Number.isFinite(b.azimuthDeg) || !Number.isFinite(b.elevationDeg) || !Number.isFinite(b.lengthM)) return null;
+  if (!BEARING_REASONS.includes(b.reason) || typeof b.observedAt !== 'string' || Number.isNaN(Date.parse(b.observedAt))) return null;
+  return b;
+}
+
+/**
+ * The live bearings a camera site entity carries (platformData.generic.fields
+ * "bearings", a JSON array), judged at nowMs, the server's clock. A bearing
+ * past observedAt + bearingTtlSec is dropped here, since a site need not
+ * republish at the moment one expires. Empty for an entity with none, bad
+ * JSON, or entries that are not bearings.
+ */
+export function bearingsOf(entity: FieldsCarrier, nowMs: number): SiteBearing[] {
+  const raw = entity?.platformData?.generic?.fields?.['bearings'];
+  if (!raw) return [];
+  let list: unknown;
+  try {
+    list = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(list)) return [];
+  const ttlSec = bearingTtlOf(entity);
+  const out: SiteBearing[] = [];
+  for (const x of list) {
+    const b = asBearing(x);
+    if (b && !bearingExpired(b.observedAt, ttlSec, nowMs)) out.push(b);
+  }
+  return out;
+}
+
+const WGS84_A = 6378137;
+const WGS84_F = 1 / 298.257223563;
+const WGS84_E2 = WGS84_F * (2 - WGS84_F);
+const RAD = Math.PI / 180;
+
+/**
+ * The far end of a bearing line: length along the azimuth (true north) and
+ * elevation from the origin, in the origin's local east-north-up frame, taken
+ * to geodetic coordinates on the WGS84 ellipsoid. The line is straight, so
+ * over a long range its end rises above the ellipsoid by the earth's curvature.
+ */
+export function bearingEnd(
+  origin: { lat: number; lon: number; alt: number },
+  b: Pick<SiteBearing, 'azimuthDeg' | 'elevationDeg' | 'lengthM'>,
+): { lat: number; lon: number; alt: number } {
+  const lat = origin.lat * RAD;
+  const lon = origin.lon * RAD;
+  const az = b.azimuthDeg * RAD;
+  const el = b.elevationDeg * RAD;
+  const east = b.lengthM * Math.cos(el) * Math.sin(az);
+  const north = b.lengthM * Math.cos(el) * Math.cos(az);
+  const up = b.lengthM * Math.sin(el);
+
+  const sinLat = Math.sin(lat);
+  const cosLat = Math.cos(lat);
+  const sinLon = Math.sin(lon);
+  const cosLon = Math.cos(lon);
+  const n = WGS84_A / Math.sqrt(1 - WGS84_E2 * sinLat * sinLat);
+  const x = (n + origin.alt) * cosLat * cosLon + -sinLon * east - sinLat * cosLon * north + cosLat * cosLon * up;
+  const y = (n + origin.alt) * cosLat * sinLon + cosLon * east - sinLat * sinLon * north + cosLat * sinLon * up;
+  const z = (n * (1 - WGS84_E2) + origin.alt) * sinLat + cosLat * north + sinLat * up;
+
+  // ECEF to geodetic by fixed-point iteration; it converges to well under a millimetre in a few steps.
+  const p = Math.hypot(x, y);
+  let phi = Math.atan2(z, p * (1 - WGS84_E2));
+  let h = 0;
+  for (let i = 0; i < 6; i++) {
+    const s = Math.sin(phi);
+    const nn = WGS84_A / Math.sqrt(1 - WGS84_E2 * s * s);
+    h = Math.abs(phi) < Math.PI / 4 ? p / Math.cos(phi) - nn : z / s - nn * (1 - WGS84_E2); // the z form near the poles
+    phi = Math.atan2(z, p * (1 - (WGS84_E2 * nn) / (nn + h)));
+  }
+  return { lat: phi / RAD, lon: Math.atan2(y, x) / RAD, alt: h };
+}
+
 /** A site's heartbeat from its REST row, before its entity is on the stream; null for a row with none. */
 export function rowHeartbeatOf(e: Pick<Emplacement, 'heartbeat' | 'silentSince' | 'heartbeatIntervalSec' | 'lastHeartbeatAt'>): SiteHeartbeat | null {
   if (!e.heartbeat) return null;

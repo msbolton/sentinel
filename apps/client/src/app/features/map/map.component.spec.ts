@@ -28,6 +28,7 @@ import {
 import { Feed } from '../../shared/models/feed.model';
 import { ELLIPSE_95 } from './uncertainty';
 import { sidcFor, symbolDataUrl } from './milstd2525';
+import { BearingLayer } from './bearing-layer';
 
 function covFromEllipse(semiMajorM: number, semiMinorM: number, orientationDeg: number) {
   const s1 = semiMajorM / ELLIPSE_95;
@@ -88,6 +89,7 @@ function makeFakeCesium() {
     }),
     HeightReference: { NONE: 0, CLAMP_TO_GROUND: 1, RELATIVE_TO_GROUND: 2 },
     VerticalOrigin: { CENTER: 0, BOTTOM: 1 },
+    HorizontalOrigin: { LEFT: -1 },
     LabelStyle: { FILL_AND_OUTLINE: 2 },
     Math: {
       toRadians: (deg: number) => (deg * Math.PI) / 180,
@@ -273,6 +275,54 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     expect(viewer.selectedEntity).toBeUndefined();
     expect(TestBed.inject(Router).navigate).not.toHaveBeenCalled();
     expect(TestBed.inject(Router).navigateByUrl).not.toHaveBeenCalled();
+  });
+
+  it("selects the camera's site entity when a bearing line is clicked", () => {
+    const actions = new Map<unknown, (e: any) => void>();
+    (fakeCesium as any).ScreenSpaceEventHandler = function () {
+      return { setInputAction: (fn: (e: any) => void, type: unknown) => actions.set(type, fn) };
+    };
+    (fakeCesium as any).ScreenSpaceEventType = { LEFT_CLICK: 'L', LEFT_DOUBLE_CLICK: 'D', MOUSE_MOVE: 'M', LEFT_DOWN: 'DN', LEFT_UP: 'UP' };
+    (fakeCesium as any).defined = (x: unknown) => x != null;
+    const viewer = (component as any).viewer;
+    viewer.scene.canvas = {};
+    viewer.scene.pick = jest.fn(() => ({ id: { id: 'bearing:site-1:t1', _sentinelBearing: 'site-1' } }));
+    viewer.selectedEntity = { stale: true };
+    const site = baseSignalEntity({ id: 'site-1', entityType: EntityType.SENSOR, identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }] } as Partial<Entity>);
+    (component as any).emplacementEntities.set('site-1', site);
+
+    (component as any).setupEventHandlers();
+    actions.get('L')!({ position: { x: 1, y: 2 } });
+
+    expect(component.selectedEntity()).toBe(site);
+    expect(TestBed.inject(EmplacementService).select).toHaveBeenCalledWith('emp-1');
+    expect(viewer.selectedEntity).toBeUndefined();
+  });
+
+  it('draws the bearing lines a site entity carries and drops them with the site', () => {
+    const fields = {
+      bearings: JSON.stringify([{ trackId: 't1', azimuthDeg: 90, elevationDeg: 0, lengthM: 1000, reason: 'no_ground_intersection', observedAt: new Date().toISOString() }]),
+      bearingTtlSec: '60',
+    };
+    const site = baseSignalEntity({
+      id: 'site-1', entityType: EntityType.SENSOR, feedId: 'cam-1', identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }],
+      position: { latitude: 10, longitude: 20, altitude: 5 },
+      platformData: { generic: { fields } },
+    } as Partial<Entity>);
+    (fakeCesium as any).PolylineDashMaterialProperty = jest.fn(function (this: any, o: any) { Object.assign(this, o); });
+    const live = new Map<string, any>();
+    const viewer = (component as any).viewer;
+    viewer.entities.add = jest.fn((cfg: any) => { const e = { ...cfg }; live.set(cfg.id, e); return e; });
+    viewer.entities.remove = jest.fn((e: any) => live.delete(e.id));
+    (component as any).bearingLayer = new BearingLayer(viewer, fakeCesium);
+    (component as any).loadedEmplacementIds = new Set(['emp-1']);
+
+    (component as any).addOrUpdateCesiumEntity(site);
+    expect([...live.keys()]).toEqual(['bearing:site-1:t1']);
+    expect(live.get('bearing:site-1:t1').polyline.positions[0]).toEqual({ lon: 20, lat: 10, alt: 5 });
+
+    (component as any).removeCesiumEntity('site-1');
+    expect(live.size).toBe(0);
   });
 
   it('clears any previous selection when the clicked site is not on the stream', () => {

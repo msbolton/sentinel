@@ -190,3 +190,16 @@ export const FLIGHT_PATH_CONFIG = {
   width: 2,
   dashLength: 14,
 };
+
+/** A camera's bearing lines: dashed, in the site's colour, fading over the last part of their ttl. */
+export const BEARING_LINE_CONFIG = {
+  width: 2,
+  dashLength: 16,
+  /** The last share of the ttl over which the line fades out. */
+  fadeFraction: 0.3,
+  /** The faintest a line is drawn before it expires. */
+  minAlpha: 0.1,
+  /** Alpha is rounded to this step, so a line is redrawn only when its look visibly changes. */
+  alphaStep: 0.05,
+  labelFont: '12px sans-serif',
+};

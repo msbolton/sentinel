@@ -67,9 +67,10 @@ import { formatAltitude } from '../../shared/geo-format';
 import { entityLabel } from './entity-label';
 import { GeofenceService } from '../../core/services/geofence.service';
 import { DRAFT_ID, GeofenceLayer } from './geofence-layer';
-import { EMPLACEMENT_DRAFT_ID, EmplacementLayer, emplacementDrawingOf, siteEntityOf, sitesShown } from './emplacement-layer';
+import { EMPLACEMENT_DRAFT_ID, EmplacementLayer, SILENT_SITE_COLOR, emplacementDrawingOf, isSilent, siteEntityOf, sitesShown } from './emplacement-layer';
+import { BearingLayer, type BearingSite } from './bearing-layer';
 import { EmplacementService } from '../../core/services/emplacement.service';
-import { emplacementIdOf, rowHeartbeatOf, siteHeartbeatOf } from '../../shared/models/emplacement.model';
+import { bearingTtlOf, bearingsOf, emplacementIdOf, rowHeartbeatOf, siteHeartbeatOf } from '../../shared/models/emplacement.model';
 import { FeedService } from '../../core/services/feed.service';
 import { ellipseFromCovariance } from './uncertainty';
 import { drawsUncertainty, heightModeOf, type HeightMode } from './height-mode';
@@ -219,6 +220,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   /** Saved geofences drawn on the globe; see geofence-layer.ts. */
   private geofenceLayer: GeofenceLayer | null = null;
   private emplacementLayer: EmplacementLayer | null = null;
+  /** The bearing lines of camera sites, drawn from their SENSOR entities. */
+  private bearingLayer: BearingLayer | null = null;
   /** The SENSOR entities that stand for loaded emplacements, by entity id; the emplacement layer draws them. */
   private readonly emplacementEntities = new Map<string, Entity>();
   /** The ids of the emplacements loaded now; only their entities are left to the emplacement layer. */
@@ -446,6 +449,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.geofenceLayer = null;
     this.emplacementLayer?.destroy();
     this.emplacementLayer = null;
+    this.bearingLayer?.destroy();
+    this.bearingLayer = null;
     this.clearOrbitOverlay();
     this.clearFlightPath();
     if (this.ageoutConfigTimer) clearInterval(this.ageoutConfigTimer);
@@ -493,6 +498,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.setupClusterSources();
       this.geofenceLayer = new GeofenceLayer(this.viewer, Cesium);
       this.emplacementLayer = new EmplacementLayer(this.viewer, Cesium);
+      this.bearingLayer = new BearingLayer(this.viewer, Cesium);
       this.drawTool = new GeofenceDrawTool(this.viewer, Cesium);
       this.geofenceLayer.sync(this.geofences.zones(), this.geofences.selectedId(), (id) => this.geofenceAnchorPosition(id));
       this.resyncEmplacements();
@@ -579,6 +585,17 @@ export class MapComponent implements AfterViewInit, OnDestroy {
             this.selectedEntity.set(site); // null when the site is not on the stream: never keep an unrelated selection
           });
         }
+        return;
+      }
+      if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelBearing) {
+        // A bearing line selects the camera's site entity, as a click on the site does.
+        const site = this.emplacementEntities.get(pickedObject.id._sentinelBearing as string) ?? null;
+        const emplacementId = site ? emplacementIdOf(site) : null;
+        this.viewer.selectedEntity = undefined;
+        this.ngZone.run(() => {
+          if (emplacementId) this.emplacements.select(emplacementId);
+          this.selectedEntity.set(site);
+        });
         return;
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelDensity) {
@@ -857,6 +874,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // A loaded emplacement's own SENSOR entity is drawn by the emplacement layer.
     if (emplacementDrawingOf(entity, this.loadedEmplacementIds)) {
       this.emplacementEntities.set(entity.id, entity);
+      this.resyncBearings();
       return;
     }
     if (!entity.position) {
@@ -1303,7 +1321,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   private removeCesiumEntity(entityId: string): void {
-    this.emplacementEntities.delete(entityId);
+    if (this.emplacementEntities.delete(entityId)) this.resyncBearings();
     this.deadReckoning.remove(entityId);
     this.satellites.remove(entityId);
     if (entityId === this.orbit.forId) this.clearOrbitOverlay();
@@ -1541,6 +1559,37 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.ngZone.runOutsideAngular(() =>
       this.emplacementLayer?.sync(list, selectedId, draft, coverage, (id) => this.emplacementPosition(id), heartbeat),
     );
+    this.resyncBearings();
+  }
+
+  /**
+   * Redraw the bearing lines of camera sites from their SENSOR entities. Every
+   * 3 s with the emplacement layer, and whenever a site entity updates, so a
+   * line fades and expires on that cadence. Each line takes its site's colour
+   * and its connection's layer toggle.
+   */
+  private resyncBearings(): void {
+    if (!this.bearingLayer) return;
+    const now = this.wsService.serverNow();
+    const rows = new Map(this.emplacements.emplacements().map((e) => [e.id, e]));
+    const sites: BearingSite[] = [];
+    for (const entity of this.emplacementEntities.values()) {
+      if (!entity.position || entity.ageoutState === 'AGED_OUT') continue;
+      const bearings = bearingsOf(entity, now);
+      if (bearings.length === 0) continue;
+      const emplacementId = emplacementIdOf(entity);
+      const row = emplacementId ? rows.get(emplacementId) : undefined;
+      const hb = siteHeartbeatOf(entity, now) ?? (row ? rowHeartbeatOf(row) : null);
+      sites.push({
+        siteEntityId: entity.id,
+        feedId: row?.feedId ?? entity.feedId ?? null,
+        origin: { lat: entity.position.latitude, lon: entity.position.longitude, alt: entity.position.altitude ?? null },
+        color: isSilent(hb) ? SILENT_SITE_COLOR : (ENTITY_TYPE_PIN_COLORS[EntityType.SENSOR] ?? '#8b5cf6'),
+        bearings,
+        ttlSec: bearingTtlOf(entity),
+      });
+    }
+    this.ngZone.runOutsideAngular(() => this.bearingLayer?.sync(sites, this.layerVisibility.hidden(), now));
   }
 
   /** "Show on map" from an emplacement editor: fly there once, when the viewer is up. */
@@ -1860,6 +1909,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         }
         this.entityMap.clear();
         this.emplacementEntities.clear();
+        this.resyncBearings();
         this.trackTrails.clear();
         this.deadReckoning.clear();
         this.satellites.clear();
