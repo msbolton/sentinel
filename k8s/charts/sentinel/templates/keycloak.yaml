@@ -72,6 +72,10 @@ metadata:
     {{- include "sentinel.labels" (dict "ctx" $ "component" "keycloak" "tier" "data") | nindent 4 }}
 spec:
   replicas: 1
+  # One replica with a local cache: stop the old pod before the new one starts,
+  # rather than run two Keycloaks (and twice the memory) during a rollout.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "keycloak") | nindent 6 }}
@@ -93,10 +97,9 @@ spec:
         - name: wait-for-postgresql
           image: {{ .Values.dbSchema.image | quote }}
           imagePullPolicy: IfNotPresent
-          {{- with $v.containerSecurityContext }}
+          # pg_isready writes nothing.
           securityContext:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- merge (dict "readOnlyRootFilesystem" true) ($v.containerSecurityContext | default dict | deepCopy) | toYaml | nindent 12 }}
           command: ["/bin/sh", "-c"]
           args:
             - until pg_isready -h {{ include "sentinel.postgresHost" . }} -p 5432 -U keycloak -d keycloak; do sleep 2; done
