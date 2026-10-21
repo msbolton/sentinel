@@ -1,4 +1,6 @@
-FROM node:22-alpine AS builder
+# The Angular bundle is architecture-independent, so the build always runs on the
+# build host's own architecture and only the nginx stage is per-target.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS builder
 WORKDIR /build
 COPY package.json package-lock.json tsconfig.base.json nx.json ./
 COPY libs/ ./libs/
@@ -8,7 +10,9 @@ COPY apps/client/ ./apps/client/
 RUN npm ci --ignore-scripts --legacy-peer-deps
 RUN npx nx build client --configuration=production
 
-FROM nginx:1.27-alpine
+# Unprivileged nginx runs as uid 101 and keeps its pid and temp files under /tmp,
+# so it works with a read-only root filesystem and runAsNonRoot.
+FROM nginxinc/nginx-unprivileged:1.27-alpine
 COPY apps/client/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /build/dist/apps/client/browser /usr/share/nginx/html
 EXPOSE 4200

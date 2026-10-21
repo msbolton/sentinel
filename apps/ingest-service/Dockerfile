@@ -7,7 +7,9 @@ COPY libs/common-go/ ./libs/common-go/
 COPY libs/proto-gen/src/go/ ./libs/proto-gen/src/go/
 COPY apps/ingest-service/ ./apps/ingest-service/
 WORKDIR /build/apps/ingest-service
-RUN CGO_ENABLED=1 GOOS=linux go build -tags dynamic -o /ingest-service ./cmd/server
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 GOOS=linux go build -tags dynamic -o /ingest-service ./cmd/server
 
 # Runtime librdkafka must be at least the version confluent-kafka-go was built against;
 # keep the runtime Alpine release aligned with the golang builder image.
