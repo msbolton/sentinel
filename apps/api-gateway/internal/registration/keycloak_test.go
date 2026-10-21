@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,6 +21,7 @@ type fakeKeycloak struct {
 	users       map[string]*keycloakUser
 	userRoles   map[string][]keycloakRole
 	calls       []string
+	putBodies   []map[string]interface{} // every PUT /users/{id} body, in order
 	failRoleMap bool
 	conflict    bool
 }
@@ -112,8 +114,14 @@ func (f *fakeKeycloak) server(t *testing.T) *httptest.Server {
 			http.Error(w, "not found", 404)
 			return
 		}
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]interface{}
+		_ = json.Unmarshal(raw, &body)
+		f.mu.Lock()
+		f.putBodies = append(f.putBodies, body)
+		f.mu.Unlock()
 		var patch map[string]json.RawMessage
-		_ = json.NewDecoder(r.Body).Decode(&patch)
+		_ = json.Unmarshal(raw, &patch)
 		if v, ok := patch["enabled"]; ok {
 			_ = json.Unmarshal(v, &u.Enabled)
 		}
@@ -121,6 +129,13 @@ func (f *fakeKeycloak) server(t *testing.T) *httptest.Server {
 			u.Attributes = nil // Keycloak replaces the attribute map; json.Unmarshal would merge
 			_ = json.Unmarshal(v, &u.Attributes)
 		}
+		// Keycloak 26 (declarative user profile) takes the representation as the
+		// whole profile: a missing email, firstName or lastName is cleared.
+		var email, first, last string
+		_ = json.Unmarshal(patch["email"], &email)
+		_ = json.Unmarshal(patch["firstName"], &first)
+		_ = json.Unmarshal(patch["lastName"], &last)
+		u.Email, u.FirstName, u.LastName = email, first, last
 		w.WriteHeader(204)
 	}))
 	mux.HandleFunc("DELETE /admin/realms/sentinel/users/{id}", auth(func(w http.ResponseWriter, r *http.Request) {
@@ -262,6 +277,42 @@ func TestApproveUser_HappyPath(t *testing.T) {
 	joined := strings.Join(f.calls, "\n")
 	if !strings.Contains(joined, "PUT /admin/realms/sentinel/users/u-pending/execute-actions-email") {
 		t.Error("verification email not triggered")
+	}
+}
+
+// Every PUT must carry the whole representation: under Keycloak 26 a partial
+// one clears the e-mail, and the verification e-mail then fails with "User
+// email missing".
+func TestApproveUser_KeepsProfile(t *testing.T) {
+	f := newFakeKeycloak()
+	srv := f.server(t)
+	defer srv.Close()
+	if err := newClient(srv).ApproveUser(context.Background(), "u-pending", "classification-u"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.putBodies) == 0 {
+		t.Fatal("no PUT /users/{id}")
+	}
+	for i, body := range f.putBodies {
+		if body["username"] != "newbie" || body["email"] != "n@x.io" || body["firstName"] != "New" || body["lastName"] != "Bie" {
+			t.Errorf("PUT %d dropped the profile: %v", i, body)
+		}
+	}
+	u := f.users["u-pending"]
+	if u.Email != "n@x.io" || u.FirstName != "New" || u.LastName != "Bie" {
+		t.Errorf("profile after approval = %q %q %q", u.Email, u.FirstName, u.LastName)
+	}
+}
+
+func TestApproveUser_RollsBackKeepsProfile(t *testing.T) {
+	f := newFakeKeycloak()
+	f.failRoleMap = true
+	srv := f.server(t)
+	defer srv.Close()
+	_ = newClient(srv).ApproveUser(context.Background(), "u-pending", "classification-u")
+	u := f.users["u-pending"]
+	if u.Enabled || u.Email != "n@x.io" || u.FirstName != "New" || u.LastName != "Bie" {
+		t.Errorf("after rollback: enabled=%v profile=%q %q %q", u.Enabled, u.Email, u.FirstName, u.LastName)
 	}
 }
 

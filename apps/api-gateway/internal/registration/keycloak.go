@@ -298,30 +298,32 @@ func (c *KeycloakClient) PendingRegistrations(ctx context.Context) ([]PendingUse
 // ApproveUser enables the account, assigns sentinel-viewer plus the clearance
 // role, clears registrationDate, and triggers the verification email. If role
 // assignment fails the account is re-disabled so it stays visible as pending.
+// Every update sends the user's whole representation, as read: Keycloak 26
+// takes it as the complete profile and would clear a missing email or name,
+// and the verification email then fails with "User email missing".
 func (c *KeycloakClient) ApproveUser(ctx context.Context, userID, classification string) error {
-	user, err := c.getUser(ctx, userID)
+	rep, err := c.getUserRep(ctx, userID)
 	if err != nil {
 		return err
 	}
 
-	if err := c.putUser(ctx, userID, map[string]interface{}{"enabled": true}); err != nil {
+	rep["enabled"] = true
+	if err := c.putUser(ctx, userID, rep); err != nil {
 		c.logger.Error("failed to enable user", zap.String("userId", userID), zap.Error(err))
 		return &APIError{Status: http.StatusInternalServerError, Message: "Failed to approve user"}
 	}
 
 	if err := c.assignRealmRoles(ctx, userID, []string{"sentinel-viewer", classification}); err != nil {
 		c.logger.Error("role assignment failed, re-disabling user", zap.String("userId", userID), zap.Error(err))
-		_ = c.putUser(ctx, userID, map[string]interface{}{"enabled": false})
+		rep["enabled"] = false
+		_ = c.putUser(ctx, userID, rep)
 		return &APIError{Status: http.StatusInternalServerError, Message: "Failed to assign roles; user has been re-disabled"}
 	}
 
-	attrs := map[string][]string{}
-	for k, v := range user.Attributes {
-		if k != "registrationDate" {
-			attrs[k] = v
-		}
+	if attrs, isMap := rep["attributes"].(map[string]interface{}); isMap {
+		delete(attrs, "registrationDate")
 	}
-	if err := c.putUser(ctx, userID, map[string]interface{}{"attributes": attrs}); err != nil {
+	if err := c.putUser(ctx, userID, rep); err != nil {
 		c.logger.Error("failed to clear registrationDate (non-fatal)", zap.String("userId", userID), zap.Error(err))
 	}
 
@@ -440,6 +442,24 @@ func (c *KeycloakClient) getUser(ctx context.Context, userID string) (*keycloakU
 		return nil, &APIError{Status: http.StatusInternalServerError, Message: "Failed to read user"}
 	}
 	return &u, nil
+}
+
+// getUserRep reads a user's representation as Keycloak returns it, every field
+// kept, for an update that must send it back whole.
+func (c *KeycloakClient) getUserRep(ctx context.Context, userID string) (map[string]interface{}, error) {
+	resp, err := c.adminRequest(ctx, http.MethodGet, "/users/"+userID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !ok(resp) {
+		resp.Body.Close()
+		return nil, &APIError{Status: http.StatusNotFound, Message: "User not found"}
+	}
+	var rep map[string]interface{}
+	if err := decode(resp, &rep); err != nil || rep == nil {
+		return nil, &APIError{Status: http.StatusInternalServerError, Message: "Failed to read user"}
+	}
+	return rep, nil
 }
 
 func (c *KeycloakClient) putUser(ctx context.Context, userID string, rep map[string]interface{}) error {
