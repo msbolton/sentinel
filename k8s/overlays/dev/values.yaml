@@ -1,4 +1,9 @@
 # Development environment overrides
+# helm upgrade --install sentinel-dev ./k8s/charts/sentinel -f k8s/overlays/dev/values.yaml -n sentinel-dev
+
+global:
+  host: sentinel.dev.local
+
 apiGateway:
   replicaCount: 1
   resources:
@@ -45,29 +50,3 @@ web:
         paths:
           - path: /
             pathType: Prefix
-
-postgresql:
-  primary:
-    persistence:
-      size: 10Gi
-
-kafka:
-  controller:
-    replicaCount: 1
-  provisioning:
-    topics:
-      - name: observations.raw
-        partitions: 6
-        replicationFactor: 1
-      - name: observations.dlq
-        partitions: 1
-        replicationFactor: 1
-      - name: entities.events
-        partitions: 3
-        replicationFactor: 1
-      - name: alerts.events
-        partitions: 1
-        replicationFactor: 1
-      - name: density.events
-        partitions: 1
-        replicationFactor: 1

@@ -4,8 +4,7 @@ kind: ConfigMap
 metadata:
   name: {{ include "sentinel.fullname" . }}-geoserver-init
   labels:
-    app.kubernetes.io/name: geoserver
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "geoserver") | nindent 4 }}
 data:
   provision.sh: |-
 {{ .Files.Get "files/geoserver-provision.sh" | indent 4 }}
@@ -17,8 +16,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: {{ include "sentinel.fullname" . }}-geoserver-data
   labels:
-    app.kubernetes.io/name: geoserver
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "geoserver") | nindent 4 }}
 spec:
   accessModes: ["ReadWriteOnce"]
   {{- if .Values.global.storageClass }}
@@ -33,23 +31,22 @@ kind: Deployment
 metadata:
   name: {{ include "sentinel.fullname" . }}-geoserver
   labels:
-    app.kubernetes.io/name: geoserver
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/component: gis
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "geoserver" "tier" "gis") | nindent 4 }}
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: geoserver
-      app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "geoserver") | nindent 6 }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: geoserver
-        app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- include "sentinel.podLabels" (dict "ctx" $ "component" "geoserver") | nindent 8 }}
     spec:
+      {{- with (include "sentinel.imagePullSecrets" .) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       containers:
         - name: geoserver
           image: "{{ .Values.geoserver.image.repository }}:{{ .Values.geoserver.image.tag }}"
@@ -96,8 +93,7 @@ kind: Service
 metadata:
   name: {{ include "sentinel.fullname" . }}-geoserver
   labels:
-    app.kubernetes.io/name: geoserver
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "geoserver") | nindent 4 }}
 spec:
   type: ClusterIP
   ports:
@@ -105,8 +101,7 @@ spec:
       port: 8600
       targetPort: http
   selector:
-    app.kubernetes.io/name: geoserver
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "geoserver") | nindent 4 }}
 ---
 {{- if not .Values.geoserver.existingSecret }}
 apiVersion: v1
@@ -114,8 +109,7 @@ kind: Secret
 metadata:
   name: {{ include "sentinel.fullname" . }}-geoserver
   labels:
-    app.kubernetes.io/name: geoserver
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "geoserver") | nindent 4 }}
 type: Opaque
 stringData:
   admin-password: {{ .Values.geoserver.adminPassword | quote }}
@@ -131,8 +125,7 @@ kind: Job
 metadata:
   name: {{ include "sentinel.fullname" . }}-geoserver-init
   labels:
-    app.kubernetes.io/name: geoserver-init
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "geoserver-init") | nindent 4 }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
@@ -141,6 +134,9 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      {{- with (include "sentinel.imagePullSecrets" .) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       containers:
         - name: provision
           image: curlimages/curl:8.10.1
@@ -151,7 +147,7 @@ spec:
             - name: GEOSERVER_ADMIN_USER
               value: {{ .Values.geoserver.adminUser | quote }}
             - name: GIS_DB_HOST
-              value: {{ tpl .Values.geoserver.dbHost . | quote }}
+              value: {{ tpl (default (include "sentinel.postgresHost" .) .Values.geoserver.dbHost) . | quote }}
             {{- $sec := default (printf "%s-geoserver" (include "sentinel.fullname" .)) .Values.geoserver.existingSecret }}
             {{- range $env, $key := dict "GEOSERVER_ADMIN_PASSWORD" "admin-password" "GIS_DB_PASSWORD" "gis-db-password" "GIS_USER_PASSWORD_U" "gis-user-password-u" "GIS_USER_PASSWORD_C" "gis-user-password-c" "GIS_USER_PASSWORD_S" "gis-user-password-s" "GIS_USER_PASSWORD_TS" "gis-user-password-ts" }}
             - name: {{ $env }}

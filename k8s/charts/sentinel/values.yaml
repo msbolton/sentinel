@@ -2,7 +2,19 @@
 # Override these for each environment (dev, staging, prod)
 
 global:
+  # Public hostname the deployment is served on, without a scheme. The chart
+  # derives the CORS origin, the token issuers and the Ingress host from it.
+  host: ""
+  # Private registry holding the Sentinel images (make images-push REGISTRY=...):
+  # images are <imageRegistry>/<repository>:<tag>. Empty pulls <repository>:<tag>
+  # from the node's default registry. Third-party images (PostgreSQL, GeoServer,
+  # curl) are never prefixed with it.
   imageRegistry: ""
+  # Tag of every Sentinel image that sets no tag of its own. Empty falls back to
+  # the chart's appVersion.
+  imageTag: ""
+  # Secrets of type kubernetes.io/dockerconfigjson for the private registry, as
+  # [{name: registry-credentials}], added to every pod.
   imagePullSecrets: []
   storageClass: ""
 
@@ -12,7 +24,7 @@ apiGateway:
   replicaCount: 2
   image:
     repository: sentinel/api-gateway
-    tag: latest
+    tag: ""
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -24,16 +36,12 @@ apiGateway:
     limits:
       cpu: 1000m
       memory: 1Gi
-  env:
-    DB_HOST: "{{ .Release.Name }}-postgresql"
-    KAFKA_BROKERS: "{{ .Release.Name }}-kafka:9092"
-    KEYCLOAK_URL: "http://{{ .Release.Name }}-keycloak"
 
 entityService:
   replicaCount: 2
   image:
     repository: sentinel/entity-service
-    tag: latest
+    tag: ""
   service:
     port: 3001
   resources:
@@ -48,7 +56,7 @@ trackService:
   replicaCount: 2
   image:
     repository: sentinel/track-service
-    tag: latest
+    tag: ""
   service:
     port: 3002
   resources:
@@ -63,7 +71,7 @@ searchService:
   replicaCount: 1
   image:
     repository: sentinel/search-service
-    tag: latest
+    tag: ""
   service:
     port: 3003
   resources:
@@ -78,7 +86,7 @@ linkAnalysisService:
   replicaCount: 1
   image:
     repository: sentinel/link-analysis-service
-    tag: latest
+    tag: ""
   service:
     port: 3004
   resources:
@@ -93,7 +101,7 @@ alertService:
   replicaCount: 2
   image:
     repository: sentinel/alert-service
-    tag: latest
+    tag: ""
   service:
     port: 3005
   resources:
@@ -109,7 +117,7 @@ ingestService:
   replicaCount: 3
   image:
     repository: sentinel/ingest-service
-    tag: latest
+    tag: ""
     pullPolicy: IfNotPresent
   service:
     port: 4000
@@ -216,7 +224,7 @@ analyticsService:
   replicaCount: 1
   image:
     repository: sentinel/analytics-service
-    tag: latest
+    tag: ""
   service:
     port: 5000
   resources:
@@ -233,7 +241,7 @@ web:
   replicaCount: 2
   image:
     repository: sentinel/web
-    tag: latest
+    tag: ""
   service:
     type: ClusterIP
     port: 80
@@ -248,47 +256,8 @@ web:
     tls: []
 
 # -- Infrastructure --
-
-postgresql:
-  enabled: true
-  auth:
-    database: sentinel
-    username: sentinel
-    password: sentinel_dev
-  primary:
-    initdb:
-      scripts:
-        init-extensions.sql: |
-          CREATE EXTENSION IF NOT EXISTS postgis;
-          CREATE EXTENSION IF NOT EXISTS postgis_topology;
-          CREATE EXTENSION IF NOT EXISTS timescaledb;
-          CREATE EXTENSION IF NOT EXISTS age;
-          LOAD 'age';
-          SET search_path = ag_catalog, "$user", public;
-          SELECT create_graph('entity_graph');
-          -- Owned by the role the services connect as, so that the dbSchema Job
-          -- (which runs as that role) can create and alter the tables. The name
-          -- must be postgresql.auth.username; a values file is not templated.
-          CREATE SCHEMA IF NOT EXISTS sentinel AUTHORIZATION sentinel;
-          -- The GeoServer role, created here without a password so that
-          -- 90_gis_views.sql finds it and needs no CREATEROLE. It cannot log in
-          -- until ALTER ROLE sentinel_gis PASSWORD sets one.
-          DO $$
-          BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sentinel_gis') THEN
-              CREATE ROLE sentinel_gis LOGIN;
-            END IF;
-          END
-          $$;
-    resources:
-      requests:
-        cpu: 500m
-        memory: 1Gi
-      limits:
-        cpu: 2000m
-        memory: 4Gi
-    persistence:
-      size: 50Gi
+# The data tier (PostgreSQL, Kafka, OpenSearch, Keycloak) is added to this
+# chart as templates with their own values; none comes from a subchart.
 
 # Applies db/schema with a Helm hook Job: after the first install creates the
 # release's resources, and before every upgrade (a failing Job aborts it). It
@@ -301,12 +270,10 @@ postgresql:
 #
 # What the database must provide for the Job to work as a plain role:
 # - The Job connects as the role in the database-url key of the
-#   <release>-postgresql Secret. That role must be postgresql.auth.username, the
-#   role the services and the gateway use. No chart template creates the key;
-#   the operator supplies it.
+#   <fullname>-postgresql Secret, the role the services and the gateway use.
 # - That role owns schema sentinel, and the role sentinel_gis exists. The
-#   postgresql initdb script above creates both, but only on an empty data
-#   directory: an existing release needs, once and as a superuser, ALTER SCHEMA
+#   database's initialisation creates both, but only on an empty data
+#   directory: an existing database needs, once and as a superuser, ALTER SCHEMA
 #   sentinel OWNER TO <role> and CREATE ROLE sentinel_gis LOGIN.
 # - sentinel_gis has no password, so it cannot log in until ALTER ROLE
 #   sentinel_gis PASSWORD ... sets the one GeoServer's provisioning uses
@@ -342,75 +309,6 @@ dbSchema:
     capabilities:
       drop: [ALL]
 
-kafka:
-  enabled: true
-  kraft:
-    enabled: true
-  controller:
-    replicaCount: 3
-  listeners:
-    client:
-      protocol: PLAINTEXT
-  provisioning:
-    enabled: true
-    topics:
-      - name: observations.raw
-        partitions: 24
-        replicationFactor: 3
-      - name: observations.dlq
-        partitions: 3
-        replicationFactor: 3
-      - name: entities.events
-        partitions: 12
-        replicationFactor: 3
-      - name: alerts.events
-        partitions: 3
-        replicationFactor: 3
-      - name: density.events
-        partitions: 1
-        replicationFactor: 3
-
-opensearch:
-  enabled: true
-  replicas: 1
-  resources:
-    requests:
-      cpu: 500m
-      memory: 1Gi
-
-keycloak:
-  enabled: true
-  auth:
-    adminUser: admin
-    adminPassword: admin
-  extraEnvVars:
-    - name: KEYCLOAK_EXTRA_ARGS
-      value: "--import-realm"
-
-minio:
-  enabled: true
-  auth:
-    rootUser: minio
-    rootPassword: minio123
-  defaultBuckets: "sentinel-imagery,sentinel-reports,sentinel-tiles,sentinel-exports"
-  resources:
-    requests:
-      cpu: 250m
-      memory: 512Mi
-
-# -- Monitoring --
-
-monitoring:
-  enabled: false
-  prometheus:
-    enabled: false
-  grafana:
-    enabled: false
-  loki:
-    enabled: false
-  jaeger:
-    enabled: false
-
 # -- GeoServer (OGC WMS/WFS layers over the PostGIS views; config/geoserver) --
 geoserver:
   enabled: false
@@ -429,7 +327,8 @@ geoserver:
     s: change-me
     ts: change-me
   existingSecret: ""
-  dbHost: "{{ .Release.Name }}-postgresql"
+  # Empty: the chart's own PostgreSQL. A value is run through tpl.
+  dbHost: ""
   persistence:
     size: 5Gi
   resources:
