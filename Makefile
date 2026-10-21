@@ -247,25 +247,24 @@ db-seed: ## Seed database with sample entities, a geofence rule, and locations
 # Kubernetes
 # ----------------------------------------------------------------------------
 
-k8s-deploy-dev: ## Deploy to development K8s cluster
-	kubectl apply -k k8s/overlays/dev
+# Everything the chart renders must validate (kubeconform skips the CRDs it has no schema for), with
+# the defaults, the dev overlay and the optional parts switched on. The pod specs of the hardened
+# templates (both ingest Deployments and the schema Job) must each render runAsNonRoot: true; add a
+# template to RESTRICTED when it is hardened too.
+CHART := k8s/charts/sentinel
+CHART_SET := --set ingestService.serviceToken=lint
+RESTRICTED := --show-only templates/ingest-service-deployment.yaml --show-only templates/ingest-listener-deployment.yaml --show-only templates/db-schema-job.yaml
 
-k8s-deploy-staging: ## Deploy to staging K8s cluster
-	kubectl apply -k k8s/overlays/staging
-
-k8s-deploy-prod: ## Deploy to production K8s cluster
-	@echo "WARNING: Deploying to production!"
-	@read -p "Are you sure? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
-	kubectl apply -k k8s/overlays/prod
-
-# The last check counts runAsNonRoot: true in these three templates alone (--show-only),
-# since the subcharts render some of their own: both ingest Deployments and the schema Job make 3.
-chart-lint: ## Lint the Helm chart and check it renders db/schema into the schema Job and runAsNonRoot into both ingest Deployments and that Job (needs helm; run helm dependency build k8s/charts/sentinel first)
-	helm lint k8s/charts/sentinel --set ingestService.serviceToken=lint
-	helm template sentinel k8s/charts/sentinel --set ingestService.serviceToken=lint | grep -q '^  70_feeds\.sql: '
-	test "$$(helm template sentinel k8s/charts/sentinel --set ingestService.serviceToken=lint --set ingestListener.enabled=true \
-		--show-only templates/ingest-service-deployment.yaml --show-only templates/ingest-listener-deployment.yaml \
-		--show-only templates/db-schema-job.yaml | grep -c 'runAsNonRoot: true')" = 3
+chart-lint: ## Lint the Helm chart, check that it renders db/schema and runAsNonRoot into every hardened pod spec, and validate the output with kubeconform (needs helm and kubeconform)
+	helm lint $(CHART) $(CHART_SET)
+	helm template sentinel $(CHART) $(CHART_SET) | grep -q '^  70_feeds\.sql: '
+	@restricted="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestListener.enabled=true $(RESTRICTED))"; \
+	pods=$$(printf '%s\n' "$$restricted" | grep -cE '^ +containers:'); \
+	roots=$$(printf '%s\n' "$$restricted" | grep -c 'runAsNonRoot: true'); \
+	test "$$pods" -gt 0 && test "$$pods" = "$$roots" || { echo "chart-lint: $$roots runAsNonRoot: true for $$pods hardened pod specs"; exit 1; }
+	helm template sentinel $(CHART) $(CHART_SET) | kubeconform -strict -ignore-missing-schemas -summary
+	helm template sentinel $(CHART) $(CHART_SET) -f k8s/overlays/dev/values.yaml | kubeconform -strict -ignore-missing-schemas -summary
+	helm template sentinel $(CHART) $(CHART_SET) --set geoserver.enabled=true --set ingestService.serviceMonitor.enabled=true | kubeconform -strict -ignore-missing-schemas -summary
 
 # ----------------------------------------------------------------------------
 # Cleanup
