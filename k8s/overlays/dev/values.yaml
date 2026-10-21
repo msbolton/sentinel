@@ -40,10 +40,8 @@ ingestListener:
 
 web:
   replicaCount: 1
-  ingress:
-    enabled: true
-    hosts:
-      - host: sentinel.dev.local
-        paths:
-          - path: /
-            pathType: Prefix
+
+# A dev cluster has no public name for Let's Encrypt: sign with the local CA of
+# k8s/cluster/selfsigned-issuer.yaml.
+ingress:
+  clusterIssuer: sentinel-local-ca

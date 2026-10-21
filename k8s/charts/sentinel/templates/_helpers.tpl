@@ -179,6 +179,16 @@ generates.
 {{- end }}
 
 {{/*
+The Secret with Keycloak's bootstrap passwords (keys admin-password, for the
+master realm's admin, and sentinel-admin-password, for the sentinel realm's
+bootstrap user): keycloak.existingSecret, else the <fullname>-keycloak the
+chart generates.
+*/}}
+{{- define "sentinel.keycloakSecret" -}}
+{{ default (printf "%s-keycloak" (include "sentinel.fullname" .)) .Values.keycloak.existingSecret }}
+{{- end }}
+
+{{/*
 The Secret with the SMTP password (key password): mail.existingSecret, else
 the <fullname>-mail the chart renders from mail.password. Empty when neither
 is set: the gateway then authenticates to the relay with no password.

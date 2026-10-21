@@ -1,0 +1,325 @@
+{{- if .Values.keycloak.enabled }}
+{{- $name := printf "%s-keycloak" (include "sentinel.fullname" .) }}
+{{- $v := .Values.keycloak }}
+{{- $publicUrl := include "sentinel.publicUrl" . }}
+{{- $mailSecret := include "sentinel.mailSecret" . }}
+{{- $reserved := list "KC_DB" "KC_DB_URL" "KC_DB_USERNAME" "KC_DB_PASSWORD" "KC_HTTP_RELATIVE_PATH" "KC_HOSTNAME" "KC_HOSTNAME_ADMIN" "KC_HOSTNAME_BACKCHANNEL_DYNAMIC" "KC_PROXY_HEADERS" "KC_HTTP_ENABLED" "KC_HEALTH_ENABLED" "KC_CACHE" "KC_BOOTSTRAP_ADMIN_USERNAME" "KC_BOOTSTRAP_ADMIN_PASSWORD" "SENTINEL_SERVICE_CLIENT_SECRET" "SENTINEL_ADMIN_PASSWORD" "SENTINEL_SMTP_PASSWORD" }}
+{{- if not $v.existingSecret }}
+# The bootstrap passwords, generated once and read back on every upgrade.
+# Keycloak uses them on its first start only (the master realm's admin, and the
+# realm import), so resource-policy keep leaves the Secret behind on helm
+# uninstall: a reinstall onto the kept database still shows the passwords it
+# was created with.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "keycloak" "tier" "data") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+stringData:
+  admin-password: {{ include "sentinel.secretValue" (dict "ctx" $ "name" $name "key" "admin-password") | quote }}
+  sentinel-admin-password: {{ include "sentinel.secretValue" (dict "ctx" $ "name" $name "key" "sentinel-admin-password") | quote }}
+---
+{{- end }}
+# The realms imported on Keycloak's first start. The sentinel realm's secrets
+# are ${ENV} placeholders that Keycloak resolves from the container's
+# environment while importing, so this ConfigMap holds none.
+#
+# master-realm.json (the file name is what makes Keycloak import it in place
+# of creating its default master realm) is files/keycloak-master-realm.json,
+# Keycloak's default master realm (display name, and a user profile that
+# requires no e-mail or name, so the bootstrap admin can sign in), with the
+# admin console's URL as the frontend URL: the console signs in through the
+# master realm, whose pages the Ingress does not route, so it must find them
+# at the port-forward too.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-realm
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "keycloak" "tier" "data") | nindent 4 }}
+data:
+  master-realm.json: |
+    {{- $master := .Files.Get "files/keycloak-master-realm.json" | fromJson }}
+    {{- $_ := set $master.attributes "frontendUrl" $v.adminUrl }}
+    {{- toPrettyJson $master | nindent 4 }}
+  sentinel-realm.json: |
+    {{- include "sentinel.keycloakRealm" . | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "keycloak" "tier" "data") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+  selector:
+    {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "keycloak") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "keycloak" "tier" "data") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "keycloak") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sentinel.podLabels" (dict "ctx" $ "component" "keycloak") | nindent 8 }}
+    spec:
+      {{- with $v.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "sentinel.imagePullSecrets" .) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      initContainers:
+        # Keycloak gives up when the database is not there at start; wait for
+        # it with the schema Job's image, which has pg_isready.
+        - name: wait-for-postgresql
+          image: {{ .Values.dbSchema.image | quote }}
+          imagePullPolicy: IfNotPresent
+          {{- with $v.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - until pg_isready -h {{ include "sentinel.postgresHost" . }} -p 5432 -U keycloak -d keycloak; do sleep 2; done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      containers:
+        - name: keycloak
+          image: "{{ $v.image.repository }}:{{ $v.image.tag }}"
+          imagePullPolicy: {{ $v.image.pullPolicy | default "IfNotPresent" }}
+          {{- with $v.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # Production mode. The realm import skips a realm that exists, so
+          # only the first start imports it.
+          args: ["start", "--import-realm"]
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+          env:
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL
+              value: jdbc:postgresql://{{ include "sentinel.postgresHost" . }}:5432/keycloak
+            - name: KC_DB_USERNAME
+              value: keycloak
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.postgresSecret" . }}
+                  key: keycloak-password
+            # Served under /auth, at the public URL: tokens carry
+            # https://<host>/auth/realms/sentinel as their issuer, the one the
+            # gateway accepts. Backchannel requests (the gateway's, from inside
+            # the cluster) are answered at the URL they came to.
+            - name: KC_HTTP_RELATIVE_PATH
+              value: /auth
+            - name: KC_HOSTNAME
+              value: {{ printf "%s/auth" $publicUrl | quote }}
+            - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
+              value: "true"
+            # The admin console, through kubectl port-forward (and the master
+            # realm's frontend URL, master-realm.json above).
+            - name: KC_HOSTNAME_ADMIN
+              value: {{ $v.adminUrl | quote }}
+            # TLS ends at the Ingress, which forwards plain HTTP with the
+            # X-Forwarded-* headers.
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            # One replica: no cluster to discover (sessions are kept in the
+            # database).
+            - name: KC_CACHE
+              value: local
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              value: {{ $v.adminUsername | quote }}
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.keycloakSecret" . }}
+                  key: admin-password
+            # The realm's placeholders.
+            - name: SENTINEL_SERVICE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.keycloakClientsSecret" . }}
+                  key: service-client-secret
+            - name: SENTINEL_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.keycloakSecret" . }}
+                  key: sentinel-admin-password
+            {{- if and .Values.mail.host $mailSecret }}
+            - name: SENTINEL_SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $mailSecret }}
+                  key: password
+            {{- end }}
+            {{- with (include "sentinel.extraEnv" (dict "env" $v.extraEnv "reserved" $reserved "what" "keycloak.extraEnv")) }}
+            {{- . | trim | nindent 12 }}
+            {{- end }}
+          # Health is on the management port, which the Service does not
+          # expose, under the relative path. The first start builds Keycloak
+          # and creates the schema: allow it 5 minutes.
+          startupProbe:
+            httpGet:
+              path: /auth/health/started
+              port: management
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /auth/health/ready
+              port: management
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /auth/health/live
+              port: management
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          volumeMounts:
+            - name: realm
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+      volumes:
+        - name: realm
+          configMap:
+            name: {{ $name }}-realm
+{{- end }}
+
+{{/*
+The sentinel realm for this deployment: config/keycloak/sentinel-realm.json
+(the dev realm, linked into the chart as files/keycloak) with
+- the users reduced to the service accounts (sentinel-service's also gets
+  view-realm, which approving a registration needs), plus the bootstrap user
+  sentinel-admin (the roles of the dev admin, a password that is not temporary:
+  the client signs in with the password grant, which cannot change it);
+- sentinel-web's redirect URIs, web origins and post-logout redirect URIs on
+  https://<global.host>;
+- sentinel-service's secret, the bootstrap password and the SMTP password as
+  ${ENV} placeholders;
+- the VERIFY_EMAIL and UPDATE_PASSWORD required actions, which the realm file
+  does not list;
+- smtpServer from mail (none without mail.host).
+*/}}
+{{- define "sentinel.keycloakRealm" -}}
+{{- $realm := .Files.Get "files/keycloak/sentinel-realm.json" | fromJson }}
+{{- $publicUrl := include "sentinel.publicUrl" . }}
+{{- $host := .Values.global.host }}
+{{- $u := .Values.keycloak.bootstrapUser }}
+{{- $users := list }}
+{{- range $realm.users }}
+{{- if .serviceAccountClientId }}
+{{- if eq .serviceAccountClientId "sentinel-service" }}
+{{- /* Approving a registration reads the realm roles (GET /roles), which needs view-realm beside manage-users. */}}
+{{- $clientRoles := .clientRoles | default dict }}
+{{- $rm := get $clientRoles "realm-management" | default list }}
+{{- $_ := set $clientRoles "realm-management" (append $rm "view-realm" | uniq) }}
+{{- $_ := set . "clientRoles" $clientRoles }}
+{{- end }}
+{{- $users = append $users . }}
+{{- end }}
+{{- end }}
+{{- $admin := dict
+  "username" "sentinel-admin"
+  "enabled" true
+  "email" ($u.email | default (printf "sentinel-admin@%s" $host))
+  "emailVerified" true
+  "firstName" $u.firstName
+  "lastName" $u.lastName
+  "credentials" (list (dict "type" "password" "value" "${SENTINEL_ADMIN_PASSWORD}" "temporary" false))
+  "realmRoles" (list "sentinel-admin" "sentinel-analyst" "classification-ts")
+}}
+{{- $_ := set $realm "users" (append $users $admin) }}
+{{- range $realm.clients }}
+{{- if eq .clientId "sentinel-web" }}
+{{- $_ := set . "redirectUris" (list (printf "%s/*" $publicUrl)) }}
+{{- $_ := set . "webOrigins" (list $publicUrl) }}
+{{- $attrs := .attributes | default dict }}
+{{- $_ := set $attrs "post.logout.redirect.uris" (printf "%s/*" $publicUrl) }}
+{{- $_ := set . "attributes" $attrs }}
+{{- else if eq .clientId "sentinel-service" }}
+{{- $_ := set . "secret" "${SENTINEL_SERVICE_CLIENT_SECRET}" }}
+{{- end }}
+{{- end }}
+{{- $actions := $realm.requiredActions | default list }}
+{{- $aliases := list }}
+{{- range $actions }}
+{{- $aliases = append $aliases .alias }}
+{{- end }}
+{{- range list (dict "alias" "VERIFY_EMAIL" "name" "Verify Email" "priority" 50) (dict "alias" "UPDATE_PASSWORD" "name" "Update Password" "priority" 30) }}
+{{- if not (has .alias $aliases) }}
+{{- $actions = append $actions (dict "alias" .alias "name" .name "providerId" .alias "enabled" true "defaultAction" false "priority" .priority) }}
+{{- end }}
+{{- end }}
+{{- $_ := set $realm "requiredActions" $actions }}
+{{- with .Values.mail }}
+{{- if .host }}
+{{- /* mail.from is an address with an optional display name, as the gateway takes it; Keycloak wants them apart. */}}
+{{- $from := .from | default (printf "SENTINEL <sentinel@%s>" $host) }}
+{{- $address := $from | trim }}
+{{- $display := "" }}
+{{- with regexFind "<[^<>]+>" $from }}
+{{- $address = . | trimPrefix "<" | trimSuffix ">" }}
+{{- $display = regexReplaceAll "<[^<>]*>" $from "" | trim | trimAll "\"" }}
+{{- end }}
+{{- $smtp := dict
+  "host" .host
+  "port" (toString .port)
+  "from" $address
+  "ssl" (eq .tls "tls" | toString)
+  "starttls" (eq .tls "starttls" | toString)
+  "auth" (not (empty .username) | toString)
+}}
+{{- with $display }}
+{{- $_ := set $smtp "fromDisplayName" . }}
+{{- end }}
+{{- with .username }}
+{{- $_ := set $smtp "user" . }}
+{{- end }}
+{{- if $mailSecret := include "sentinel.mailSecret" $ }}
+{{- $_ := set $smtp "password" "${SENTINEL_SMTP_PASSWORD}" }}
+{{- end }}
+{{- $_ := set $realm "smtpServer" $smtp }}
+{{- else }}
+{{- $_ := unset $realm "smtpServer" }}
+{{- end }}
+{{- end }}
+{{- toPrettyJson $realm }}
+{{- end }}

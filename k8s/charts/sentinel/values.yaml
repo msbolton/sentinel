@@ -63,10 +63,12 @@ apiGateway:
     capabilities:
       drop: [ALL]
 
-# Registration mail: the gateway sends the account e-mails through this SMTP
-# relay. With host empty the chart sets no MAIL_* at all and registration
-# e-mails fail until a relay is configured (the gateway would otherwise try
-# localhost:1025, the dev mailhog).
+# Registration mail: the gateway (rejection notices) and Keycloak (the
+# verification e-mail sent on approval, password resets) send through this SMTP
+# relay. With host empty the chart sets no MAIL_* at all and the realm has no
+# SMTP server, so registration e-mails fail until a relay is configured (the
+# gateway would otherwise try localhost:1025, the dev mailhog). Keycloak takes
+# these settings at its first start only (keycloak below).
 mail:
   host: ""
   port: 587
@@ -81,15 +83,6 @@ mail:
   # the key password in existingSecret, which wins over password.
   password: ""
   existingSecret: ""
-
-keycloak:
-  # Secret with the key service-client-secret: the client secret of Keycloak's
-  # sentinel-service client, which the gateway uses to create accounts.
-  # Empty: the chart generates <fullname>-keycloak-clients with 32 random
-  # characters, keeps it across upgrades and leaves it behind on helm uninstall
-  # (helm.sh/resource-policy: keep). Keycloak's sentinel-service client must
-  # carry the same secret.
-  clientsExistingSecret: ""
 
 # Shared by the six services of templates/services.yaml (entity, track, search,
 # link-analysis, alert and analytics). Each image runs as 10001 and writes no
@@ -356,8 +349,8 @@ analyticsService:
 
 # The Angular client, served by unprivileged nginx (user 101) on 4200. The
 # chart replaces the image's default.conf, whose proxy blocks name Compose
-# hosts, with one that serves the static site only: the Ingress routes /api,
-# /ws and /auth.
+# hosts, with one that serves the static site only (and 404 under /auth): the
+# Ingress routes /api, /ws and Keycloak's public paths.
 web:
   enabled: true
   replicaCount: 2
@@ -398,21 +391,31 @@ web:
     readOnlyRootFilesystem: true
     capabilities:
       drop: [ALL]
-  ingress:
-    enabled: true
-    className: nginx
-    hosts:
-      - host: sentinel.local
-        paths:
-          - path: /
-            pathType: Prefix
-    tls: []
+
+# One Ingress for https://<global.host>: /api and /ws to the gateway,
+# /auth/realms/sentinel and /auth/resources to Keycloak, everything else to
+# the web client. Keycloak's admin console, its master realm and the rest of
+# /auth are not routed (the web client answers 404 there): reach the console
+# with kubectl port-forward (keycloak below).
+ingress:
+  enabled: true
+  # IngressClass. Empty: the cluster's default class (traefik on k3s).
+  className: ""
+  # cert-manager ClusterIssuer for the certificate, from k8s/cluster/
+  # (letsencrypt-staging, letsencrypt-prod, sentinel-local-ca for k3d). Empty
+  # adds no issuer annotation: provide the TLS Secret yourself.
+  clusterIssuer: letsencrypt-prod
+  # Secret holding the certificate. Empty: <fullname>-tls.
+  tlsSecretName: ""
+  # More annotations, for the controller (Traefik middlewares, ...).
+  annotations: {}
 
 # -- Infrastructure --
 # The data tier (PostgreSQL, Kafka, OpenSearch, Keycloak) is added to this
-# chart as templates with their own values; none comes from a subchart. Each is
-# a one-replica StatefulSet with a volume from global.storageClass: the chart
-# targets a single node, where backups matter more than failover.
+# chart as templates with their own values; none comes from a subchart.
+# PostgreSQL, Kafka and OpenSearch are one-replica StatefulSets with a volume
+# from global.storageClass, and Keycloak keeps its state in PostgreSQL: the
+# chart targets a single node, where backups matter more than failover.
 
 # PostgreSQL 16 with PostGIS 3.4, the image Compose runs. Its first start, on an
 # empty volume, runs an initdb script as the superuser postgres: it creates the
@@ -461,6 +464,74 @@ postgresql:
   containerSecurityContext:
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+
+# Keycloak 26 in production mode behind the Ingress, at https://<global.host>/auth,
+# on the keycloak database of the chart's PostgreSQL. On its first start it
+# imports the sentinel realm, rendered from config/keycloak/sentinel-realm.json
+# for this deployment: the dev users are dropped, the bootstrap user
+# sentinel-admin is added, sentinel-web's redirect URIs name global.host, and
+# the mail settings come from mail above. Later starts skip the import, so a
+# change to these values after the first start must be made in the admin
+# console as well. The admin console is not routed by the Ingress:
+#   kubectl port-forward svc/<fullname>-keycloak 8080
+# then http://localhost:8080/auth/admin/ (the admin hostname below).
+keycloak:
+  enabled: true
+  image:
+    repository: quay.io/keycloak/keycloak
+    tag: "26.8.1"
+    pullPolicy: IfNotPresent
+  # The master realm's bootstrap admin (KC_BOOTSTRAP_ADMIN_USERNAME), for the
+  # admin console. Keycloak creates it on its first start only.
+  adminUsername: admin
+  # The URL the admin console is opened at, the port-forward above: the
+  # console's address (KC_HOSTNAME_ADMIN) and the master realm's frontend URL,
+  # since the console signs in through the master realm, which the Ingress
+  # does not route. First start only, like the realm.
+  adminUrl: http://localhost:8080/auth
+  # The sentinel realm's bootstrap user: sentinel-admin, with the roles
+  # sentinel-admin, sentinel-analyst and classification-ts. Empty email:
+  # sentinel-admin@<global.host>.
+  bootstrapUser:
+    email: ""
+    firstName: Sentinel
+    lastName: Administrator
+  # Secret with the keys admin-password (the master realm's admin) and
+  # sentinel-admin-password (the bootstrap user). Empty: the chart generates
+  # <fullname>-keycloak with 32 random characters each, keeps it across
+  # upgrades and leaves it behind on helm uninstall. Both passwords are set on
+  # the first start only; change them in the admin console afterwards.
+  existingSecret: ""
+  # Secret with the key service-client-secret: the client secret of Keycloak's
+  # sentinel-service client, which the gateway uses to create accounts.
+  # Empty: the chart generates <fullname>-keycloak-clients with 32 random
+  # characters, keeps it across upgrades and leaves it behind on helm uninstall
+  # (helm.sh/resource-policy: keep). The imported realm gives the
+  # sentinel-service client the same secret.
+  clientsExistingSecret: ""
+  # Plain environment values the chart does not set itself, as NAME: value
+  # (KC_LOG_LEVEL, ...). A name the chart sets is an error.
+  extraEnv: {}
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      cpu: 2000m
+      memory: 1536Mi
+  # The image's keycloak user (1000; its files belong to group 0).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  # Not read-only: the first start of an image builds Keycloak for the
+  # database and features configured here, under /opt/keycloak.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
     capabilities:
       drop: [ALL]
 
