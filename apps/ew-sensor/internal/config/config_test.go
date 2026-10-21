@@ -692,3 +692,20 @@ func TestHeartbeatIntervalFlag(t *testing.T) {
 		t.Fatalf("zero value = %d / %v", s.HeartbeatSeconds(), s.HeartbeatEvery())
 	}
 }
+
+func TestVerboseFlagAndYAML(t *testing.T) {
+	base := []string{"--addr", "h:1", "--token", "t", "--insecure", "--lat", "1", "--lon", "2"}
+	if mustLoad(t, base, nil).Verbose {
+		t.Error("verbose must default to false")
+	}
+	if !mustLoad(t, append([]string{"--verbose"}, base...), nil).Verbose {
+		t.Error("--verbose did not set Verbose")
+	}
+	y := writeYAML(t, "verbose: true\n")
+	if !mustLoad(t, append([]string{"--config", y}, base...), nil).Verbose {
+		t.Error("YAML verbose: true did not set Verbose")
+	}
+	if mustLoad(t, append([]string{"--config", y, "--verbose=false"}, base...), nil).Verbose {
+		t.Error("--verbose=false must override the YAML")
+	}
+}

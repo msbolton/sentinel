@@ -1139,3 +1139,58 @@ func TestRateWarningCountsObservationsOnly(t *testing.T) {
 		t.Fatalf("warned of a rate the limit allows:\n%s", h.logs.String())
 	}
 }
+
+func TestVerboseLogsEverySendAndAck(t *testing.T) {
+	f := newFake()
+	h := newHarness(t, f, func(c *config.Config, _ *Options) { c.Verbose = true })
+	h.start()
+	f.until(t, "a heartbeat", func(g got) bool { return isState(g.r) })
+	obs, _ := f.until(t, "an observation", func(g got) bool { return g.r.GetObservation() != nil })
+	select {
+	case <-h.acks:
+	case <-time.After(waitTimeout):
+		t.Fatal("no ack")
+	}
+	logs := h.logs.String()
+	id := obs.r.GetObservation().GetSourceEntityId()
+	var sendObs, sendHB, ack bool
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, "msg=send ") {
+			sendObs = sendObs || (strings.Contains(line, "kind=observation") && strings.Contains(line, "sourceEntityId")) && strings.Contains(line, id)
+			sendHB = sendHB || strings.Contains(line, "kind=heartbeat")
+		}
+		ack = ack || (strings.Contains(line, "msg=ack ") && strings.Contains(line, "status=ACK_STATUS_OK"))
+	}
+	if !sendObs || !sendHB || !ack {
+		t.Fatalf("obs=%v heartbeat=%v ack=%v in:\n%s", sendObs, sendHB, ack, logs)
+	}
+	t.Log(firstLine(logs, "msg=send "))
+	t.Log(firstLine(logs, "msg=ack "))
+}
+
+func firstLine(s, sub string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if strings.Contains(l, sub) {
+			return l
+		}
+	}
+	return ""
+}
+
+func TestNotVerboseLogsNoSendOrAck(t *testing.T) {
+	f := newFake()
+	buf := &syncBuf{}
+	h := newHarness(t, f, func(_ *config.Config, o *Options) {
+		o.Logger = slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	})
+	h.start()
+	f.until(t, "an observation", func(g got) bool { return g.r.GetObservation() != nil })
+	select {
+	case <-h.acks:
+	case <-time.After(waitTimeout):
+		t.Fatal("no ack")
+	}
+	if l := buf.String(); strings.Contains(l, "msg=send") || strings.Contains(l, "msg=ack") {
+		t.Fatalf("a non-verbose run logged sends or acks:\n%s", l)
+	}
+}

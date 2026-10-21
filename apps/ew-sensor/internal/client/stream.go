@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	ingestv1 "github.com/sentinel/proto-gen/sentinel/ingest/v1"
@@ -291,6 +293,15 @@ func (l *loop) send(r *ingestv1.Report, retried bool) {
 		}
 	}
 	l.c.track(a.gen, r, retried)
+	if l.c.log.Enabled(context.Background(), slog.LevelDebug) {
+		kind := "observation"
+		if r.GetEmplacementState() != nil {
+			kind = "heartbeat"
+		}
+		l.c.log.Debug("send", "client_ref", r.ClientRef, "kind", kind,
+			"emplacement", r.EmplacementId, "retried", retried,
+			"body", protojson.MarshalOptions{}.Format(r))
+	}
 	if err := a.stream.Send(req); err != nil {
 		// The stream's status comes from its ack reader (Send returns io.EOF).
 		a.broken = true
@@ -415,12 +426,11 @@ func (c *Client) handleAck(a *activeStream, ack *ingestv1.Ack) {
 		c.stats.Rejected["unspecified"]++
 	}
 	c.mu.Unlock()
-	switch {
-	case warn != "":
+	if warn != "" {
 		c.log.Warn(warn, "client_ref", ref, "status", ack.GetStatus().String(), "reason", reason)
-	case ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK:
-		c.log.Debug("report not accepted", "client_ref", ref, "status", ack.GetStatus().String(), "reason", reason)
 	}
+	c.log.Debug("ack", "client_ref", ref, "status", ack.GetStatus().String(), "reason", reason,
+		"emplacement", ack.GetEmplacementId())
 	if c.opts.OnAck != nil {
 		c.opts.OnAck(ack)
 	}
