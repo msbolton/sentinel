@@ -253,18 +253,38 @@ db-seed: ## Seed database with sample entities, a geofence rule, and locations
 # the web client, both ingest Deployments, the schema and topics Jobs and the data tier) must each
 # render runAsNonRoot: true; add a template to RESTRICTED when it is hardened too.
 CHART := k8s/charts/sentinel
-CHART_SET := --set ingestService.serviceToken=lint --set global.host=sentinel.example.com
+CHART_HOST := sentinel.example.com
+CHART_SET := --set ingestService.serviceToken=lint --set global.host=$(CHART_HOST)
 DEV_VALUES := k8s/overlays/dev/values.yaml
 RESTRICTED := --show-only templates/api-gateway-deployment.yaml --show-only templates/services.yaml --show-only templates/web.yaml \
 	--show-only templates/ingest-service-deployment.yaml --show-only templates/ingest-listener-deployment.yaml --show-only templates/db-schema-job.yaml \
-	--show-only templates/postgresql.yaml --show-only templates/kafka.yaml --show-only templates/kafka-topics-job.yaml --show-only templates/opensearch.yaml
+	--show-only templates/postgresql.yaml --show-only templates/kafka.yaml --show-only templates/kafka-topics-job.yaml --show-only templates/opensearch.yaml \
+	--show-only templates/keycloak.yaml
 DATA_TIER_ONLY := --set apiGateway.enabled=false --set ingestService.enabled=false --set ingestListener.enabled=false --set web.enabled=false \
 	--set entityService.enabled=false --set trackService.enabled=false --set searchService.enabled=false \
 	--set linkAnalysisService.enabled=false --set alertService.enabled=false --set analyticsService.enabled=false
 # The optional parts of the application tier: registration mail with a password, the web client's
-# map keys and the services' ServiceMonitors.
+# map keys, the services' ServiceMonitors and the Ingress's class and annotations.
 APPS_OPTIONAL := --set mail.host=smtp.example.com --set mail.username=sentinel --set mail.password=lint \
-	--set web.mapKeys.googleMapsApiKey=lint --set appServices.serviceMonitor.enabled=true
+	--set web.mapKeys.googleMapsApiKey=lint --set appServices.serviceMonitor.enabled=true \
+	--set ingress.className=traefik --set ingress.annotations.sentinel-lint=lint
+
+# The Keycloak realm the chart renders from the dev realm file: no dev user (only the service account
+# and sentinel-admin), no -dev secret, every secret a ${ENV} placeholder (the SMTP password too, when
+# mail has one), and sentinel-web's redirect URIs and web origins on https://$(CHART_HOST) only.
+define chart_realm_check
+	@realm="$$(helm template sentinel $(CHART) $(CHART_SET) $(1) --show-only templates/keycloak.yaml | sed -n '/^  sentinel-realm.json: |$$/,/^---$$/p')"; \
+	test -n "$$realm" || { echo "chart-lint: no realm rendered ($(1))"; exit 1; }; \
+	users=$$(printf '%s\n' "$$realm" | sed -nE 's/^ *"username": "([^"]*)".*/\1/p' | sort | tr '\n' ' '); \
+	test "$$users" = "sentinel-admin service-account-sentinel-service " || { echo "chart-lint: realm users are $$users"; exit 1; }; \
+	! printf '%s\n' "$$realm" | grep -n -- '-dev"' || { echo "chart-lint: the realm holds a -dev value"; exit 1; }; \
+	printf '%s\n' "$$realm" | grep -q '"secret": "$${SENTINEL_SERVICE_CLIENT_SECRET}"' || { echo "chart-lint: sentinel-service's secret is not the placeholder"; exit 1; }; \
+	printf '%s\n' "$$realm" | grep -q '"value": "$${SENTINEL_ADMIN_PASSWORD}"' || { echo "chart-lint: sentinel-admin's password is not the placeholder"; exit 1; }; \
+	! printf '%s\n' "$$realm" | grep -n '"password": "[^$$]' || { echo "chart-lint: the realm holds a password"; exit 1; }; \
+	uris=$$(printf '%s\n' "$$realm" | awk '/"(redirectUris|webOrigins)": \[/ {on=1; next} on && /\]/ {on=0} on'); \
+	test -n "$$uris" || { echo "chart-lint: sentinel-web has no redirect URIs"; exit 1; }; \
+	! printf '%s\n' "$$uris" | grep -vE '^ *"https://$(subst .,\.,$(CHART_HOST))(/\*)?",?$$' || { echo "chart-lint: a redirect URI or web origin is not on https://$(CHART_HOST)"; exit 1; }
+endef
 
 # kubeconform on one render. The render goes to a variable first, so a failing helm template fails
 # the target (a pipe would hide it), and a render with no resources is an error too.
@@ -274,11 +294,13 @@ define chart_validate
 	printf '%s\n' "$$out" | kubeconform -strict -ignore-missing-schemas -summary
 endef
 
-chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics script and the initdb SQL and runAsNonRoot into every hardened pod spec, and validate the output with kubeconform (needs helm and kubeconform)
+chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics script, the initdb SQL, a production Keycloak realm and runAsNonRoot into every hardened pod spec, and validate the output with kubeconform (needs helm and kubeconform)
 	helm lint $(CHART) $(CHART_SET)
 	helm template sentinel $(CHART) $(CHART_SET) | grep -q '^  70_feeds\.sql: '
 	helm template sentinel $(CHART) $(CHART_SET) | grep -q 'observations\.raw|24|'
 	helm template sentinel $(CHART) $(CHART_SET) | grep -q 'CREATE EXTENSION IF NOT EXISTS postgis_topology;'
+	$(call chart_realm_check,)
+	$(call chart_realm_check,$(APPS_OPTIONAL))
 	@restricted="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestListener.enabled=true $(RESTRICTED))"; \
 	pods=$$(printf '%s\n' "$$restricted" | grep -cE '^ +containers:'); \
 	roots=$$(printf '%s\n' "$$restricted" | grep -c 'runAsNonRoot: true'); \
