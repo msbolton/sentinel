@@ -248,10 +248,11 @@ db-seed: ## Seed database with sample entities, a geofence rule, and locations
 # ----------------------------------------------------------------------------
 
 # Everything the chart renders must validate (kubeconform skips the CRDs it has no schema for), with
-# the defaults, the dev overlay, the optional parts switched on, the data tier alone and the apps
-# against an external database. The pod specs of the hardened templates (the gateway, the services,
-# the web client, both ingest Deployments, the schema and topics Jobs and the data tier) must each
-# render runAsNonRoot: true; add a template to RESTRICTED when it is hardened too.
+# the defaults, the dev overlay, the optional parts switched on, the data tier alone, the apps
+# against an external database and the NetworkPolicies and backups switched off. The pod specs of the
+# hardened templates (the gateway, the services, the web client, both ingest Deployments, the schema
+# and topics Jobs, the data tier and the backups) must each render runAsNonRoot: true; add a template
+# to RESTRICTED when it is hardened too.
 CHART := k8s/charts/sentinel
 CHART_HOST := sentinel.example.com
 CHART_SET := --set ingestService.serviceToken=lint --set global.host=$(CHART_HOST)
@@ -259,7 +260,7 @@ DEV_VALUES := k8s/overlays/dev/values.yaml
 RESTRICTED := --show-only templates/api-gateway-deployment.yaml --show-only templates/services.yaml --show-only templates/web.yaml \
 	--show-only templates/ingest-service-deployment.yaml --show-only templates/ingest-listener-deployment.yaml --show-only templates/db-schema-job.yaml \
 	--show-only templates/postgresql.yaml --show-only templates/kafka.yaml --show-only templates/kafka-topics-job.yaml --show-only templates/opensearch.yaml \
-	--show-only templates/keycloak.yaml
+	--show-only templates/keycloak.yaml --show-only templates/backup-cronjob.yaml
 DATA_TIER_ONLY := --set apiGateway.enabled=false --set ingestService.enabled=false --set ingestListener.enabled=false --set web.enabled=false \
 	--set entityService.enabled=false --set trackService.enabled=false --set searchService.enabled=false \
 	--set linkAnalysisService.enabled=false --set alertService.enabled=false --set analyticsService.enabled=false
@@ -268,6 +269,12 @@ DATA_TIER_ONLY := --set apiGateway.enabled=false --set ingestService.enabled=fal
 APPS_OPTIONAL := --set mail.host=smtp.example.com --set mail.username=sentinel --set mail.password=lint \
 	--set web.mapKeys.googleMapsApiKey=lint --set appServices.serviceMonitor.enabled=true \
 	--set ingress.className=traefik --set ingress.annotations.sentinel-lint=lint
+# The optional parts of the NetworkPolicies and backups: the listener's node CIDRs, GeoServer's peers,
+# the metrics peer and an rclone upload with a time zone.
+NETPOL_BACKUP_OPTIONAL := --set networkPolicy.hostNetworkCIDRs={10.42.0.1/32} --set geoserver.enabled=true \
+	--set networkPolicy.geoserver.from[0].ipBlock.cidr=192.0.2.0/24 --set ingestService.serviceMonitor.enabled=true \
+	--set backup.rclone.enabled=true --set backup.rclone.existingSecret=lint --set backup.rclone.remote=lint:sentinel \
+	--set backup.timeZone=Etc/UTC
 
 # The Keycloak realm the chart renders from the dev realm file: no dev user (only the service account
 # and sentinel-admin), no -dev secret, every secret a ${ENV} placeholder (the SMTP password too, when
@@ -294,7 +301,7 @@ define chart_validate
 	printf '%s\n' "$$out" | kubeconform -strict -ignore-missing-schemas -summary
 endef
 
-chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics script, the initdb SQL, a production Keycloak realm and runAsNonRoot into every hardened pod spec, and validate the output with kubeconform (needs helm and kubeconform)
+chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics script, the initdb SQL, a production Keycloak realm, runAsNonRoot in every hardened pod spec and the listener's NetworkPolicy rule, and validate the output with kubeconform (needs helm and kubeconform)
 	helm lint $(CHART) $(CHART_SET)
 	helm template sentinel $(CHART) $(CHART_SET) | grep -q '^  70_feeds\.sql: '
 	helm template sentinel $(CHART) $(CHART_SET) | grep -q 'observations\.raw|24|'
@@ -311,6 +318,14 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics 
 	$(call chart_validate,$(APPS_OPTIONAL))
 	$(call chart_validate,$(DATA_TIER_ONLY))
 	$(call chart_validate,--set postgresql.existingSecret=sentinel-db --set postgresql.enabled=false --set kafka.enabled=false --set opensearch.enabled=false)
+	$(call chart_validate,$(NETPOL_BACKUP_OPTIONAL))
+	$(call chart_validate,--set networkPolicy.enabled=false --set backup.enabled=false)
+	@# The listener's rule: with the listener on and no CIDRs PostgreSQL has no from (open in the
+	@# cluster); with CIDRs they reach both the PostgreSQL and the Kafka policy.
+	@np="$$(helm template sentinel $(CHART) $(CHART_SET) --show-only templates/networkpolicies.yaml)"; \
+	! printf '%s\n' "$$np" | awk '/name: sentinel-postgresql$$/ {p=1} p && /^---/ {exit} p' | grep -q 'from:' || { echo "chart-lint: PostgreSQL is restricted although the listener has no hostNetworkCIDRs"; exit 1; }; \
+	np="$$(helm template sentinel $(CHART) $(CHART_SET) $(NETPOL_BACKUP_OPTIONAL) --show-only templates/networkpolicies.yaml)"; \
+	test "$$(printf '%s\n' "$$np" | grep -c 'cidr: "10.42.0.1/32"')" = 2 || { echo "chart-lint: hostNetworkCIDRs do not reach the PostgreSQL and Kafka policies"; exit 1; }
 
 # ----------------------------------------------------------------------------
 # Cleanup
