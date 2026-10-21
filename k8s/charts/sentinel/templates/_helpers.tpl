@@ -218,3 +218,22 @@ a duplicate name would fail the server-side apply.
   value: {{ $v | quote }}
 {{- end }}
 {{- end }}
+
+{{/*
+The head of a NetworkPolicy for one workload's pods, named
+<fullname>-<component>, for the ingress rules that follow it:
+  include "sentinel.networkPolicyMeta" (dict "ctx" $ "component" "web")
+*/}}
+{{- define "sentinel.networkPolicyMeta" -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "sentinel.fullname" .ctx }}-{{ .component }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" .ctx "component" .component) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "sentinel.selectorLabels" (dict "ctx" .ctx "component" .component) | nindent 6 }}
+  policyTypes: [Ingress]
+{{- end }}

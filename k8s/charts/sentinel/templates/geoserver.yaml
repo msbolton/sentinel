@@ -132,6 +132,9 @@ metadata:
 spec:
   backoffLimit: 6
   template:
+    metadata:
+      labels:
+        {{- include "sentinel.podLabels" (dict "ctx" $ "component" "geoserver-init") | nindent 8 }}
     spec:
       restartPolicy: OnFailure
       {{- with (include "sentinel.imagePullSecrets" .) }}

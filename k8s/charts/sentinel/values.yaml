@@ -678,6 +678,47 @@ dbSchema:
     capabilities:
       drop: [ALL]
 
+# Ingress NetworkPolicies (templates/networkpolicies.yaml). Every pod of the
+# release accepts only its callers: the web client, the gateway and Keycloak
+# the ingress controller (and Keycloak the gateway); the services behind the
+# gateway the gateway alone; OpenSearch search-service alone; PostgreSQL and
+# Kafka every pod of the namespace plus hostNetworkCIDRs. Egress is not
+# restricted (feeds and mail reach the internet). Needs a CNI that
+# enforces them: k3s's embedded controller (kube-router), Calico, Cilium.
+networkPolicy:
+  enabled: true
+  # The ingress controller's pods, as a namespaceSelector and a podSelector
+  # that must both match. The default is k3s's Traefik. RKE2's ingress-nginx
+  # runs in kube-system (app.kubernetes.io/name: rke2-ingress-nginx), the
+  # upstream chart in ingress-nginx (app.kubernetes.io/name: ingress-nginx);
+  # check with kubectl get pods -A --show-labels.
+  ingressController:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: traefik
+  # The ingest listener runs on the host network, so its connections to
+  # PostgreSQL and Kafka come from a node address, not a pod address: list the
+  # CIDRs they come from (the listener node's address and, for traffic to a pod
+  # on the same node, its pod-network gateway, e.g. 10.42.0.1/32 on k3s). With
+  # the listener enabled and this list empty, PostgreSQL and Kafka accept
+  # anyone inside the cluster.
+  hostNetworkCIDRs: []
+  # Prometheus, for the services whose ServiceMonitor the chart renders
+  # (appServices.serviceMonitor, ingestService.serviceMonitor). The listener's
+  # PodMonitor needs nothing: a hostNetwork pod is not subject to policies.
+  metrics:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: monitoring
+    podSelector: {}
+  # GeoServer (when enabled) accepts these NetworkPolicy peers on 8600, beside
+  # its provisioning Job. Empty: anyone, as without policies.
+  geoserver:
+    from: []
+
 # -- GeoServer (OGC WMS/WFS layers over the PostGIS views; config/geoserver) --
 geoserver:
   enabled: false
