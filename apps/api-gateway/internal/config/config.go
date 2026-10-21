@@ -1,6 +1,9 @@
 package config
 
 import (
+	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -32,6 +35,12 @@ type Config struct {
 	MailHost                    string
 	MailPort                    string
 	MailFrom                    string
+	// MailUsername/MailPassword authenticate to the relay (only over TLS).
+	// MailTLS is starttls, tls or none; empty upgrades only if the relay offers
+	// STARTTLS.
+	MailUsername string
+	MailPassword string
+	MailTLS      string
 
 	// Viewport sync: push the area connected map clients see to every ingest
 	// feed that polls an area of interest, so a remote API is polled only
@@ -58,6 +67,65 @@ type Config struct {
 
 // IsProduction reports whether the gateway runs with production hardening.
 func (c Config) IsProduction() bool { return c.AppEnv == "production" }
+
+// devServiceSecret is the Keycloak service-client secret of the dev realm.
+const devServiceSecret = "sentinel-service-secret-dev"
+
+// Validate returns an error when the configuration must not start the gateway.
+// The production checks only apply under APP_ENV=production.
+func (c Config) Validate() error {
+	switch c.MailTLS {
+	case "", "starttls", "tls", "none":
+	default:
+		return fmt.Errorf("MAIL_TLS must be starttls, tls or none, got %q", c.MailTLS)
+	}
+	if !c.IsProduction() {
+		return nil
+	}
+	if c.KeycloakServiceClientSecret == "" || c.KeycloakServiceClientSecret == devServiceSecret {
+		return errors.New("KEYCLOAK_SERVICE_CLIENT_SECRET must be set to a non-default value in production")
+	}
+	if c.MailTLS == "none" && c.MailPassword != "" {
+		return errors.New("MAIL_TLS=none would send MAIL_PASSWORD in cleartext; use starttls or tls in production")
+	}
+	return nil
+}
+
+// Warnings lists configuration that is valid but suspicious. Under production
+// that is any downstream *_SERVICE_URL still pointing at localhost.
+func (c Config) Warnings() []string {
+	if !c.IsProduction() {
+		return nil
+	}
+	urls := []struct{ name, value string }{
+		{"ENTITY_SERVICE_URL", c.EntityServiceURL},
+		{"TRACK_SERVICE_URL", c.TrackServiceURL},
+		{"SEARCH_SERVICE_URL", c.SearchServiceURL},
+		{"LINK_ANALYSIS_SERVICE_URL", c.LinkAnalysisServiceURL},
+		{"ALERT_SERVICE_URL", c.AlertServiceURL},
+		{"ANALYTICS_SERVICE_URL", c.AnalyticsServiceURL},
+		{"INGEST_SERVICE_URL", c.IngestServiceURL},
+	}
+	var out []string
+	for _, u := range urls {
+		if isLoopbackURL(u.value) {
+			out = append(out, u.name+" points at localhost ("+u.value+"); the service is unreachable from another pod")
+		}
+	}
+	return out
+}
+
+func isLoopbackURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
 
 // JWKSURL returns the Keycloak JWKS endpoint for the configured realm.
 func (c Config) JWKSURL() string {
@@ -99,6 +167,9 @@ func Load() Config {
 		MailHost:                    commonCfg.EnvOrDefault("MAIL_HOST", "localhost"),
 		MailPort:                    commonCfg.EnvOrDefault("MAIL_PORT", "1025"),
 		MailFrom:                    commonCfg.EnvOrDefault("MAIL_FROM", "\"SENTINEL Platform\" <sentinel@sentinel.local>"),
+		MailUsername:                commonCfg.EnvOrDefault("MAIL_USERNAME", ""),
+		MailPassword:                commonCfg.EnvOrDefault("MAIL_PASSWORD", ""),
+		MailTLS:                     strings.ToLower(strings.TrimSpace(commonCfg.EnvOrDefault("MAIL_TLS", ""))),
 
 		ViewportSyncEnabled:   commonCfg.EnvOrDefaultBool("VIEWPORT_SYNC_ENABLED", true),
 		ViewportSyncHeartbeat: time.Duration(commonCfg.EnvOrDefaultInt("VIEWPORT_SYNC_HEARTBEAT_SEC", 30)) * time.Second,

@@ -45,6 +45,12 @@ func main() {
 	if cfg.IsProduction() && cfg.AuthDevBypass {
 		logger.Fatal("AUTH_DEV_BYPASS must not be enabled in production")
 	}
+	if err := cfg.Validate(); err != nil {
+		logger.Fatal("invalid configuration", zap.Error(err))
+	}
+	for _, w := range cfg.Warnings() {
+		logger.Warn(w)
+	}
 
 	// PostgreSQL (locations).
 	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
@@ -89,7 +95,11 @@ func main() {
 		cfg.KeycloakServiceClientID, cfg.KeycloakServiceClientSecret, logger)
 	var mailer registration.Mailer = registration.NopMailer{}
 	if cfg.MailHost != "" {
-		mailer = registration.NewSMTPMailer(cfg.MailHost, cfg.MailPort, cfg.MailFrom)
+		mailer = registration.NewSMTPMailer(cfg.MailHost, cfg.MailPort, cfg.MailFrom, registration.MailOptions{
+			Username: cfg.MailUsername,
+			Password: cfg.MailPassword,
+			TLS:      cfg.MailTLS,
+		})
 	}
 	regHandler := registration.NewHandler(keycloakAdmin, mailer,
 		registration.NewIPLimiter(5, 15*time.Minute), logger)
