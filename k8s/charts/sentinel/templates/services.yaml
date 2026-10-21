@@ -79,7 +79,7 @@ spec:
               value: {{ include "sentinel.publicUrl" $ }}
             {{- if eq .name "search-service" }}
             - name: OPENSEARCH_HOST
-              value: {{ $v.opensearch.host | default (include "sentinel.opensearchHost" $) }}
+              value: {{ $v.opensearch.host | default (include "sentinel.opensearchHost" $) | quote }}
             - name: OPENSEARCH_PORT
               value: {{ $v.opensearch.port | quote }}
             {{- end }}
