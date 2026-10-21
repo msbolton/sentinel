@@ -377,14 +377,25 @@ deploy: ## helm upgrade --install RELEASE (sentinel) into NAMESPACE (sentinel) w
 		-f $(PROD_VALUES) $(foreach v,$(VALUES),-f $(v)) \
 		--set global.imageRegistry=$(REGISTRY) --set global.imageTag=$(TAG) --timeout 20m $(HELM_ARGS)
 
-backup-now: ## Run the release's backup CronJob now as a Job, wait for it and print its log (RELEASE, NAMESPACE)
-	@cj=$$(kubectl -n $(NAMESPACE) get cronjob -l app.kubernetes.io/instance=$(RELEASE),app.kubernetes.io/name=backup -o name); \
+# How long backup-now waits for its Job, in seconds: a little over the Job's own deadline
+# (backup.activeDeadlineSeconds, 3600), after which Kubernetes marks it Failed anyway.
+BACKUP_TIMEOUT ?= 3700
+
+backup-now: ## Run the release's backup CronJob now as a Job, wait for it (BACKUP_TIMEOUT seconds) and print its log (RELEASE, NAMESPACE)
+	@cj=$$(kubectl -n $(NAMESPACE) get cronjob -l app.kubernetes.io/instance=$(RELEASE),app.kubernetes.io/name=backup -o name) || exit 1; \
 	test -n "$$cj" || { echo "no backup CronJob for release $(RELEASE) in namespace $(NAMESPACE)"; exit 1; }; \
 	job=backup-now-$$(date -u +%Y%m%d%H%M%S); \
 	kubectl -n $(NAMESPACE) create job --from=$$cj $$job || exit 1; \
-	echo "waiting for job/$$job ..."; \
-	until state=$$(kubectl -n $(NAMESPACE) get job $$job -o jsonpath='{.status.conditions[?(@.status=="True")].type}'); \
-		case " $$state " in *" Complete "*|*" Failed "*) true;; *) false;; esac; do sleep 5; done; \
+	echo "waiting for job/$$job (up to $(BACKUP_TIMEOUT)s) ..."; \
+	deadline=$$(( $$(date +%s) + $(BACKUP_TIMEOUT) )); errors=0; state=; \
+	while :; do \
+		if state=$$(kubectl -n $(NAMESPACE) get job $$job -o jsonpath='{.status.conditions[?(@.status=="True")].type}'); then errors=0; \
+		else errors=$$((errors + 1)); test $$errors -lt 6 || { echo "job/$$job: kubectl get failed $$errors times in a row"; exit 1; }; fi; \
+		case " $$state " in *" Complete "*|*" Failed "*) break;; esac; \
+		test $$(date +%s) -lt $$deadline || { echo "job/$$job: not finished after $(BACKUP_TIMEOUT)s"; \
+			kubectl -n $(NAMESPACE) logs job/$$job --all-containers --prefix; exit 1; }; \
+		sleep 5; \
+	done; \
 	kubectl -n $(NAMESPACE) logs job/$$job --all-containers --prefix; \
 	case " $$state " in *" Complete "*) echo "job/$$job: Complete";; *) echo "job/$$job: Failed"; exit 1;; esac
 
