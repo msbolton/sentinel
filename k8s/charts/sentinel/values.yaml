@@ -2,17 +2,38 @@
 # Override these for each environment (dev, staging, prod)
 
 global:
+  # Public hostname the deployment is served on, without a scheme. The chart
+  # derives the CORS origin, the token issuers and the Ingress host from it.
+  host: ""
+  # Private registry holding the Sentinel images (make images-push REGISTRY=...):
+  # images are <imageRegistry>/<repository>:<tag>. Empty pulls <repository>:<tag>
+  # from the node's default registry. Third-party images (PostgreSQL, GeoServer,
+  # curl) are never prefixed with it.
   imageRegistry: ""
+  # Tag of every Sentinel image that sets no tag of its own. Empty falls back to
+  # the chart's appVersion.
+  imageTag: ""
+  # Secrets of type kubernetes.io/dockerconfigjson for the private registry, as
+  # [{name: registry-credentials}], added to every pod.
   imagePullSecrets: []
+  # StorageClass of every volume the chart claims (PostgreSQL, Kafka,
+  # OpenSearch, GeoServer). Empty uses the cluster's default class.
   storageClass: ""
+  # DNS domain of the cluster, for the fully qualified Service names the chart
+  # hands out (Kafka's advertised listener).
+  clusterDomain: cluster.local
 
 # -- Application Services --
 
+# The Go gateway: the one entry point of the API and the WebSocket stream. It
+# runs with APP_ENV=production, so it refuses to start without a real service
+# client secret (keycloak below) and never accepts AUTH_DEV_BYPASS.
 apiGateway:
+  enabled: true
   replicaCount: 2
   image:
     repository: sentinel/api-gateway
-    tag: latest
+    tag: ""
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -24,16 +45,80 @@ apiGateway:
     limits:
       cpu: 1000m
       memory: 1Gi
-  env:
-    DB_HOST: "{{ .Release.Name }}-postgresql"
-    KAFKA_BROKERS: "{{ .Release.Name }}-kafka:9092"
-    KEYCLOAK_URL: "http://{{ .Release.Name }}-keycloak"
+  # Plain environment values the chart does not set itself, as NAME: value
+  # (VIEWPORT_SYNC_ENABLED, INTELSKY_BASE_URL, LOG_LEVEL, ...; see
+  # apps/api-gateway/internal/config). A name the chart sets is an error.
+  extraEnv: {}
+  # The image's user 10001, like the services below. The gateway writes no
+  # files, so the root filesystem is read-only.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+
+# Registration mail: the gateway (rejection notices) and Keycloak (the
+# verification e-mail sent on approval, password resets) send through this SMTP
+# relay. With host empty the chart sets no MAIL_* at all and the realm has no
+# SMTP server, so registration e-mails fail until a relay is configured (the
+# gateway would otherwise try localhost:1025, the dev mailhog). Keycloak takes
+# these settings at its first start only (keycloak below).
+mail:
+  host: ""
+  port: 587
+  # Sender address. Empty: SENTINEL <sentinel@<global.host>>.
+  from: ""
+  username: ""
+  # starttls, tls (implicit TLS, usually port 465) or none. none with a
+  # password is refused: it would send the password in cleartext.
+  tls: starttls
+  # SMTP password. The chart stores it in the Secret <fullname>-mail (key
+  # password), rendered only when it is set. Or name an existing Secret with
+  # the key password in existingSecret, which wins over password.
+  password: ""
+  existingSecret: ""
+
+# Shared by the six services of templates/services.yaml (entity, track, search,
+# link-analysis, alert and analytics). Each image runs as 10001 and writes no
+# files.
+appServices:
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+  # Needs the Prometheus Operator CRDs: a ServiceMonitor per service, scraping
+  # its /metrics.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+
+# Each service below gets PORT (service.port), DATABASE_URL (the Postgres
+# Secret's database-url), KAFKA_BROKERS (not link-analysis) and CORS_ORIGIN
+# (https://<global.host>) from the chart. env adds plain values the chart does
+# not set (LOG_LEVEL, ...; a name the chart sets is an error), and
+# secretEnv.existingSecret names a Secret whose keys become environment
+# variables (envFrom).
 
 entityService:
+  enabled: true
   replicaCount: 2
   image:
     repository: sentinel/entity-service
-    tag: latest
+    tag: ""
+    pullPolicy: IfNotPresent
   service:
     port: 3001
   resources:
@@ -43,12 +128,17 @@ entityService:
     limits:
       cpu: 1000m
       memory: 1Gi
+  env: {}
+  secretEnv:
+    existingSecret: ""
 
 trackService:
+  enabled: true
   replicaCount: 2
   image:
     repository: sentinel/track-service
-    tag: latest
+    tag: ""
+    pullPolicy: IfNotPresent
   service:
     port: 3002
   resources:
@@ -58,12 +148,17 @@ trackService:
     limits:
       cpu: 2000m
       memory: 2Gi
+  env: {}
+  secretEnv:
+    existingSecret: ""
 
 searchService:
+  enabled: true
   replicaCount: 1
   image:
     repository: sentinel/search-service
-    tag: latest
+    tag: ""
+    pullPolicy: IfNotPresent
   service:
     port: 3003
   resources:
@@ -73,12 +168,21 @@ searchService:
     limits:
       cpu: 1000m
       memory: 1Gi
+  # OPENSEARCH_HOST and OPENSEARCH_PORT. Empty host: the chart's OpenSearch.
+  opensearch:
+    host: ""
+    port: 9200
+  env: {}
+  secretEnv:
+    existingSecret: ""
 
 linkAnalysisService:
+  enabled: true
   replicaCount: 1
   image:
     repository: sentinel/link-analysis-service
-    tag: latest
+    tag: ""
+    pullPolicy: IfNotPresent
   service:
     port: 3004
   resources:
@@ -88,12 +192,17 @@ linkAnalysisService:
     limits:
       cpu: 1000m
       memory: 1Gi
+  env: {}
+  secretEnv:
+    existingSecret: ""
 
 alertService:
+  enabled: true
   replicaCount: 2
   image:
     repository: sentinel/alert-service
-    tag: latest
+    tag: ""
+    pullPolicy: IfNotPresent
   service:
     port: 3005
   resources:
@@ -103,13 +212,19 @@ alertService:
     limits:
       cpu: 1000m
       memory: 1Gi
+  env: {}
+  secretEnv:
+    existingSecret: ""
 
 ingestService:
+  # Renders the ingest-service Deployment, its Service and Secret (the listener
+  # below has a flag of its own).
+  enabled: true
   # Feeds are leased so each runs on exactly one replica; scale freely.
   replicaCount: 3
   image:
     repository: sentinel/ingest-service
-    tag: latest
+    tag: ""
     pullPolicy: IfNotPresent
   service:
     port: 4000
@@ -209,14 +324,15 @@ ingestListener:
     requests: { cpu: 250m, memory: 128Mi }
     limits: { cpu: 2000m, memory: 512Mi }
 
-# Go behavioural-analysis service. One replica: detector state is in process
-# and the hourly baseline job takes a Postgres advisory lock, so a second
-# replica would be harmless but is not planned for.
+# Go behavioural-analysis service. Always one replica (there is no
+# replicaCount): detector state is in process and the hourly baseline job
+# takes a Postgres advisory lock.
 analyticsService:
-  replicaCount: 1
+  enabled: true
   image:
     repository: sentinel/analytics-service
-    tag: latest
+    tag: ""
+    pullPolicy: IfNotPresent
   service:
     port: 5000
   resources:
@@ -228,67 +344,287 @@ analyticsService:
       memory: 512Mi
   # Extra environment (ANALYTICS_* thresholds; see apps/analytics-service/internal/config)
   env: {}
+  secretEnv:
+    existingSecret: ""
 
+# The Angular client, served by unprivileged nginx (user 101) on 4200. The
+# chart replaces the image's default.conf, whose proxy blocks name Compose
+# hosts, with one that serves the static site only (and 404 under /auth): the
+# Ingress routes /api, /ws and Keycloak's public paths.
 web:
+  enabled: true
   replicaCount: 2
   image:
     repository: sentinel/web
-    tag: latest
+    tag: ""
+    pullPolicy: IfNotPresent
   service:
     type: ClusterIP
-    port: 80
-  ingress:
-    enabled: true
-    className: nginx
-    hosts:
-      - host: sentinel.local
-        paths:
-          - path: /
-            pathType: Prefix
-    tls: []
+    port: 4200
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  # The map keys the client reads from /config.json, written at container
+  # start. Both are optional (empty disables the layer that needs it) and must
+  # match [A-Za-z0-9._-], or the container refuses to start. Set them here and
+  # the chart stores them in the Secret <fullname>-web, or name an existing
+  # Secret with the keys google-maps-api-key and cesium-ion-access-token
+  # (either may be missing) in existingSecret.
+  mapKeys:
+    existingSecret: ""
+    googleMapsApiKey: ""
+    cesiumIonAccessToken: ""
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 101
+    seccompProfile:
+      type: RuntimeDefault
+  # nginx writes its pid and temp files under /tmp and the entrypoint writes
+  # /var/run/sentinel/config.json: both are emptyDirs.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+
+# One Ingress for https://<global.host>: /api and /ws to the gateway,
+# /auth/realms/sentinel and /auth/resources to Keycloak, everything else to
+# the web client. Keycloak's admin console, its master realm and the rest of
+# /auth are not routed (the web client answers 404 there): reach the console
+# with kubectl port-forward (keycloak below).
+ingress:
+  enabled: true
+  # IngressClass. Empty: the cluster's default class (traefik on k3s).
+  className: ""
+  # cert-manager ClusterIssuer for the certificate, from k8s/cluster/
+  # (letsencrypt-staging, letsencrypt-prod, sentinel-local-ca for k3d). Empty
+  # adds no issuer annotation: provide the TLS Secret yourself.
+  clusterIssuer: letsencrypt-prod
+  # Secret holding the certificate. Empty: <fullname>-tls.
+  tlsSecretName: ""
+  # More annotations, for the controller (Traefik middlewares, ...).
+  annotations: {}
 
 # -- Infrastructure --
+# The data tier (PostgreSQL, Kafka, OpenSearch, Keycloak) is added to this
+# chart as templates with their own values; none comes from a subchart.
+# PostgreSQL, Kafka and OpenSearch are one-replica StatefulSets with a volume
+# from global.storageClass, and Keycloak keeps its state in PostgreSQL: the
+# chart targets a single node, where backups matter more than failover.
 
+# PostgreSQL 16 with PostGIS 3.4, the image Compose runs. Its first start, on an
+# empty volume, runs an initdb script as the superuser postgres: it creates the
+# login roles sentinel and keycloak with their databases, PostGIS and the
+# optional extensions of config/postgres/init-extensions.sql in sentinel, schema
+# sentinel owned by the role sentinel, and sentinel_gis (LOGIN, no password).
+# Later starts skip it, so changing a password in the Secret afterwards does not
+# change it in the database: ALTER ROLE as well.
 postgresql:
   enabled: true
-  auth:
-    database: sentinel
-    username: sentinel
-    password: sentinel_dev
-  primary:
-    initdb:
-      scripts:
-        init-extensions.sql: |
-          CREATE EXTENSION IF NOT EXISTS postgis;
-          CREATE EXTENSION IF NOT EXISTS postgis_topology;
-          CREATE EXTENSION IF NOT EXISTS timescaledb;
-          CREATE EXTENSION IF NOT EXISTS age;
-          LOAD 'age';
-          SET search_path = ag_catalog, "$user", public;
-          SELECT create_graph('entity_graph');
-          -- Owned by the role the services connect as, so that the dbSchema Job
-          -- (which runs as that role) can create and alter the tables. The name
-          -- must be postgresql.auth.username; a values file is not templated.
-          CREATE SCHEMA IF NOT EXISTS sentinel AUTHORIZATION sentinel;
-          -- The GeoServer role, created here without a password so that
-          -- 90_gis_views.sql finds it and needs no CREATEROLE. It cannot log in
-          -- until ALTER ROLE sentinel_gis PASSWORD sets one.
-          DO $$
-          BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sentinel_gis') THEN
-              CREATE ROLE sentinel_gis LOGIN;
-            END IF;
-          END
-          $$;
+  image:
+    # amd64 only. On an arm64 node (k3d on Apple silicon) use a multi-arch
+    # build, such as imresamu/postgis:16-3.4.
+    repository: postgis/postgis
+    tag: "16-3.4"
+    pullPolicy: IfNotPresent
+  # Secret with the keys postgres-password (the superuser postgres), username
+  # (sentinel), password (sentinel's), keycloak-password and database-url
+  # (postgres://sentinel:<password>@<fullname>-postgresql:5432/sentinel?sslmode=disable).
+  # Empty: the chart generates <fullname>-postgresql with random passwords, keeps
+  # them across upgrades, and leaves the Secret behind on helm uninstall
+  # (helm.sh/resource-policy: keep) so a reinstall finds the volume's passwords.
+  existingSecret: ""
+  persistence:
+    size: 50Gi
+  # Memory-backed /dev/shm for parallel queries (a container gets 64 MB).
+  shmSize: 256Mi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  # The image's postgres user (999 in the Debian-based image). fsGroup makes the
+  # volume writable; the data directory is a subdirectory of it (PGDATA), since
+  # initdb refuses a mount point that holds lost+found.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+
+# Keycloak 26 in production mode behind the Ingress, at https://<global.host>/auth,
+# on the keycloak database of the chart's PostgreSQL. On its first start it
+# imports the sentinel realm, rendered from config/keycloak/sentinel-realm.json
+# for this deployment: the dev users are dropped, the bootstrap user
+# sentinel-admin is added, sentinel-web's redirect URIs name global.host, and
+# the mail settings come from mail above. Later starts skip the import, so a
+# change to these values after the first start must be made in the admin
+# console as well. The admin console is not routed by the Ingress:
+#   kubectl port-forward svc/<fullname>-keycloak 8080
+# then http://localhost:8080/auth/admin/ (the admin hostname below).
+keycloak:
+  enabled: true
+  image:
+    repository: quay.io/keycloak/keycloak
+    tag: "26.8.1"
+    pullPolicy: IfNotPresent
+  # The master realm's bootstrap admin (KC_BOOTSTRAP_ADMIN_USERNAME), for the
+  # admin console. Keycloak creates it on its first start only.
+  adminUsername: admin
+  # The URL the admin console is opened at, the port-forward above: the
+  # console's address (KC_HOSTNAME_ADMIN) and the master realm's frontend URL,
+  # since the console signs in through the master realm, which the Ingress
+  # does not route. First start only, like the realm.
+  adminUrl: http://localhost:8080/auth
+  # The sentinel realm's bootstrap user: sentinel-admin, with the roles
+  # sentinel-admin, sentinel-analyst and classification-ts. Empty email:
+  # sentinel-admin@<global.host>.
+  bootstrapUser:
+    email: ""
+    firstName: Sentinel
+    lastName: Administrator
+  # Secret with the keys admin-password (the master realm's admin) and
+  # sentinel-admin-password (the bootstrap user). Empty: the chart generates
+  # <fullname>-keycloak with 32 random characters each, keeps it across
+  # upgrades and leaves it behind on helm uninstall. Both passwords are set on
+  # the first start only; change them in the admin console afterwards.
+  existingSecret: ""
+  # Secret with the key service-client-secret: the client secret of Keycloak's
+  # sentinel-service client, which the gateway uses to create accounts.
+  # Empty: the chart generates <fullname>-keycloak-clients with 32 random
+  # characters, keeps it across upgrades and leaves it behind on helm uninstall
+  # (helm.sh/resource-policy: keep). The imported realm gives the
+  # sentinel-service client the same secret.
+  clientsExistingSecret: ""
+  # Plain environment values the chart does not set itself, as NAME: value
+  # (KC_LOG_LEVEL, ...). A name the chart sets is an error.
+  extraEnv: {}
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      cpu: 2000m
+      memory: 1536Mi
+  # The image's keycloak user (1000; its files belong to group 0).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  # Not read-only: the first start of an image builds Keycloak for the
+  # database and features configured here, under /opt/keycloak.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: [ALL]
+
+# Apache Kafka in KRaft combined mode (broker and controller in one process),
+# the image and cluster id Compose uses. Clients use PLAINTEXT on 9092 (the
+# NetworkPolicies keep it in the namespace); the controller listens on 9093.
+kafka:
+  enabled: true
+  image:
+    repository: apache/kafka
+    tag: "3.7.0"
+    pullPolicy: IfNotPresent
+  # The KRaft cluster id the volume is formatted with. Changing it on an
+  # existing volume stops the broker from starting.
+  clusterId: MkU3OEVBNTcwNTJENDM2Qk
+  heapOpts: "-Xms768m -Xmx768m"
+  persistence:
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 1536Mi
+  # The topics of config/kafka/create-topics.sh, created by a hook Job after a
+  # first install and before every upgrade (it skips topics that exist).
+  topics:
+    enabled: true
+    # One broker, so one replica of each partition.
+    replicationFactor: 1
+    backoffLimit: 6
+    activeDeadlineSeconds: 600
     resources:
       requests:
-        cpu: 500m
-        memory: 1Gi
+        cpu: 50m
+        memory: 256Mi
       limits:
-        cpu: 2000m
-        memory: 4Gi
-    persistence:
-      size: 50Gi
+        cpu: 500m
+        memory: 512Mi
+  # appuser (1000) of the image, for the broker and the topics Job.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  # Not read-only: the image writes server.properties from the environment at
+  # start.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: [ALL]
+
+# OpenSearch, single node, with the security plugin off: no TLS and no login,
+# so only the NetworkPolicies keep other pods out. Single-node discovery skips
+# the bootstrap checks, so the node needs no vm.max_map_count change (a low one
+# still logs a warning).
+opensearch:
+  enabled: true
+  image:
+    repository: opensearchproject/opensearch
+    tag: "2.17.1"
+    pullPolicy: IfNotPresent
+  javaOpts: "-Xms1g -Xmx1g"
+  persistence:
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  # The image's opensearch user (1000).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  # Not read-only: OpenSearch writes its keystore and logs under
+  # /usr/share/opensearch.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: [ALL]
 
 # Applies db/schema with a Helm hook Job: after the first install creates the
 # release's resources, and before every upgrade (a failing Job aborts it). It
@@ -301,13 +637,13 @@ postgresql:
 #
 # What the database must provide for the Job to work as a plain role:
 # - The Job connects as the role in the database-url key of the
-#   <release>-postgresql Secret. That role must be postgresql.auth.username, the
-#   role the services and the gateway use. No chart template creates the key;
-#   the operator supplies it.
+#   <fullname>-postgresql Secret (or postgresql.existingSecret), the role the
+#   services and the gateway use.
 # - That role owns schema sentinel, and the role sentinel_gis exists. The
-#   postgresql initdb script above creates both, but only on an empty data
-#   directory: an existing release needs, once and as a superuser, ALTER SCHEMA
-#   sentinel OWNER TO <role> and CREATE ROLE sentinel_gis LOGIN.
+#   chart's PostgreSQL creates both at its first start (postgresql above), but
+#   only on an empty data directory: another database needs, once and as a
+#   superuser, ALTER SCHEMA sentinel OWNER TO <role> and CREATE ROLE
+#   sentinel_gis LOGIN.
 # - sentinel_gis has no password, so it cannot log in until ALTER ROLE
 #   sentinel_gis PASSWORD ... sets the one GeoServer's provisioning uses
 #   (GIS_DB_PASSWORD, from geoserver.gisDbPassword).
@@ -342,74 +678,110 @@ dbSchema:
     capabilities:
       drop: [ALL]
 
-kafka:
+# Ingress NetworkPolicies (templates/networkpolicies.yaml). Every pod of the
+# release accepts only its callers: the web client, the gateway and Keycloak
+# the ingress controller (and Keycloak the gateway); the services behind the
+# gateway the gateway alone; OpenSearch search-service alone; PostgreSQL and
+# Kafka every pod of the namespace plus hostNetworkCIDRs. Egress is not
+# restricted (feeds and mail reach the internet). Needs a CNI that
+# enforces them: k3s's embedded controller (kube-router), Calico, Cilium.
+networkPolicy:
   enabled: true
-  kraft:
-    enabled: true
-  controller:
-    replicaCount: 3
-  listeners:
-    client:
-      protocol: PLAINTEXT
-  provisioning:
-    enabled: true
-    topics:
-      - name: observations.raw
-        partitions: 24
-        replicationFactor: 3
-      - name: observations.dlq
-        partitions: 3
-        replicationFactor: 3
-      - name: entities.events
-        partitions: 12
-        replicationFactor: 3
-      - name: alerts.events
-        partitions: 3
-        replicationFactor: 3
-      - name: density.events
-        partitions: 1
-        replicationFactor: 3
+  # The ingress controller's pods, as a namespaceSelector and a podSelector
+  # that must both match. The default is k3s's Traefik. RKE2's ingress-nginx
+  # runs in kube-system (app.kubernetes.io/name: rke2-ingress-nginx), the
+  # upstream chart in ingress-nginx (app.kubernetes.io/name: ingress-nginx);
+  # check with kubectl get pods -A --show-labels.
+  ingressController:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: traefik
+  # The ingest listener runs on the host network, so its connections to
+  # PostgreSQL and Kafka come from a node address, not a pod address: list the
+  # CIDRs they come from: for a pod on the same node its pod-network gateway
+  # (10.42.0.1/32 on a single k3s node), from another node usually that node's
+  # address; confirm with pg_stat_activity's client_addr. With the listener
+  # enabled and this list empty, PostgreSQL and Kafka accept every source on
+  # their port (pods in any namespace, the nodes).
+  hostNetworkCIDRs: []
+  # Prometheus, for the services whose ServiceMonitor the chart renders
+  # (appServices.serviceMonitor, ingestService.serviceMonitor). The listener's
+  # PodMonitor needs nothing: a hostNetwork pod is not subject to policies.
+  metrics:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: monitoring
+    podSelector: {}
+  # GeoServer (when enabled) accepts these NetworkPolicy peers on 8600, beside
+  # its provisioning Job. Empty: anyone, as without policies.
+  geoserver:
+    from: []
 
-opensearch:
+# Nightly backups of the chart's PostgreSQL (templates/backup-cronjob.yaml):
+# pg_dump -Fc of each database and pg_dumpall --globals-only (roles and their
+# password hashes) into a timestamped directory on the claim <fullname>-backups,
+# then the directories older than retentionDays are deleted. Rendered only with
+# postgresql.enabled: back up an external database where it runs. The PostgreSQL
+# pod mounts the claim read-only at /backups, so restores run there with
+# pg_restore (docs/infrastructure.md, Backups); turning backups on or off
+# restarts it.
+backup:
   enabled: true
-  replicas: 1
+  # Cron, in the time zone below (the controller's, usually UTC, when empty).
+  schedule: "30 2 * * *"
+  timeZone: ""
+  databases: [sentinel, keycloak]
+  retentionDays: 7
+  # pg_dump must be the server's major version or newer.
+  image: postgres:16-alpine
+  persistence:
+    size: 20Gi
+    # An existing claim (an NFS share, say) instead of <fullname>-backups.
+    existingClaim: ""
+  # Copies the backup directories to off-node storage after each run with
+  # rclone copy, which adds new files and deletes nothing: expire old copies
+  # with the storage's own lifecycle rules. existingSecret names a Secret with
+  # the key rclone.conf; remote is <remote name in rclone.conf>:<path>.
+  rclone:
+    enabled: false
+    image: rclone/rclone:1.71.2
+    existingSecret: ""
+    remote: ""
+    extraArgs: []
+  # A backup Job before every upgrade (a pre-upgrade hook ahead of the schema
+  # Job), so a failed upgrade can be undone from a dump taken just before it.
+  # A failing backup fails the upgrade. Skipped while the claim does not exist
+  # yet (the install or upgrade that turns backups on).
+  preUpgrade:
+    enabled: false
+  backoffLimit: 2
+  activeDeadlineSeconds: 3600
   resources:
     requests:
-      cpu: 500m
-      memory: 1Gi
-
-keycloak:
-  enabled: true
-  auth:
-    adminUser: admin
-    adminPassword: admin
-  extraEnvVars:
-    - name: KEYCLOAK_EXTRA_ARGS
-      value: "--import-realm"
-
-minio:
-  enabled: true
-  auth:
-    rootUser: minio
-    rootPassword: minio123
-  defaultBuckets: "sentinel-imagery,sentinel-reports,sentinel-tiles,sentinel-exports"
-  resources:
-    requests:
-      cpu: 250m
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
       memory: 512Mi
-
-# -- Monitoring --
-
-monitoring:
-  enabled: false
-  prometheus:
-    enabled: false
-  grafana:
-    enabled: false
-  loki:
-    enabled: false
-  jaeger:
-    enabled: false
+  # PostgreSQL's ids (postgresql.podSecurityContext), since its pod mounts the
+  # claim too: the dumps (mode 0600) are readable there for a restore, and the
+  # two pods never change the volume's group back and forth with fsGroup.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
 
 # -- GeoServer (OGC WMS/WFS layers over the PostGIS views; config/geoserver) --
 geoserver:
@@ -429,7 +801,8 @@ geoserver:
     s: change-me
     ts: change-me
   existingSecret: ""
-  dbHost: "{{ .Release.Name }}-postgresql"
+  # Empty: the chart's own PostgreSQL. A value is run through tpl.
+  dbHost: ""
   persistence:
     size: 5Gi
   resources:

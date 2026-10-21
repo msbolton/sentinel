@@ -75,7 +75,7 @@ Entity Track   Search   Alert   Link Analysis
 
 **9 services**: API Gateway (Go :3000), Entity Service (Go :3001), Track Service (Go :3002), Search Service (Go :3003), Link Analysis Service (Go :3004), Alert Service (Go :3005), Ingest Service (Go :4000), Analytics Service (Go :5000), Web UI (Angular :4200)
 
-**Infrastructure**: PostgreSQL 16 + PostGIS + TimescaleDB, Kafka 3.7 (KRaft), OpenSearch 2.17, Keycloak 24, GeoServer 2.25, MinIO
+**Infrastructure**: PostgreSQL 16 + PostGIS + TimescaleDB, Kafka 3.7 (KRaft), OpenSearch 2.17, Keycloak 26, GeoServer 2.25 (plus MinIO in the Compose stack only, unused so far)
 
 ## Project Structure
 
@@ -97,7 +97,7 @@ sentinel/
 ├── proto/                    # Protobuf definitions
 ├── db/                       # SQL schema (db/schema, one file per area) and seed data
 ├── config/                   # Docker init scripts, Kafka topics, Keycloak realm
-├── k8s/                      # Kubernetes manifests
+├── k8s/                      # Helm chart, values overlays (prod, local, dev), cluster manifests
 ├── docs/                     # Detailed documentation
 ├── docker-compose.yml        # Full stack
 ├── docker-compose.infra.yml  # Infrastructure only
@@ -109,11 +109,12 @@ sentinel/
 | Document | Description |
 |----------|-------------|
 | [Architecture](docs/architecture.md) | System design, data flow, communication patterns |
-| [Infrastructure](docs/infrastructure.md) | Docker services, ports, volumes, networking |
+| [Infrastructure](docs/infrastructure.md) | Docker Compose services, ports, volumes, networking; the Helm chart in detail |
 | [API Gateway](docs/api-gateway.md) | REST endpoints, WebSocket events, auth |
 | [Frontend](docs/frontend.md) | Angular app structure, CesiumJS map, services |
 | [Data Model](docs/data-model.md) | PostgreSQL schema, entity types, Kafka topics |
 | [Development](docs/development.md) | Local setup, Makefile targets, debugging tips |
+| [Deployment](docs/deployment.md) | Production runbook: one k3s node, TLS, images, first install, upgrades, backups |
 | [EW sensor simulator](docs/ew-sensor.md) | `ew-sensor` CLI: simulated ESM sensor streaming RF emitter fixes over gRPC |
 
 ## Key Commands
@@ -128,11 +129,14 @@ sentinel/
 | `make test` | Run all tests |
 | `make lint` | Lint all code |
 | `make docker-clean` | Stop all and remove volumes |
+| `make images-push REGISTRY=...` | Build the images for linux/amd64 and push them, tagged with the commit |
+| `make deploy REGISTRY=... VALUES=...` | Install or upgrade the Helm release with the prod values ([runbook](docs/deployment.md)) |
+| `make backup-now` | Run the release's database backup now |
 
 ## Tech Stack
 
 - **Frontend**: Angular 19, CesiumJS 1.120, vis-network
 - **Backend**: Go 1.24 (net/http, pgx, confluent-kafka-go, golang-jwt), native WebSocket
 - **Data**: PostgreSQL 16 + PostGIS + TimescaleDB, Kafka 3.7, OpenSearch 2.17
-- **Auth**: Keycloak 24 (OIDC/JWT), RBAC + classification-based access
-- **DevOps**: Docker Compose, Kubernetes, Nx monorepo
+- **Auth**: Keycloak 26 (OIDC/JWT), RBAC + classification-based access
+- **DevOps**: Docker Compose for development; Kubernetes (k3s, Helm, cert-manager) for production; Nx monorepo

@@ -1,0 +1,42 @@
+# A local certificate authority for clusters with no public name (k3d on a
+# laptop): cert-manager signs the Ingress certificate with a CA it generated
+# itself, so browsers warn until the CA is trusted. Apply once, after
+# cert-manager, and install with --set ingress.clusterIssuer=sentinel-local-ca:
+#   kubectl apply -f k8s/cluster/selfsigned-issuer.yaml
+# The CA certificate, to trust it (curl --cacert, NODE_EXTRA_CA_CERTS, the
+# system keychain):
+#   kubectl -n cert-manager get secret sentinel-local-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > sentinel-local-ca.crt
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned
+spec:
+  selfSigned: {}
+---
+# The CA itself, issued by selfsigned. A ClusterIssuer reads its Secret from
+# cert-manager's own namespace.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sentinel-local-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: Sentinel local CA
+  secretName: sentinel-local-ca
+  duration: 87600h # 10 years
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: selfsigned
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: sentinel-local-ca
+spec:
+  ca:
+    secretName: sentinel-local-ca

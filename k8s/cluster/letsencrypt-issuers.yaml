@@ -1,0 +1,38 @@
+# Let's Encrypt ClusterIssuers for the chart's Ingress (ingress.clusterIssuer),
+# solving HTTP-01 through the cluster's Ingress controller. Apply once per
+# cluster, after cert-manager, with your address in both email fields:
+#   kubectl apply -f k8s/cluster/letsencrypt-issuers.yaml
+# HTTP-01 needs <global.host> to resolve to the node from the internet and port
+# 80 to reach the Ingress controller. Try letsencrypt-staging first: its
+# certificates are not trusted by browsers, but its rate limits are generous.
+# solvers[0].http01.ingress.ingressClassName must name the cluster's class
+# (traefik on k3s, nginx on RKE2).
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: admin@example.com
+    privateKeySecretRef:
+      name: letsencrypt-staging-account
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@example.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-account
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik

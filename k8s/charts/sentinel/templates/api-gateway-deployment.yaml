@@ -1,27 +1,58 @@
+{{- if .Values.apiGateway.enabled }}
+{{- $publicUrl := include "sentinel.publicUrl" . }}
+{{- /* The downstream services, as the env variable that names each one's URL. */}}
+{{- $downstream := list
+  (dict "env" "ENTITY_SERVICE_URL" "key" "entityService" "name" "entity-service")
+  (dict "env" "TRACK_SERVICE_URL" "key" "trackService" "name" "track-service")
+  (dict "env" "SEARCH_SERVICE_URL" "key" "searchService" "name" "search-service")
+  (dict "env" "LINK_ANALYSIS_SERVICE_URL" "key" "linkAnalysisService" "name" "link-analysis-service")
+  (dict "env" "ALERT_SERVICE_URL" "key" "alertService" "name" "alert-service")
+  (dict "env" "ANALYTICS_SERVICE_URL" "key" "analyticsService" "name" "analytics-service")
+  (dict "env" "INGEST_SERVICE_URL" "key" "ingestService" "name" "ingest-service")
+}}
+{{- $reserved := list "PORT" "APP_ENV" "DATABASE_URL" "KAFKA_BROKERS" "CORS_ORIGIN" "KEYCLOAK_URL" "KEYCLOAK_REALM" "KEYCLOAK_ISSUERS" "KEYCLOAK_SERVICE_CLIENT_SECRET" "INGEST_SERVICE_TOKEN" "MAIL_HOST" "MAIL_PORT" "MAIL_FROM" "MAIL_TLS" "MAIL_USERNAME" "MAIL_PASSWORD" "AUTH_DEV_BYPASS" }}
+{{- range $downstream }}
+{{- $reserved = append $reserved .env }}
+{{- end }}
+{{- with .Values.mail }}
+{{- if not (has .tls (list "starttls" "tls" "none")) }}
+{{- fail (printf "mail.tls must be starttls, tls or none, got %q" .tls) }}
+{{- end }}
+{{- if and .host (eq .tls "none") (or .password .existingSecret) }}
+{{- fail "mail.tls=none with a password would send it in cleartext, and the gateway refuses to start: use starttls or tls" }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "sentinel.fullname" . }}-api-gateway
   labels:
-    app.kubernetes.io/name: api-gateway
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/component: api
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "api-gateway" "tier" "api") | nindent 4 }}
 spec:
   replicas: {{ .Values.apiGateway.replicaCount }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: api-gateway
-      app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "api-gateway") | nindent 6 }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: api-gateway
-        app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- include "sentinel.podLabels" (dict "ctx" $ "component" "api-gateway") | nindent 8 }}
     spec:
+      {{- with .Values.apiGateway.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "sentinel.imagePullSecrets" .) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       containers:
         - name: api-gateway
-          image: "{{ .Values.apiGateway.image.repository }}:{{ .Values.apiGateway.image.tag }}"
-          imagePullPolicy: {{ .Values.apiGateway.image.pullPolicy }}
+          image: {{ include "sentinel.image" (dict "ctx" $ "image" .Values.apiGateway.image) | quote }}
+          imagePullPolicy: {{ .Values.apiGateway.image.pullPolicy | default "IfNotPresent" }}
+          {{- with .Values.apiGateway.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 3000
@@ -29,37 +60,67 @@ spec:
           env:
             - name: PORT
               value: "3000"
-            - name: DB_HOST
-              value: {{ .Release.Name }}-postgresql
-            - name: DB_PORT
-              value: "5432"
-            - name: DB_DATABASE
-              value: sentinel
-            - name: DB_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Release.Name }}-postgresql
-                  key: username
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Release.Name }}-postgresql
-                  key: password
-            - name: KAFKA_BROKERS
-              value: {{ .Release.Name }}-kafka:9092
-            - name: KEYCLOAK_URL
-              value: http://{{ .Release.Name }}-keycloak
-            - name: KEYCLOAK_REALM
-              value: sentinel
             - name: APP_ENV
               value: production
-            - name: INGEST_SERVICE_URL
-              value: http://{{ include "sentinel.fullname" . }}-ingest-service:{{ .Values.ingestService.service.port }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.postgresSecret" . }}
+                  key: database-url
+            - name: KAFKA_BROKERS
+              value: {{ include "sentinel.kafkaBrokers" . }}
+            - name: CORS_ORIGIN
+              value: {{ $publicUrl }}
+            # The gateway fetches the signing keys from Keycloak inside the
+            # cluster, but the tokens carry the issuer the browser saw.
+            - name: KEYCLOAK_URL
+              value: {{ include "sentinel.keycloakInternalUrl" . }}
+            - name: KEYCLOAK_REALM
+              value: sentinel
+            - name: KEYCLOAK_ISSUERS
+              value: {{ $publicUrl }}/auth/realms/sentinel
+            - name: KEYCLOAK_SERVICE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.keycloakClientsSecret" . }}
+                  key: service-client-secret
+            {{- range $s := $downstream }}
+            - name: {{ $s.env }}
+              value: http://{{ include "sentinel.fullname" $ }}-{{ $s.name }}:{{ (index $.Values $s.key).service.port }}
+            {{- end }}
             - name: INGEST_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ default (printf "%s-ingest" (include "sentinel.fullname" .)) .Values.ingestService.existingSecret }}
+                  name: {{ include "sentinel.ingestSecret" . }}
                   key: service-token
+            {{- with .Values.mail }}
+            {{- if .host }}
+            # Registration mail (mail in values.yaml). Without mail.host none of
+            # these is set and registration e-mails fail.
+            - name: MAIL_HOST
+              value: {{ .host | quote }}
+            - name: MAIL_PORT
+              value: {{ .port | quote }}
+            - name: MAIL_FROM
+              value: {{ .from | default (printf "SENTINEL <sentinel@%s>" $.Values.global.host) | quote }}
+            - name: MAIL_TLS
+              value: {{ .tls | quote }}
+            {{- with .username }}
+            - name: MAIL_USERNAME
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with (include "sentinel.mailSecret" $) }}
+            - name: MAIL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: password
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- with (include "sentinel.extraEnv" (dict "env" .Values.apiGateway.extraEnv "reserved" $reserved "what" "apiGateway.extraEnv")) }}
+            {{- . | trim | nindent 12 }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /health
@@ -80,8 +141,7 @@ kind: Service
 metadata:
   name: {{ include "sentinel.fullname" . }}-api-gateway
   labels:
-    app.kubernetes.io/name: api-gateway
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "api-gateway") | nindent 4 }}
 spec:
   type: {{ .Values.apiGateway.service.type }}
   ports:
@@ -90,5 +150,5 @@ spec:
       protocol: TCP
       name: http
   selector:
-    app.kubernetes.io/name: api-gateway
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "api-gateway") | nindent 4 }}
+{{- end }}

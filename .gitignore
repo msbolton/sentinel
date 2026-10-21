@@ -35,6 +35,13 @@ coverage/
 # Docker
 docker-compose.override.yml
 
+# Deployment site files (docs/deployment.md keeps them in ~/sentinel, outside
+# the checkout; these names are a backstop)
+sentinel-site*.yaml
+rclone.conf
+sentinel-secrets-*.yaml*
+sentinel-local-ca.crt
+
 # Go build outputs
 apps/*/vendor/
 apps/*/server

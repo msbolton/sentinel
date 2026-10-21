@@ -30,6 +30,8 @@ make dev
 
 Seeded entities are queryable through the gateway as soon as the entity-service is up; it reads PostgreSQL directly (PostGIS index for spatial queries).
 
+The client in Docker Compose is a production build, which carries no map keys: its Google Maps and Cesium Ion keys come only from `.env` (`GOOGLE_MAPS_API_KEY`, `CESIUM_ION_ACCESS_TOKEN`; see `.env.example` and `docs/frontend.md`, Environments and runtime config). Without them the layers that need a key are off. `nx serve client` reads `src/environments/environment.ts` instead.
+
 ## Makefile Targets
 
 ### Development
@@ -60,6 +62,18 @@ Seeded entities are queryable through the gateway as soon as the entity-service 
 | `make docker-clean` | Stop and **remove all volumes** (destructive) |
 | `make docker-logs` | Tail all container logs |
 | `make docker-build` | Build all Docker images |
+
+### Images and deployment
+
+`docs/deployment.md` is the runbook these follow.
+
+| Command | Description |
+|---------|-------------|
+| `make images-push REGISTRY=<registry>` | Build the nine images for `PLATFORM` (`linux/amd64`) and push them as `<registry>/sentinel/<name>:<TAG>`, one at a time; `TAG` defaults to the commit's short hash |
+| `make images-local` | Build them for this machine and load them as `sentinel/<name>:<TAG>` (for `k3d image import`) |
+| `make chart-lint` | Lint and render the Helm chart, its overlays included, and validate the output with kubeconform |
+| `make deploy REGISTRY=<registry> VALUES=<site file>` | `helm upgrade --install` the release (`RELEASE`, `NAMESPACE`: `sentinel`) with `k8s/overlays/prod/values.yaml`, then `VALUES`, and the images of `REGISTRY` and `TAG`; `HELM_ARGS` adds flags |
+| `make backup-now` | Run the release's backup CronJob now, wait for it and print its log |
 
 ### Testing & Linting
 

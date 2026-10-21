@@ -1,0 +1,40 @@
+# k3s only: settings for the Traefik that k3s installs from its bundled chart.
+# k3s applies a HelmChartConfig in kube-system named after the chart and
+# redeploys Traefik with these values merged in. Apply once:
+#   kubectl apply -f k8s/cluster/traefik-config.yaml
+# (or copy it to /var/lib/rancher/k3s/server/manifests/ on the server).
+# The keys are those of the Traefik chart k3s bundles (v39: kubectl -n
+# kube-system get helmchart traefik -o jsonpath='{.spec.chart}'); an older
+# chart had ports.web.redirectTo instead of ports.web.http.redirections.
+#
+# externalTrafficPolicy: Local keeps the client's address on the way in: with
+# Cluster the node rewrites it to its own, and Traefik's X-Forwarded-For, which
+# the gateway's registration rate limiter keys on, would name the node for
+# every visitor. Local only answers on nodes running a Traefik pod, which on a
+# single node is that node.
+#
+# The web entrypoint (port 80) answers every request with a permanent redirect
+# (308) to the same URL on websecure (443), so nothing, the client's
+# password-grant login included, is sent in cleartext. cert-manager's HTTP-01
+# challenges still pass: Let's Encrypt follows the redirect to
+# https://<host>/.well-known/acme-challenge/..., ignores the certificate it
+# finds there (Traefik's default one before the first issue), and Traefik routes
+# the solver's Ingress on websecure too.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    service:
+      spec:
+        externalTrafficPolicy: Local
+    ports:
+      web:
+        http:
+          redirections:
+            entryPoint:
+              to: websecure
+              scheme: https
+              permanent: true

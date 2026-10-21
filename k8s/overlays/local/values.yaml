@@ -1,0 +1,89 @@
+# k3d on a laptop (docs/deployment.md, Local cluster on k3d), layered over
+# k8s/overlays/prod/values.yaml:
+#   make deploy REGISTRY=docker.io VALUES=k8s/overlays/local/values.yaml
+# The images come from make images-local and k3d image import, which names them
+# docker.io/sentinel/<name>:<TAG>, hence REGISTRY=docker.io and pullPolicy Never:
+# a missing image fails as ErrImageNeverPull instead of being looked for on
+# Docker Hub. Test values only: the ingest token below is not a secret.
+
+global:
+  # Resolves to 127.0.0.1, where k3d's load balancer publishes 80 and 443.
+  host: sentinel.localhost
+  # k3d's own class (Delete), not prod's local-path-retain: a throwaway cluster
+  # should not pile up Released volumes when its namespace is deleted.
+  storageClass: local-path
+
+# No public name for Let's Encrypt: the local CA of k8s/cluster/selfsigned-issuer.yaml.
+ingress:
+  clusterIssuer: sentinel-local-ca
+
+# Small requests: the Docker VM has about 8 GB for everything.
+apiGateway:
+  image: { pullPolicy: Never }
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+entityService:
+  image: { pullPolicy: Never }
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+trackService:
+  image: { pullPolicy: Never }
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+searchService:
+  image: { pullPolicy: Never }
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+linkAnalysisService:
+  image: { pullPolicy: Never }
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+alertService:
+  image: { pullPolicy: Never }
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+analyticsService:
+  image: { pullPolicy: Never }
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+web:
+  image: { pullPolicy: Never }
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+
+ingestService:
+  replicaCount: 1
+  # The listener uses the same image values.
+  image: { pullPolicy: Never }
+  serviceToken: k3d-ingest-token
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+ingestListener:
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+
+# k3d's nodes are arm64 on Apple silicon, and postgis/postgis is amd64 only.
+postgresql:
+  image:
+    repository: imresamu/postgis
+    tag: "16-3.4"
+  persistence:
+    size: 5Gi
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+
+keycloak:
+  resources:
+    requests: { cpu: 100m, memory: 512Mi }
+
+kafka:
+  persistence:
+    size: 2Gi
+
+opensearch:
+  persistence:
+    size: 2Gi
+
+backup:
+  persistence:
+    size: 2Gi

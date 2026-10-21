@@ -1,0 +1,234 @@
+{{- if and .Values.backup.enabled .Values.postgresql.enabled }}
+{{- $v := .Values.backup }}
+{{- $name := printf "%s-backup" (include "sentinel.fullname" .) }}
+{{- $claim := include "sentinel.backupClaim" . }}
+{{- if and $v.rclone.enabled (not (and $v.rclone.existingSecret $v.rclone.remote)) }}
+{{- fail "backup.rclone.enabled needs backup.rclone.existingSecret (a Secret with the key rclone.conf) and backup.rclone.remote" }}
+{{- end }}
+{{- if lt (int $v.retentionDays) 1 }}
+{{- fail "backup.retentionDays must be 1 or more" }}
+{{- end }}
+{{- if not $v.persistence.existingClaim }}
+# Kept on helm uninstall like the database's own claim: the dumps are what a
+# reinstall would restore from. The PostgreSQL pod mounts it too (read-only, for
+# restores), which also binds it during the install: with a WaitForFirstConsumer
+# class (local-path) a claim only the CronJob used would stay Pending until the
+# first run, and helm --wait would time out on it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $claim }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "backup" "tier" "data") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.global.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $v.persistence.size }}
+---
+{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "backup" "tier" "data") | nindent 4 }}
+spec:
+  schedule: {{ $v.schedule | quote }}
+  {{- with $v.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  # One run at a time: two would write to the claim together. A run missed by
+  # more than an hour (the cluster was down) is skipped, not caught up late.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      {{- include "sentinel.backupJobSpec" (dict "ctx" $ "claim" $claim) | nindent 6 }}
+{{- if and $v.preUpgrade.enabled (lookup "v1" "PersistentVolumeClaim" .Release.Namespace $claim) }}
+---
+# The same backup before every upgrade, ahead of the schema Job (weight -5) and
+# its ConfigMap (-10), so the dump predates any change the upgrade makes. lookup
+# skips it until the claim exists: on the upgrade that turns backups on, its pod
+# would wait for a claim Helm creates only after the hooks.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-pre-upgrade
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "backup" "tier" "data") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-20"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  {{- include "sentinel.backupJobSpec" (dict "ctx" $ "claim" $claim) | nindent 2 }}
+{{- end }}
+{{- end }}
+
+{{- /*
+The spec of a backup Job, for the CronJob's jobTemplate and the pre-upgrade
+hook. The dump runs first (an init container when rclone uploads after it).
+*/}}
+{{- define "sentinel.backupJobSpec" -}}
+{{- $ := .ctx -}}
+{{- $v := $.Values.backup -}}
+{{- $dump := include "sentinel.backupDumpContainer" $ -}}
+backoffLimit: {{ $v.backoffLimit }}
+activeDeadlineSeconds: {{ $v.activeDeadlineSeconds }}
+template:
+  metadata:
+    labels:
+      {{- include "sentinel.podLabels" (dict "ctx" $ "component" "backup") | nindent 6 }}
+  spec:
+    # Never: a failed pod stays for its logs, and the Job retries in a new one.
+    restartPolicy: Never
+    {{- with $v.podSecurityContext }}
+    securityContext:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with (include "sentinel.imagePullSecrets" $) }}
+    {{- . | nindent 4 }}
+    {{- end }}
+    {{- if $v.rclone.enabled }}
+    initContainers:
+      {{- $dump | nindent 6 }}
+    containers:
+      - name: upload
+        image: {{ $v.rclone.image | quote }}
+        imagePullPolicy: IfNotPresent
+        {{- with $v.containerSecurityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        # rclone may rewrite its config (a refreshed OAuth token), so it works
+        # on a copy in /tmp, readable by its own user only and in memory, so
+        # the credentials never reach the node's disk. copy adds what the
+        # remote lacks and deletes nothing; unfinished dumps (.partial-*) stay
+        # behind.
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -eu
+            umask 077
+            cp /etc/rclone/rclone.conf /tmp/rclone.conf
+            exec rclone copy /backups "$RCLONE_REMOTE" --config /tmp/rclone.conf \
+              --exclude '.partial-*/**' --exclude 'lost+found/**' "$@"
+          - rclone
+          {{- range $v.rclone.extraArgs }}
+          - {{ . | quote }}
+          {{- end }}
+        env:
+          - name: RCLONE_REMOTE
+            value: {{ $v.rclone.remote | quote }}
+          - name: HOME
+            value: /tmp
+        resources:
+          {{- toYaml $v.resources | nindent 10 }}
+        volumeMounts:
+          - name: backups
+            mountPath: /backups
+            readOnly: true
+          - name: rclone-config
+            mountPath: /etc/rclone
+            readOnly: true
+          - name: tmp
+            mountPath: /tmp
+    {{- else }}
+    containers:
+      {{- $dump | nindent 6 }}
+    {{- end }}
+    volumes:
+      - name: backups
+        persistentVolumeClaim:
+          claimName: {{ .claim }}
+      {{- if $v.rclone.enabled }}
+      - name: rclone-config
+        secret:
+          secretName: {{ $v.rclone.existingSecret }}
+          defaultMode: 0400
+          items:
+            - key: rclone.conf
+              path: rclone.conf
+      - name: tmp
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Mi
+      {{- end }}
+{{- end }}
+
+{{- /*
+The container that dumps the databases into /backups/<UTC time>/: as the
+superuser postgres, which pg_dumpall needs to read the roles' passwords. It
+writes into .partial-<time> and renames the directory once every dump has
+succeeded, so a directory named for its time holds a whole backup. Retention
+runs only after a good backup, so failing runs never delete the last ones.
+*/}}
+{{- define "sentinel.backupDumpContainer" -}}
+{{- $v := .Values.backup -}}
+- name: dump
+  image: {{ $v.image | quote }}
+  imagePullPolicy: IfNotPresent
+  {{- with $v.containerSecurityContext }}
+  securityContext:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  command: ["/bin/sh", "-c"]
+  args:
+    - |
+      set -eu
+      umask 077
+      stamp=$(date -u +%Y%m%dT%H%M%SZ)
+      work="/backups/.partial-$stamp"
+      tries=0
+      until pg_isready -q; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 60 ]; then
+          echo "PostgreSQL at $PGHOST is not ready" >&2
+          exit 1
+        fi
+        sleep 5
+      done
+      mkdir "$work"
+      pg_dumpall --globals-only --no-password --file "$work/globals.sql"
+      for db in $DATABASES; do
+        echo "== $db"
+        pg_dump --format=custom --no-password --file "$work/$db.dump" "$db"
+      done
+      mv "$work" "/backups/$stamp"
+      touch "/backups/$stamp"
+      echo "== /backups/$stamp"
+      ls -l "/backups/$stamp"
+      find /backups -mindepth 1 -maxdepth 1 -type d -name '20*Z' \
+        -mmin "+$((RETENTION_DAYS * 1440))" -print -exec rm -rf {} +
+      find /backups -mindepth 1 -maxdepth 1 -type d -name '.partial-*' \
+        -mmin +1440 -exec rm -rf {} +
+  env:
+    - name: PGHOST
+      value: {{ include "sentinel.postgresHost" . }}
+    - name: PGPORT
+      value: "5432"
+    - name: PGUSER
+      value: postgres
+    - name: PGPASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: {{ include "sentinel.postgresSecret" . }}
+          key: postgres-password
+    - name: DATABASES
+      value: {{ join " " $v.databases | quote }}
+    - name: RETENTION_DAYS
+      value: {{ int $v.retentionDays | quote }}
+  resources:
+    {{- toYaml $v.resources | nindent 4 }}
+  volumeMounts:
+    - name: backups
+      mountPath: /backups
+{{- end }}

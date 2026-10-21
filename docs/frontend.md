@@ -24,8 +24,10 @@ apps/client/src/
 │   ├── app.config.ts               # Angular providers config
 │   ├── app.routes.ts               # Lazy-loaded feature routes
 │   ├── core/
+│   │   ├── config/
+│   │   │   └── runtime-config.ts   # Loads /config.json (map keys) before bootstrap
 │   │   └── services/
-│   │       ├── auth.service.ts     # Keycloak auth + dev-mode fallback
+│   │       ├── auth.service.ts     # Keycloak auth + dev-mode fallback (dev builds only)
 │   │       ├── entity.service.ts   # REST + WebSocket entity state
 │   │       ├── websocket.service.ts # Native WebSocket stream (/ws/entities)
 │   │       └── alert.service.ts    # Alert notifications
@@ -110,6 +112,27 @@ The app uses a fixed layout with three zones:
 2. **Main content** (center) — CesiumJS map as persistent background + feature panels as overlays
 3. **Status bar** (bottom, 28px) — WebSocket connection status, entity count, classification level, username, UTC clock
 
+## Environments and runtime config
+
+| Build | Environment file | Map keys |
+|-------|------------------|----------|
+| `nx serve client` (dev) | `src/environments/environment.ts` | Built in, read directly |
+| `nx build client` (production, the default) | `src/environments/environment.prod.ts` (`fileReplacements`) | Empty; filled at runtime |
+
+The production bundle carries no keys. `main.ts` calls `loadRuntimeConfig()` (`core/config/runtime-config.ts`) before bootstrapping Angular. It fetches `/config.json` with `cache: 'no-store'` and copies `googleMapsApiKey` and `cesiumIonAccessToken` onto `environment`, so `Cesium.Ion.defaultAccessToken` and the 3D buildings provider see them when the map initialises. A 404 means "no config" (dev server, plain static hosting) and any other failure is logged; neither blocks startup, and empty values never overwrite what the build already holds.
+
+In the container the file is written at start by `apps/client/docker-entrypoint.d/40-sentinel-config.sh` from the `GOOGLE_MAPS_API_KEY` and `CESIUM_ION_ACCESS_TOKEN` environment variables (Compose reads both from `.env`; empty when unset). It goes to `/var/run/sentinel/config.json`, which nginx serves at `/config.json` with `Cache-Control: no-store`. Values may contain only `[A-Za-z0-9._-]` (they are written into JSON unescaped), and the container refuses to start on anything else.
+
+nginx is split in two files in the image: `/etc/nginx/sentinel/static.conf` (SPA fallback, asset caching, `index.html` revalidation, `/config.json`, `/healthz`) and `/etc/nginx/conf.d/default.conf` (a server block that includes it plus the Compose-only `/api`, `/ws` and `/auth/` proxy blocks). The Kubernetes chart replaces `default.conf` and includes only `static.conf`; with a read-only root filesystem, mount an `emptyDir` at `/var/run/sentinel`.
+
+### Authentication failures
+
+In a development build, a failed Keycloak initialisation falls back to a local `dev-operator` profile so the UI works without Keycloak. A production build never does: it stays signed out, `AuthService.initError$` carries the reason, and the login page shows it.
+
+### Rotate the committed keys
+
+`src/environments/environment.ts` still holds a real Google Maps API key and Cesium Ion token, and they are in the git history. They are no longer shipped in the production bundle, but anyone with repository access has them. Rotate both, or restrict them (Google Maps key by HTTP referrer and API, Cesium Ion token by allowed URL), then replace the values in `environment.ts` with your own or empty strings.
+
 ## Proxy Configuration
 
 `apps/client/proxy.conf.json` forwards API and WebSocket traffic to the API Gateway:
@@ -137,7 +160,7 @@ The app uses a fixed layout with three zones:
 ## CesiumJS
 
 - **Version**: 1.120
-- **Ion token**: Configured via `CESIUM_ION_ACCESS_TOKEN` environment variable
+- **Ion token**: Configured via `CESIUM_ION_ACCESS_TOKEN` (see [Environments and runtime config](#environments-and-runtime-config))
 - **Build setup**: Cesium workers, assets, and widgets are copied into the build output via Angular build configuration
 - **Globe**: 3D terrain with entity billboards/points positioned using WGS84 coordinates
 - **Motion between fixes**: aircraft and moving vessels are dead-reckoned (`features/map/dead-reckoning.ts`); satellites are propagated with SGP4 from the elements they carry (`features/map/satellite-tracker.ts`, `satellite.js` 6.0.2), all of them four times a second and the selected one every frame

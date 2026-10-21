@@ -2,6 +2,13 @@
 
 import { TestBed } from '@angular/core/testing';
 import { AuthService } from './auth.service';
+import { environment } from '../../../environments/environment';
+
+const mockKeycloakInit = jest.fn();
+jest.mock('keycloak-js', () => ({
+  __esModule: true,
+  default: jest.fn().mockImplementation(() => ({ init: mockKeycloakInit })),
+}));
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -33,6 +40,49 @@ describe('AuthService', () => {
       expect(service.isAuthenticated()).toBe(true);
 
       warnSpy.mockRestore();
+    });
+  });
+
+  describe('init when Keycloak is unreachable', () => {
+    const wasProduction = environment.production;
+    let warnSpy: jest.SpyInstance;
+    let errorSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      errorSpy = jest.spyOn(console, 'error').mockImplementation();
+      mockKeycloakInit.mockReset().mockRejectedValue(new Error('Connection refused'));
+      warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+    });
+
+    afterEach(() => {
+      environment.production = wasProduction;
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    });
+
+    it('in production reports a login error and never signs in a development user', async () => {
+      environment.production = true;
+      const devProfile = jest.spyOn(service as any, 'setDevelopmentProfile');
+      let profile: unknown = 'unset';
+      service.userProfile$.subscribe((p) => (profile = p));
+
+      const result = await service.init();
+
+      expect(result).toBe(false);
+      expect(devProfile).not.toHaveBeenCalled();
+      expect(service.isAuthenticated()).toBe(false);
+      expect(profile).toBeNull();
+      expect(service.initError$.value).toMatch(/authentication service/i);
+    });
+
+    it('in development falls back to the development user', async () => {
+      environment.production = false;
+
+      const result = await service.init();
+
+      expect(result).toBe(true);
+      expect(service.isAuthenticated()).toBe(true);
+      expect(service.initError$.value).toBeNull();
     });
   });
 

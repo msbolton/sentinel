@@ -1,0 +1,190 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+{{- $fullname := include "sentinel.fullname" . }}
+{{- /*
+Ingress rules only: egress stays open, since ingest reaches the internet and
+the gateway and Keycloak a mail relay. Each workload accepts the callers it
+has and nothing else; the default deny below catches the release's other pods
+(the Jobs, the backups). Ports are the containers' named ports (http, and
+postgresql and kafka for the data tier): a policy matches the pod's port, not
+the Service's, so a Service port changed in the values changes nothing here.
+kube-router (k3s) accepts any source address of the pod's own node whatever
+the rules say, so the kubelet's probes, and a hostNetwork pod on the same
+node, always get through.
+*/}}
+{{- $gateway := include "sentinel.selectorLabels" (dict "ctx" $ "component" "api-gateway") }}
+{{- $ingressPeer := include "sentinel.selectorPeer" $np.ingressController }}
+# Every pod of the release accepts nothing unless a policy below lets it. Pods
+# outside the release (cert-manager's solver, a debug pod) are not selected.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-default-deny
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "default-deny") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/part-of: sentinel
+  policyTypes: [Ingress]
+{{- if .Values.web.enabled }}
+---
+{{ include "sentinel.networkPolicyMeta" (dict "ctx" $ "component" "web") }}
+  ingress:
+    - from:
+        {{- $ingressPeer | nindent 8 }}
+      ports:
+        - port: http
+          protocol: TCP
+{{- end }}
+{{- if .Values.apiGateway.enabled }}
+---
+{{ include "sentinel.networkPolicyMeta" (dict "ctx" $ "component" "api-gateway") }}
+  ingress:
+    - from:
+        {{- $ingressPeer | nindent 8 }}
+      ports:
+        - port: http
+          protocol: TCP
+{{- end }}
+{{- if .Values.keycloak.enabled }}
+---
+# The Ingress for the realm's public pages, the gateway for the signing keys,
+# tokens and the admin API. The management port (9000) serves the probes only.
+{{ include "sentinel.networkPolicyMeta" (dict "ctx" $ "component" "keycloak") }}
+  ingress:
+    - from:
+        {{- $ingressPeer | nindent 8 }}
+        - podSelector:
+            matchLabels:
+              {{- $gateway | nindent 14 }}
+      ports:
+        - port: http
+          protocol: TCP
+{{- end }}
+{{- /* The services behind the gateway: each accepts the gateway only, and
+Prometheus when the chart renders a monitor for it. */}}
+{{- $services := list
+  (dict "key" "entityService" "name" "entity-service" "monitor" .Values.appServices.serviceMonitor.enabled)
+  (dict "key" "trackService" "name" "track-service" "monitor" .Values.appServices.serviceMonitor.enabled)
+  (dict "key" "searchService" "name" "search-service" "monitor" .Values.appServices.serviceMonitor.enabled)
+  (dict "key" "linkAnalysisService" "name" "link-analysis-service" "monitor" .Values.appServices.serviceMonitor.enabled)
+  (dict "key" "alertService" "name" "alert-service" "monitor" .Values.appServices.serviceMonitor.enabled)
+  (dict "key" "analyticsService" "name" "analytics-service" "monitor" .Values.appServices.serviceMonitor.enabled)
+  (dict "key" "ingestService" "name" "ingest-service" "monitor" .Values.ingestService.serviceMonitor.enabled)
+}}
+{{- range $services }}
+{{- $v := index $.Values .key }}
+{{- if $v.enabled }}
+---
+{{ include "sentinel.networkPolicyMeta" (dict "ctx" $ "component" .name) }}
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- $gateway | nindent 14 }}
+        {{- if .monitor }}
+        {{- include "sentinel.selectorPeer" $np.metrics | nindent 8 }}
+        {{- end }}
+      ports:
+        - port: http
+          protocol: TCP
+{{- end }}
+{{- end }}
+{{- /* Postgres and Kafka accept every pod of the namespace (the services, the
+gateway, Keycloak, GeoServer, the hook Jobs and the backups) and the
+hostNetwork listener, whose connections come from a node address, not a pod
+address: hostNetworkCIDRs. With the listener on and no CIDRs, the rule has no
+from at all, so they accept every source on their port. */}}
+{{- $open := and .Values.ingestListener.enabled (empty $np.hostNetworkCIDRs) }}
+{{- $data := list }}
+{{- if .Values.postgresql.enabled }}
+{{- $data = append $data (dict "name" "postgresql") }}
+{{- end }}
+{{- if .Values.kafka.enabled }}
+{{- $data = append $data (dict "name" "kafka") }}
+{{- end }}
+{{- range $data }}
+---
+{{ include "sentinel.networkPolicyMeta" (dict "ctx" $ "component" .name) }}
+  ingress:
+    - ports:
+        - port: {{ .name }}
+          protocol: TCP
+      {{- if not $open }}
+      from:
+        - podSelector: {}
+        {{- range $np.hostNetworkCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+{{- end }}
+{{- if .Values.opensearch.enabled }}
+---
+# No TLS and no login (opensearch in values.yaml): this policy is all that keeps
+# other pods out.
+{{ include "sentinel.networkPolicyMeta" (dict "ctx" $ "component" "opensearch") }}
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "search-service") | nindent 14 }}
+      ports:
+        - port: http
+          protocol: TCP
+{{- end }}
+{{- if .Values.geoserver.enabled }}
+---
+# GIS clients reach GeoServer however it is exposed (an Ingress or a Service of
+# your own, or kubectl port-forward, which no policy affects). With
+# networkPolicy.geoserver.from empty it accepts anyone on 8600, as without the
+# policies, and its own accounts guard the layers.
+{{ include "sentinel.networkPolicyMeta" (dict "ctx" $ "component" "geoserver") }}
+  ingress:
+    - ports:
+        - port: http
+          protocol: TCP
+      {{- with $np.geoserver.from }}
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "geoserver-init") | nindent 14 }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- if and .Values.ingress.enabled .Values.ingress.clusterIssuer }}
+---
+# cert-manager's HTTP-01 solver, which it starts in this namespace while it
+# gets a certificate: the controller must reach it, or Let's Encrypt cannot
+# validate the host. It is not part of the release, so the default deny does
+# not select it; this keeps it reachable under a namespace-wide deny of your
+# own, and to the controller only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-acme-solver
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "acme-solver") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      acme.cert-manager.io/http01-solver: "true"
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- $ingressPeer | nindent 8 }}
+{{- end }}
+{{- end }}
+
+{{- /*
+A NetworkPolicy peer from a namespaceSelector and a podSelector, which must
+both match (networkPolicy.ingressController, networkPolicy.metrics).
+*/}}
+{{- define "sentinel.selectorPeer" -}}
+- namespaceSelector:
+    {{- toYaml .namespaceSelector | nindent 4 }}
+  podSelector:
+    {{- toYaml .podSelector | nindent 4 }}
+{{- end }}

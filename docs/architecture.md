@@ -253,13 +253,13 @@ Partitioning by key keeps one object's reports and one entity's events in order.
 - **PostgreSQL 16 + PostGIS** is the system of record: `entities`, `entity_identities`, `entity_sources`, `observations`, `track_points` (TimescaleDB hypertable when the extension is present), `alerts`, `alert_rules`, `links`, `locations`, `anomalies`, `feeds`, `feed_status`, `feed_areas`, `feed_leases`, `ingest_replicas`, `feed_ageout_config`, `api_keys`, and the GIS views. The schema is a set of idempotent per-area files in `db/schema/` applied in name order by `make db-schema`; versioned migrations begin at the first release. `docs/data-model.md` describes every table.
 - **OpenSearch** holds the search index, rebuilt from `entities.events`; nothing else reads it.
 - **Kafka** (KRaft, no ZooKeeper) is the only path between services for data; topics are created by `config/kafka/create-topics.sh`.
-- **MinIO** is S3-compatible object storage, part of the stack but not yet used by a service.
+- **MinIO** is S3-compatible object storage in the Compose stack, not yet used by a service; the Helm chart leaves it out.
 - **Keycloak** keeps its own Postgres database.
 
 ## Deployment
 
 - **Docker Compose** runs the whole stack for development: `docker-compose.infra.yml` for the data stores and Keycloak alone, `docker-compose.yml` for everything. One-shot jobs apply the schema (`db-schema`), create topics, provision GeoServer (`geoserver-init`) and MinIO. Ingest scales with `--scale ingest-service=N`; the `inbound` profile adds the host-networked `ingest-listener`.
-- **Kubernetes** uses the Helm chart under `k8s/charts/sentinel` (gateway and ingest deployments, optional GeoServer with the same provisioning script, a TAK certificate secret mount, the host-networked ingest listener on a labelled node, and a hook Job that applies `db/schema` before each upgrade) and a Kustomize overlay per environment under `k8s/overlays`.
+- **Kubernetes** uses the self-contained Helm chart under `k8s/charts/sentinel`, aimed at one node: PostgreSQL with PostGIS, Kafka, OpenSearch and Keycloak as its own StatefulSets and Deployments (no subcharts, no MinIO or Redis), the gateway, the services and the web client, the host-networked ingest listener on a labelled node, hook Jobs that apply `db/schema` and create the topics, an Ingress with a cert-manager certificate, NetworkPolicies and nightly PostgreSQL backups. Values overlays under `k8s/overlays` (`prod` for one k3s node, `local` for k3d over it, `dev`) are plain Helm values files. `make images-push` and `make deploy` follow `docs/deployment.md`; `docs/infrastructure.md` describes the chart.
 - **Images** are built per service from each app's `Dockerfile`; Go services build with `-tags dynamic` for librdkafka.
 
 ## Repository layout
@@ -290,12 +290,13 @@ sentinel/
 │   └── postgres/              init-extensions.sql, TimescaleDB/AGE installer
 ├── k8s/
 │   ├── charts/sentinel/       Helm chart (templates/, files/, values.yaml)
-│   └── overlays/              Kustomize overlays per environment
+│   ├── overlays/              Helm values: prod (one k3s node), local (k3d), dev
+│   └── cluster/               once-per-cluster manifests: issuers, Traefik settings, Retain storage class
 ├── scripts/smoke.sh           exercises the running stack through the gateway
 ├── docs/                      this documentation
 ├── docker-compose.yml         full stack
 ├── docker-compose.infra.yml   data stores and Keycloak only
-├── Makefile                   proto, build, dev, test, db-schema, docker targets
+├── Makefile                   proto, build, dev, test, db-schema, docker, images, chart-lint, deploy targets
 ├── nx.json, package.json      Nx workspace; every app and lib is an Nx project
 └── secrets/                   gitignored; TAK and listener certificates and ingest.env, supplied to ingest
 ```

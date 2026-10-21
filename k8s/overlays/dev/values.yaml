@@ -1,4 +1,14 @@
 # Development environment overrides
+# Needs a service token and the images' registry and tag:
+#   helm upgrade --install sentinel-dev ./k8s/charts/sentinel -f k8s/overlays/dev/values.yaml \
+#     --set ingestService.serviceToken=<token> --set global.imageRegistry=<registry> \
+#     --set global.imageTag=<tag> -n sentinel-dev --create-namespace
+# For a cluster you will actually run, use k8s/overlays/local (k3d) or the
+# production runbook, docs/deployment.md.
+
+global:
+  host: sentinel.dev.local
+
 apiGateway:
   replicaCount: 1
   resources:
@@ -33,41 +43,10 @@ ingestService:
 ingestListener:
   enabled: false
 
-analyticsService:
-  replicaCount: 1
-
 web:
   replicaCount: 1
-  ingress:
-    enabled: true
-    hosts:
-      - host: sentinel.dev.local
-        paths:
-          - path: /
-            pathType: Prefix
 
-postgresql:
-  primary:
-    persistence:
-      size: 10Gi
-
-kafka:
-  controller:
-    replicaCount: 1
-  provisioning:
-    topics:
-      - name: observations.raw
-        partitions: 6
-        replicationFactor: 1
-      - name: observations.dlq
-        partitions: 1
-        replicationFactor: 1
-      - name: entities.events
-        partitions: 3
-        replicationFactor: 1
-      - name: alerts.events
-        partitions: 1
-        replicationFactor: 1
-      - name: density.events
-        partitions: 1
-        replicationFactor: 1
+# A dev cluster has no public name for Let's Encrypt: sign with the local CA of
+# k8s/cluster/selfsigned-issuer.yaml.
+ingress:
+  clusterIssuer: sentinel-local-ca

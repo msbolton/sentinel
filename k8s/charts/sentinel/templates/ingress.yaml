@@ -1,0 +1,56 @@
+{{- if .Values.ingress.enabled }}
+{{- $fullname := include "sentinel.fullname" . }}
+{{- $host := required "global.host is required" .Values.global.host }}
+{{- $annotations := deepCopy (.Values.ingress.annotations | default dict) }}
+{{- with .Values.ingress.clusterIssuer }}
+{{- $_ := set $annotations "cert-manager.io/cluster-issuer" . }}
+{{- end }}
+{{- /* Path, Service and port of each route; Prefix matches whole path segments. */}}
+{{- $routes := list }}
+{{- if .Values.apiGateway.enabled }}
+{{- $gw := dict "service" (printf "%s-api-gateway" $fullname) "port" .Values.apiGateway.service.port }}
+{{- $routes = append $routes (merge (dict "path" "/api") $gw) }}
+{{- $routes = append $routes (merge (dict "path" "/ws") $gw) }}
+{{- end }}
+{{- if .Values.keycloak.enabled }}
+{{- /* The sentinel realm (login, tokens, keys, account) and the static files
+its pages load. Not the admin console, the master realm, health or metrics. */}}
+{{- $kc := dict "service" (printf "%s-keycloak" $fullname) "port" 8080 }}
+{{- $routes = append $routes (merge (dict "path" "/auth/realms/sentinel") $kc) }}
+{{- $routes = append $routes (merge (dict "path" "/auth/resources") $kc) }}
+{{- end }}
+{{- if .Values.web.enabled }}
+{{- $routes = append $routes (dict "path" "/" "service" (printf "%s-web" $fullname) "port" .Values.web.service.port) }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "ingress") | nindent 4 }}
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  tls:
+    - hosts:
+        - {{ $host | quote }}
+      secretName: {{ .Values.ingress.tlsSecretName | default (printf "%s-tls" $fullname) }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          {{- range $routes }}
+          - path: {{ .path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .service }}
+                port:
+                  number: {{ .port }}
+          {{- end }}
+{{- end }}

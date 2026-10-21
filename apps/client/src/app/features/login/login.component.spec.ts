@@ -9,6 +9,7 @@ describe('LoginComponent', () => {
   let fixture: ComponentFixture<LoginComponent>;
   let authService: {
     isAuthenticated$: BehaviorSubject<boolean>;
+    initError$: BehaviorSubject<string | null>;
     loginWithCredentials: jest.Mock;
     isAuthenticated: jest.Mock;
   };
@@ -18,6 +19,7 @@ describe('LoginComponent', () => {
   beforeEach(async () => {
     authService = {
       isAuthenticated$: new BehaviorSubject<boolean>(false),
+      initError$: new BehaviorSubject<string | null>(null),
       loginWithCredentials: jest.fn().mockResolvedValue({ success: true }),
       isAuthenticated: jest.fn().mockReturnValue(false),
     };
@@ -104,6 +106,20 @@ describe('LoginComponent', () => {
 
     expect(component.errorMessage()).toBe('Invalid credentials');
     expect(router.navigateByUrl).not.toHaveBeenCalled();
+  });
+
+  it('should show the authentication service error from startup', () => {
+    authService.initError$.next('The authentication service is unavailable.');
+    fixture.detectChanges();
+
+    const error = fixture.nativeElement.querySelector('.error-message');
+    expect(error.textContent).toContain('The authentication service is unavailable.');
+  });
+
+  it('should show no error when startup was healthy', () => {
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.error-message')).toBeNull();
   });
 
   it('should not submit when username or password is empty', async () => {

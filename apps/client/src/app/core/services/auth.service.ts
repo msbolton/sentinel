@@ -1,6 +1,7 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import { HttpInterceptorFn } from '@angular/common/http';
 import { BehaviorSubject, Observable } from 'rxjs';
+import { environment } from '../../../environments/environment';
 
 export interface UserProfile {
   username: string;
@@ -26,14 +27,15 @@ export class AuthService implements OnDestroy {
   readonly isAuthenticated$: Observable<boolean> = this.authenticatedSubject.asObservable();
   readonly userProfile$: Observable<UserProfile | null> = this.userProfileSubject.asObservable();
 
+  /** Set when sign-in is unavailable because Keycloak could not be initialised (production only). */
+  readonly initError$ = new BehaviorSubject<string | null>(null);
+
   async init(): Promise<boolean> {
     try {
       const KeycloakModule = await import('keycloak-js').catch(() => null);
 
       if (!KeycloakModule) {
-        console.warn('[Auth] Keycloak JS adapter not available, running in unauthenticated mode');
-        this.setDevelopmentProfile();
-        return true;
+        return this.handleInitFailure('Keycloak JS adapter not available');
       }
 
       const Keycloak = KeycloakModule.default;
@@ -68,11 +70,27 @@ export class AuthService implements OnDestroy {
 
       return authenticated;
     } catch (error) {
-      console.warn('[Auth] Keycloak initialization failed, running in unauthenticated mode:', error);
       this.keycloak = null;
-      this.setDevelopmentProfile();
-      return true;
+      return this.handleInitFailure('Keycloak initialization failed', error);
     }
+  }
+
+  /**
+   * Development falls back to a local operator so the UI works without Keycloak.
+   * A production build must never do that: it stays signed out and surfaces an
+   * error on the login page.
+   */
+  private handleInitFailure(reason: string, error?: unknown): boolean {
+    if (environment.production) {
+      console.error(`[Auth] ${reason}; sign-in is unavailable`, error ?? '');
+      this.authenticatedSubject.next(false);
+      this.userProfileSubject.next(null);
+      this.initError$.next('The authentication service is unavailable. Try again shortly or contact an administrator.');
+      return false;
+    }
+    console.warn(`[Auth] ${reason}, running in unauthenticated mode`, error ?? '');
+    this.setDevelopmentProfile();
+    return true;
   }
 
   async login(redirectUri?: string): Promise<void> {

@@ -1,0 +1,151 @@
+{{- if .Values.kafka.enabled }}
+{{- $name := printf "%s-kafka" (include "sentinel.fullname" .) }}
+{{- $v := .Values.kafka }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "kafka" "tier" "data") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: kafka
+  selector:
+    {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "kafka") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "kafka" "tier" "data") | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ $name }}
+  selector:
+    matchLabels:
+      {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "kafka") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sentinel.podLabels" (dict "ctx" $ "component" "kafka") | nindent 8 }}
+    spec:
+      # The image turns every KAFKA_* variable into a broker setting, and the
+      # service links Kubernetes injects (KAFKA_PORT=tcp://...) would be among
+      # them.
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 60
+      {{- with $v.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "sentinel.imagePullSecrets" .) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: kafka
+          image: "{{ $v.image.repository }}:{{ $v.image.tag }}"
+          imagePullPolicy: {{ $v.image.pullPolicy | default "IfNotPresent" }}
+          {{- with $v.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: kafka
+              containerPort: 9092
+            - name: controller
+              containerPort: 9093
+          # The settings of the Compose broker, with one PLAINTEXT listener for
+          # clients instead of its EXTERNAL and INTERNAL pair. Clients reach
+          # the broker through the Service's fully qualified name; the
+          # controller votes for itself on localhost, so it needs no Service
+          # (which has no endpoints before the pod is ready).
+          env:
+            - name: CLUSTER_ID
+              value: {{ $v.clusterId | quote }}
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_PROCESS_ROLES
+              value: broker,controller
+            - name: KAFKA_LISTENERS
+              value: PLAINTEXT://:9092,CONTROLLER://:9093
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: PLAINTEXT://{{ $name }}.{{ .Release.Namespace }}.svc.{{ .Values.global.clusterDomain }}:9092
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: CONTROLLER
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: PLAINTEXT
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: 1@localhost:9093
+            - name: KAFKA_LOG_DIRS
+              value: /var/lib/kafka/data
+            - name: KAFKA_NUM_PARTITIONS
+              value: "6"
+            - name: KAFKA_DEFAULT_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_LOG_RETENTION_HOURS
+              value: "168"
+            - name: KAFKA_LOG_SEGMENT_BYTES
+              value: "1073741824"
+            - name: KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS
+              value: "300000"
+            - name: KAFKA_MESSAGE_MAX_BYTES
+              value: "10485760"
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "false"
+            - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
+              value: "0"
+            - name: KAFKA_HEAP_OPTS
+              value: {{ $v.heapOpts | quote }}
+          startupProbe:
+            tcpSocket:
+              port: kafka
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: kafka
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: kafka
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          # The log directory is the claim's data subdirectory, mounted on the
+          # path itself. Not the claim's root: Kafka refuses to start when the
+          # log directory holds anything but partitions, such as the lost+found
+          # of a fresh ext4 volume. Not above it either (at /var/lib/kafka, as
+          # Compose mounts it): the image declares VOLUME /var/lib/kafka/data,
+          # so the runtime would put an anonymous volume there that the next
+          # pod does not get back.
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/kafka/data
+              subPath: data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "kafka") | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.global.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $v.persistence.size }}
+{{- end }}
