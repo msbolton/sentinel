@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -367,11 +368,15 @@ func TestUpsertThenStreamObservations(t *testing.T) {
 	h := newHarness(t, f, func(c *config.Config, _ *Options) { c.Sensor.Classification = "SECRET" })
 	h.start()
 
-	refs := map[string]bool{}
-	for i := 0; i < 20; i++ {
+	first := f.next(t)
+	if !isState(first.r) || first.r.GetEmplacementId() != "emp-1" {
+		t.Fatalf("a FIXED sensor's first report is %v, want its heartbeat", first.r)
+	}
+	refs := map[string]bool{first.r.GetClientRef(): true}
+	for n := 0; n < 20; {
 		g := f.next(t)
-		if !isObs(g.r) {
-			t.Fatalf("a FIXED sensor sent a non-observation report: %v", g.r)
+		if isState(g.r) {
+			continue
 		}
 		if g.r.GetEmplacementId() != "emp-1" {
 			t.Fatalf("report emplacement_id = %q, want the upserted id", g.r.GetEmplacementId())
@@ -380,6 +385,7 @@ func TestUpsertThenStreamObservations(t *testing.T) {
 			t.Fatalf("client_ref %q repeated or empty", g.r.GetClientRef())
 		}
 		refs[g.r.GetClientRef()] = true
+		n++
 	}
 	for i := 0; i < 10; i++ {
 		h.ackWhere(func(a *ingestv1.Ack) bool { return a.GetStatus() == ingestv1.AckStatus_ACK_STATUS_OK })
@@ -478,12 +484,16 @@ func TestSingleBoundEmplacementFallback(t *testing.T) {
 	f.session = sessionWith(false, boundEmplacement("EMP-B"))
 	h := newHarness(t, f, nil)
 	h.start()
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 6; {
 		g := f.next(t)
 		if g.r.GetEmplacementId() != "EMP-B" {
 			t.Fatalf("emplacement_id = %q, want EMP-B", g.r.GetEmplacementId())
 		}
+		if isState(g.r) {
+			continue // the heartbeat carries no fix to place
+		}
 		assertNearServerSite(t, g.r)
+		i++
 	}
 	if _, upserts, _ := f.counts(); upserts != 0 {
 		t.Fatalf("upserted %d times without sender-managed emplacements", upserts)
@@ -522,12 +532,16 @@ func TestEmplacementIDUsesServerGeometry(t *testing.T) {
 	f.session = sessionWith(true, boundEmplacement("Other"), boundEmplacement("4F0E-ABC"))
 	h := newHarness(t, f, func(c *config.Config, _ *Options) { c.Emplacement.EmplacementID = "  4f0e-abc " })
 	h.start()
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 6; {
 		g := f.next(t)
 		if g.r.GetEmplacementId() != "4F0E-ABC" {
 			t.Fatalf("emplacement_id = %q, want the session's id", g.r.GetEmplacementId())
 		}
+		if isState(g.r) {
+			continue // the heartbeat carries no fix to place
+		}
 		assertNearServerSite(t, g.r)
+		i++
 	}
 	if _, upserts, _ := f.counts(); upserts != 0 {
 		t.Fatal("upserted although --emplacement-id was given")
@@ -612,10 +626,10 @@ func TestUnknownEmplacementRetriedOnceInGraceWindow(t *testing.T) {
 					}
 					st, reason := ingestv1.AckStatus_ACK_STATUS_OK, ""
 					switch {
-					case first == nil:
+					case first == nil && isObs(r):
 						first = r.GetObservation()
 						st, reason = ingestv1.AckStatus_ACK_STATUS_REJECTED, "unknown_emplacement"
-					case twice && proto.Equal(r.GetObservation(), first):
+					case twice && isObs(r) && proto.Equal(r.GetObservation(), first):
 						st, reason = ingestv1.AckStatus_ACK_STATUS_REJECTED, "unknown_emplacement"
 					}
 					if err := s.ack(r, st, reason); err != nil {
@@ -625,7 +639,7 @@ func TestUnknownEmplacementRetriedOnceInGraceWindow(t *testing.T) {
 			}
 			h := newHarness(t, f, nil)
 			h.start()
-			orig := f.next(t)
+			orig, _ := f.until(t, "the first observation", func(g got) bool { return isObs(g.r) })
 			again, _ := f.until(t, "the retry", func(g got) bool { return proto.Equal(g.r.GetObservation(), orig.r.GetObservation()) })
 			if again.r.GetClientRef() == orig.r.GetClientRef() || again.stream != orig.stream {
 				t.Fatalf("retry ref %q stream %d, original ref %q stream %d", again.r.GetClientRef(), again.stream, orig.r.GetClientRef(), orig.stream)
@@ -856,7 +870,7 @@ func TestStreamResourceExhaustedReconnectsWithoutResend(t *testing.T) {
 	}
 	for _, a := range after {
 		for _, b := range before {
-			if a.GetClientRef() == b.GetClientRef() || proto.Equal(a.GetObservation(), b.GetObservation()) {
+			if a.GetClientRef() == b.GetClientRef() || (isObs(a) && isObs(b) && proto.Equal(a.GetObservation(), b.GetObservation())) {
 				t.Fatalf("report %q from the failed stream was resent", b.GetClientRef())
 			}
 		}
@@ -880,11 +894,10 @@ func TestOversizeReportDroppedLocally(t *testing.T) {
 	if err := h.stop(); err != nil {
 		t.Fatal(err)
 	}
-	if st := h.c.Stats(); st.Sent != 0 {
-		t.Fatalf("sent %d oversize reports", st.Sent)
-	}
-	if n := len(f.reports); n != 0 {
-		t.Fatalf("server received %d reports", n)
+	for len(f.reports) > 0 {
+		if g := <-f.reports; isObs(g.r) {
+			t.Fatalf("the server received an oversize observation: %v", g.r)
+		}
 	}
 	if !strings.Contains(h.logs.String(), "max_message_bytes") {
 		t.Fatalf("drop not logged:\n%s", h.logs.String())
@@ -960,7 +973,9 @@ func TestDeterministicForFixedSeed(t *testing.T) {
 		h.start()
 		var out []*sentinelv1.Observation
 		for len(out) < 30 {
-			out = append(out, f.next(t).r.GetObservation())
+			if g := f.next(t); isObs(g.r) {
+				out = append(out, g.r.GetObservation())
+			}
 		}
 		_ = h.stop()
 		return out
@@ -1024,5 +1039,103 @@ func TestBackoff(t *testing.T) {
 	b.reset()
 	if d := b.next(); d > 600*time.Millisecond {
 		t.Fatalf("after reset: %v", d)
+	}
+}
+
+// A fixed site heartbeats first on every stream and then every interval,
+// declaring the interval it was given.
+func TestFixedSensorHeartbeatsFirstAndThenEveryInterval(t *testing.T) {
+	f := newFake()
+	h := newHarness(t, f, func(c *config.Config, o *Options) {
+		c.Sensor.HeartbeatInterval = 7 * time.Second
+		o.HeartbeatEvery = 20 * time.Millisecond
+	})
+	h.start()
+	first := f.next(t)
+	if !isState(first.r) || first.r.GetEmplacementState().GetHeartbeatIntervalSec() != 7 || first.r.GetEmplacementId() != "emp-1" {
+		t.Fatalf("first report = %v, want a heartbeat declaring 7 s", first.r)
+	}
+	if g, _ := f.until(t, "a second heartbeat", func(g got) bool { return isState(g.r) }); g.stream != 1 {
+		t.Fatalf("the second heartbeat came on stream %d, want the same stream", g.stream)
+	}
+}
+
+// After no_heartbeat (the server lost the emplacement's liveness: a replica
+// move, a heartbeat lost) the CLI heartbeats at once and sends the fix again,
+// once.
+func TestNoHeartbeatSendsAStateAndRetriesTheFixOnce(t *testing.T) {
+	f := newFake()
+	var refused *sentinelv1.Observation
+	f.handler = func(s *srvStream) error {
+		for {
+			r, err := s.recv()
+			if err != nil {
+				return nil
+			}
+			st, reason := ingestv1.AckStatus_ACK_STATUS_OK, ""
+			if refused == nil && isObs(r) {
+				refused = r.GetObservation()
+				st, reason = ingestv1.AckStatus_ACK_STATUS_REJECTED, "no_heartbeat"
+			}
+			if err := s.ack(r, st, reason); err != nil {
+				return nil
+			}
+		}
+	}
+	h := newHarness(t, f, func(_ *config.Config, o *Options) { o.HeartbeatEvery = time.Hour })
+	h.start()
+	f.until(t, "the stream's first heartbeat", func(g got) bool { return isState(g.r) })
+	orig, _ := f.until(t, "the first observation", func(g got) bool { return isObs(g.r) })
+	f.until(t, "a heartbeat after the refusal", func(g got) bool { return isState(g.r) })
+	again, _ := f.until(t, "the retried fix", func(g got) bool {
+		return isObs(g.r) && proto.Equal(g.r.GetObservation(), orig.r.GetObservation())
+	})
+	if again.r.GetClientRef() == orig.r.GetClientRef() {
+		t.Fatal("the retry reused the client_ref")
+	}
+	h.ackWhere(func(a *ingestv1.Ack) bool { return a.GetClientRef() == again.r.GetClientRef() })
+	if st := h.c.Stats(); st.Rejected["no_heartbeat"] != 1 || st.Retried != 1 {
+		t.Fatalf("stats = %+v", st)
+	}
+}
+
+// Many refusals in a moment send one heartbeat, not one each.
+func TestNoHeartbeatKicksAreDebounced(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
+	c, err := New(testConfig(), Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: clock.Now, HeartbeatKickMin: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &activeStream{gen: 1}
+	refused := &ingestv1.Ack{ClientRef: "x", Status: ingestv1.AckStatus_ACK_STATUS_REJECTED, Reason: "no_heartbeat"}
+	c.handleAck(a, refused)
+	if !c.takeStateKick() {
+		t.Fatal("no heartbeat asked for after a refusal")
+	}
+	c.handleAck(a, refused)
+	if c.takeStateKick() {
+		t.Fatal("a second refusal within a second asked for another")
+	}
+	clock.Advance(time.Second)
+	c.handleAck(a, refused)
+	if !c.takeStateKick() {
+		t.Fatal("a refusal a second later asked for none")
+	}
+	if st := c.Stats(); st.Rejected["no_heartbeat"] != 3 {
+		t.Fatalf("rejected = %v", st.Rejected)
+	}
+}
+
+// Heartbeats are never rate limited, so the rate warning counts observations only.
+func TestRateWarningCountsObservationsOnly(t *testing.T) {
+	f := newFake()
+	f.session = func(int) (*ingestv1.GetSessionResponse, error) {
+		return &ingestv1.GetSessionResponse{FeedId: "feed-1", SenderManagedEmplacements: true, MaxMessagesPerSec: 300}, nil
+	}
+	h := newHarness(t, f, func(c *config.Config, _ *Options) { c.Emplacement.Mobility = config.MobilityMobile }) // 100 Hz x 3 emitters
+	h.start()
+	f.next(t)
+	if strings.Contains(h.logs.String(), "expect rate_limited") {
+		t.Fatalf("warned of a rate the limit allows:\n%s", h.logs.String())
 	}
 }

@@ -123,10 +123,14 @@ func unassigned(f registry.Feed, reason string) registry.Feed {
 
 // render is f as the caller who made r may see it: the decoder error texts in
 // its status are left out unless the caller's clearance reaches the feed's
-// classification. Every route that returns a feed or its status renders through
-// here.
+// classification, and the emplacements in it are those the caller may see
+// (visibleEmplacements). Every route that returns a feed or its status renders
+// through here.
 func (h *Handler) render(r *http.Request, f registry.Feed) feedDTO {
-	return toFeedDTO(f, h.catalog, clearedFor(r, f))
+	cleared := clearedFor(r, f)
+	dto := toFeedDTO(f, h.catalog, cleared)
+	dto.Status.Detail = visibleEmplacements(dto.Status.Detail, callerRank(r), cleared)
+	return dto
 }
 
 // present overlays the live status when the feed runs on this replica,
@@ -150,6 +154,7 @@ func (h *Handler) present(f registry.Feed, p placement) registry.Feed {
 		st := *f.Status
 		st.State = registry.StateUnassigned
 		st.Health = registry.HealthUnknown
+		st.Detail = withoutHeartbeats(st.Detail)
 		f.Status = &st
 	}
 	// Only a feed not running here gets this far, so a feed this replica runs
@@ -166,6 +171,33 @@ func (h *Handler) present(f registry.Feed, p placement) registry.Feed {
 		return unassigned(f, registry.NoOrdinaryReplicaError)
 	}
 	return f
+}
+
+// withoutHeartbeats returns a status detail without the emplacements'
+// heartbeat states (emplacements, heartbeat), for a stale row: they are what a
+// replica that went silent last saw, and the emplacements API does not believe
+// them either. A detail that cannot be read becomes {}; one without the keys
+// comes back as it is.
+func withoutHeartbeats(detail json.RawMessage) json.RawMessage {
+	if len(detail) == 0 {
+		return detail
+	}
+	var d map[string]json.RawMessage
+	if json.Unmarshal(detail, &d) != nil {
+		return json.RawMessage("{}")
+	}
+	_, hasList := d["emplacements"]
+	_, hasState := d["heartbeat"]
+	if !hasList && !hasState {
+		return detail
+	}
+	delete(d, "emplacements")
+	delete(d, "heartbeat")
+	out, err := json.Marshal(d)
+	if err != nil {
+		return json.RawMessage("{}")
+	}
+	return out
 }
 
 // RegisterRoutes mounts the routes on mux, each wrapped by guard.

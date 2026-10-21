@@ -156,3 +156,52 @@ func withoutSenderErrors(raw json.RawMessage) (json.RawMessage, bool) {
 	out, err := json.Marshal(senders)
 	return out, err == nil
 }
+
+// callerRank is the rank of the caller's clearance.
+func callerRank(r *http.Request) int {
+	return classification.Rank(middleware.Classification(r.Context()))
+}
+
+// visibleEmplacements returns a status detail whose emplacements (the
+// heartbeat state of a connection's emplacements, detail.emplacements) are
+// those the caller may see. An entry above rank is left out, as the API
+// leaves out the emplacement itself. When the caller is not cleared for the
+// connection, the names are blanked like the detail's other texts. A detail
+// without the key comes back as it is.
+func visibleEmplacements(detail json.RawMessage, rank int, cleared bool) json.RawMessage {
+	var d map[string]json.RawMessage
+	if json.Unmarshal(detail, &d) != nil || d == nil {
+		return detail
+	}
+	raw, ok := d["emplacements"]
+	if !ok {
+		return detail
+	}
+	var list []map[string]json.RawMessage
+	if json.Unmarshal(raw, &list) != nil {
+		delete(d, "emplacements")
+	} else {
+		kept := make([]map[string]json.RawMessage, 0, len(list))
+		for _, e := range list {
+			var level string
+			_ = json.Unmarshal(e["classification"], &level)
+			if classification.Rank(level) > rank {
+				continue
+			}
+			if !cleared {
+				e["name"] = json.RawMessage(`""`)
+			}
+			kept = append(kept, e)
+		}
+		out, err := json.Marshal(kept)
+		if err != nil {
+			return json.RawMessage("{}")
+		}
+		d["emplacements"] = out
+	}
+	out, err := json.Marshal(d)
+	if err != nil {
+		return json.RawMessage("{}")
+	}
+	return out
+}

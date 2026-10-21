@@ -125,17 +125,19 @@ class Emplacement(_message.Message):
     def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., mobility: _Optional[_Union[Mobility, str]] = ..., sensor_type: _Optional[_Union[SensorType, str]] = ..., position: _Optional[_Union[_common_pb2.Coordinate, _Mapping]] = ..., boresight_deg: _Optional[float] = ..., azimuth_reference: _Optional[_Union[AzimuthReference, str]] = ..., coverage: _Optional[_Union[Coverage, _Mapping]] = ..., default_sigma: _Optional[_Union[PolarSigma, _Mapping]] = ..., classification: _Optional[_Union[_common_pb2.Classification, str]] = ..., exercise: _Optional[bool] = ..., feed_id: _Optional[str] = ..., active: _Optional[bool] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class EmplacementState(_message.Message):
-    __slots__ = ("emplacement_id", "time", "position", "heading", "velocity", "orientation")
+    __slots__ = ("emplacement_id", "time", "position", "heading", "velocity", "orientation", "heartbeat_interval_sec")
     EMPLACEMENT_ID_FIELD_NUMBER: _ClassVar[int]
     TIME_FIELD_NUMBER: _ClassVar[int]
     POSITION_FIELD_NUMBER: _ClassVar[int]
     HEADING_FIELD_NUMBER: _ClassVar[int]
     VELOCITY_FIELD_NUMBER: _ClassVar[int]
     ORIENTATION_FIELD_NUMBER: _ClassVar[int]
+    HEARTBEAT_INTERVAL_SEC_FIELD_NUMBER: _ClassVar[int]
     emplacement_id: str
     time: _timestamp_pb2.Timestamp
     position: _common_pb2.Coordinate
     heading: float
     velocity: _entity_pb2.GeodeticVelocity
     orientation: _entity_pb2.Orientation
-    def __init__(self, emplacement_id: _Optional[str] = ..., time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., position: _Optional[_Union[_common_pb2.Coordinate, _Mapping]] = ..., heading: _Optional[float] = ..., velocity: _Optional[_Union[_entity_pb2.GeodeticVelocity, _Mapping]] = ..., orientation: _Optional[_Union[_entity_pb2.Orientation, _Mapping]] = ...) -> None: ...
+    heartbeat_interval_sec: int
+    def __init__(self, emplacement_id: _Optional[str] = ..., time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., position: _Optional[_Union[_common_pb2.Coordinate, _Mapping]] = ..., heading: _Optional[float] = ..., velocity: _Optional[_Union[_entity_pb2.GeodeticVelocity, _Mapping]] = ..., orientation: _Optional[_Union[_entity_pb2.Orientation, _Mapping]] = ..., heartbeat_interval_sec: _Optional[int] = ...) -> None: ...

@@ -54,6 +54,7 @@ func (depsWriter) Delete(context.Context, string) error { return nil }
 func (depsWriter) Touch(context.Context, string, *emplacement.Point, *float64, time.Time) error {
 	return nil
 }
+func (depsWriter) Heartbeat(context.Context, string, int, time.Time) error { return nil }
 
 // The drivers that authenticate senders (grpc) get the token cache, and the
 // emplacement view, from the supervisor's options.

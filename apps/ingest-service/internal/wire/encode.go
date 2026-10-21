@@ -4,6 +4,7 @@
 package wire
 
 import (
+	"maps"
 	"strconv"
 
 	"google.golang.org/protobuf/proto"
@@ -174,6 +175,8 @@ func platform(o *obs.Observation) *sentinelv1.PlatformDetail {
 			PriUs: copyFloat(r.PriUs), PulseWidthUs: copyFloat(r.PulseWidthUs),
 			ScanType: r.ScanType, PowerDbm: copyFloat(r.PowerDbm),
 		}}}
+	case len(o.Generic) > 0:
+		return &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Generic{Generic: &sentinelv1.GenericDetail{Fields: maps.Clone(o.Generic)}}}
 	}
 	return nil
 }

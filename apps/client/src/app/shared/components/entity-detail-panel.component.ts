@@ -12,7 +12,8 @@ import { FlightPathService } from '../../core/services/flight-path.service';
 import { FLIGHT_PATH_DAYS } from '../models/flight-path.model';
 import { pathSummary } from '../../features/map/flight-path';
 import { Entity, EntitySource } from '../models/entity.model';
-import { emplacementIdOf } from '../models/emplacement.model';
+import { SiteHeartbeat, emplacementIdOf, formatZulu, siteHeartbeatOf } from '../models/emplacement.model';
+import { WebSocketService } from '../../core/services/websocket.service';
 import { EntityBaseline, EntityPlace, Finding, findingKindLabel, formatDuration, formatMetres } from '../models/finding.model';
 import { Location } from '../models/location.model';
 import { formatAltitude, formatCoordinate } from '../geo-format';
@@ -653,7 +654,17 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                   @if (emplacementName(); as name) {
                     <div class="field-row">
                       <span class="field-label">Emplacement</span>
-                      <button type="button" class="field-value field-link" (click)="openEmplacement()">{{ name }}</button>
+                      @if (canOpenConnection() && connectionId(); as connId) {
+                        <button type="button" class="field-value field-link" [title]="'Open its connection, ' + connId" (click)="openConnection()">{{ name }}</button>
+                      } @else {
+                        <span class="field-value">{{ name }}</span>
+                      }
+                    </div>
+                  }
+                  @if (siteHeartbeat(); as hb) {
+                    <div class="field-row">
+                      <span class="field-label">Heartbeat</span>
+                      <span class="field-value mono">{{ heartbeatLabel(hb) }}</span>
                     </div>
                   }
                   @if (cotUid(); as uid) {
@@ -1408,18 +1419,49 @@ export class EntityDetailPanelComponent {
   private readonly emplacementService = inject(EmplacementService);
   private readonly router = inject(Router);
 
+  /** The emplacement row a SENSOR entity stands for, when it is loaded. */
+  private emplacementRow = computed(() => {
+    const id = emplacementIdOf(this.entity() ?? {});
+    if (!id) return null;
+    return this.emplacementService.emplacements().find((e) => e.id === id) ?? null;
+  });
+
   /** The emplacement a SENSOR entity stands for, by name when it is loaded. */
   protected emplacementName = computed(() => {
     const id = emplacementIdOf(this.entity() ?? {});
     if (!id) return null;
-    return this.emplacementService.emplacements().find((e) => e.id === id)?.name ?? id;
+    return this.emplacementRow()?.name ?? id;
   });
 
-  protected openEmplacement(): void {
-    const id = emplacementIdOf(this.entity() ?? {});
-    if (!id) return;
-    this.emplacementService.select(id);
-    this.router.navigateByUrl('/emplacements');
+  /**
+   * The connection a site belongs to: its row's, since the entity's feedId is
+   * the first feed that ever reported it and an operator may have rebound it
+   * since; the entity's when the row is not loaded.
+   */
+  protected connectionId = computed(() => this.emplacementRow()?.feedId ?? this.entity()?.feedId ?? null);
+
+  private readonly ws = inject(WebSocketService);
+
+  /** A site entity's heartbeat, judged against the server's clock, every second. */
+  protected siteHeartbeat = computed(() => {
+    this.now();
+    return siteHeartbeatOf(this.entity(), this.ws.serverNow());
+  });
+
+  /** Emplacements are edited inside their connection, which operators and admins manage. */
+  protected canOpenConnection = computed(() => this.auth.hasAnyRole('sentinel-operator', 'sentinel-admin'));
+
+  protected openConnection(): void {
+    const feedId = this.connectionId();
+    if (feedId) void this.router.navigate(['/connections'], { queryParams: { open: feedId } });
+  }
+
+  protected heartbeatLabel(hb: SiteHeartbeat): string {
+    const state =
+      hb.state === 'online' ? 'online'
+      : hb.state === 'offline' ? (hb.silentSince ? `offline since ${formatZulu(hb.silentSince, this.ws.serverNow())}` : 'offline')
+      : 'awaiting first heartbeat';
+    return `${state} · every ${hb.intervalSec} s`;
   }
   protected readonly orbit = inject(OrbitOverlayService);
   protected readonly flightPath = inject(FlightPathService);

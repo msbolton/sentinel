@@ -484,9 +484,13 @@ type Ack struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	ClientRef string                 `protobuf:"bytes,1,opt,name=client_ref,json=clientRef,proto3" json:"client_ref,omitempty"`
 	Status    AckStatus              `protobuf:"varint,2,opt,name=status,proto3,enum=sentinel.ingest.v1.AckStatus" json:"status,omitempty"`
-	// Why a report was not accepted: unknown_emplacement, stale_ownship,
-	// clock_skew (EmplacementState.time >5s ahead of or >60s behind server time), …
-	Reason        string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	// Why a report was not accepted: unknown_emplacement, no_heartbeat (the
+	// report's emplacement has not heartbeat within three of its intervals),
+	// stale_ownship, clock_skew (EmplacementState.time >5s ahead of or >60s
+	// behind server time), …
+	Reason string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	// The emplacement the report was resolved to, when it was (informational).
+	EmplacementId string `protobuf:"bytes,4,opt,name=emplacement_id,json=emplacementId,proto3" json:"emplacement_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -538,6 +542,13 @@ func (x *Ack) GetStatus() AckStatus {
 func (x *Ack) GetReason() string {
 	if x != nil {
 		return x.Reason
+	}
+	return ""
+}
+
+func (x *Ack) GetEmplacementId() string {
+	if x != nil {
+		return x.EmplacementId
 	}
 	return ""
 }
@@ -745,12 +756,13 @@ const file_sentinel_ingest_v1_ingest_service_proto_rawDesc = "" +
 	"\vobservation\x18\x02 \x01(\v2\x18.sentinel.v1.ObservationH\x00R\vobservation\x12L\n" +
 	"\x11emplacement_state\x18\x03 \x01(\v2\x1d.sentinel.v1.EmplacementStateH\x00R\x10emplacementState\x12%\n" +
 	"\x0eemplacement_id\x18\x04 \x01(\tR\remplacementIdB\x06\n" +
-	"\x04body\"s\n" +
+	"\x04body\"\x9a\x01\n" +
 	"\x03Ack\x12\x1d\n" +
 	"\n" +
 	"client_ref\x18\x01 \x01(\tR\tclientRef\x125\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x1d.sentinel.ingest.v1.AckStatusR\x06status\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"J\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12%\n" +
+	"\x0eemplacement_id\x18\x04 \x01(\tR\remplacementId\"J\n" +
 	"\x14StreamReportsRequest\x122\n" +
 	"\x06report\x18\x01 \x01(\v2\x1a.sentinel.ingest.v1.ReportR\x06report\"B\n" +
 	"\x15StreamReportsResponse\x12)\n" +

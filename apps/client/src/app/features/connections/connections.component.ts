@@ -1,5 +1,11 @@
 import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { ActivatedRoute, Router } from '@angular/router';
+import { Subscription } from 'rxjs';
+import { EmplacementService } from '../../core/services/emplacement.service';
+import { sitesSummaryOf } from '../../shared/models/emplacement.model';
+import { ConnectionEmplacementsComponent } from './connection-emplacements.component';
 import { FeedService, problemsOf } from '../../core/services/feed.service';
 import {
   ConnectionPolicy,
@@ -17,6 +23,7 @@ import { HasRoleDirective } from '../../shared/directives/has-role.directive';
 import { ConnectionFormComponent } from './connection-form.component';
 import { DeadLettersComponent } from './dead-letters.component';
 import { IngestTokensComponent } from './ingest-tokens.component';
+import { UnassignedEmplacementsComponent } from './unassigned-emplacements.component';
 import { SendGuideComponent } from './send-guide.component';
 import { endpointLabel, sendTarget } from './send-guide';
 import { listenOf } from './listen-config';
@@ -63,8 +70,9 @@ const DIRECTION_LABELS: Record<FeedDirection, string> = {
 
 const HEALTH_LABELS: Record<FeedHealthLevel, string> = {
   healthy: 'Healthy',
-  warn: 'Stale (warning)',
-  critical: 'Stale (critical)',
+  // A connection with emplacements is warned when some are silent, not stale.
+  warn: 'Warning',
+  critical: 'Critical',
   unknown: 'Unknown',
 };
 
@@ -76,13 +84,16 @@ const HEALTH_LABELS: Record<FeedHealthLevel, string> = {
 @Component({
   selector: 'app-connections',
   standalone: true,
-  imports: [DecimalPipe, ConnectionFormComponent, DeadLettersComponent, HasRoleDirective, IngestTokensComponent, SendGuideComponent],
+  imports: [DecimalPipe, ConnectionEmplacementsComponent, ConnectionFormComponent, DeadLettersComponent, HasRoleDirective, IngestTokensComponent, SendGuideComponent, UnassignedEmplacementsComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './connections.component.html',
   styleUrl: './connections.component.scss',
 })
 export class ConnectionsComponent implements OnInit, OnDestroy {
   private readonly feedService = inject(FeedService);
+  private readonly emplacements = inject(EmplacementService);
+  private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
 
   /** Who sees a connection's recent rejects; the server refuses everyone else, so this only spares them the panel. */
   readonly deadLetterRoles = ['sentinel-operator', 'sentinel-admin'];
@@ -121,7 +132,7 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
         sink,
         highlights: highlightsOf(feed.status?.detail, sink, feed),
         detailEntries: Object.entries(feed.status?.detail ?? {})
-          .filter(([key]) => key !== 'leaseToken')
+          .filter(([key]) => key !== 'leaseToken' && key !== 'emplacements' && key !== 'heartbeat')
           .map(([key, value]) => ({ key, value: formatDetail(value), withheld: isWithheld(value) })),
       };
     });
@@ -132,14 +143,31 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
 
   private release: (() => void) | null = null;
   private clock: ReturnType<typeof setInterval> | null = null;
+  private emplacementsLoad: Subscription | null = null;
+
+  constructor() {
+    // The expanded rows live in ?open=, so a link can open one (the entity
+    // panel's "connection" link) and a reload keeps them.
+    this.route.queryParamMap.pipe(takeUntilDestroyed()).subscribe((params) => {
+      const open = params.get('open');
+      this.expanded.set(new Set(open ? open.split(',').filter((id) => id !== '') : []));
+    });
+  }
 
   ngOnInit(): void {
     this.release = this.feedService.poll(10_000);
+    this.reloadEmplacements();
     this.feedService.loadDrivers().subscribe({
       next: () => this.driversError.set(null),
       error: (err) => this.driversError.set(`Driver catalog unavailable: ${problemsOf(err).message}`),
     });
-    this.clock = setInterval(() => this.now.set(Date.now()), 10_000);
+    // The emplacements are reloaded with the feed poll: the server moves them
+    // (a deleted connection's operator rows go to Unassigned; a sender
+    // declares new ones) without telling this page.
+    this.clock = setInterval(() => {
+      this.now.set(Date.now());
+      this.reloadEmplacements();
+    }, 10_000);
   }
 
   ngOnDestroy(): void {
@@ -149,6 +177,14 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
       clearInterval(this.clock);
       this.clock = null;
     }
+    this.emplacementsLoad?.unsubscribe();
+    this.emplacementsLoad = null;
+  }
+
+  /** Loads the emplacements again, dropping a load still in flight. */
+  private reloadEmplacements(): void {
+    this.emplacementsLoad?.unsubscribe();
+    this.emplacementsLoad = this.emplacements.load().subscribe({ error: () => undefined });
   }
 
   // --- presentation -----------------------------------------------------
@@ -200,14 +236,18 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
   }
 
   toggleExpanded(id: string): void {
-    this.expanded.update((set) => {
-      const next = new Set(set);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
+    const next = new Set(this.expanded());
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    this.expanded.set(next);
+    void this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { open: next.size > 0 ? [...next].join(',') : null },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
     });
   }
 
@@ -266,6 +306,8 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
       next: () => {
         this.deleting.set(null);
         this.confirmingDelete.set(null);
+        // The server unbound its emplacements: its operator rows are now Unassigned.
+        this.reloadEmplacements();
       },
       error: (err) => {
         this.deleting.set(null);
@@ -311,6 +353,10 @@ function highlightsOf(detail: Record<string, unknown> | undefined, sink: SinkDet
     return [];
   }
   const out: string[] = [];
+  const sites = sitesSummaryOf(detail);
+  if (sites) {
+    out.push(sites);
+  }
   if (sink.remotePeer) {
     out.push(sink.remotePeer);
   }

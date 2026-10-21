@@ -28,6 +28,7 @@ sensor:
   sigmaM: 250            # position error at the reference range
   classification: UNCLASSIFIED
   sendTimestamps: false  # keep false unless this host's clock is NTP-disciplined
+  heartbeatInterval: 5s  # the site's EmplacementState heartbeat; offline after three missed
 
 emitters:
   # Merchant-style X-band surface search radar on a patrolling vessel.

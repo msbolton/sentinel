@@ -1,17 +1,19 @@
 import { LngLat } from '../../shared/models/geofence.model';
-import { Emplacement, EmplacementDraft, emplacementIdOf } from '../../shared/models/emplacement.model';
+import { Emplacement, EmplacementDraft, SiteHeartbeat, emplacementIdOf, formatZulu } from '../../shared/models/emplacement.model';
 import { EntityType } from '../../shared/models/entity.model';
 import { ENTITY_TYPE_PIN_COLORS, LABEL_SCALE_BY_DISTANCE, LABEL_TRANSLUCENCY_BY_DISTANCE } from './cesium-config';
 import { coverageRings, hasCoverage } from './emplacement-geometry';
 import { locationDotDataUrl } from './location-dot';
 
-/** The layer key emplacements obey: the built-in emplacements feed's row in the layers pill. */
-export const EMPLACEMENTS_LAYER = 'emplacements';
 /** The id the form's unsaved draft is drawn under; it is never an emplacement id. */
 export const EMPLACEMENT_DRAFT_ID = '__emplacement_draft__';
+/** The grey of a silent site. */
+export const SILENT_SITE_COLOR = '#6b7280';
 
 /** Where a mobile emplacement's SENSOR entity is now, if it is on the stream. */
 export type LivePosition = (emplacementId: string) => { lon: number; lat: number; heading: number | null } | null;
+/** A site's heartbeat, judged now; null for a site whose connection does not heartbeat it. */
+export type HeartbeatOf = (emplacementId: string) => SiteHeartbeat | null;
 
 type Placeable = Pick<Emplacement, 'id' | 'mobility' | 'position' | 'boresightDeg' | 'azimuthReference'>;
 type Drawable = Placeable & Pick<Emplacement, 'name' | 'coverage'>;
@@ -27,6 +29,34 @@ export function emplacementDrawingOf(
 ): string | null {
   const id = emplacementIdOf(entity);
   return id != null && loaded.has(id) ? id : null;
+}
+
+/** The SENSOR entity that stands for an emplacement, among those on the stream. */
+export function siteEntityOf<T extends { identities?: { type: string; value: string }[] | null }>(entities: Iterable<T>, emplacementId: string): T | null {
+  for (const e of entities) {
+    if (emplacementIdOf(e) === emplacementId) return e;
+  }
+  return null;
+}
+
+/**
+ * The sites drawn on the map: those whose connection's layer is shown. One
+ * with no connection has no layer; it is drawn only while selected or edited.
+ */
+export function sitesShown(list: Emplacement[], hidden: ReadonlySet<string>): Emplacement[] {
+  return list.filter((e) => !e.feedId || !hidden.has(e.feedId));
+}
+
+/** Whether a site is drawn as silent: heard from and lapsed, or never heard from. */
+export function isSilent(hb: SiteHeartbeat | null): boolean {
+  return hb !== null && (hb.state === 'offline' || hb.state === 'never');
+}
+
+/** A site's label: its name, and, while it is silent, since when. */
+export function siteLabel(name: string, hb: SiteHeartbeat | null, nowMs: number = Date.now()): string {
+  if (!hb || !isSilent(hb)) return name;
+  if (hb.state === 'never') return `${name} · no heartbeat yet`;
+  return hb.silentSince ? `${name} · silent since ${formatZulu(hb.silentSince, nowMs)}` : `${name} · silent`;
 }
 
 /**
@@ -47,8 +77,10 @@ export function placementOf(e: Placeable, live: LivePosition): { lon: number; la
 /**
  * Keeps the viewer's entities in step with the emplacements: a marker and
  * label per emplacement, and its coverage footprint when coverage is shown.
- * A mobile emplacement's entities follow its live fix through callbacks.
- * Every entity carries `_sentinelEmplacement` so a click can select it.
+ * A silent site is a grey hollow dot, labelled since when, with a dim
+ * footprint. A mobile emplacement's entities follow its live fix through
+ * callbacks. Every entity carries `_sentinelEmplacement` so a click can
+ * select the site.
  */
 export class EmplacementLayer {
   private readonly drawn = new Map<string, { entities: any[]; key: string }>();
@@ -56,17 +88,24 @@ export class EmplacementLayer {
 
   constructor(private readonly viewer: any, private readonly Cesium: any) {}
 
-  sync(list: Emplacement[], selectedId: string | null, draft: EmplacementDraft | null, showCoverage: boolean, live: LivePosition): void {
+  sync(
+    list: Emplacement[],
+    selectedId: string | null,
+    draft: EmplacementDraft | null,
+    showCoverage: boolean,
+    live: LivePosition,
+    heartbeat: HeartbeatOf = () => null,
+  ): void {
     this.live = live;
-    const items = new Map<string, { e: Drawable; selected: boolean }>();
+    const items = new Map<string, { e: Drawable; selected: boolean; hb: SiteHeartbeat | null }>();
     for (const e of list) {
-      if (e.active || e.id === selectedId) items.set(e.id, { e, selected: e.id === selectedId });
+      if (e.active || e.id === selectedId) items.set(e.id, { e, selected: e.id === selectedId, hb: heartbeat(e.id) });
     }
     if (draft) {
       const id = draft.id ?? EMPLACEMENT_DRAFT_ID;
-      items.set(id, { e: { ...draft, id }, selected: true });
+      items.set(id, { e: { ...draft, id }, selected: true, hb: null });
     }
-    for (const [id, { e, selected }] of items) this.build(id, e, selected, showCoverage);
+    for (const [id, { e, selected, hb }] of items) this.build(id, e, selected, showCoverage, hb);
     for (const [id, { entities }] of this.drawn) {
       if (!items.has(id)) {
         for (const x of entities) this.viewer.entities.remove(x);
@@ -83,14 +122,16 @@ export class EmplacementLayer {
     this.drawn.clear();
   }
 
-  private build(id: string, e: Drawable, selected: boolean, showCoverage: boolean): void {
-    const key = JSON.stringify([e.name, e.mobility, e.position, e.boresightDeg, e.azimuthReference, e.coverage, selected, showCoverage]);
+  private build(id: string, e: Drawable, selected: boolean, showCoverage: boolean, hb: SiteHeartbeat | null): void {
+    const silent = isSilent(hb);
+    const text = siteLabel(e.name || 'New emplacement', hb);
+    const key = JSON.stringify([e.name, e.mobility, e.position, e.boresightDeg, e.azimuthReference, e.coverage, selected, showCoverage, silent, text]);
     const existing = this.drawn.get(id);
     if (existing?.key === key) return;
     if (existing) for (const x of existing.entities) this.viewer.entities.remove(x);
 
     const C = this.Cesium;
-    const cssColor = ENTITY_TYPE_PIN_COLORS[EntityType.SENSOR] ?? '#8b5cf6';
+    const cssColor = silent ? SILENT_SITE_COLOR : (ENTITY_TYPE_PIN_COLORS[EntityType.SENSOR] ?? '#8b5cf6');
     const color = C.Color.fromCssColorString(cssColor);
     const mobile = e.mobility === 'MOBILE';
     const place = () => placementOf(e, this.live);
@@ -109,14 +150,14 @@ export class EmplacementLayer {
       position: dynamic(cartesian),
       show: mobile ? new C.CallbackProperty(() => place() !== null, false) : true,
       billboard: {
-        image: locationDotDataUrl(cssColor, { dashed: mobile }),
+        image: locationDotDataUrl(cssColor, { dashed: mobile, hollow: silent }),
         scale: selected ? 0.9 : 0.7,
         heightReference: C.HeightReference.CLAMP_TO_GROUND,
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
         verticalOrigin: C.VerticalOrigin.CENTER,
       },
       label: {
-        text: e.name || 'New emplacement',
+        text,
         font: '11px JetBrains Mono, monospace',
         fillColor: color,
         outlineColor: C.Color.BLACK,
@@ -152,9 +193,10 @@ export class EmplacementLayer {
         const ring = toCartesian(r[0]);
         return [...ring, ring[0]];
       };
+      const fill = silent ? 0.04 : selected ? 0.18 : 0.08;
       const footprint = this.viewer.entities.add({
-        polygon: { hierarchy: dynamic(hierarchy), material: color.withAlpha(selected ? 0.18 : 0.08), heightReference: C.HeightReference.CLAMP_TO_GROUND },
-        polyline: { positions: dynamic(outline), width: selected ? 2.5 : 1.5, material: color.withAlpha(0.8), clampToGround: true },
+        polygon: { hierarchy: dynamic(hierarchy), material: color.withAlpha(fill), heightReference: C.HeightReference.CLAMP_TO_GROUND },
+        polyline: { positions: dynamic(outline), width: selected ? 2.5 : 1.5, material: color.withAlpha(silent ? 0.35 : 0.8), clampToGround: true },
       });
       footprint._sentinelEmplacement = id;
       entities.push(footprint);

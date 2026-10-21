@@ -78,14 +78,16 @@ class Report(_message.Message):
     def __init__(self, client_ref: _Optional[str] = ..., observation: _Optional[_Union[_observation_pb2.Observation, _Mapping]] = ..., emplacement_state: _Optional[_Union[_emplacement_pb2.EmplacementState, _Mapping]] = ..., emplacement_id: _Optional[str] = ...) -> None: ...
 
 class Ack(_message.Message):
-    __slots__ = ("client_ref", "status", "reason")
+    __slots__ = ("client_ref", "status", "reason", "emplacement_id")
     CLIENT_REF_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     REASON_FIELD_NUMBER: _ClassVar[int]
+    EMPLACEMENT_ID_FIELD_NUMBER: _ClassVar[int]
     client_ref: str
     status: AckStatus
     reason: str
-    def __init__(self, client_ref: _Optional[str] = ..., status: _Optional[_Union[AckStatus, str]] = ..., reason: _Optional[str] = ...) -> None: ...
+    emplacement_id: str
+    def __init__(self, client_ref: _Optional[str] = ..., status: _Optional[_Union[AckStatus, str]] = ..., reason: _Optional[str] = ..., emplacement_id: _Optional[str] = ...) -> None: ...
 
 class StreamReportsRequest(_message.Message):
     __slots__ = ("report",)

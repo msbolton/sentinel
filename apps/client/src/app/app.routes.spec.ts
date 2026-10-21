@@ -46,4 +46,19 @@ describe('routes', () => {
     await harness.navigateByUrl('/feeds');
     expect(TestBed.inject(Router).url).toBe('/map');
   });
+
+  it('sends /emplacements to the map: emplacements are managed inside their connections', async () => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(routes),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: AuthService, useValue: { isAuthenticated: () => true, getUserRoles: () => ['sentinel-viewer'], getClassificationLevel: () => 'UNCLASSIFIED' } },
+      ],
+    });
+    expect(routes.find((r) => r.path === 'emplacements')).toEqual({ path: 'emplacements', redirectTo: 'map' });
+    const harness = await RouterTestingHarness.create();
+    await harness.navigateByUrl('/emplacements');
+    expect(TestBed.inject(Router).url).toBe('/map');
+  });
 });

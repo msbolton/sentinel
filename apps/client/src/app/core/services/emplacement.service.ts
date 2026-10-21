@@ -2,13 +2,13 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Observable, map, tap } from 'rxjs';
 import { AuthService } from './auth.service';
-import { Emplacement, EmplacementDraft, EmplacementInput } from '../../shared/models/emplacement.model';
+import { Emplacement, EmplacementDraft, EmplacementInput, EmplacementPoint } from '../../shared/models/emplacement.model';
 
 const URL = '/api/v1/emplacements';
 const COVERAGE_KEY = 'sentinel-emplacement-coverage';
 
-/** The roles that may create and edit emplacements, matching the gateway's policy. */
-export const EMPLACEMENT_WRITER_ROLES = ['sentinel-operator', 'sentinel-analyst', 'sentinel-admin'];
+/** The roles that may create and edit emplacements (inside their connection), matching the gateway's policy. */
+export const EMPLACEMENT_WRITER_ROLES = ['sentinel-operator', 'sentinel-admin'];
 /** Deleting one is for admins. */
 export const EMPLACEMENT_DELETE_ROLES = ['sentinel-admin'];
 
@@ -24,8 +24,7 @@ function readShowCoverage(): boolean {
 
 /**
  * The client's one view of emplacements: the list, the selection, the form's
- * unsaved draft (which the map previews) and whether the map's next click
- * places it.
+ * unsaved draft (which the map previews) and where the map should fly.
  */
 @Injectable({ providedIn: 'root' })
 export class EmplacementService {
@@ -39,9 +38,10 @@ export class EmplacementService {
   readonly selectedId = signal<string | null>(null);
   readonly selected = computed(() => this.emplacements().find((e) => e.id === this.selectedId()) ?? null);
   readonly draft = signal<EmplacementDraft | null>(null);
-  readonly picking = signal(false);
   /** Whether coverage is drawn on the map: this user's choice. */
   readonly showCoverage = signal<boolean>(readShowCoverage());
+  /** A place the map should fly to ("Show on map" in an editor); the map clears it once there. */
+  readonly focus = signal<EmplacementPoint | null>(null);
 
   load(): Observable<Emplacement[]> {
     return this.http.get<Emplacement[]>(URL).pipe(
@@ -76,12 +76,6 @@ export class EmplacementService {
 
   select(id: string | null): void {
     this.selectedId.set(id);
-  }
-
-  /** The map's click while picking: the draft's new position. */
-  pickAt(lat: number, lon: number): void {
-    this.picking.set(false);
-    this.draft.update((d) => (d ? { ...d, position: { lat, lon } } : d));
   }
 
   setShowCoverage(show: boolean): void {

@@ -15,10 +15,10 @@ import (
 
 	"github.com/sentinel/go-common/classification"
 	"github.com/sentinel/go-common/geo"
+	"github.com/sentinel/ingest-service/internal/emplacement"
 	"github.com/sentinel/ingest-service/internal/source/decoder"
 	"github.com/sentinel/ingest-service/internal/source/decoder/sentinelobs"
 	"github.com/sentinel/ingest-service/internal/source/driver"
-	"github.com/sentinel/ingest-service/internal/source/driver/emplacementmirror"
 	"github.com/sentinel/ingest-service/internal/source/transport"
 	ingestv1 "github.com/sentinel/proto-gen/sentinel/ingest/v1"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
@@ -112,14 +112,11 @@ func (s *service) Publish(ctx context.Context, req *ingestv1.PublishRequest) (*i
 // ended while the sink was waiting); everything else is an ack.
 func (s *service) handle(ctx context.Context, a authed, from string, r *ingestv1.Report) (*ingestv1.Ack, error) {
 	ack := &ingestv1.Ack{ClientRef: r.GetClientRef()}
-	// The sender's own bucket first, so a flooder spends none of the shared one.
-	if !s.d.perSender.Allow(transport.SenderIP(from), time.Now()) {
-		s.d.senders.RateLimited(from, 1)
-		s.d.counts.SenderRateLimited.Add(1)
-		return s.reject(ack, "rate_limited"), nil
-	}
-	if !s.d.limit.Allow() {
-		s.d.counts.RateLimited.Add(1)
+	// A heartbeat is never rate limited: a refused one would take its
+	// emplacement offline and refuse its fixes. A state that is refused is
+	// charged by state itself, before it is dead-lettered (see limited).
+	_, heartbeat := r.GetBody().(*ingestv1.Report_EmplacementState)
+	if !heartbeat && s.limited(from) {
 		return s.reject(ack, "rate_limited"), nil
 	}
 	s.d.senders.Seen(from, time.Now().UTC())
@@ -128,6 +125,9 @@ func (s *service) handle(ctx context.Context, a authed, from string, r *ingestv1
 	// and a dead letter (visible at the connection's level) must not be
 	// written for it, whatever the body: no body is read at all.
 	if classification.Rank(s.d.floor) > classification.Rank(a.tok.Classification) {
+		if heartbeat && s.limited(from) {
+			return s.reject(ack, "rate_limited"), nil
+		}
 		return s.reject(ack, "above_ceiling"), nil
 	}
 	switch body := r.GetBody().(type) {
@@ -140,10 +140,29 @@ func (s *service) handle(ctx context.Context, a authed, from string, r *ingestv1
 	}
 }
 
+// limited charges a report to the rate limits and reports whether it is over
+// them. The sender's own bucket is drawn on first, so a flooder spends none
+// of the shared one.
+func (s *service) limited(from string) bool {
+	if !s.d.perSender.Allow(transport.SenderIP(from), time.Now()) {
+		s.d.senders.RateLimited(from, 1)
+		s.d.counts.SenderRateLimited.Add(1)
+		return true
+	}
+	if !s.d.limit.Allow() {
+		s.d.counts.RateLimited.Add(1)
+		return true
+	}
+	return false
+}
+
 func (s *service) observation(ctx context.Context, a authed, from string, r *ingestv1.Report, m *sentinelv1.Observation, ack *ingestv1.Ack) (*ingestv1.Ack, error) {
 	e, bound, reason := s.resolve(a, r.GetEmplacementId())
 	if reason != "" {
 		return s.reject(ack, reason), nil
+	}
+	if bound {
+		ack.EmplacementId = e.ID
 	}
 	if m == nil {
 		// Dead letters are visible at the connection's level only: an empty
@@ -152,6 +171,14 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 			return s.reject(ack, "empty_report"), nil
 		}
 		return s.deadLetter(ack, from, r, "empty_report", errors.New("the report's observation is empty")), nil
+	}
+	// A bound report is taken only while its emplacement heartbeats: a silent
+	// sensor's fixes are refused, whatever else is wrong with them. A
+	// connection with no emplacements (bound false) is not affected.
+	if bound && !s.d.heartbeatsOff {
+		if t := s.d.liveness(); t == nil || !t.Online(e.ID, s.d.now().UTC()) {
+			return s.reject(ack, "no_heartbeat"), nil
+		}
 	}
 	// The level the runner will stamp: the highest of the feed's, the
 	// emplacement's and the report's own. A token may not send above its
@@ -210,7 +237,7 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 	if bound {
 		o.EmplacementID, o.SensorID = e.ID, e.ID
 		if o.Source == "" {
-			o.Source = emplacementmirror.SourceFor(e.SensorType)
+			o.Source = emplacement.SourceFor(e.SensorType)
 		}
 		o.Exercise = e.Exercise
 		if classification.Rank(e.Classification) > classification.Rank(o.Classification) {

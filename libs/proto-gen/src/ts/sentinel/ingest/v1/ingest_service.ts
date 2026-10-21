@@ -121,10 +121,14 @@ export interface Ack {
   clientRef: string;
   status: AckStatus;
   /**
-   * Why a report was not accepted: unknown_emplacement, stale_ownship,
-   * clock_skew (EmplacementState.time >5s ahead of or >60s behind server time), …
+   * Why a report was not accepted: unknown_emplacement, no_heartbeat (the
+   * report's emplacement has not heartbeat within three of its intervals),
+   * stale_ownship, clock_skew (EmplacementState.time >5s ahead of or >60s
+   * behind server time), …
    */
   reason: string;
+  /** The emplacement the report was resolved to, when it was (informational). */
+  emplacementId: string;
 }
 
 export interface StreamReportsRequest {
@@ -680,7 +684,7 @@ export const Report = {
 };
 
 function createBaseAck(): Ack {
-  return { clientRef: "", status: AckStatus.UNSPECIFIED, reason: "" };
+  return { clientRef: "", status: AckStatus.UNSPECIFIED, reason: "", emplacementId: "" };
 }
 
 export const Ack = {
@@ -693,6 +697,9 @@ export const Ack = {
     }
     if (message.reason !== "") {
       writer.uint32(26).string(message.reason);
+    }
+    if (message.emplacementId !== "") {
+      writer.uint32(34).string(message.emplacementId);
     }
     return writer;
   },
@@ -725,6 +732,13 @@ export const Ack = {
 
           message.reason = reader.string();
           continue;
+        case 4:
+          if (tag !== 34) {
+            break;
+          }
+
+          message.emplacementId = reader.string();
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -739,6 +753,7 @@ export const Ack = {
       clientRef: isSet(object.clientRef) ? globalThis.String(object.clientRef) : "",
       status: isSet(object.status) ? ackStatusFromJSON(object.status) : AckStatus.UNSPECIFIED,
       reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
+      emplacementId: isSet(object.emplacementId) ? globalThis.String(object.emplacementId) : "",
     };
   },
 
@@ -753,6 +768,9 @@ export const Ack = {
     if (message.reason !== "") {
       obj.reason = message.reason;
     }
+    if (message.emplacementId !== "") {
+      obj.emplacementId = message.emplacementId;
+    }
     return obj;
   },
 
@@ -764,6 +782,7 @@ export const Ack = {
     message.clientRef = object.clientRef ?? "";
     message.status = object.status ?? AckStatus.UNSPECIFIED;
     message.reason = object.reason ?? "";
+    message.emplacementId = object.emplacementId ?? "";
     return message;
   },
 };

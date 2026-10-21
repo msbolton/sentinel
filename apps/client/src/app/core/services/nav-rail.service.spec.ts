@@ -41,9 +41,9 @@ describe('routeForShortcut', () => {
     }
   });
 
-  it('opens the geofences panel on G', () => {
+  it('opens the geofences panel on G, and E opens nothing now that emplacements live in their connections', () => {
     expect(press('g')).toBe('/geofences');
-    expect(press('e')).toBe('/emplacements');
+    expect(press('e')).toBeNull();
   });
 
   it('ignores keys with a modifier held, so browser shortcuts still work', () => {

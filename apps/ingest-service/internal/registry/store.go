@@ -260,9 +260,10 @@ const emplacementsChannel = "sentinel_emplacements"
 // tokens cascade. Its emplacements are let go in the same transaction, each
 // announced the way the emplacement store announces its own writes: the ones
 // its senders made (createdBy "ingest-token:...") are soft-deleted, the rest
-// unbound. The foreign key would only null feedId silently, and a cache that
-// never hears of it keeps binding the emplacement to a feed that is gone, or
-// to a new feed that takes its id.
+// unbound and deactivated (an active emplacement needs a connection). The
+// foreign key (ON DELETE RESTRICT) would refuse the delete otherwise, and a
+// cache that never hears of the change keeps binding the emplacement to a feed
+// that is gone, or to a new feed that takes its id.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
 		// Lock the feed row first: an emplacement insert or update that binds
@@ -278,7 +279,9 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		}
 		rows, err := tx.Query(ctx, `UPDATE sentinel.emplacements SET
 				"deletedAt" = CASE WHEN "createdBy" LIKE $2 THEN NOW() ELSE "deletedAt" END,
-				"feedId" = NULL, version = version + 1, "updatedAt" = NOW()
+				active = CASE WHEN "createdBy" LIKE $2 THEN active ELSE FALSE END,
+				"feedId" = NULL, "heartbeatIntervalSec" = NULL, "lastHeartbeatAt" = NULL,
+				version = version + 1, "updatedAt" = NOW()
 			WHERE "feedId" = $1 AND "deletedAt" IS NULL
 			RETURNING id::text, "deletedAt" IS NOT NULL`, id, emplacement.SenderPrefix+"%")
 		if err != nil {
@@ -300,6 +303,12 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		rows.Close()
 		if err := rows.Err(); err != nil {
 			return err
+		}
+		// Rows deleted earlier still name the feed, and the foreign key (ON
+		// DELETE RESTRICT) would refuse the delete. No cache holds a deleted
+		// row, so they are let go without a notice.
+		if _, err := tx.Exec(ctx, `UPDATE sentinel.emplacements SET "feedId" = NULL WHERE "feedId" = $1 AND "deletedAt" IS NOT NULL`, id); err != nil {
+			return fmt.Errorf("letting go of feed %s's deleted emplacements: %w", id, err)
 		}
 		tag, err := tx.Exec(ctx, `DELETE FROM sentinel.feeds WHERE id = $1`, id)
 		if err != nil {

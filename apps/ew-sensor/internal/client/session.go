@@ -77,10 +77,8 @@ func (c *Client) session(ctx context.Context, api ingestv1.IngestServiceClient) 
 		"max_message_bytes", sess.GetMaxMessageBytes(),
 		"max_messages_per_sec", sess.GetMaxMessagesPerSec())
 	if limit := sess.GetMaxMessagesPerSec(); limit > 0 {
+		// Heartbeats are never rate limited: only the observations count.
 		per := c.cfg.EmitterCount
-		if c.cfg.Mobile() {
-			per++
-		}
 		if want := c.cfg.Sensor.Rate * float64(per); want > float64(limit) {
 			c.log.Warn("the configured rate can exceed the connection's message limit; expect rate_limited acks",
 				"reports_per_sec_max", want, "max_messages_per_sec", limit)

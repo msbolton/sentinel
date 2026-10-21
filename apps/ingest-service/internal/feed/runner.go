@@ -54,6 +54,9 @@ type RunnerOptions struct {
 	// It runs beside the driver; when either stops with an error the other
 	// is cancelled and the supervisor restarts the connection.
 	Pump *outbound.Pump
+	// Sites reports the connection's fixed emplacements when its driver does
+	// not heartbeat them (nil for grpc, outbound connections and tests).
+	Sites *SitePublisher
 }
 
 // Stats is what a runner has counted so far. The Outbound fields are zero
@@ -114,6 +117,12 @@ func NewRunner(feedID, driverID string, drv driver.Driver, pub Publisher, m *met
 // Run runs the driver until ctx ends. A panic inside the driver is
 // recovered and returned as an error so the supervisor can restart it.
 func (r *Runner) Run(ctx context.Context) error {
+	if r.opts.Sites != nil {
+		sctx, stop := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { defer close(done); r.opts.Sites.Run(sctx, r) }()
+		defer func() { stop(); <-done }()
+	}
 	if r.opts.Pump == nil {
 		return r.runDriver(ctx)
 	}
@@ -198,7 +207,7 @@ func (r *Runner) Emit(ctx context.Context, o *obs.Observation) error {
 	dropForeignEmplacements(o)
 	o.EnsureIdentity()
 	r.boundRaw(o)
-	if !r.opts.NoRepeatSuppression && !r.filter.Allow(o, time.Now()) {
+	if !r.opts.NoRepeatSuppression && !isSiteReport(o) && !r.filter.Allow(o, time.Now()) {
 		if r.metrics != nil {
 			r.metrics.DuplicatesTotal.WithLabelValues(r.feedID).Inc()
 		}
@@ -236,6 +245,13 @@ func dropForeignEmplacements(o *obs.Observation) {
 		kept = append(kept, id)
 	}
 	o.Identities = kept
+}
+
+// isSiteReport reports whether o is an emplacement's own SENSOR report, its
+// site entity. It is never suppressed as a repeat: a re-publish keeps the
+// position and changes what the entity says (its heartbeat state, a name).
+func isSiteReport(o *obs.Observation) bool {
+	return o.EmplacementID != "" && o.SourceEntityID == o.EmplacementID
 }
 
 func (r *Runner) boundRaw(o *obs.Observation) {

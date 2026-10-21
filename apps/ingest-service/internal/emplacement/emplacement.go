@@ -5,6 +5,7 @@
 package emplacement
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -85,10 +86,22 @@ type Emplacement struct {
 	Exercise         bool       `json:"exercise"`
 	Active           bool       `json:"active"`
 	LastReportAt     *time.Time `json:"lastReportAt"`
-	CreatedBy        string     `json:"createdBy"`
-	CreatedAt        time.Time  `json:"createdAt"`
-	UpdatedAt        time.Time  `json:"updatedAt"`
-	Version          int        `json:"version"`
+	// HeartbeatIntervalSec and LastHeartbeatAt are what the row last recorded
+	// of the emplacement's heartbeats (the grpc driver writes them, throttled,
+	// with the server's receive time); null until the first heartbeat and
+	// after a change of connection.
+	HeartbeatIntervalSec *int       `json:"heartbeatIntervalSec"`
+	LastHeartbeatAt      *time.Time `json:"lastHeartbeatAt"`
+	// Heartbeat and SilentSince are computed for the API from the owning
+	// replica's status (Handler.Liveness), and never stored. Heartbeat is
+	// empty for an emplacement whose connection does not heartbeat it, or
+	// that has no connection; SilentSince is set while it is offline.
+	Heartbeat   HeartbeatState `json:"heartbeat,omitempty"`
+	SilentSince *time.Time     `json:"silentSince,omitempty"`
+	CreatedBy   string         `json:"createdBy"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	UpdatedAt   time.Time      `json:"updatedAt"`
+	Version     int            `json:"version"`
 }
 
 // Input is a create or PATCH body. A nil field is left as it is; FeedID ""
@@ -108,6 +121,11 @@ type Input struct {
 	Classification   *string   `json:"classification"`
 	Exercise         *bool     `json:"exercise"`
 	Active           *bool     `json:"active"`
+	// Read-only fields a client may send back from a GET: accepted, ignored.
+	Heartbeat            json.RawMessage `json:"heartbeat"`
+	SilentSince          json.RawMessage `json:"silentSince"`
+	LastHeartbeatAt      json.RawMessage `json:"lastHeartbeatAt"`
+	HeartbeatIntervalSec json.RawMessage `json:"heartbeatIntervalSec"`
 }
 
 // New is what a create starts from before its input is applied.

@@ -485,3 +485,122 @@ func TestAffiliationStickyAndCovarianceCEPClears(t *testing.T) {
 		t.Fatalf("expected covariance-derived CE to clear when covariance clears, got %v (err=%v)", res[0].Record.CircularError, err)
 	}
 }
+
+// Review focus 3: a silent site's re-publish carries the same source time as
+// its last online one and still lands: the entity turns INACTIVE and its
+// generic detail is replaced, silentSince with it.
+func TestSiteStatusFollowsItsConnection(t *testing.T) {
+	pool, ctx := testPool(t)
+	ids := store.NewIdentityStore(pool, nil)
+	ents := store.NewEntityStore(pool, nil)
+	t0 := time.Now().UTC().Truncate(time.Millisecond)
+	icao := "TSO" + t0.Format("150405")
+	r1 := report("test-op", icao, t0, 41.9, -87.9)
+	created, _, err := ids.CreateEntities(ctx, []identity.NewEntity{fusion.SpecFor(r1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entityID := created[r1.Key]
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM sentinel.entities WHERE id = $1`, entityID)
+	})
+	apply := func(status, platform string, at time.Time) *store.EntityRecord {
+		t.Helper()
+		res, err := ents.ApplyFused(ctx, []store.FusedUpdate{{EntityID: entityID, ObservedAt: at, FeedID: "test-op", Source: "OPENSKY",
+			SourceEntityID: r1.Obs.SourceEntityId, KeyType: r1.Key.Type, KeyValue: r1.Key.Value, Name: "X", Lat: 1, Lon: 1,
+			OperationalStatus: status, Platform: json.RawMessage(platform)}})
+		if err != nil || len(res) != 1 {
+			t.Fatalf("apply %s = %+v %v", status, res, err)
+		}
+		return res[0].Record
+	}
+	rec := apply("OPERATIONAL", `{"generic":{"fields":{"heartbeat":"online"}}}`, t0)
+	if rec.OperationalStatus == nil || *rec.OperationalStatus != "OPERATIONAL" {
+		t.Fatalf("online: %v", rec.OperationalStatus)
+	}
+	rec = apply("INACTIVE", `{"generic":{"fields":{"heartbeat":"offline","silentSince":"x"}}}`, t0)
+	if rec.OperationalStatus == nil || *rec.OperationalStatus != "INACTIVE" {
+		t.Fatalf("a re-publish at the same time did not land: %v", rec.OperationalStatus)
+	}
+	rec = apply("", `{"generic":{"fields":{"heartbeat":"online"}}}`, t0.Add(time.Second))
+	if *rec.OperationalStatus != "INACTIVE" {
+		t.Fatalf("a report with no status changed it: %v", *rec.OperationalStatus)
+	}
+	fields, _ := rec.PlatformData["generic"].(map[string]interface{})["fields"].(map[string]interface{})
+	if _, ok := fields["silentSince"]; ok || fields["heartbeat"] != "online" {
+		t.Fatalf("generic detail = %v, want the newest one only", rec.PlatformData["generic"])
+	}
+}
+
+// A soft-deleted entity releases its identity: the next report that carries
+// it creates a new entity and the identity row moves to it.
+func TestCreateEntitiesRebindsDeletedEntitysIdentity(t *testing.T) {
+	pool, ctx := testPool(t)
+	ids := store.NewIdentityStore(pool, nil)
+	ents := store.NewEntityStore(pool, nil)
+	t0 := time.Now().UTC().Truncate(time.Millisecond)
+	icao := "RVV" + t0.Format("150405")
+
+	r1 := report("test-revive", icao, t0, 41.9, -87.9)
+	first, _, err := ids.CreateEntities(ctx, []identity.NewEntity{fusion.SpecFor(r1)})
+	if err != nil || first[r1.Key] == "" {
+		t.Fatalf("create = %v %v", first, err)
+	}
+	oldID := first[r1.Key]
+	if err := ents.SoftDelete(ctx, oldID); err != nil {
+		t.Fatal(err)
+	}
+
+	r2 := report("test-revive", icao, t0.Add(time.Minute), 42.0, -88.0)
+	again, isNew, err := ids.CreateEntities(ctx, []identity.NewEntity{fusion.SpecFor(r2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newID := again[r2.Key]
+	if newID == "" || newID == oldID || !isNew[r2.Key] {
+		t.Fatalf("after delete: id %q (old %q) created %v; want a new entity", newID, oldID, isNew[r2.Key])
+	}
+	var bound string
+	var firstSeen time.Time
+	if err := pool.QueryRow(ctx, `SELECT "entityId", "firstSeenAt" FROM sentinel.entity_identities WHERE "identityType" = $1 AND "identityValue" = $2`,
+		r2.Key.Type, r2.Key.Value).Scan(&bound, &firstSeen); err != nil {
+		t.Fatal(err)
+	}
+	if bound != newID {
+		t.Fatalf("identity bound to %q, want %q", bound, newID)
+	}
+	if !firstSeen.Equal(fusion.SpecFor(r2).SeenAt) {
+		t.Fatalf("firstSeenAt = %v, want %v", firstSeen, fusion.SpecFor(r2).SeenAt)
+	}
+	var oldDeleted, newDeleted bool
+	if err := pool.QueryRow(ctx, `SELECT deleted FROM sentinel.entities WHERE id = $1`, oldID).Scan(&oldDeleted); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT deleted FROM sentinel.entities WHERE id = $1`, newID).Scan(&newDeleted); err != nil {
+		t.Fatal(err)
+	}
+	if !oldDeleted || newDeleted {
+		t.Fatalf("old deleted=%v new deleted=%v; want true/false", oldDeleted, newDeleted)
+	}
+	dead, err := ents.DeletedAmong(ctx, []string{oldID, newID})
+	if err != nil || len(dead) != 1 || !dead[oldID] {
+		t.Fatalf("DeletedAmong = %v %v, want only %q", dead, err, oldID)
+	}
+	found, err := ids.Lookup(ctx, []identity.Key{r2.Key})
+	if err != nil || found[r2.Key] != newID {
+		t.Fatalf("lookup = %v %v, want %q", found, err, newID)
+	}
+
+	// The race case: a live entity holds the key, so creating returns it.
+	third, isNew3, err := ids.CreateEntities(ctx, []identity.NewEntity{fusion.SpecFor(r2)})
+	if err != nil || third[r2.Key] != newID || isNew3[r2.Key] {
+		t.Fatalf("live holder: %v %v %v; want %q not created", third, isNew3, err, newID)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sentinel.entities WHERE "feedId" = 'test-revive' AND "primaryIdentityValue" = $1`, r2.Key.Value).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("entities for key = %d, want 2 (old deleted + new live)", n)
+	}
+}

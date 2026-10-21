@@ -15,7 +15,8 @@ func TestAuthRolesForEmplacements(t *testing.T) {
 		method, path, roles string
 		want                int
 	}{
-		{http.MethodPost, "/emplacements", "sentinel-analyst", 204},
+		{http.MethodPost, "/emplacements", "sentinel-analyst", 403},
+		{http.MethodPost, "/emplacements", "sentinel-operator", 204},
 		{http.MethodPatch, "/emplacements/x", "sentinel-operator", 204},
 		{http.MethodPost, "/emplacements", "sentinel-viewer", 403},
 		{http.MethodDelete, "/emplacements/x", "sentinel-operator", 403},

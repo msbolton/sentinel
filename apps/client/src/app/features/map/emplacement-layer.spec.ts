@@ -1,4 +1,5 @@
-import { EmplacementLayer, emplacementDrawingOf, placementOf } from './emplacement-layer';
+import { EmplacementLayer, emplacementDrawingOf, placementOf, siteEntityOf, siteLabel, sitesShown } from './emplacement-layer';
+import { Emplacement } from '../../shared/models/emplacement.model';
 import { locationDotDataUrl } from './location-dot';
 
 const fixed = { id: 'f', mobility: 'FIXED' as const, position: { lat: 50, lon: -4 }, boresightDeg: 270, azimuthReference: 'TRUE_NORTH' as const };
@@ -124,5 +125,71 @@ describe('EmplacementLayer', () => {
     added.length = 0;
     layer.sync([{ ...emp, id: 'emp-2', mobility: 'MOBILE' }], null, null, false, () => null);
     expect(added[0].billboard.image).toBe(locationDotDataUrl('#8b5cf6', { dashed: true }));
+  });
+});
+
+describe('sitesShown', () => {
+  it("draws a site under its connection's layer toggle", () => {
+    const sites = [{ id: 'a', feedId: 'grpc-1' }, { id: 'b', feedId: 'grpc-2' }, { id: 'c', feedId: null }] as Emplacement[];
+    expect(sitesShown(sites, new Set(['grpc-2'])).map((e) => e.id)).toEqual(['a', 'c']);
+    expect(sitesShown(sites, new Set()).map((e) => e.id)).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('siteLabel', () => {
+  const NOW = Date.parse('2026-10-20T15:00:00Z');
+  it('says since when a silent site has been silent', () => {
+    expect(siteLabel('Coastal', null, NOW)).toBe('Coastal');
+    expect(siteLabel('Coastal', { state: 'online', intervalSec: 5, lastHeartbeatAt: null, silentSince: null }, NOW)).toBe('Coastal');
+    expect(siteLabel('Coastal', { state: 'offline', intervalSec: 5, lastHeartbeatAt: '2026-10-20T14:02:00Z', silentSince: '2026-10-20T14:02:00Z' }, NOW)).toBe('Coastal · silent since 14:02Z');
+    expect(siteLabel('Coastal', { state: 'never', intervalSec: 10, lastHeartbeatAt: null, silentSince: null }, NOW)).toBe('Coastal · no heartbeat yet');
+  });
+});
+
+describe('siteEntityOf', () => {
+  it('finds the SENSOR entity that stands for an emplacement', () => {
+    const entities = [{ id: 'x', identities: [{ type: 'MMSI', value: '1' }] }, { id: 'y', identities: [{ type: 'EMPLACEMENT', value: 'e-1' }] }];
+    expect(siteEntityOf(entities, 'e-1')?.id).toBe('y');
+    expect(siteEntityOf(entities, 'e-2')).toBeNull();
+  });
+});
+
+describe('EmplacementLayer, silent sites', () => {
+  it('draws a silent site grey and hollow, says since when, dims its footprint, and redraws it violet once it heartbeats', () => {
+    const added: any[] = [];
+    const viewer = {
+      entities: { add: (cfg: any) => { added.push(cfg); return cfg; }, remove: jest.fn() },
+      scene: { requestRender: jest.fn() },
+      isDestroyed: () => false,
+    };
+    const Cesium = {
+      Color: { fromCssColorString: (css: string) => ({ css, withAlpha: (a: number) => ({ css, a }) }), BLACK: 'black' },
+      Cartesian3: { fromDegrees: (lon: number, lat: number, h: number) => ({ lon, lat, h }) },
+      Cartesian2: function (x: number, y: number) { return { x, y }; },
+      NearFarScalar: function (...args: number[]) { return args; },
+      CallbackProperty: function (fn: () => unknown) { return fn; },
+      PolygonHierarchy: function (positions: unknown, holes: unknown) { return { positions, holes }; },
+      HeightReference: { CLAMP_TO_GROUND: 'CLAMP_TO_GROUND' },
+      LabelStyle: { FILL_AND_OUTLINE: 'FILL_AND_OUTLINE' },
+      HorizontalOrigin: { LEFT: 'LEFT' },
+      VerticalOrigin: { CENTER: 'CENTER', BOTTOM: 'BOTTOM' },
+    };
+    const emp = {
+      id: 'emp-1', name: 'EW Hilltop', description: '', sensorType: 'RF' as const, mobility: 'FIXED' as const,
+      position: { lat: 50.8, lon: -1.1 }, altitude: null, boresightDeg: 180, azimuthReference: 'TRUE_NORTH' as const,
+      coverage: { minRangeM: 0, maxRangeM: 50000, azimuthWidthDeg: 120 }, defaultSigma: {}, feedId: 'grpc-1',
+      classification: 'UNCLASSIFIED', exercise: false, active: true, lastReportAt: null, createdBy: 'op',
+      createdAt: '2026-10-20T00:00:00Z', updatedAt: '2026-10-20T00:00:00Z', version: 1,
+    };
+    const silent = { state: 'offline' as const, intervalSec: 5, lastHeartbeatAt: '2026-10-20T14:02:00Z', silentSince: '2026-10-20T14:02:00Z' };
+    const layer = new EmplacementLayer(viewer, Cesium);
+    layer.sync([emp], null, null, true, () => null, () => silent);
+    expect(added[0].billboard.image).toBe(locationDotDataUrl('#6b7280', { hollow: true }));
+    expect(added[0].label.text).toMatch(/^EW Hilltop · silent since (\d\d-\d\d )?14:02Z$/);
+    expect(added[1].polygon.material).toEqual({ css: '#6b7280', a: 0.04 });
+    added.length = 0;
+    layer.sync([emp], null, null, true, () => null, () => ({ ...silent, state: 'online', silentSince: null }));
+    expect(added[0].billboard.image).toBe(locationDotDataUrl('#8b5cf6'));
+    expect(added[0].label.text).toBe('EW Hilltop');
   });
 });

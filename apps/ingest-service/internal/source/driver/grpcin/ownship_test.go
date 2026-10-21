@@ -148,7 +148,7 @@ func shipRig(t *testing.T, cfg map[string]any, tok ingesttoken.Token, ships ...e
 }
 
 // A mobile emplacement's own report moves its SENSOR entity: one observation
-// a second at most, fused with the mirror's through EMPLACEMENT:<id>, and its
+// a second at most, fused with its other reports through EMPLACEMENT:<id>, and its
 // position written through Touch at most every 10 s.
 func TestStateEmitsTheSensorAndTouches(t *testing.T) {
 	r, w, clk, st := shipRig(t, nil, ingesttoken.Token{}, emp("ship", "grpc-1", "MOBILE", "RF", "UNCLASSIFIED"))
@@ -309,8 +309,8 @@ func TestStateRules(t *testing.T) {
 	r := start(t, nil, nil, tokensWith(secretA, ingesttoken.Token{ID: "t1", FeedID: "grpc-1"}), &fakeEmplacements{rows: []emplacement.Emplacement{fixed, ship}}, nil)
 	st := openStream(t, r, secretA)
 	now := time.Now()
-	if ack := send(t, st, stateReport("radar", now, 50, -4, nil)); ack.GetReason() != "unknown_emplacement" {
-		t.Errorf("a fixed emplacement's state: %v", ack)
+	if ack := send(t, st, stateReport("radar", now, 50, -4, nil)); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK || ack.GetEmplacementId() != "radar" {
+		t.Errorf("a fixed emplacement's state is its heartbeat: %v", ack)
 	}
 	mismatch := stateReport("ship", now, 50, -4, nil)
 	mismatch.GetEmplacementState().EmplacementId = "radar"

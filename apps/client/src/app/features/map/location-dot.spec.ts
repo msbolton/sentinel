@@ -25,4 +25,13 @@ describe('locationDot', () => {
     expect(a).not.toBe(d);
     expect(a.startsWith('data:image/svg+xml;base64,')).toBe(true);
   });
+
+  it('draws a silent site as a hollow ring with no halo, cached apart', () => {
+    const grey = locationDotSvg('#6b7280', { hollow: true });
+    expect(grey).toContain('fill="none"');
+    expect(grey).toContain('stroke="#6b7280"');
+    expect(grey).not.toContain('r="28"');
+    expect(grey).not.toContain('r="18"');
+    expect(locationDotDataUrl('#6b7280', { hollow: true })).not.toBe(locationDotDataUrl('#6b7280'));
+  });
 });

@@ -578,7 +578,11 @@ func (x *Emplacement) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// EmplacementState is a mobile emplacement's own position report (ownship).
+// EmplacementState is an emplacement's heartbeat. Every emplacement bound to
+// a grpc connection sends one at least every heartbeat_interval_sec; three
+// missed intervals make it offline and its fixes are refused (no_heartbeat).
+// A mobile emplacement's state also carries its position (ownship); a fixed
+// one's position and time are ignored.
 type EmplacementState struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	EmplacementId string                 `protobuf:"bytes,1,opt,name=emplacement_id,json=emplacementId,proto3" json:"emplacement_id,omitempty"`
@@ -587,8 +591,11 @@ type EmplacementState struct {
 	Heading       *float64               `protobuf:"fixed64,4,opt,name=heading,proto3,oneof" json:"heading,omitempty"`
 	Velocity      *GeodeticVelocity      `protobuf:"bytes,5,opt,name=velocity,proto3" json:"velocity,omitempty"`
 	Orientation   *Orientation           `protobuf:"bytes,6,opt,name=orientation,proto3" json:"orientation,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// How often this emplacement heartbeats, in seconds: 1 to 300, 0 for the
+	// default of 10. A value above 300 refuses the state as bad_state.
+	HeartbeatIntervalSec uint32 `protobuf:"varint,7,opt,name=heartbeat_interval_sec,json=heartbeatIntervalSec,proto3" json:"heartbeat_interval_sec,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *EmplacementState) Reset() {
@@ -663,6 +670,13 @@ func (x *EmplacementState) GetOrientation() *Orientation {
 	return nil
 }
 
+func (x *EmplacementState) GetHeartbeatIntervalSec() uint32 {
+	if x != nil {
+		return x.HeartbeatIntervalSec
+	}
+	return 0
+}
+
 var File_sentinel_v1_emplacement_proto protoreflect.FileDescriptor
 
 const file_sentinel_v1_emplacement_proto_rawDesc = "" +
@@ -714,14 +728,15 @@ const file_sentinel_v1_emplacement_proto_rawDesc = "" +
 	"\afeed_id\x18\r \x01(\tR\x06feedId\x12\x16\n" +
 	"\x06active\x18\x0e \x01(\bR\x06active\x129\n" +
 	"\n" +
-	"updated_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xc0\x02\n" +
+	"updated_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xf6\x02\n" +
 	"\x10EmplacementState\x12%\n" +
 	"\x0eemplacement_id\x18\x01 \x01(\tR\remplacementId\x12.\n" +
 	"\x04time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x04time\x123\n" +
 	"\bposition\x18\x03 \x01(\v2\x17.sentinel.v1.CoordinateR\bposition\x12\x1d\n" +
 	"\aheading\x18\x04 \x01(\x01H\x00R\aheading\x88\x01\x01\x129\n" +
 	"\bvelocity\x18\x05 \x01(\v2\x1d.sentinel.v1.GeodeticVelocityR\bvelocity\x12:\n" +
-	"\vorientation\x18\x06 \x01(\v2\x18.sentinel.v1.OrientationR\vorientationB\n" +
+	"\vorientation\x18\x06 \x01(\v2\x18.sentinel.v1.OrientationR\vorientation\x124\n" +
+	"\x16heartbeat_interval_sec\x18\a \x01(\rR\x14heartbeatIntervalSecB\n" +
 	"\n" +
 	"\b_heading*M\n" +
 	"\bMobility\x12\x18\n" +

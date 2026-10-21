@@ -21,10 +21,10 @@ type AuthOptions struct {
 // check on reading dead letters, which the gateway lets any GET through.
 var operatorRoles = []string{"sentinel-operator", "sentinel-admin"}
 
-// Roles that create and edit emplacements, matching the gateway's policy;
-// deleting one needs admin.
+// Roles that create and edit emplacements (inside their connection, on the
+// Connections page), matching the gateway's policy; deleting one needs admin.
 var (
-	emplacementWriters = []string{"sentinel-operator", "sentinel-analyst", "sentinel-admin"}
+	emplacementWriters = []string{"sentinel-operator", "sentinel-admin"}
 	adminRoles         = []string{"sentinel-admin"}
 )
 
@@ -34,14 +34,14 @@ func required(r *http.Request) ([]string, string) {
 		if r.Method == http.MethodDelete {
 			return adminRoles, "admin role required"
 		}
-		return emplacementWriters, "operator, analyst or admin role required"
+		return emplacementWriters, "operator or admin role required"
 	}
 	return operatorRoles, "operator or admin role required"
 }
 
 // Auth returns middleware that requires the service token (when configured)
-// on every request and an operator or admin identity on mutations (operator,
-// analyst or admin for emplacements; admin to delete one). PUT on
+// on every request and an operator or admin identity on mutations (operator
+// or admin for emplacements; admin to delete one). PUT on
 // an area endpoint is exempt from the role check because the gateway's
 // viewport sync has no user behind it.
 func Auth(opts AuthOptions) func(http.Handler) http.Handler {

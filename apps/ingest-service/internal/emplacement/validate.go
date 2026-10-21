@@ -107,6 +107,10 @@ func Validate(e *Emplacement) error {
 		add("/classification", "must be UNCLASSIFIED, CONFIDENTIAL, SECRET or TOP_SECRET")
 	}
 
+	if e.Active && e.FeedID == nil {
+		add("/feedId", "is required for an active emplacement: bind it to a connection, or deactivate it")
+	}
+
 	if len(problems) > 0 {
 		return &ValidationError{Problems: problems}
 	}

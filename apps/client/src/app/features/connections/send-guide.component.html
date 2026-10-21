@@ -12,6 +12,12 @@
     <p class="muted note">
       Every call carries the connection's ingest token: <code>authorization: Bearer si_…</code>. Issue one under Tokens below.
     </p>
+    <p class="muted note heartbeat-note">
+      Each emplacement must heartbeat, fixed sites included: send an <code>EmplacementState</code> for it at least every
+      <code>heartbeat_interval_sec</code> seconds (1–300; 0 means 10). After three missed intervals it is offline. Its fixes
+      are refused as <code>no_heartbeat</code>, it is drawn grey on the map, and the connection turns amber (some offline)
+      or red (all offline).
+    </p>
     @if (grpcurl(); as cmd) {
       <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: cmd }" />
     }

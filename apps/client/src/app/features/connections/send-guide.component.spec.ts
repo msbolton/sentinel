@@ -130,6 +130,14 @@ describe('SendGuideComponent', () => {
       expect(el.textContent).not.toContain('authorization: Bearer');
       expect(blocks().some((b) => b.includes('grpcurl') || b.includes('ew-sensor'))).toBe(false);
     });
+
+    it('says every emplacement must heartbeat', () => {
+      render(grpcFeed());
+      const note = text(el.querySelector('.heartbeat-note'));
+      expect(note).toContain('EmplacementState');
+      expect(note).toContain('heartbeat_interval_sec');
+      expect(note).toContain('no_heartbeat');
+    });
   });
 
   it('connect mode: shows the target, the last error, messages and reconnects but no listener counters', () => {

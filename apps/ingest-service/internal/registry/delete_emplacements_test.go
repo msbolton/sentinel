@@ -79,8 +79,44 @@ func TestDeleteLetsGoOfTheFeedsEmplacements(t *testing.T) {
 		t.Errorf("the sender's emplacement is still live: %v", err)
 	}
 	after, err := emps.Get(ctx, o.ID)
-	if err != nil || after.FeedID != nil || after.Version != o.Version+1 {
-		t.Errorf("the operator's emplacement = %+v, %v; want unbound with its version bumped", after, err)
+	if err != nil || after.FeedID != nil || after.Active || after.Version != o.Version+1 {
+		t.Errorf("the operator's emplacement = %+v, %v; want unbound, inactive, with its version bumped", after, err)
+	}
+}
+
+// A row deleted earlier still names its connection, and the foreign key
+// (ON DELETE RESTRICT) would refuse deleting the connection: Delete lets it go.
+func TestDeleteUnbindsSoftDeletedEmplacements(t *testing.T) {
+	s, ctx := testStore(t)
+	pool := s.Pool()
+	feed := "test-grpc-softdel"
+	if err := s.Create(ctx, &Feed{ID: feed, Name: "Test", Driver: "stream",
+		Config:     json.RawMessage(`{"transport":{"kind":"mqtt","brokerUrl":"tcp://b:1883","topics":["a"]},"decoder":{"name":"json"}}`),
+		SecretRefs: map[string]string{}, Enabled: true, CreatedBy: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	drop := func(ctx context.Context) {
+		_, _ = pool.Exec(ctx, `DELETE FROM sentinel.emplacements WHERE name LIKE 'test-softdel-%'`)
+	}
+	drop(ctx)
+	t.Cleanup(func() { drop(context.Background()) })
+
+	emps := emplacement.NewPGStore(pool)
+	gone := emplacement.New()
+	gone.Name, gone.Mobility, gone.SensorType, gone.FeedID, gone.CreatedBy = "test-softdel-gone", "MOBILE", "RF", &feed, "u1"
+	g, err := emps.Create(ctx, gone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := emps.Delete(ctx, g.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(ctx, feed); err != nil {
+		t.Fatalf("deleting a connection whose emplacement was deleted earlier: %v", err)
+	}
+	var still *string
+	if err := pool.QueryRow(ctx, `SELECT "feedId" FROM sentinel.emplacements WHERE id = $1::uuid`, g.ID).Scan(&still); err != nil || still != nil {
+		t.Fatalf("the deleted row's connection = %v, %v; want none", still, err)
 	}
 }
 

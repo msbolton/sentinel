@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS sentinel.observations (
   source             VARCHAR(50) NOT NULL,
   "sensorId"         VARCHAR(255),
   accepted           BOOLEAN NOT NULL,
-  "rejectReason"     VARCHAR(30),                   -- DUPLICATE | STALE_FIX | INVALID_POSITION
+  "rejectReason"     VARCHAR(30),                   -- DUPLICATE | STALE_FIX | INVALID_POSITION | ENTITY_DELETED
   "entityType"       VARCHAR(50),
   position           geometry(Point, 4326),
   altitude           DOUBLE PRECISION,

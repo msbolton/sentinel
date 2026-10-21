@@ -11,7 +11,6 @@ import (
 	"github.com/sentinel/go-common/classification"
 	"github.com/sentinel/go-common/geo"
 	"github.com/sentinel/ingest-service/internal/emplacement"
-	"github.com/sentinel/ingest-service/internal/source/driver/emplacementmirror"
 	ingestv1 "github.com/sentinel/proto-gen/sentinel/ingest/v1"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 )
@@ -28,42 +27,79 @@ const sensorEvery = time.Second
 // clock to mend, and not a malformed report.
 const maxClockLead = 5 * time.Second
 
-var errBadState = errors.New("an emplacement_state needs a position inside WGS84 bounds, and finite heading and velocity, and a valid time")
+var (
+	errBadState    = errors.New("an emplacement_state needs a position inside WGS84 bounds, and finite heading and velocity, and a valid time")
+	errBadInterval = errors.New("an emplacement_state's heartbeat_interval_sec must be 0 (the default, 10) to 300")
+)
 
-// state takes a mobile emplacement's report of itself: it extends the
-// emplacement's track (the origin of its measurements), records its
-// position, and moves its SENSOR entity.
+// state takes an emplacement's heartbeat. For a fixed emplacement that is all
+// it is: its position and time are not read. A mobile one's also extends its
+// track (the origin of its measurements), records its position, and moves its
+// SENSOR entity. Either way the SENSOR entity goes out online, at most once a
+// second, stamped and throttled on the server's clock.
 func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.Report, m *sentinelv1.EmplacementState, ack *ingestv1.Ack) (*ingestv1.Ack, error) {
+	// Only a state taken as a heartbeat is exempt from the rate limits: every
+	// refusal is charged first, so malformed states cannot flood the dead
+	// letters.
+	refuse := func(reason string) *ingestv1.Ack {
+		if s.limited(from) {
+			reason = "rate_limited"
+		}
+		return s.reject(ack, reason)
+	}
 	if m == nil {
+		if s.limited(from) {
+			return s.reject(ack, "rate_limited"), nil
+		}
 		return s.deadLetter(ack, from, r, "empty_report", errors.New("the report's emplacement_state is empty")), nil
 	}
 	claim := claimOf(r.GetEmplacementId())
 	if id := claimOf(m.GetEmplacementId()); id != "" {
 		if claim != "" && claim != id {
-			return s.reject(ack, "unknown_emplacement"), nil
+			return refuse("unknown_emplacement"), nil
 		}
 		claim = id
 	}
 	e, bound, reason := s.resolve(a, claim)
-	if reason != "" || !bound || e.Mobility != emplacement.MobilityMobile {
-		return s.reject(ack, "unknown_emplacement"), nil
+	if reason != "" || !bound {
+		return refuse("unknown_emplacement"), nil
 	}
+	ack.EmplacementId = e.ID
 	if max(classification.Rank(s.d.floor), classification.Rank(e.Classification)) > classification.Rank(a.tok.Classification) {
-		return s.reject(ack, "above_ceiling"), nil
+		return refuse("above_ceiling"), nil
+	}
+	interval, ok := emplacement.IntervalOf(m.GetHeartbeatIntervalSec())
+	if !ok {
+		return s.badState(ack, from, r, e, errBadInterval), nil
 	}
 	now := s.d.now().UTC()
+	if e.Mobility != emplacement.MobilityMobile {
+		s.d.beat(ctx, e.ID, interval, now)
+		if s.d.sensorDue(e.ID, now) {
+			if o, ok := s.d.siteFor(e, emplacement.HeartbeatOnline, now); ok {
+				if raw, err := proto.Marshal(m); err == nil {
+					o.Raw, o.RawContentType = raw, contentType
+				}
+				if err := s.sink.Emit(ctx, o); err != nil {
+					return nil, err
+				}
+				s.sink.Succeeded(1)
+			}
+		}
+		s.d.reportsOK.Add(1)
+		ack.Status = ingestv1.AckStatus_ACK_STATUS_OK
+		return ack, nil
+	}
 	f, why := fixOf(m, now)
 	switch why {
 	case "":
 	case "clock_skew":
-		return s.reject(ack, why), nil
+		return refuse(why), nil
 	default:
-		if classification.Rank(e.Classification) > classification.Rank(s.d.floor) {
-			return s.reject(ack, "bad_state"), nil
-		}
-		return s.deadLetter(ack, from, r, "bad_state", errBadState), nil
+		return s.badState(ack, from, r, e, errBadState), nil
 	}
 	s.d.addFix(e.ID, f)
+	s.d.beat(ctx, e.ID, interval, now)
 	pos := &emplacement.Point{Lat: f.pos.Lat, Lon: f.pos.Lon}
 	var alt *float64
 	if m.GetPosition().AltitudeMeters != nil {
@@ -85,13 +121,14 @@ func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.
 	// The SENSOR observation is rated on server time for the same reason.
 	if s.d.sensorDue(e.ID, now) {
 		e.Position, e.Altitude = pos, alt
-		o := emplacementmirror.Observation(e, reportAt)
+		o := emplacement.Observation(e, reportAt)
 		o.Decoder = Decoder
 		o.ReceivedAt = now
 		if f.heading != nil {
 			o.Heading = f.heading
 		}
 		o.Velocity = f.vel
+		emplacement.MarkSite(o, emplacement.HeartbeatOnline, now, interval)
 		if raw, err := proto.Marshal(m); err == nil {
 			o.Raw, o.RawContentType = raw, contentType
 		}
@@ -103,6 +140,19 @@ func (s *service) state(ctx context.Context, a authed, from string, r *ingestv1.
 	s.d.reportsOK.Add(1)
 	ack.Status = ingestv1.AckStatus_ACK_STATUS_OK
 	return ack, nil
+}
+
+// badState refuses a malformed state. It is rejected when the emplacement is
+// above the connection's level, so its content stays out of the dead
+// letters (gated at the connection's level), and dead-lettered otherwise.
+func (s *service) badState(ack *ingestv1.Ack, from string, r *ingestv1.Report, e emplacement.Emplacement, cause error) *ingestv1.Ack {
+	if s.limited(from) {
+		return s.reject(ack, "rate_limited")
+	}
+	if classification.Rank(e.Classification) > classification.Rank(s.d.floor) {
+		return s.reject(ack, "bad_state")
+	}
+	return s.deadLetter(ack, from, r, "bad_state", cause)
 }
 
 // fixOf reads a state report. why is "" for a usable one, "bad_state" for a

@@ -85,9 +85,13 @@ enum AckStatus {
 message Ack {
   string client_ref = 1;
   AckStatus status = 2;
-  // Why a report was not accepted: unknown_emplacement, stale_ownship,
-  // clock_skew (EmplacementState.time >5s ahead of or >60s behind server time), …
+  // Why a report was not accepted: unknown_emplacement, no_heartbeat (the
+  // report's emplacement has not heartbeat within three of its intervals),
+  // stale_ownship, clock_skew (EmplacementState.time >5s ahead of or >60s
+  // behind server time), …
   string reason = 3;
+  // The emplacement the report was resolved to, when it was (informational).
+  string emplacement_id = 4;
 }
 
 message StreamReportsRequest {

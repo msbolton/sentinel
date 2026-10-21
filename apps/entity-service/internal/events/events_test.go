@@ -119,3 +119,15 @@ func TestPublisherEmitsTypedEvents(t *testing.T) {
 		t.Errorf("stale = %+v", fp.protos[6].ev.GetStale())
 	}
 }
+
+func TestEntityProtoMapsGenericDetail(t *testing.T) {
+	feed, last := "grpc-1", "2026-10-20 12:00:00+00"
+	rec := &store.EntityRecord{ID: "e1", EntityType: "SENSOR", Name: "Coastal", Source: "SIGINT", Classification: "UNCLASSIFIED",
+		FeedID: &feed, LastSeenAt: &last, LastObservedAt: &last, AgeoutState: "LIVE", CreatedAt: "2026-10-20 12:00:00+00", UpdatedAt: "2026-10-20 12:00:00+00",
+		PlatformData: map[string]interface{}{"generic": map[string]interface{}{"fields": map[string]interface{}{"heartbeat": "offline", "silentSince": "2026-10-20T14:02:00Z"}}}}
+	e := EntityProto(rec, nil, nil)
+	g := e.Platforms["generic"].GetGeneric()
+	if g == nil || g.GetFields()["heartbeat"] != "offline" || g.GetFields()["silentSince"] != "2026-10-20T14:02:00Z" {
+		t.Fatalf("platforms = %v", e.Platforms)
+	}
+}

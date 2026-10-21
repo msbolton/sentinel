@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/sentinel/ingest-service/internal/emplacement"
 )
 
 // Builtins are the feeds every deployment has. db/seed/seed.sql inserts the
@@ -34,17 +36,17 @@ var Builtins = []Feed{
 		Config:      json.RawMessage(`{"maxAreaSqDeg": 2500, "movingIntervalSec": 15, "stationaryIntervalSec": 180, "staleWarnSec": 600, "staleCriticalSec": 1800}`),
 		SecretRefs:  map[string]string{"apiKey": "env:AISSTREAM_API_KEY"},
 	},
-	{
-		ID: "emplacements", Name: "Emplacements", Driver: "emplacement", Builtin: true, Enabled: true,
-		Description: "Sentinel's emplacements, reported as SENSOR entities so they are in search, anchor geofences and, when mobile, are tracked.",
-		Config:      json.RawMessage(`{"heartbeatSec": 60}`),
-		SecretRefs:  map[string]string{},
-	},
 }
 
-// EnsureBuiltins inserts any missing built-in feed. Feeds named in enabledIDs,
-// and builtins that need no credentials (Enabled), are inserted enabled; an
-// existing row is never changed.
+// retiredBuiltinDrivers are the drivers of built-in feeds Sentinel no longer
+// ships (the emplacements mirror). EnsureBuiltins deletes their rows, so a pod
+// of an older version that restarts during a rollout and inserts one again has
+// it removed by the next new one.
+var retiredBuiltinDrivers = []string{"emplacement"}
+
+// EnsureBuiltins inserts any missing built-in feed and deletes retired ones.
+// Feeds named in enabledIDs, and builtins that need no credentials (Enabled),
+// are inserted enabled; an existing row is never changed.
 func (s *Store) EnsureBuiltins(ctx context.Context, enabledIDs []string) error {
 	enabled := map[string]bool{}
 	for _, id := range enabledIDs {
@@ -59,6 +61,20 @@ func (s *Store) EnsureBuiltins(ctx context.Context, enabledIDs []string) error {
 		if err != nil {
 			return fmt.Errorf("ensuring builtin feed %s: %w", b.ID, err)
 		}
+	}
+	// Rows bound to a retired feed are let go first (the foreign key is
+	// RESTRICT), deactivated as an active one needs a connection, and announced.
+	if _, err := s.pool.Exec(ctx, `
+		WITH released AS (
+			UPDATE sentinel.emplacements SET "feedId" = NULL, active = FALSE, version = version + 1, "updatedAt" = NOW()
+			 WHERE "feedId" IN (SELECT id FROM sentinel.feeds WHERE builtin AND driver = ANY($1))
+			RETURNING id)
+		SELECT pg_notify($2, json_build_object('id', id::text, 'op', 'upsert')::text) FROM released`,
+		retiredBuiltinDrivers, emplacement.Channel); err != nil {
+		return fmt.Errorf("letting go of the emplacements of retired builtin feeds: %w", err)
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM sentinel.feeds WHERE builtin AND driver = ANY($1)`, retiredBuiltinDrivers); err != nil {
+		return fmt.Errorf("deleting retired builtin feeds: %w", err)
 	}
 	return nil
 }

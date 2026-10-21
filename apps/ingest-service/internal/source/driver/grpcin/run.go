@@ -50,12 +50,16 @@ func (d *Driver) serverOptions(svc *service) []grpc.ServerOption {
 }
 
 // Run binds the port and serves until ctx ends, then stops within
-// stopGrace and returns nil. An error before that (the bind, the
-// listener) fails the feed, and the supervisor retries.
+// stopGrace, publishes every site once as offline and returns nil. An error
+// before that (the bind, the listener) fails the feed, and the supervisor
+// retries.
 func (d *Driver) Run(ctx context.Context, sink driver.Sink) error {
 	if d.tokens == nil || d.emps == nil {
 		return errNoTokens
 	}
+	live := d.startLiveness(ctx)
+	unwatch := d.watchBindings(live)
+	defer unwatch()
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", d.addr)
 	if err != nil {
 		return transport.BindError("tcp", d.addr, err)
@@ -83,17 +87,36 @@ func (d *Driver) Run(ctx context.Context, sink driver.Sink) error {
 	d.connected.Store(true)
 	defer d.connected.Store(false)
 
+	repubCtx, stopRepub := context.WithCancel(ctx)
+	repubDone := make(chan struct{})
+	if d.heartbeatsOff {
+		close(repubDone)
+	} else {
+		go func() { defer close(repubDone); d.republish(repubCtx, sink) }()
+	}
+	defer func() { stopRepub(); <-repubDone }()
+
 	select {
 	case err := <-served:
 		d.stopping.Store(true)
 		gl.CloseAll()
 		d.stop(srv, gl)
+		stopRepub()
+		<-repubDone
+		if !d.heartbeatsOff {
+			d.publishOffline(sink)
+		}
 		return fmt.Errorf("grpc: serving stopped: %w", err)
 	case <-ctx.Done():
 	}
 	d.stopping.Store(true)
 	d.stop(srv, gl)
 	<-served
+	stopRepub()
+	<-repubDone
+	if !d.heartbeatsOff {
+		d.publishOffline(sink)
+	}
 	return nil
 }
 

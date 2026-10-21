@@ -58,7 +58,8 @@ func (s *IdentityStore) Lookup(ctx context.Context, keys []identity.Key) (map[id
 
 // CreateEntities inserts one entity per unresolved key and binds the key to
 // it. Each insert runs under a savepoint: when another writer bound the key
-// first, the new row is rolled back and the existing entity id returned.
+// first, the new row is rolled back and the existing entity id returned. A
+// key still bound to a deleted entity is moved to the new one instead.
 func (s *IdentityStore) CreateEntities(ctx context.Context, specs []identity.NewEntity) (map[identity.Key]string, map[identity.Key]bool, error) {
 	ids, created := map[identity.Key]string{}, map[identity.Key]bool{}
 	if len(specs) == 0 {
@@ -129,8 +130,26 @@ func (s *IdentityStore) createOne(ctx context.Context, tx pgx.Tx, spec identity.
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", false, fmt.Errorf("bind identity %s: %w", spec.Key, err)
 	}
-	// Someone bound the key between our lookup and this insert: drop the
-	// entity we just made and use theirs.
+	// The key is bound already. When its entity is deleted (a soft delete
+	// keeps the identity rows), the identity is released: move it to the
+	// entity we just made and keep that one.
+	tag, err := tx.Exec(ctx, `
+		UPDATE sentinel.entity_identities i
+		   SET "entityId" = $3, "firstSeenAt" = $4, "lastSeenAt" = $4
+		  FROM sentinel.entities e
+		 WHERE i."identityType" = $1 AND i."identityValue" = $2
+		   AND e.id = i."entityId" AND e.deleted = true`, spec.Key.Type, spec.Key.Value, id, spec.SeenAt)
+	if err != nil {
+		return "", false, fmt.Errorf("rebind identity %s: %w", spec.Key, err)
+	}
+	if tag.RowsAffected() == 1 {
+		if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT create_entity"); err != nil {
+			return "", false, err
+		}
+		return id, true, nil
+	}
+	// A live entity bound the key between our lookup and this insert: drop
+	// the entity we just made and use theirs.
 	if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT create_entity"); err != nil {
 		return "", false, err
 	}

@@ -26,6 +26,7 @@ import (
 const (
 	reasonRateLimited        = "rate_limited"
 	reasonUnknownEmplacement = "unknown_emplacement"
+	reasonNoHeartbeat        = "no_heartbeat"
 )
 
 type reportStream = grpc.BidiStreamingClient[ingestv1.StreamReportsRequest, ingestv1.StreamReportsResponse]
@@ -142,12 +143,16 @@ func (l *loop) run(ctx context.Context) error {
 	defer ticker.Stop()
 	stats := time.NewTicker(l.c.opts.StatsEvery)
 	defer stats.Stop()
-	var stateC <-chan time.Time
+	// The emplacement's heartbeat: a mobile one's position reports at 1 Hz, a
+	// fixed one's EmplacementState every heartbeat interval. Both declare the
+	// configured interval.
+	every := l.c.opts.HeartbeatEvery
 	if l.sim.mobile {
-		st := time.NewTicker(l.c.opts.StateEvery)
-		defer st.Stop()
-		stateC = st.C
+		every = l.c.opts.StateEvery
 	}
+	st := time.NewTicker(every)
+	defer st.Stop()
+	stateC := st.C
 
 	for {
 		var doneC <-chan error
@@ -177,6 +182,9 @@ func (l *loop) run(ctx context.Context) error {
 			l.c.logStats("stats")
 
 		case <-l.c.wake:
+			if l.c.takeStateKick() {
+				l.send(l.sim.state(), false)
+			}
 			l.armRetry()
 
 		case <-l.retryC:
@@ -202,8 +210,8 @@ func (l *loop) run(ctx context.Context) error {
 	}
 }
 
-// connect opens a stream; a mobile sensor's first report on it is always an
-// EmplacementState. A failure to open schedules a reconnect, or is fatal.
+// connect opens a stream; its first report is always the emplacement's
+// heartbeat (EmplacementState). A failure to open schedules a reconnect, or is fatal.
 func (l *loop) connect(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return nil
@@ -219,9 +227,7 @@ func (l *loop) connect(ctx context.Context) error {
 	l.cur = a
 	go l.c.readAcks(a)
 	l.c.log.Info("stream open", "stream", a.gen)
-	if l.sim.mobile {
-		l.send(l.sim.state(), false)
-	}
+	l.send(l.sim.state(), false)
 	return nil
 }
 
@@ -375,6 +381,26 @@ func (c *Client) handleAck(a *activeStream, ack *ingestv1.Ack) {
 			case c.wake <- struct{}{}:
 			default:
 			}
+		case reason == reasonNoHeartbeat:
+			// The server holds no heartbeat for the emplacement (its connection
+			// moved replica, or a state was lost): heartbeat now, debounced,
+			// and send the fix again once, after it.
+			c.stats.Rejected[reason]++
+			if now.Sub(c.lastKick) >= c.opts.HeartbeatKickMin {
+				c.lastKick, c.stateKick = now, true
+			}
+			if tracked && !p.retried && p.gen == a.gen && p.report.GetObservation() != nil {
+				c.stats.Retried++
+				c.retries = append(c.retries, retryItem{gen: a.gen, report: p.report, due: time.Now().Add(c.opts.RetryDelay)})
+			}
+			if !c.seenReason[reason] {
+				c.seenReason[reason] = true
+				warn = "report rejected: the service has no heartbeat from the emplacement; sending one"
+			}
+			select {
+			case c.wake <- struct{}{}:
+			default:
+			}
 		default:
 			c.stats.Rejected[reason]++
 			if !c.seenReason[reason] {
@@ -400,15 +426,24 @@ func (c *Client) handleAck(a *activeStream, ack *ingestv1.Ack) {
 	}
 }
 
-// track remembers a report sent inside the upsert grace window, so an
-// unknown_emplacement ack for it can be retried.
+// track remembers a sent report until its ack, so that an unknown_emplacement
+// in the upsert grace window, or a no_heartbeat at any time, can retry it.
 func (c *Client) track(gen uint64, r *ingestv1.Report, retried bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.opts.Now().Before(c.graceUntil) || len(c.pending) >= maxPending {
+	if len(c.pending) >= maxPending {
 		return
 	}
 	c.pending[r.ClientRef] = pendingReport{gen: gen, report: r, retried: retried}
+}
+
+// takeStateKick reports whether a no_heartbeat ack asked for a heartbeat, and clears the request.
+func (c *Client) takeStateKick() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	kick := c.stateKick
+	c.stateKick = false
+	return kick
 }
 
 func (c *Client) untrack(ref string) {

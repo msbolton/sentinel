@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -17,15 +18,43 @@ import (
 	"github.com/sentinel/go-common/middleware"
 )
 
-// FeedCheck reports whether a feed exists and takes data in, for binding an
-// emplacement to the connection that may report as it.
-type FeedCheck func(ctx context.Context, feedID string) (exists, inbound bool, err error)
+// FeedInfo is what binding an emplacement needs to know of a connection.
+type FeedInfo struct {
+	Exists, Inbound bool
+	// Driver is the connection's driver id.
+	Driver string
+}
+
+// FeedCheck looks a connection up, for binding an emplacement to the
+// connection that reports as it.
+type FeedCheck func(ctx context.Context, feedID string) (FeedInfo, error)
+
+// BindableDriver is the one driver an emplacement may be bound to until the
+// TCP/UDP (sub-project 2) and TAK (sub-project 3) heartbeats exist: only it
+// reports its emplacements' heartbeats.
+const BindableDriver = "grpc"
+
+// FeedLiveness is what the owning replica last reported of a connection's
+// emplacements.
+type FeedLiveness struct {
+	Driver string
+	// Emplacements is detail.emplacements of the connection's status. It is
+	// nil when the connection has no fresh status (it never ran, it is
+	// stopped, or its replica went silent); then the rows' own heartbeat
+	// times are read instead.
+	Emplacements []Liveness
+}
+
+// LivenessSource lists every connection's FeedLiveness by connection id.
+type LivenessSource func(ctx context.Context) (map[string]FeedLiveness, error)
 
 // Handler serves the emplacement routes of the management API.
 type Handler struct {
-	store  Store
-	feeds  FeedCheck
-	logger *zap.Logger
+	store Store
+	feeds FeedCheck
+	// Liveness fills the computed heartbeat and silentSince; nil leaves them out.
+	Liveness LivenessSource
+	logger   *zap.Logger
 }
 
 // NewHandler wires the handler; logger may be nil.
@@ -77,6 +106,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			out = append(out, e)
 		}
 	}
+	h.annotate(r.Context(), out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -93,7 +123,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	writeEmplacement(w, http.StatusOK, e)
+	h.writeAnnotated(w, r, http.StatusOK, e)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +135,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	e := New()
 	in.Apply(&e)
 	e.CreatedBy = middleware.UserID(r.Context())
-	if err := h.check(r, &e); err != nil {
+	if err := h.check(r, &e, nil); err != nil {
 		h.fail(w, err)
 		return
 	}
@@ -115,7 +145,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.logger.Info("emplacement created", zap.String("id", out.ID), zap.String("name", out.Name))
-	writeEmplacement(w, http.StatusCreated, out)
+	h.writeAnnotated(w, r, http.StatusCreated, out)
 }
 
 func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
@@ -152,14 +182,19 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 			(in.Mobility == nil || strings.ToUpper(strings.TrimSpace(*in.Mobility)) == MobilityMobile) {
 			in.Position, in.Altitude = nil, nil
 		}
+		prev := e.FeedID
 		in.Apply(e)
-		return h.check(r, e)
+		// A new connection knows nothing of the emplacement's heartbeats.
+		if !sameFeed(prev, e.FeedID) {
+			e.LastHeartbeatAt, e.HeartbeatIntervalSec = nil, nil
+		}
+		return h.check(r, e, prev)
 	})
 	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	writeEmplacement(w, http.StatusOK, out)
+	h.writeAnnotated(w, r, http.StatusOK, out)
 }
 
 func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
@@ -181,6 +216,53 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// annotate fills the computed heartbeat and silentSince of the active
+// emplacements bound to a grpc connection; the others carry neither. A
+// failure to read the statuses leaves them out and is logged.
+func (h *Handler) annotate(ctx context.Context, list []Emplacement) {
+	if h.Liveness == nil || len(list) == 0 {
+		return
+	}
+	feeds, err := h.Liveness(ctx)
+	if err != nil {
+		h.logger.Warn("reading the connections' heartbeats failed", zap.Error(err))
+		return
+	}
+	now := time.Now()
+	for i := range list {
+		annotate(&list[i], feeds, now)
+	}
+}
+
+func annotate(e *Emplacement, feeds map[string]FeedLiveness, now time.Time) {
+	if !e.Active || e.FeedID == nil {
+		return
+	}
+	f, ok := feeds[*e.FeedID]
+	if !ok || f.Driver != BindableDriver {
+		return
+	}
+	state, last := RowState(*e, now), e.LastHeartbeatAt
+	for _, l := range f.Emplacements {
+		if l.ID == e.ID {
+			state, last = l.State, l.LastHeartbeatAt
+			break
+		}
+	}
+	e.Heartbeat = state
+	if state == HeartbeatOffline && last != nil {
+		at := *last
+		e.SilentSince = &at
+	}
+}
+
+// writeAnnotated writes one emplacement with its computed heartbeat.
+func (h *Handler) writeAnnotated(w http.ResponseWriter, r *http.Request, status int, e Emplacement) {
+	one := []Emplacement{e}
+	h.annotate(r.Context(), one)
+	writeEmplacement(w, status, one[0])
+}
+
 // CheckWrite validates e as it would be stored and holds it to what the
 // writer may write: no classification above ceilingRank, and a binding only
 // to a connection that takes data in. The HTTP API passes the caller's
@@ -196,13 +278,13 @@ func CheckWrite(ctx context.Context, e *Emplacement, ceilingRank int, feeds Feed
 		ve.Problems = append(ve.Problems, Problem{Path: "/classification", Message: "is above your clearance"})
 	}
 	if e.FeedID != nil {
-		exists, inbound, err := feeds(ctx, *e.FeedID)
+		info, err := feeds(ctx, *e.FeedID)
 		switch {
 		case err != nil:
 			return err
-		case !exists:
+		case !info.Exists:
 			ve.Problems = append(ve.Problems, Problem{Path: "/feedId", Message: "names no connection"})
-		case !inbound:
+		case !info.Inbound:
 			ve.Problems = append(ve.Problems, Problem{Path: "/feedId", Message: "names a connection that does not take data in"})
 		}
 	}
@@ -212,8 +294,36 @@ func CheckWrite(ctx context.Context, e *Emplacement, ceilingRank int, feeds Feed
 	return nil
 }
 
-func (h *Handler) check(r *http.Request, e *Emplacement) error {
-	return CheckWrite(r.Context(), e, clearance(r), h.feeds)
+// check is CheckWrite with the caller's clearance. A write that binds e to a
+// connection it was not bound to (prev) is refused for a connection whose
+// driver does not heartbeat its emplacements yet; a row bound to one before
+// that rule keeps being editable.
+func (h *Handler) check(r *http.Request, e *Emplacement, prev *string) error {
+	err := CheckWrite(r.Context(), e, clearance(r), h.feeds)
+	if e.FeedID == nil || sameFeed(prev, e.FeedID) {
+		return err
+	}
+	ve := &ValidationError{}
+	if err != nil && !errors.As(err, &ve) {
+		return err
+	}
+	info, ferr := h.feeds(r.Context(), *e.FeedID)
+	if ferr != nil {
+		return ferr
+	}
+	if info.Exists && info.Inbound && info.Driver != BindableDriver {
+		ve.Problems = append(ve.Problems, Problem{Path: "/feedId",
+			Message: "names a " + info.Driver + " connection: emplacements can be bound only to grpc connections for now"})
+	}
+	if len(ve.Problems) > 0 {
+		return ve
+	}
+	return nil
+}
+
+// sameFeed reports whether two bindings name the same connection (or none).
+func sameFeed(a, b *string) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }
 
 func pathID(w http.ResponseWriter, r *http.Request) (string, bool) {

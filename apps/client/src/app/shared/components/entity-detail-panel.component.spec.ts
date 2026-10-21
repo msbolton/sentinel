@@ -3,6 +3,8 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { of } from 'rxjs';
+import { Router } from '@angular/router';
+import { EmplacementService } from '../../core/services/emplacement.service';
 import { EntityDetailPanelComponent } from './entity-detail-panel.component';
 import { AnalyticsService } from '../../core/services/analytics.service';
 import { AuthService } from '../../core/services/auth.service';
@@ -569,5 +571,76 @@ describe('EntityDetailPanelComponent', () => {
       expect(r.some((row) => row.startsWith('PRI / PRF:'))).toBe(false);
       expect(r.some((row) => row.startsWith('Pulse Width:'))).toBe(false);
     });
+  });
+
+  it("shows a site's heartbeat and, for an operator, links to its connection", () => {
+    auth.hasAnyRole.mockImplementation((...roles: string[]) => roles.includes('sentinel-operator'));
+    const navigate = jest.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    fixture.componentRef.setInput(
+      'entity',
+      makeEntity({
+        entityType: EntityType.SENSOR,
+        feedId: 'grpc-1',
+        identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }],
+        platformData: { generic: { fields: { heartbeat: 'online', heartbeatIntervalSec: '5', lastHeartbeatAt: secondsAgo(2) } } },
+      }),
+    );
+    fixture.detectChanges();
+    open('origin');
+    httpMock.expectOne('/api/v1/feeds').flush([]);
+    fixture.detectChanges();
+    expect(rows()['Heartbeat']).toBe('online · every 5 s');
+    (el.querySelector('.origin-section .field-link') as HTMLButtonElement).click();
+    expect(navigate).toHaveBeenCalledWith(['/connections'], { queryParams: { open: 'grpc-1' } });
+  });
+
+  it("links a rebound site to its emplacement row's connection, not the entity's first feed", () => {
+    auth.hasAnyRole.mockImplementation((...roles: string[]) => roles.includes('sentinel-operator'));
+    const navigate = jest.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    TestBed.inject(EmplacementService).emplacements.set([
+      {
+        id: 'emp-1', name: 'Mast', description: '', mobility: 'FIXED', sensorType: 'RADAR',
+        position: { lat: 50, lon: -4 }, altitude: null, boresightDeg: 0, azimuthReference: 'TRUE_NORTH',
+        coverage: { minRangeM: 0, maxRangeM: 60000, azimuthWidthDeg: 360 }, defaultSigma: {},
+        feedId: 'grpc-2', classification: 'UNCLASSIFIED', exercise: false, active: true,
+        lastReportAt: null, createdBy: 'u', createdAt: '', updatedAt: '', version: 2,
+      },
+    ]);
+    fixture.componentRef.setInput(
+      'entity',
+      makeEntity({
+        entityType: EntityType.SENSOR,
+        feedId: 'grpc-1',
+        identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }],
+        platformData: { generic: { fields: { heartbeat: 'online', heartbeatIntervalSec: '5', lastHeartbeatAt: secondsAgo(2) } } },
+      }),
+    );
+    fixture.detectChanges();
+    open('origin');
+    httpMock.expectOne('/api/v1/feeds').flush([]);
+    fixture.detectChanges();
+    const link = el.querySelector('.origin-section .field-link') as HTMLButtonElement;
+    expect(link.textContent?.trim()).toBe('Mast');
+    expect(link.getAttribute('title')).toBe('Open its connection, grpc-2');
+    link.click();
+    expect(navigate).toHaveBeenCalledWith(['/connections'], { queryParams: { open: 'grpc-2' } });
+  });
+
+  it("shows a silent site's heartbeat with since when, and no link for a viewer", () => {
+    fixture.componentRef.setInput(
+      'entity',
+      makeEntity({
+        entityType: EntityType.SENSOR,
+        feedId: 'grpc-1',
+        identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }],
+        platformData: { generic: { fields: { heartbeat: 'offline', heartbeatIntervalSec: '5', lastHeartbeatAt: '2026-10-17T14:02:00Z', silentSince: '2026-10-17T14:02:00Z' } } },
+      }),
+    );
+    fixture.detectChanges();
+    open('origin');
+    httpMock.expectOne('/api/v1/feeds').flush([]);
+    fixture.detectChanges();
+    expect(rows()['Heartbeat']).toBe('offline since 14:02Z · every 5 s');
+    expect(el.querySelector('.origin-section .field-link')).toBeNull();
   });
 });

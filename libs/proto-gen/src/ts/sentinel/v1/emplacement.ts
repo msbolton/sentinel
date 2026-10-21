@@ -270,14 +270,27 @@ export interface Emplacement {
   updatedAt?: string | undefined;
 }
 
-/** EmplacementState is a mobile emplacement's own position report (ownship). */
+/**
+ * EmplacementState is an emplacement's heartbeat. Every emplacement bound to
+ * a grpc connection sends one at least every heartbeat_interval_sec; three
+ * missed intervals make it offline and its fixes are refused (no_heartbeat).
+ * A mobile emplacement's state also carries its position (ownship); a fixed
+ * one's position and time are ignored.
+ */
 export interface EmplacementState {
   emplacementId: string;
   time?: string | undefined;
   position?: Coordinate | undefined;
   heading?: number | undefined;
   velocity?: GeodeticVelocity | undefined;
-  orientation?: Orientation | undefined;
+  orientation?:
+    | Orientation
+    | undefined;
+  /**
+   * How often this emplacement heartbeats, in seconds: 1 to 300, 0 for the
+   * default of 10. A value above 300 refuses the state as bad_state.
+   */
+  heartbeatIntervalSec: number;
 }
 
 function createBaseCoverage(): Coverage {
@@ -936,6 +949,7 @@ function createBaseEmplacementState(): EmplacementState {
     heading: undefined,
     velocity: undefined,
     orientation: undefined,
+    heartbeatIntervalSec: 0,
   };
 }
 
@@ -958,6 +972,9 @@ export const EmplacementState = {
     }
     if (message.orientation !== undefined) {
       Orientation.encode(message.orientation, writer.uint32(50).fork()).ldelim();
+    }
+    if (message.heartbeatIntervalSec !== 0) {
+      writer.uint32(56).uint32(message.heartbeatIntervalSec);
     }
     return writer;
   },
@@ -1011,6 +1028,13 @@ export const EmplacementState = {
 
           message.orientation = Orientation.decode(reader, reader.uint32());
           continue;
+        case 7:
+          if (tag !== 56) {
+            break;
+          }
+
+          message.heartbeatIntervalSec = reader.uint32();
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1028,6 +1052,7 @@ export const EmplacementState = {
       heading: isSet(object.heading) ? globalThis.Number(object.heading) : undefined,
       velocity: isSet(object.velocity) ? GeodeticVelocity.fromJSON(object.velocity) : undefined,
       orientation: isSet(object.orientation) ? Orientation.fromJSON(object.orientation) : undefined,
+      heartbeatIntervalSec: isSet(object.heartbeatIntervalSec) ? globalThis.Number(object.heartbeatIntervalSec) : 0,
     };
   },
 
@@ -1051,6 +1076,9 @@ export const EmplacementState = {
     if (message.orientation !== undefined) {
       obj.orientation = Orientation.toJSON(message.orientation);
     }
+    if (message.heartbeatIntervalSec !== 0) {
+      obj.heartbeatIntervalSec = Math.round(message.heartbeatIntervalSec);
+    }
     return obj;
   },
 
@@ -1071,6 +1099,7 @@ export const EmplacementState = {
     message.orientation = (object.orientation !== undefined && object.orientation !== null)
       ? Orientation.fromPartial(object.orientation)
       : undefined;
+    message.heartbeatIntervalSec = object.heartbeatIntervalSec ?? 0;
     return message;
   },
 };

@@ -18,6 +18,7 @@ import (
 
 var users = map[string]*auth.User{
 	"viewer":   {UserID: "v", Username: "viewer", Roles: []string{auth.RoleViewer}, ClassificationLevel: "UNCLASSIFIED"},
+	"operator": {UserID: "o", Username: "operator", Roles: []string{auth.RoleOperator}, ClassificationLevel: "UNCLASSIFIED"},
 	"analyst":  {UserID: "a", Username: "analyst", Roles: []string{auth.RoleAnalyst}, ClassificationLevel: "CONFIDENTIAL"},
 	"lowadmin": {UserID: "l", Username: "lowadmin", Roles: []string{auth.RoleAdmin}, ClassificationLevel: "UNCLASSIFIED"},
 	"admin":    {UserID: "d", Username: "admin", Roles: []string{auth.RoleAdmin}, ClassificationLevel: "TOP_SECRET"},
@@ -167,8 +168,10 @@ func TestRouter_RolePolicies(t *testing.T) {
 		{http.MethodGet, "/api/v1/feeds", "viewer", 200},
 		{http.MethodGet, "/api/v1/emplacements", "viewer", 200},
 		{http.MethodPost, "/api/v1/emplacements", "viewer", 403},
-		{http.MethodPost, "/api/v1/emplacements", "analyst", 200},
-		{http.MethodPatch, "/api/v1/emplacements/x", "analyst", 200},
+		{http.MethodPost, "/api/v1/emplacements", "analyst", 403},
+		{http.MethodPatch, "/api/v1/emplacements/x", "analyst", 403},
+		{http.MethodPost, "/api/v1/emplacements", "operator", 200},
+		{http.MethodPatch, "/api/v1/emplacements/x", "operator", 200},
 		{http.MethodDelete, "/api/v1/emplacements/x", "analyst", 403},
 		{http.MethodDelete, "/api/v1/emplacements/x", "lowadmin", 200},
 	}

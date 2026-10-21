@@ -344,7 +344,7 @@ func TestEmptyBodiesOnTheWire(t *testing.T) {
 
 // An exercise connection's emplacements are exercise: an upsert that asks for
 // exercise=false, on create or on update, stores true, so the row matches the
-// sensor entity the mirror reports. A connection that is not exercise takes
+// SENSOR entity the connection reports. A connection that is not exercise takes
 // the flag as sent.
 func TestUpsertOnAnExerciseConnectionStoresExercise(t *testing.T) {
 	r, w, _ := consentRig(t, map[string]any{"exercise": true}, ingesttoken.Token{}, senderRow("mine-1"))
@@ -368,7 +368,7 @@ func TestUpsertOnAnExerciseConnectionStoresExercise(t *testing.T) {
 	}
 }
 
-// The session and the list tell a sender what the mirror reports: an
+// The session and the list tell a sender what the connection reports: an
 // emplacement of an exercise connection is exercise even when an operator
 // wrote its row without the flag. A connection that is not exercise reports
 // the row as it is.
