@@ -23,15 +23,17 @@ Listens on port **3000** (`PORT`).
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `APP_ENV` | `development` | `production` enables HSTS and refuses `AUTH_DEV_BYPASS` |
+| `APP_ENV` | `development` | `production` enables HSTS, refuses `AUTH_DEV_BYPASS`, and adds the startup checks below |
 | `AUTH_DEV_BYPASS` | `false` | Treat every request as the built-in dev user; never in production |
 | `KEYCLOAK_URL` | `http://localhost:8080` | Keycloak base URL (JWKS and Admin API) |
 | `KEYCLOAK_REALM` | `sentinel` | Realm name |
 | `KEYCLOAK_ISSUERS` | `{KEYCLOAK_URL}/realms/{realm}` | Comma-separated accepted `iss` values; tokens minted through the browser-facing hostname carry that hostname |
 | `KEYCLOAK_AUDIENCE` | `sentinel-api` | Required `aud` claim; empty disables the check |
 | `KEYCLOAK_CLIENT_ID` | `sentinel-api` | Client whose `resource_access` roles are merged into the user's roles |
-| `KEYCLOAK_SERVICE_CLIENT_ID` / `_SECRET` | `sentinel-service` | Service account used for the Admin API |
-| `MAIL_HOST` / `MAIL_PORT` / `MAIL_FROM` | `localhost:1025` | SMTP relay for registration notices (mailhog in dev) |
+| `KEYCLOAK_SERVICE_CLIENT_ID` / `_SECRET` | `sentinel-service` / `sentinel-service-secret-dev` | Service account used for the Admin API; production refuses an empty or the dev secret |
+| `MAIL_HOST` / `MAIL_PORT` / `MAIL_FROM` | `localhost:1025` | SMTP relay for registration notices (mailhog in dev); an empty `MAIL_HOST` discards mail |
+| `MAIL_USERNAME` / `MAIL_PASSWORD` | | SMTP login (AUTH PLAIN). Sent only over TLS: with a username set and no TLS the send fails instead of leaking the password |
+| `MAIL_TLS` | | `starttls` (upgrade required, fails if the relay does not offer it), `tls` (implicit TLS, usually port 465) or `none`. Empty keeps the dev behaviour: upgrade when the relay offers STARTTLS, otherwise plaintext. Certificates are always verified |
 | `CORS_ORIGIN` | `http://localhost:4200` | Allowed origin for REST and WebSocket |
 | `KAFKA_BROKERS` | `localhost:9092` | Brokers for the WebSocket bridge |
 | `KAFKA_WS_CONSUMER_GROUP` | `sentinel-gateway-ws-{hostname}` | Unique per instance so every gateway sees every event |
@@ -42,6 +44,8 @@ Listens on port **3000** (`PORT`).
 | `INGEST_SERVICE_TOKEN` | | Shared secret presented to the ingest management API as `X-Sentinel-Service-Token` on every proxied feed request and area push; required when the ingest service runs in production |
 | `INTELSKY_BASE_URL` | `https://intelsky.org` | Where flight paths come from |
 | `DB_HOST` … or `DATABASE_URL` | | PostgreSQL for the locations table |
+
+Startup checks (all environments): `MAIL_TLS` must be `starttls`, `tls`, `none` or empty. Under `APP_ENV=production` the gateway also exits when `KEYCLOAK_SERVICE_CLIENT_SECRET` is empty or `sentinel-service-secret-dev`, or when `MAIL_TLS=none` is combined with a `MAIL_PASSWORD`, and it logs a warning for every `*_SERVICE_URL` that still points at localhost. The mailer dials with a 10 s timeout and gives each message 30 s end to end; it rejects CR or LF in addresses and RFC 2047-encodes the subject.
 
 ## REST API
 

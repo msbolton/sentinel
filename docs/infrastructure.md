@@ -14,7 +14,7 @@ SENTINEL uses two Compose files:
 | PostgreSQL | `postgis/postgis:16-3.4` | 5432 | 5432 | Primary database with PostGIS, TimescaleDB, Apache AGE |
 | Kafka | `apache/kafka:3.7.0` | 9092, 9093 | 9092, 9093 | Event streaming (KRaft mode, no Zookeeper) |
 | OpenSearch | `opensearchproject/opensearch:2.17.1` | 9200 | 9200 | Full-text + geospatial search |
-| Keycloak | `quay.io/keycloak/keycloak:24.0` | 8080 | 8080 | Identity provider (OIDC/JWT) |
+| Keycloak | `quay.io/keycloak/keycloak:26.8.1` | 8080 | 8080 | Identity provider (OIDC/JWT) |
 | Keycloak DB | `postgres:16-alpine` | — | 5432 | Dedicated Keycloak database |
 | GeoServer | `kartoza/geoserver:2.25.2` | 8600 | 8600 | OGC WMS/WFS layers over the PostGIS views `entities_live_{u,c,s,ts}` and `locations_geo`, provisioned by the one-shot `geoserver-init` job (`config/geoserver/provision.sh`); accounts `gis-u` … `gis-ts` per clearance level |
 | MinIO | `minio/minio:latest` | 9000, 9001 | 9000, 9001 | S3-compatible object storage |
@@ -170,13 +170,16 @@ Messages are protobuf (`proto/sentinel/v1`); see the topic table in `docs/data-m
 
 ## Keycloak Configuration
 
-- **Dev mode**: Starts with `start-dev` (HTTP, no TLS)
+- **Dev mode**: Starts with `start-dev` (HTTP, no TLS). The health endpoints live on the management port 9000, which compose does not publish
+- **Version**: Keycloak 26. It starts with `KC_PROXY_HEADERS=xforwarded` and bootstraps the master-realm admin from `KC_BOOTSTRAP_ADMIN_USERNAME` / `KC_BOOTSTRAP_ADMIN_PASSWORD`; the `token-exchange` and `admin-fine-grained-authz` features are not enabled because nothing uses them
+- **Upgrading a dev volume**: the first start of Keycloak 26 against a `sentinel-keycloak-db-data` volume written by Keycloak 24 migrates the database in place and cannot be undone. Copy the volume first if you may want Keycloak 24 back. The realm import is skipped when the realm exists, so an existing dev realm does not pick up changes to `sentinel-realm.json` (recreate the volume, or apply them in the admin console)
 - **Realm**: `sentinel` (imported from `config/keycloak/sentinel-realm.json`)
 - **Clients**:
   - `sentinel-web` — Angular frontend (public, PKCE)
   - `sentinel-api` — API gateway (confidential, bearer-only)
 - **Roles**: `sentinel-viewer`, `sentinel-analyst`, `sentinel-operator`, `sentinel-admin`, plus `classification-u|c|s|ts`
 - **Custom claim**: `classification_level` (added to JWT via protocol mapper)
+- **Keycloak 26 needs two things the realm now declares**: `sentinel-web` has the `basic` client scope (since 25 it carries the `sub` claim, which the gateway requires), and the user profile sets `unmanagedAttributePolicy: ADMIN_EDIT` (otherwise Keycloak drops the `organization`, `justification` and `registrationDate` attributes the registration flow stores)
 
 ## Environment Variables
 
@@ -208,6 +211,14 @@ OPENSKY_CLIENT_SECRET=
 # connections may not take (blank means the default list)
 INGEST_LISTENER_HOST=localhost
 INGEST_RESERVED_PORTS=
+
+# Registration mail: mailhog in dev. A real relay sets MAIL_TLS (starttls|tls|none),
+# MAIL_USERNAME and MAIL_PASSWORD; see docs/api-gateway.md
+MAIL_HOST=localhost
+MAIL_PORT=1025
+MAIL_TLS=
+MAIL_USERNAME=
+MAIL_PASSWORD=
 
 # Service ports
 API_GATEWAY_PORT=3000
