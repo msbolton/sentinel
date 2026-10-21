@@ -13,6 +13,201 @@ import {
   navigationalStatusToNumber,
 } from "./common";
 
+/** RadarMode is the radar's operating mode for a track. */
+export enum RadarMode {
+  UNSPECIFIED = "UNSPECIFIED",
+  SEARCH = "SEARCH",
+  TRACK = "TRACK",
+}
+
+export function radarModeFromJSON(object: any): RadarMode {
+  switch (object) {
+    case 0:
+    case "RADAR_MODE_UNSPECIFIED":
+      return RadarMode.UNSPECIFIED;
+    case 1:
+    case "RADAR_MODE_SEARCH":
+      return RadarMode.SEARCH;
+    case 2:
+    case "RADAR_MODE_TRACK":
+      return RadarMode.TRACK;
+    default:
+      throw new globalThis.Error("Unrecognized enum value " + object + " for enum RadarMode");
+  }
+}
+
+export function radarModeToJSON(object: RadarMode): string {
+  switch (object) {
+    case RadarMode.UNSPECIFIED:
+      return "RADAR_MODE_UNSPECIFIED";
+    case RadarMode.SEARCH:
+      return "RADAR_MODE_SEARCH";
+    case RadarMode.TRACK:
+      return "RADAR_MODE_TRACK";
+    default:
+      throw new globalThis.Error("Unrecognized enum value " + object + " for enum RadarMode");
+  }
+}
+
+export function radarModeToNumber(object: RadarMode): number {
+  switch (object) {
+    case RadarMode.UNSPECIFIED:
+      return 0;
+    case RadarMode.SEARCH:
+      return 1;
+    case RadarMode.TRACK:
+      return 2;
+    default:
+      throw new globalThis.Error("Unrecognized enum value " + object + " for enum RadarMode");
+  }
+}
+
+/** RadarClass is the radar's own target classification. */
+export enum RadarClass {
+  UNSPECIFIED = "UNSPECIFIED",
+  VEHICLE = "VEHICLE",
+  DRONE = "DRONE",
+  PERSON = "PERSON",
+  BIRD = "BIRD",
+  CLUTTER = "CLUTTER",
+  UNKNOWN = "UNKNOWN",
+}
+
+export function radarClassFromJSON(object: any): RadarClass {
+  switch (object) {
+    case 0:
+    case "RADAR_CLASS_UNSPECIFIED":
+      return RadarClass.UNSPECIFIED;
+    case 1:
+    case "RADAR_CLASS_VEHICLE":
+      return RadarClass.VEHICLE;
+    case 2:
+    case "RADAR_CLASS_DRONE":
+      return RadarClass.DRONE;
+    case 3:
+    case "RADAR_CLASS_PERSON":
+      return RadarClass.PERSON;
+    case 4:
+    case "RADAR_CLASS_BIRD":
+      return RadarClass.BIRD;
+    case 5:
+    case "RADAR_CLASS_CLUTTER":
+      return RadarClass.CLUTTER;
+    case 6:
+    case "RADAR_CLASS_UNKNOWN":
+      return RadarClass.UNKNOWN;
+    default:
+      throw new globalThis.Error("Unrecognized enum value " + object + " for enum RadarClass");
+  }
+}
+
+export function radarClassToJSON(object: RadarClass): string {
+  switch (object) {
+    case RadarClass.UNSPECIFIED:
+      return "RADAR_CLASS_UNSPECIFIED";
+    case RadarClass.VEHICLE:
+      return "RADAR_CLASS_VEHICLE";
+    case RadarClass.DRONE:
+      return "RADAR_CLASS_DRONE";
+    case RadarClass.PERSON:
+      return "RADAR_CLASS_PERSON";
+    case RadarClass.BIRD:
+      return "RADAR_CLASS_BIRD";
+    case RadarClass.CLUTTER:
+      return "RADAR_CLASS_CLUTTER";
+    case RadarClass.UNKNOWN:
+      return "RADAR_CLASS_UNKNOWN";
+    default:
+      throw new globalThis.Error("Unrecognized enum value " + object + " for enum RadarClass");
+  }
+}
+
+export function radarClassToNumber(object: RadarClass): number {
+  switch (object) {
+    case RadarClass.UNSPECIFIED:
+      return 0;
+    case RadarClass.VEHICLE:
+      return 1;
+    case RadarClass.DRONE:
+      return 2;
+    case RadarClass.PERSON:
+      return 3;
+    case RadarClass.BIRD:
+      return 4;
+    case RadarClass.CLUTTER:
+      return 5;
+    case RadarClass.UNKNOWN:
+      return 6;
+    default:
+      throw new globalThis.Error("Unrecognized enum value " + object + " for enum RadarClass");
+  }
+}
+
+/** EoIrBand is the spectral band of an electro-optical / infrared camera. */
+export enum EoIrBand {
+  UNSPECIFIED = "UNSPECIFIED",
+  VISIBLE = "VISIBLE",
+  SWIR = "SWIR",
+  MWIR = "MWIR",
+  LWIR = "LWIR",
+}
+
+export function eoIrBandFromJSON(object: any): EoIrBand {
+  switch (object) {
+    case 0:
+    case "EO_IR_BAND_UNSPECIFIED":
+      return EoIrBand.UNSPECIFIED;
+    case 1:
+    case "EO_IR_BAND_VISIBLE":
+      return EoIrBand.VISIBLE;
+    case 2:
+    case "EO_IR_BAND_SWIR":
+      return EoIrBand.SWIR;
+    case 3:
+    case "EO_IR_BAND_MWIR":
+      return EoIrBand.MWIR;
+    case 4:
+    case "EO_IR_BAND_LWIR":
+      return EoIrBand.LWIR;
+    default:
+      throw new globalThis.Error("Unrecognized enum value " + object + " for enum EoIrBand");
+  }
+}
+
+export function eoIrBandToJSON(object: EoIrBand): string {
+  switch (object) {
+    case EoIrBand.UNSPECIFIED:
+      return "EO_IR_BAND_UNSPECIFIED";
+    case EoIrBand.VISIBLE:
+      return "EO_IR_BAND_VISIBLE";
+    case EoIrBand.SWIR:
+      return "EO_IR_BAND_SWIR";
+    case EoIrBand.MWIR:
+      return "EO_IR_BAND_MWIR";
+    case EoIrBand.LWIR:
+      return "EO_IR_BAND_LWIR";
+    default:
+      throw new globalThis.Error("Unrecognized enum value " + object + " for enum EoIrBand");
+  }
+}
+
+export function eoIrBandToNumber(object: EoIrBand): number {
+  switch (object) {
+    case EoIrBand.UNSPECIFIED:
+      return 0;
+    case EoIrBand.VISIBLE:
+      return 1;
+    case EoIrBand.SWIR:
+      return 2;
+    case EoIrBand.MWIR:
+      return 3;
+    case EoIrBand.LWIR:
+      return 4;
+    default:
+      throw new globalThis.Error("Unrecognized enum value " + object + " for enum EoIrBand");
+  }
+}
+
 /** AisDetail carries AIS maritime identification and voyage data. */
 export interface AisDetail {
   mmsi: string;
@@ -163,11 +358,47 @@ export interface RfDetail {
   powerDbm?: number | undefined;
 }
 
+/** RadarDetail carries one radar track's measurements and classification. */
+export interface RadarDetail {
+  /** closing speed; negative = approaching */
+  rangeRateMps?: number | undefined;
+  rcsDbsm?: number | undefined;
+  snrDb?: number | undefined;
+  mode: RadarMode;
+  /** 0..1 */
+  trackQuality?: number | undefined;
+  classification: RadarClass;
+  /** 0..1 */
+  classificationConfidence?: number | undefined;
+  radarTrackId: string;
+  /** server-computed; a sender's value is overwritten */
+  heightAboveGroundM?: number | undefined;
+}
+
+/** NormalizedBox is an image-space box; every field is 0..1 of the frame. */
+export interface NormalizedBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** EoIrDetail carries one camera detection. */
+export interface EoIrDetail {
+  band: EoIrBand;
+  classification: string;
+  classificationConfidence?: number | undefined;
+  horizontalFovDeg?: number | undefined;
+  verticalFovDeg?: number | undefined;
+  boundingBox?: NormalizedBox | undefined;
+  cameraTrackId: string;
+}
+
 /**
  * PlatformDetail is the protocol-specific block attached to one observation.
  * An entity fused from several feeds keeps one PlatformDetail per kind, keyed
  * by the oneof field name ("ais", "adsb", "tle", "link16", "cot", "uav",
- * "generic", "rf").
+ * "generic", "rf", "radar", "eoir").
  */
 export interface PlatformDetail {
   ais?: AisDetail | undefined;
@@ -178,6 +409,8 @@ export interface PlatformDetail {
   uav?: UavDetail | undefined;
   generic?: GenericDetail | undefined;
   rf?: RfDetail | undefined;
+  radar?: RadarDetail | undefined;
+  eoir?: EoIrDetail | undefined;
 }
 
 /**
@@ -2207,6 +2440,462 @@ export const RfDetail = {
   },
 };
 
+function createBaseRadarDetail(): RadarDetail {
+  return {
+    rangeRateMps: undefined,
+    rcsDbsm: undefined,
+    snrDb: undefined,
+    mode: RadarMode.UNSPECIFIED,
+    trackQuality: undefined,
+    classification: RadarClass.UNSPECIFIED,
+    classificationConfidence: undefined,
+    radarTrackId: "",
+    heightAboveGroundM: undefined,
+  };
+}
+
+export const RadarDetail = {
+  encode(message: RadarDetail, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.rangeRateMps !== undefined) {
+      writer.uint32(9).double(message.rangeRateMps);
+    }
+    if (message.rcsDbsm !== undefined) {
+      writer.uint32(17).double(message.rcsDbsm);
+    }
+    if (message.snrDb !== undefined) {
+      writer.uint32(25).double(message.snrDb);
+    }
+    if (message.mode !== RadarMode.UNSPECIFIED) {
+      writer.uint32(32).int32(radarModeToNumber(message.mode));
+    }
+    if (message.trackQuality !== undefined) {
+      writer.uint32(41).double(message.trackQuality);
+    }
+    if (message.classification !== RadarClass.UNSPECIFIED) {
+      writer.uint32(48).int32(radarClassToNumber(message.classification));
+    }
+    if (message.classificationConfidence !== undefined) {
+      writer.uint32(57).double(message.classificationConfidence);
+    }
+    if (message.radarTrackId !== "") {
+      writer.uint32(66).string(message.radarTrackId);
+    }
+    if (message.heightAboveGroundM !== undefined) {
+      writer.uint32(73).double(message.heightAboveGroundM);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): RadarDetail {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseRadarDetail();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          if (tag !== 9) {
+            break;
+          }
+
+          message.rangeRateMps = reader.double();
+          continue;
+        case 2:
+          if (tag !== 17) {
+            break;
+          }
+
+          message.rcsDbsm = reader.double();
+          continue;
+        case 3:
+          if (tag !== 25) {
+            break;
+          }
+
+          message.snrDb = reader.double();
+          continue;
+        case 4:
+          if (tag !== 32) {
+            break;
+          }
+
+          message.mode = radarModeFromJSON(reader.int32());
+          continue;
+        case 5:
+          if (tag !== 41) {
+            break;
+          }
+
+          message.trackQuality = reader.double();
+          continue;
+        case 6:
+          if (tag !== 48) {
+            break;
+          }
+
+          message.classification = radarClassFromJSON(reader.int32());
+          continue;
+        case 7:
+          if (tag !== 57) {
+            break;
+          }
+
+          message.classificationConfidence = reader.double();
+          continue;
+        case 8:
+          if (tag !== 66) {
+            break;
+          }
+
+          message.radarTrackId = reader.string();
+          continue;
+        case 9:
+          if (tag !== 73) {
+            break;
+          }
+
+          message.heightAboveGroundM = reader.double();
+          continue;
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skipType(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): RadarDetail {
+    return {
+      rangeRateMps: isSet(object.rangeRateMps) ? globalThis.Number(object.rangeRateMps) : undefined,
+      rcsDbsm: isSet(object.rcsDbsm) ? globalThis.Number(object.rcsDbsm) : undefined,
+      snrDb: isSet(object.snrDb) ? globalThis.Number(object.snrDb) : undefined,
+      mode: isSet(object.mode) ? radarModeFromJSON(object.mode) : RadarMode.UNSPECIFIED,
+      trackQuality: isSet(object.trackQuality) ? globalThis.Number(object.trackQuality) : undefined,
+      classification: isSet(object.classification) ? radarClassFromJSON(object.classification) : RadarClass.UNSPECIFIED,
+      classificationConfidence: isSet(object.classificationConfidence)
+        ? globalThis.Number(object.classificationConfidence)
+        : undefined,
+      radarTrackId: isSet(object.radarTrackId) ? globalThis.String(object.radarTrackId) : "",
+      heightAboveGroundM: isSet(object.heightAboveGroundM) ? globalThis.Number(object.heightAboveGroundM) : undefined,
+    };
+  },
+
+  toJSON(message: RadarDetail): unknown {
+    const obj: any = {};
+    if (message.rangeRateMps !== undefined) {
+      obj.rangeRateMps = message.rangeRateMps;
+    }
+    if (message.rcsDbsm !== undefined) {
+      obj.rcsDbsm = message.rcsDbsm;
+    }
+    if (message.snrDb !== undefined) {
+      obj.snrDb = message.snrDb;
+    }
+    if (message.mode !== RadarMode.UNSPECIFIED) {
+      obj.mode = radarModeToJSON(message.mode);
+    }
+    if (message.trackQuality !== undefined) {
+      obj.trackQuality = message.trackQuality;
+    }
+    if (message.classification !== RadarClass.UNSPECIFIED) {
+      obj.classification = radarClassToJSON(message.classification);
+    }
+    if (message.classificationConfidence !== undefined) {
+      obj.classificationConfidence = message.classificationConfidence;
+    }
+    if (message.radarTrackId !== "") {
+      obj.radarTrackId = message.radarTrackId;
+    }
+    if (message.heightAboveGroundM !== undefined) {
+      obj.heightAboveGroundM = message.heightAboveGroundM;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RadarDetail>, I>>(base?: I): RadarDetail {
+    return RadarDetail.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RadarDetail>, I>>(object: I): RadarDetail {
+    const message = createBaseRadarDetail();
+    message.rangeRateMps = object.rangeRateMps ?? undefined;
+    message.rcsDbsm = object.rcsDbsm ?? undefined;
+    message.snrDb = object.snrDb ?? undefined;
+    message.mode = object.mode ?? RadarMode.UNSPECIFIED;
+    message.trackQuality = object.trackQuality ?? undefined;
+    message.classification = object.classification ?? RadarClass.UNSPECIFIED;
+    message.classificationConfidence = object.classificationConfidence ?? undefined;
+    message.radarTrackId = object.radarTrackId ?? "";
+    message.heightAboveGroundM = object.heightAboveGroundM ?? undefined;
+    return message;
+  },
+};
+
+function createBaseNormalizedBox(): NormalizedBox {
+  return { x: 0, y: 0, width: 0, height: 0 };
+}
+
+export const NormalizedBox = {
+  encode(message: NormalizedBox, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.x !== 0) {
+      writer.uint32(9).double(message.x);
+    }
+    if (message.y !== 0) {
+      writer.uint32(17).double(message.y);
+    }
+    if (message.width !== 0) {
+      writer.uint32(25).double(message.width);
+    }
+    if (message.height !== 0) {
+      writer.uint32(33).double(message.height);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): NormalizedBox {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseNormalizedBox();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          if (tag !== 9) {
+            break;
+          }
+
+          message.x = reader.double();
+          continue;
+        case 2:
+          if (tag !== 17) {
+            break;
+          }
+
+          message.y = reader.double();
+          continue;
+        case 3:
+          if (tag !== 25) {
+            break;
+          }
+
+          message.width = reader.double();
+          continue;
+        case 4:
+          if (tag !== 33) {
+            break;
+          }
+
+          message.height = reader.double();
+          continue;
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skipType(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): NormalizedBox {
+    return {
+      x: isSet(object.x) ? globalThis.Number(object.x) : 0,
+      y: isSet(object.y) ? globalThis.Number(object.y) : 0,
+      width: isSet(object.width) ? globalThis.Number(object.width) : 0,
+      height: isSet(object.height) ? globalThis.Number(object.height) : 0,
+    };
+  },
+
+  toJSON(message: NormalizedBox): unknown {
+    const obj: any = {};
+    if (message.x !== 0) {
+      obj.x = message.x;
+    }
+    if (message.y !== 0) {
+      obj.y = message.y;
+    }
+    if (message.width !== 0) {
+      obj.width = message.width;
+    }
+    if (message.height !== 0) {
+      obj.height = message.height;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NormalizedBox>, I>>(base?: I): NormalizedBox {
+    return NormalizedBox.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<NormalizedBox>, I>>(object: I): NormalizedBox {
+    const message = createBaseNormalizedBox();
+    message.x = object.x ?? 0;
+    message.y = object.y ?? 0;
+    message.width = object.width ?? 0;
+    message.height = object.height ?? 0;
+    return message;
+  },
+};
+
+function createBaseEoIrDetail(): EoIrDetail {
+  return {
+    band: EoIrBand.UNSPECIFIED,
+    classification: "",
+    classificationConfidence: undefined,
+    horizontalFovDeg: undefined,
+    verticalFovDeg: undefined,
+    boundingBox: undefined,
+    cameraTrackId: "",
+  };
+}
+
+export const EoIrDetail = {
+  encode(message: EoIrDetail, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.band !== EoIrBand.UNSPECIFIED) {
+      writer.uint32(8).int32(eoIrBandToNumber(message.band));
+    }
+    if (message.classification !== "") {
+      writer.uint32(18).string(message.classification);
+    }
+    if (message.classificationConfidence !== undefined) {
+      writer.uint32(25).double(message.classificationConfidence);
+    }
+    if (message.horizontalFovDeg !== undefined) {
+      writer.uint32(33).double(message.horizontalFovDeg);
+    }
+    if (message.verticalFovDeg !== undefined) {
+      writer.uint32(41).double(message.verticalFovDeg);
+    }
+    if (message.boundingBox !== undefined) {
+      NormalizedBox.encode(message.boundingBox, writer.uint32(50).fork()).ldelim();
+    }
+    if (message.cameraTrackId !== "") {
+      writer.uint32(58).string(message.cameraTrackId);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): EoIrDetail {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseEoIrDetail();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          if (tag !== 8) {
+            break;
+          }
+
+          message.band = eoIrBandFromJSON(reader.int32());
+          continue;
+        case 2:
+          if (tag !== 18) {
+            break;
+          }
+
+          message.classification = reader.string();
+          continue;
+        case 3:
+          if (tag !== 25) {
+            break;
+          }
+
+          message.classificationConfidence = reader.double();
+          continue;
+        case 4:
+          if (tag !== 33) {
+            break;
+          }
+
+          message.horizontalFovDeg = reader.double();
+          continue;
+        case 5:
+          if (tag !== 41) {
+            break;
+          }
+
+          message.verticalFovDeg = reader.double();
+          continue;
+        case 6:
+          if (tag !== 50) {
+            break;
+          }
+
+          message.boundingBox = NormalizedBox.decode(reader, reader.uint32());
+          continue;
+        case 7:
+          if (tag !== 58) {
+            break;
+          }
+
+          message.cameraTrackId = reader.string();
+          continue;
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skipType(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): EoIrDetail {
+    return {
+      band: isSet(object.band) ? eoIrBandFromJSON(object.band) : EoIrBand.UNSPECIFIED,
+      classification: isSet(object.classification) ? globalThis.String(object.classification) : "",
+      classificationConfidence: isSet(object.classificationConfidence)
+        ? globalThis.Number(object.classificationConfidence)
+        : undefined,
+      horizontalFovDeg: isSet(object.horizontalFovDeg) ? globalThis.Number(object.horizontalFovDeg) : undefined,
+      verticalFovDeg: isSet(object.verticalFovDeg) ? globalThis.Number(object.verticalFovDeg) : undefined,
+      boundingBox: isSet(object.boundingBox) ? NormalizedBox.fromJSON(object.boundingBox) : undefined,
+      cameraTrackId: isSet(object.cameraTrackId) ? globalThis.String(object.cameraTrackId) : "",
+    };
+  },
+
+  toJSON(message: EoIrDetail): unknown {
+    const obj: any = {};
+    if (message.band !== EoIrBand.UNSPECIFIED) {
+      obj.band = eoIrBandToJSON(message.band);
+    }
+    if (message.classification !== "") {
+      obj.classification = message.classification;
+    }
+    if (message.classificationConfidence !== undefined) {
+      obj.classificationConfidence = message.classificationConfidence;
+    }
+    if (message.horizontalFovDeg !== undefined) {
+      obj.horizontalFovDeg = message.horizontalFovDeg;
+    }
+    if (message.verticalFovDeg !== undefined) {
+      obj.verticalFovDeg = message.verticalFovDeg;
+    }
+    if (message.boundingBox !== undefined) {
+      obj.boundingBox = NormalizedBox.toJSON(message.boundingBox);
+    }
+    if (message.cameraTrackId !== "") {
+      obj.cameraTrackId = message.cameraTrackId;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EoIrDetail>, I>>(base?: I): EoIrDetail {
+    return EoIrDetail.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EoIrDetail>, I>>(object: I): EoIrDetail {
+    const message = createBaseEoIrDetail();
+    message.band = object.band ?? EoIrBand.UNSPECIFIED;
+    message.classification = object.classification ?? "";
+    message.classificationConfidence = object.classificationConfidence ?? undefined;
+    message.horizontalFovDeg = object.horizontalFovDeg ?? undefined;
+    message.verticalFovDeg = object.verticalFovDeg ?? undefined;
+    message.boundingBox = (object.boundingBox !== undefined && object.boundingBox !== null)
+      ? NormalizedBox.fromPartial(object.boundingBox)
+      : undefined;
+    message.cameraTrackId = object.cameraTrackId ?? "";
+    return message;
+  },
+};
+
 function createBasePlatformDetail(): PlatformDetail {
   return {
     ais: undefined,
@@ -2217,6 +2906,8 @@ function createBasePlatformDetail(): PlatformDetail {
     uav: undefined,
     generic: undefined,
     rf: undefined,
+    radar: undefined,
+    eoir: undefined,
   };
 }
 
@@ -2245,6 +2936,12 @@ export const PlatformDetail = {
     }
     if (message.rf !== undefined) {
       RfDetail.encode(message.rf, writer.uint32(66).fork()).ldelim();
+    }
+    if (message.radar !== undefined) {
+      RadarDetail.encode(message.radar, writer.uint32(74).fork()).ldelim();
+    }
+    if (message.eoir !== undefined) {
+      EoIrDetail.encode(message.eoir, writer.uint32(82).fork()).ldelim();
     }
     return writer;
   },
@@ -2312,6 +3009,20 @@ export const PlatformDetail = {
 
           message.rf = RfDetail.decode(reader, reader.uint32());
           continue;
+        case 9:
+          if (tag !== 74) {
+            break;
+          }
+
+          message.radar = RadarDetail.decode(reader, reader.uint32());
+          continue;
+        case 10:
+          if (tag !== 82) {
+            break;
+          }
+
+          message.eoir = EoIrDetail.decode(reader, reader.uint32());
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2331,6 +3042,8 @@ export const PlatformDetail = {
       uav: isSet(object.uav) ? UavDetail.fromJSON(object.uav) : undefined,
       generic: isSet(object.generic) ? GenericDetail.fromJSON(object.generic) : undefined,
       rf: isSet(object.rf) ? RfDetail.fromJSON(object.rf) : undefined,
+      radar: isSet(object.radar) ? RadarDetail.fromJSON(object.radar) : undefined,
+      eoir: isSet(object.eoir) ? EoIrDetail.fromJSON(object.eoir) : undefined,
     };
   },
 
@@ -2360,6 +3073,12 @@ export const PlatformDetail = {
     if (message.rf !== undefined) {
       obj.rf = RfDetail.toJSON(message.rf);
     }
+    if (message.radar !== undefined) {
+      obj.radar = RadarDetail.toJSON(message.radar);
+    }
+    if (message.eoir !== undefined) {
+      obj.eoir = EoIrDetail.toJSON(message.eoir);
+    }
     return obj;
   },
 
@@ -2382,6 +3101,12 @@ export const PlatformDetail = {
       ? GenericDetail.fromPartial(object.generic)
       : undefined;
     message.rf = (object.rf !== undefined && object.rf !== null) ? RfDetail.fromPartial(object.rf) : undefined;
+    message.radar = (object.radar !== undefined && object.radar !== null)
+      ? RadarDetail.fromPartial(object.radar)
+      : undefined;
+    message.eoir = (object.eoir !== undefined && object.eoir !== null)
+      ? EoIrDetail.fromPartial(object.eoir)
+      : undefined;
     return message;
   },
 };

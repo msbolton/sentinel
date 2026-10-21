@@ -335,6 +335,8 @@ func (x *PolarSigma) GetElevationDeg() float64 {
 // observation that carries one and no position has its position derived by
 // the ingest service from the emplacement's location. elevation_deg unset
 // means the target is at the observation's altitude, else the emplacement's.
+// direction_only marks a camera-style report: range_m is ignored,
+// elevation_deg is required, and the target is placed on terrain.
 type PolarMeasurement struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	RangeM           float64                `protobuf:"fixed64,1,opt,name=range_m,json=rangeM,proto3" json:"range_m,omitempty"`
@@ -343,6 +345,7 @@ type PolarMeasurement struct {
 	RangeRateMps     *float64               `protobuf:"fixed64,4,opt,name=range_rate_mps,json=rangeRateMps,proto3,oneof" json:"range_rate_mps,omitempty"`
 	AzimuthReference AzimuthReference       `protobuf:"varint,5,opt,name=azimuth_reference,json=azimuthReference,proto3,enum=sentinel.v1.AzimuthReference" json:"azimuth_reference,omitempty"`
 	Sigma            *PolarSigma            `protobuf:"bytes,6,opt,name=sigma,proto3" json:"sigma,omitempty"`
+	DirectionOnly    bool                   `protobuf:"varint,7,opt,name=direction_only,json=directionOnly,proto3" json:"direction_only,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -419,6 +422,13 @@ func (x *PolarMeasurement) GetSigma() *PolarSigma {
 	return nil
 }
 
+func (x *PolarMeasurement) GetDirectionOnly() bool {
+	if x != nil {
+		return x.DirectionOnly
+	}
+	return false
+}
+
 // Emplacement is a place observations come from: a radar site, a mast, a
 // ship's radar, a field observer. Users manage them in Sentinel.
 type Emplacement struct {
@@ -436,11 +446,14 @@ type Emplacement struct {
 	Classification   Classification         `protobuf:"varint,11,opt,name=classification,proto3,enum=sentinel.v1.Classification" json:"classification,omitempty"`
 	Exercise         bool                   `protobuf:"varint,12,opt,name=exercise,proto3" json:"exercise,omitempty"`
 	// The connection allowed to report as this emplacement; empty when none.
-	FeedId        string                 `protobuf:"bytes,13,opt,name=feed_id,json=feedId,proto3" json:"feed_id,omitempty"`
-	Active        bool                   `protobuf:"varint,14,opt,name=active,proto3" json:"active,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,15,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	FeedId    string                 `protobuf:"bytes,13,opt,name=feed_id,json=feedId,proto3" json:"feed_id,omitempty"`
+	Active    bool                   `protobuf:"varint,14,opt,name=active,proto3" json:"active,omitempty"`
+	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,15,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// Height of the sensor above the ground, metres. Used for the origin
+	// altitude only when the position has no altitude.
+	HeightAboveGroundM *float64 `protobuf:"fixed64,16,opt,name=height_above_ground_m,json=heightAboveGroundM,proto3,oneof" json:"height_above_ground_m,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *Emplacement) Reset() {
@@ -578,6 +591,13 @@ func (x *Emplacement) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Emplacement) GetHeightAboveGroundM() float64 {
+	if x != nil && x.HeightAboveGroundM != nil {
+		return *x.HeightAboveGroundM
+	}
+	return 0
+}
+
 // EmplacementState is an emplacement's heartbeat. Every emplacement bound to
 // a grpc connection sends one at least every heartbeat_interval_sec; three
 // missed intervals make it offline and its fixes are refused (no_heartbeat).
@@ -699,7 +719,7 @@ const file_sentinel_v1_emplacement_proto_rawDesc = "" +
 	"\n" +
 	"\b_range_mB\x0e\n" +
 	"\f_azimuth_degB\x10\n" +
-	"\x0e_elevation_deg\"\xc1\x02\n" +
+	"\x0e_elevation_deg\"\xe8\x02\n" +
 	"\x10PolarMeasurement\x12\x17\n" +
 	"\arange_m\x18\x01 \x01(\x01R\x06rangeM\x12\x1f\n" +
 	"\vazimuth_deg\x18\x02 \x01(\x01R\n" +
@@ -707,9 +727,10 @@ const file_sentinel_v1_emplacement_proto_rawDesc = "" +
 	"\relevation_deg\x18\x03 \x01(\x01H\x00R\felevationDeg\x88\x01\x01\x12)\n" +
 	"\x0erange_rate_mps\x18\x04 \x01(\x01H\x01R\frangeRateMps\x88\x01\x01\x12J\n" +
 	"\x11azimuth_reference\x18\x05 \x01(\x0e2\x1d.sentinel.v1.AzimuthReferenceR\x10azimuthReference\x12-\n" +
-	"\x05sigma\x18\x06 \x01(\v2\x17.sentinel.v1.PolarSigmaR\x05sigmaB\x10\n" +
+	"\x05sigma\x18\x06 \x01(\v2\x17.sentinel.v1.PolarSigmaR\x05sigma\x12%\n" +
+	"\x0edirection_only\x18\a \x01(\bR\rdirectionOnlyB\x10\n" +
 	"\x0e_elevation_degB\x11\n" +
-	"\x0f_range_rate_mps\"\xa4\x05\n" +
+	"\x0f_range_rate_mps\"\xf6\x05\n" +
 	"\vEmplacement\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
@@ -728,7 +749,9 @@ const file_sentinel_v1_emplacement_proto_rawDesc = "" +
 	"\afeed_id\x18\r \x01(\tR\x06feedId\x12\x16\n" +
 	"\x06active\x18\x0e \x01(\bR\x06active\x129\n" +
 	"\n" +
-	"updated_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xf6\x02\n" +
+	"updated_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x126\n" +
+	"\x15height_above_ground_m\x18\x10 \x01(\x01H\x00R\x12heightAboveGroundM\x88\x01\x01B\x18\n" +
+	"\x16_height_above_ground_m\"\xf6\x02\n" +
 	"\x10EmplacementState\x12%\n" +
 	"\x0eemplacement_id\x18\x01 \x01(\tR\remplacementId\x12.\n" +
 	"\x04time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x04time\x123\n" +
@@ -820,6 +843,7 @@ func file_sentinel_v1_emplacement_proto_init() {
 	file_sentinel_v1_emplacement_proto_msgTypes[0].OneofWrappers = []any{}
 	file_sentinel_v1_emplacement_proto_msgTypes[1].OneofWrappers = []any{}
 	file_sentinel_v1_emplacement_proto_msgTypes[2].OneofWrappers = []any{}
+	file_sentinel_v1_emplacement_proto_msgTypes[3].OneofWrappers = []any{}
 	file_sentinel_v1_emplacement_proto_msgTypes[4].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

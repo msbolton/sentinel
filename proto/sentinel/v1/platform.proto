@@ -155,10 +155,69 @@ message RfDetail {
   optional double power_dbm = 8;      // received or estimated ERP, dBm
 }
 
+// RadarMode is the radar's operating mode for a track.
+enum RadarMode {
+  RADAR_MODE_UNSPECIFIED = 0;
+  RADAR_MODE_SEARCH = 1;
+  RADAR_MODE_TRACK = 2;
+}
+
+// RadarClass is the radar's own target classification.
+enum RadarClass {
+  RADAR_CLASS_UNSPECIFIED = 0;
+  RADAR_CLASS_VEHICLE = 1;
+  RADAR_CLASS_DRONE = 2;
+  RADAR_CLASS_PERSON = 3;
+  RADAR_CLASS_BIRD = 4;
+  RADAR_CLASS_CLUTTER = 5;
+  RADAR_CLASS_UNKNOWN = 6;
+}
+
+// RadarDetail carries one radar track's measurements and classification.
+message RadarDetail {
+  optional double range_rate_mps = 1;       // closing speed; negative = approaching
+  optional double rcs_dbsm = 2;
+  optional double snr_db = 3;
+  RadarMode mode = 4;
+  optional double track_quality = 5;        // 0..1
+  RadarClass classification = 6;
+  optional double classification_confidence = 7; // 0..1
+  string radar_track_id = 8;
+  optional double height_above_ground_m = 9; // server-computed; a sender's value is overwritten
+}
+
+// EoIrBand is the spectral band of an electro-optical / infrared camera.
+enum EoIrBand {
+  EO_IR_BAND_UNSPECIFIED = 0;
+  EO_IR_BAND_VISIBLE = 1;
+  EO_IR_BAND_SWIR = 2;
+  EO_IR_BAND_MWIR = 3;
+  EO_IR_BAND_LWIR = 4;
+}
+
+// NormalizedBox is an image-space box; every field is 0..1 of the frame.
+message NormalizedBox {
+  double x = 1;
+  double y = 2;
+  double width = 3;
+  double height = 4;
+}
+
+// EoIrDetail carries one camera detection.
+message EoIrDetail {
+  EoIrBand band = 1;
+  string classification = 2;
+  optional double classification_confidence = 3;
+  optional double horizontal_fov_deg = 4;
+  optional double vertical_fov_deg = 5;
+  NormalizedBox bounding_box = 6;
+  string camera_track_id = 7;
+}
+
 // PlatformDetail is the protocol-specific block attached to one observation.
 // An entity fused from several feeds keeps one PlatformDetail per kind, keyed
 // by the oneof field name ("ais", "adsb", "tle", "link16", "cot", "uav",
-// "generic", "rf").
+// "generic", "rf", "radar", "eoir").
 message PlatformDetail {
   oneof detail {
     AisDetail ais = 1;
@@ -169,6 +228,8 @@ message PlatformDetail {
     UavDetail uav = 6;
     GenericDetail generic = 7;
     RfDetail rf = 8;
+    RadarDetail radar = 9;
+    EoIrDetail eoir = 10;
   }
 }
 

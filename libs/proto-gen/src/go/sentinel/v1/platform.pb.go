@@ -21,6 +21,174 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// RadarMode is the radar's operating mode for a track.
+type RadarMode int32
+
+const (
+	RadarMode_RADAR_MODE_UNSPECIFIED RadarMode = 0
+	RadarMode_RADAR_MODE_SEARCH      RadarMode = 1
+	RadarMode_RADAR_MODE_TRACK       RadarMode = 2
+)
+
+// Enum value maps for RadarMode.
+var (
+	RadarMode_name = map[int32]string{
+		0: "RADAR_MODE_UNSPECIFIED",
+		1: "RADAR_MODE_SEARCH",
+		2: "RADAR_MODE_TRACK",
+	}
+	RadarMode_value = map[string]int32{
+		"RADAR_MODE_UNSPECIFIED": 0,
+		"RADAR_MODE_SEARCH":      1,
+		"RADAR_MODE_TRACK":       2,
+	}
+)
+
+func (x RadarMode) Enum() *RadarMode {
+	p := new(RadarMode)
+	*p = x
+	return p
+}
+
+func (x RadarMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RadarMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_sentinel_v1_platform_proto_enumTypes[0].Descriptor()
+}
+
+func (RadarMode) Type() protoreflect.EnumType {
+	return &file_sentinel_v1_platform_proto_enumTypes[0]
+}
+
+func (x RadarMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RadarMode.Descriptor instead.
+func (RadarMode) EnumDescriptor() ([]byte, []int) {
+	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{0}
+}
+
+// RadarClass is the radar's own target classification.
+type RadarClass int32
+
+const (
+	RadarClass_RADAR_CLASS_UNSPECIFIED RadarClass = 0
+	RadarClass_RADAR_CLASS_VEHICLE     RadarClass = 1
+	RadarClass_RADAR_CLASS_DRONE       RadarClass = 2
+	RadarClass_RADAR_CLASS_PERSON      RadarClass = 3
+	RadarClass_RADAR_CLASS_BIRD        RadarClass = 4
+	RadarClass_RADAR_CLASS_CLUTTER     RadarClass = 5
+	RadarClass_RADAR_CLASS_UNKNOWN     RadarClass = 6
+)
+
+// Enum value maps for RadarClass.
+var (
+	RadarClass_name = map[int32]string{
+		0: "RADAR_CLASS_UNSPECIFIED",
+		1: "RADAR_CLASS_VEHICLE",
+		2: "RADAR_CLASS_DRONE",
+		3: "RADAR_CLASS_PERSON",
+		4: "RADAR_CLASS_BIRD",
+		5: "RADAR_CLASS_CLUTTER",
+		6: "RADAR_CLASS_UNKNOWN",
+	}
+	RadarClass_value = map[string]int32{
+		"RADAR_CLASS_UNSPECIFIED": 0,
+		"RADAR_CLASS_VEHICLE":     1,
+		"RADAR_CLASS_DRONE":       2,
+		"RADAR_CLASS_PERSON":      3,
+		"RADAR_CLASS_BIRD":        4,
+		"RADAR_CLASS_CLUTTER":     5,
+		"RADAR_CLASS_UNKNOWN":     6,
+	}
+)
+
+func (x RadarClass) Enum() *RadarClass {
+	p := new(RadarClass)
+	*p = x
+	return p
+}
+
+func (x RadarClass) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RadarClass) Descriptor() protoreflect.EnumDescriptor {
+	return file_sentinel_v1_platform_proto_enumTypes[1].Descriptor()
+}
+
+func (RadarClass) Type() protoreflect.EnumType {
+	return &file_sentinel_v1_platform_proto_enumTypes[1]
+}
+
+func (x RadarClass) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RadarClass.Descriptor instead.
+func (RadarClass) EnumDescriptor() ([]byte, []int) {
+	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{1}
+}
+
+// EoIrBand is the spectral band of an electro-optical / infrared camera.
+type EoIrBand int32
+
+const (
+	EoIrBand_EO_IR_BAND_UNSPECIFIED EoIrBand = 0
+	EoIrBand_EO_IR_BAND_VISIBLE     EoIrBand = 1
+	EoIrBand_EO_IR_BAND_SWIR        EoIrBand = 2
+	EoIrBand_EO_IR_BAND_MWIR        EoIrBand = 3
+	EoIrBand_EO_IR_BAND_LWIR        EoIrBand = 4
+)
+
+// Enum value maps for EoIrBand.
+var (
+	EoIrBand_name = map[int32]string{
+		0: "EO_IR_BAND_UNSPECIFIED",
+		1: "EO_IR_BAND_VISIBLE",
+		2: "EO_IR_BAND_SWIR",
+		3: "EO_IR_BAND_MWIR",
+		4: "EO_IR_BAND_LWIR",
+	}
+	EoIrBand_value = map[string]int32{
+		"EO_IR_BAND_UNSPECIFIED": 0,
+		"EO_IR_BAND_VISIBLE":     1,
+		"EO_IR_BAND_SWIR":        2,
+		"EO_IR_BAND_MWIR":        3,
+		"EO_IR_BAND_LWIR":        4,
+	}
+)
+
+func (x EoIrBand) Enum() *EoIrBand {
+	p := new(EoIrBand)
+	*p = x
+	return p
+}
+
+func (x EoIrBand) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (EoIrBand) Descriptor() protoreflect.EnumDescriptor {
+	return file_sentinel_v1_platform_proto_enumTypes[2].Descriptor()
+}
+
+func (EoIrBand) Type() protoreflect.EnumType {
+	return &file_sentinel_v1_platform_proto_enumTypes[2]
+}
+
+func (x EoIrBand) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use EoIrBand.Descriptor instead.
+func (EoIrBand) EnumDescriptor() ([]byte, []int) {
+	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{2}
+}
+
 // AisDetail carries AIS maritime identification and voyage data.
 type AisDetail struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
@@ -1137,10 +1305,281 @@ func (x *RfDetail) GetPowerDbm() float64 {
 	return 0
 }
 
+// RadarDetail carries one radar track's measurements and classification.
+type RadarDetail struct {
+	state                    protoimpl.MessageState `protogen:"open.v1"`
+	RangeRateMps             *float64               `protobuf:"fixed64,1,opt,name=range_rate_mps,json=rangeRateMps,proto3,oneof" json:"range_rate_mps,omitempty"` // closing speed; negative = approaching
+	RcsDbsm                  *float64               `protobuf:"fixed64,2,opt,name=rcs_dbsm,json=rcsDbsm,proto3,oneof" json:"rcs_dbsm,omitempty"`
+	SnrDb                    *float64               `protobuf:"fixed64,3,opt,name=snr_db,json=snrDb,proto3,oneof" json:"snr_db,omitempty"`
+	Mode                     RadarMode              `protobuf:"varint,4,opt,name=mode,proto3,enum=sentinel.v1.RadarMode" json:"mode,omitempty"`
+	TrackQuality             *float64               `protobuf:"fixed64,5,opt,name=track_quality,json=trackQuality,proto3,oneof" json:"track_quality,omitempty"` // 0..1
+	Classification           RadarClass             `protobuf:"varint,6,opt,name=classification,proto3,enum=sentinel.v1.RadarClass" json:"classification,omitempty"`
+	ClassificationConfidence *float64               `protobuf:"fixed64,7,opt,name=classification_confidence,json=classificationConfidence,proto3,oneof" json:"classification_confidence,omitempty"` // 0..1
+	RadarTrackId             string                 `protobuf:"bytes,8,opt,name=radar_track_id,json=radarTrackId,proto3" json:"radar_track_id,omitempty"`
+	HeightAboveGroundM       *float64               `protobuf:"fixed64,9,opt,name=height_above_ground_m,json=heightAboveGroundM,proto3,oneof" json:"height_above_ground_m,omitempty"` // server-computed; a sender's value is overwritten
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
+}
+
+func (x *RadarDetail) Reset() {
+	*x = RadarDetail{}
+	mi := &file_sentinel_v1_platform_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RadarDetail) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RadarDetail) ProtoMessage() {}
+
+func (x *RadarDetail) ProtoReflect() protoreflect.Message {
+	mi := &file_sentinel_v1_platform_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RadarDetail.ProtoReflect.Descriptor instead.
+func (*RadarDetail) Descriptor() ([]byte, []int) {
+	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *RadarDetail) GetRangeRateMps() float64 {
+	if x != nil && x.RangeRateMps != nil {
+		return *x.RangeRateMps
+	}
+	return 0
+}
+
+func (x *RadarDetail) GetRcsDbsm() float64 {
+	if x != nil && x.RcsDbsm != nil {
+		return *x.RcsDbsm
+	}
+	return 0
+}
+
+func (x *RadarDetail) GetSnrDb() float64 {
+	if x != nil && x.SnrDb != nil {
+		return *x.SnrDb
+	}
+	return 0
+}
+
+func (x *RadarDetail) GetMode() RadarMode {
+	if x != nil {
+		return x.Mode
+	}
+	return RadarMode_RADAR_MODE_UNSPECIFIED
+}
+
+func (x *RadarDetail) GetTrackQuality() float64 {
+	if x != nil && x.TrackQuality != nil {
+		return *x.TrackQuality
+	}
+	return 0
+}
+
+func (x *RadarDetail) GetClassification() RadarClass {
+	if x != nil {
+		return x.Classification
+	}
+	return RadarClass_RADAR_CLASS_UNSPECIFIED
+}
+
+func (x *RadarDetail) GetClassificationConfidence() float64 {
+	if x != nil && x.ClassificationConfidence != nil {
+		return *x.ClassificationConfidence
+	}
+	return 0
+}
+
+func (x *RadarDetail) GetRadarTrackId() string {
+	if x != nil {
+		return x.RadarTrackId
+	}
+	return ""
+}
+
+func (x *RadarDetail) GetHeightAboveGroundM() float64 {
+	if x != nil && x.HeightAboveGroundM != nil {
+		return *x.HeightAboveGroundM
+	}
+	return 0
+}
+
+// NormalizedBox is an image-space box; every field is 0..1 of the frame.
+type NormalizedBox struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	X             float64                `protobuf:"fixed64,1,opt,name=x,proto3" json:"x,omitempty"`
+	Y             float64                `protobuf:"fixed64,2,opt,name=y,proto3" json:"y,omitempty"`
+	Width         float64                `protobuf:"fixed64,3,opt,name=width,proto3" json:"width,omitempty"`
+	Height        float64                `protobuf:"fixed64,4,opt,name=height,proto3" json:"height,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NormalizedBox) Reset() {
+	*x = NormalizedBox{}
+	mi := &file_sentinel_v1_platform_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NormalizedBox) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NormalizedBox) ProtoMessage() {}
+
+func (x *NormalizedBox) ProtoReflect() protoreflect.Message {
+	mi := &file_sentinel_v1_platform_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NormalizedBox.ProtoReflect.Descriptor instead.
+func (*NormalizedBox) Descriptor() ([]byte, []int) {
+	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *NormalizedBox) GetX() float64 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *NormalizedBox) GetY() float64 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *NormalizedBox) GetWidth() float64 {
+	if x != nil {
+		return x.Width
+	}
+	return 0
+}
+
+func (x *NormalizedBox) GetHeight() float64 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+// EoIrDetail carries one camera detection.
+type EoIrDetail struct {
+	state                    protoimpl.MessageState `protogen:"open.v1"`
+	Band                     EoIrBand               `protobuf:"varint,1,opt,name=band,proto3,enum=sentinel.v1.EoIrBand" json:"band,omitempty"`
+	Classification           string                 `protobuf:"bytes,2,opt,name=classification,proto3" json:"classification,omitempty"`
+	ClassificationConfidence *float64               `protobuf:"fixed64,3,opt,name=classification_confidence,json=classificationConfidence,proto3,oneof" json:"classification_confidence,omitempty"`
+	HorizontalFovDeg         *float64               `protobuf:"fixed64,4,opt,name=horizontal_fov_deg,json=horizontalFovDeg,proto3,oneof" json:"horizontal_fov_deg,omitempty"`
+	VerticalFovDeg           *float64               `protobuf:"fixed64,5,opt,name=vertical_fov_deg,json=verticalFovDeg,proto3,oneof" json:"vertical_fov_deg,omitempty"`
+	BoundingBox              *NormalizedBox         `protobuf:"bytes,6,opt,name=bounding_box,json=boundingBox,proto3" json:"bounding_box,omitempty"`
+	CameraTrackId            string                 `protobuf:"bytes,7,opt,name=camera_track_id,json=cameraTrackId,proto3" json:"camera_track_id,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
+}
+
+func (x *EoIrDetail) Reset() {
+	*x = EoIrDetail{}
+	mi := &file_sentinel_v1_platform_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EoIrDetail) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EoIrDetail) ProtoMessage() {}
+
+func (x *EoIrDetail) ProtoReflect() protoreflect.Message {
+	mi := &file_sentinel_v1_platform_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EoIrDetail.ProtoReflect.Descriptor instead.
+func (*EoIrDetail) Descriptor() ([]byte, []int) {
+	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *EoIrDetail) GetBand() EoIrBand {
+	if x != nil {
+		return x.Band
+	}
+	return EoIrBand_EO_IR_BAND_UNSPECIFIED
+}
+
+func (x *EoIrDetail) GetClassification() string {
+	if x != nil {
+		return x.Classification
+	}
+	return ""
+}
+
+func (x *EoIrDetail) GetClassificationConfidence() float64 {
+	if x != nil && x.ClassificationConfidence != nil {
+		return *x.ClassificationConfidence
+	}
+	return 0
+}
+
+func (x *EoIrDetail) GetHorizontalFovDeg() float64 {
+	if x != nil && x.HorizontalFovDeg != nil {
+		return *x.HorizontalFovDeg
+	}
+	return 0
+}
+
+func (x *EoIrDetail) GetVerticalFovDeg() float64 {
+	if x != nil && x.VerticalFovDeg != nil {
+		return *x.VerticalFovDeg
+	}
+	return 0
+}
+
+func (x *EoIrDetail) GetBoundingBox() *NormalizedBox {
+	if x != nil {
+		return x.BoundingBox
+	}
+	return nil
+}
+
+func (x *EoIrDetail) GetCameraTrackId() string {
+	if x != nil {
+		return x.CameraTrackId
+	}
+	return ""
+}
+
 // PlatformDetail is the protocol-specific block attached to one observation.
 // An entity fused from several feeds keeps one PlatformDetail per kind, keyed
 // by the oneof field name ("ais", "adsb", "tle", "link16", "cot", "uav",
-// "generic", "rf").
+// "generic", "rf", "radar", "eoir").
 type PlatformDetail struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Detail:
@@ -1153,6 +1592,8 @@ type PlatformDetail struct {
 	//	*PlatformDetail_Uav
 	//	*PlatformDetail_Generic
 	//	*PlatformDetail_Rf
+	//	*PlatformDetail_Radar
+	//	*PlatformDetail_Eoir
 	Detail        isPlatformDetail_Detail `protobuf_oneof:"detail"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1160,7 +1601,7 @@ type PlatformDetail struct {
 
 func (x *PlatformDetail) Reset() {
 	*x = PlatformDetail{}
-	mi := &file_sentinel_v1_platform_proto_msgTypes[7]
+	mi := &file_sentinel_v1_platform_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1172,7 +1613,7 @@ func (x *PlatformDetail) String() string {
 func (*PlatformDetail) ProtoMessage() {}
 
 func (x *PlatformDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_sentinel_v1_platform_proto_msgTypes[7]
+	mi := &file_sentinel_v1_platform_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1185,7 +1626,7 @@ func (x *PlatformDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlatformDetail.ProtoReflect.Descriptor instead.
 func (*PlatformDetail) Descriptor() ([]byte, []int) {
-	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{7}
+	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *PlatformDetail) GetDetail() isPlatformDetail_Detail {
@@ -1267,6 +1708,24 @@ func (x *PlatformDetail) GetRf() *RfDetail {
 	return nil
 }
 
+func (x *PlatformDetail) GetRadar() *RadarDetail {
+	if x != nil {
+		if x, ok := x.Detail.(*PlatformDetail_Radar); ok {
+			return x.Radar
+		}
+	}
+	return nil
+}
+
+func (x *PlatformDetail) GetEoir() *EoIrDetail {
+	if x != nil {
+		if x, ok := x.Detail.(*PlatformDetail_Eoir); ok {
+			return x.Eoir
+		}
+	}
+	return nil
+}
+
 type isPlatformDetail_Detail interface {
 	isPlatformDetail_Detail()
 }
@@ -1303,6 +1762,14 @@ type PlatformDetail_Rf struct {
 	Rf *RfDetail `protobuf:"bytes,8,opt,name=rf,proto3,oneof"`
 }
 
+type PlatformDetail_Radar struct {
+	Radar *RadarDetail `protobuf:"bytes,9,opt,name=radar,proto3,oneof"`
+}
+
+type PlatformDetail_Eoir struct {
+	Eoir *EoIrDetail `protobuf:"bytes,10,opt,name=eoir,proto3,oneof"`
+}
+
 func (*PlatformDetail_Ais) isPlatformDetail_Detail() {}
 
 func (*PlatformDetail_Adsb) isPlatformDetail_Detail() {}
@@ -1319,6 +1786,10 @@ func (*PlatformDetail_Generic) isPlatformDetail_Detail() {}
 
 func (*PlatformDetail_Rf) isPlatformDetail_Detail() {}
 
+func (*PlatformDetail_Radar) isPlatformDetail_Detail() {}
+
+func (*PlatformDetail_Eoir) isPlatformDetail_Detail() {}
+
 // GenericDetail holds decoder output that has no typed block, as flat
 // string key/values so it can still be indexed and displayed.
 type GenericDetail struct {
@@ -1330,7 +1801,7 @@ type GenericDetail struct {
 
 func (x *GenericDetail) Reset() {
 	*x = GenericDetail{}
-	mi := &file_sentinel_v1_platform_proto_msgTypes[8]
+	mi := &file_sentinel_v1_platform_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1342,7 +1813,7 @@ func (x *GenericDetail) String() string {
 func (*GenericDetail) ProtoMessage() {}
 
 func (x *GenericDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_sentinel_v1_platform_proto_msgTypes[8]
+	mi := &file_sentinel_v1_platform_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1355,7 +1826,7 @@ func (x *GenericDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenericDetail.ProtoReflect.Descriptor instead.
 func (*GenericDetail) Descriptor() ([]byte, []int) {
-	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{8}
+	return file_sentinel_v1_platform_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GenericDetail) GetFields() map[string]string {
@@ -1508,7 +1979,40 @@ const file_sentinel_v1_platform_proto_rawDesc = "" +
 	"\a_pri_usB\x11\n" +
 	"\x0f_pulse_width_usB\f\n" +
 	"\n" +
-	"_power_dbm\"\x8f\x03\n" +
+	"_power_dbm\"\xa0\x04\n" +
+	"\vRadarDetail\x12)\n" +
+	"\x0erange_rate_mps\x18\x01 \x01(\x01H\x00R\frangeRateMps\x88\x01\x01\x12\x1e\n" +
+	"\brcs_dbsm\x18\x02 \x01(\x01H\x01R\arcsDbsm\x88\x01\x01\x12\x1a\n" +
+	"\x06snr_db\x18\x03 \x01(\x01H\x02R\x05snrDb\x88\x01\x01\x12*\n" +
+	"\x04mode\x18\x04 \x01(\x0e2\x16.sentinel.v1.RadarModeR\x04mode\x12(\n" +
+	"\rtrack_quality\x18\x05 \x01(\x01H\x03R\ftrackQuality\x88\x01\x01\x12?\n" +
+	"\x0eclassification\x18\x06 \x01(\x0e2\x17.sentinel.v1.RadarClassR\x0eclassification\x12@\n" +
+	"\x19classification_confidence\x18\a \x01(\x01H\x04R\x18classificationConfidence\x88\x01\x01\x12$\n" +
+	"\x0eradar_track_id\x18\b \x01(\tR\fradarTrackId\x126\n" +
+	"\x15height_above_ground_m\x18\t \x01(\x01H\x05R\x12heightAboveGroundM\x88\x01\x01B\x11\n" +
+	"\x0f_range_rate_mpsB\v\n" +
+	"\t_rcs_dbsmB\t\n" +
+	"\a_snr_dbB\x10\n" +
+	"\x0e_track_qualityB\x1c\n" +
+	"\x1a_classification_confidenceB\x18\n" +
+	"\x16_height_above_ground_m\"Y\n" +
+	"\rNormalizedBox\x12\f\n" +
+	"\x01x\x18\x01 \x01(\x01R\x01x\x12\f\n" +
+	"\x01y\x18\x02 \x01(\x01R\x01y\x12\x14\n" +
+	"\x05width\x18\x03 \x01(\x01R\x05width\x12\x16\n" +
+	"\x06height\x18\x04 \x01(\x01R\x06height\"\xb4\x03\n" +
+	"\n" +
+	"EoIrDetail\x12)\n" +
+	"\x04band\x18\x01 \x01(\x0e2\x15.sentinel.v1.EoIrBandR\x04band\x12&\n" +
+	"\x0eclassification\x18\x02 \x01(\tR\x0eclassification\x12@\n" +
+	"\x19classification_confidence\x18\x03 \x01(\x01H\x00R\x18classificationConfidence\x88\x01\x01\x121\n" +
+	"\x12horizontal_fov_deg\x18\x04 \x01(\x01H\x01R\x10horizontalFovDeg\x88\x01\x01\x12-\n" +
+	"\x10vertical_fov_deg\x18\x05 \x01(\x01H\x02R\x0everticalFovDeg\x88\x01\x01\x12=\n" +
+	"\fbounding_box\x18\x06 \x01(\v2\x1a.sentinel.v1.NormalizedBoxR\vboundingBox\x12&\n" +
+	"\x0fcamera_track_id\x18\a \x01(\tR\rcameraTrackIdB\x1c\n" +
+	"\x1a_classification_confidenceB\x15\n" +
+	"\x13_horizontal_fov_degB\x13\n" +
+	"\x11_vertical_fov_deg\"\xf0\x03\n" +
 	"\x0ePlatformDetail\x12*\n" +
 	"\x03ais\x18\x01 \x01(\v2\x16.sentinel.v1.AisDetailH\x00R\x03ais\x12-\n" +
 	"\x04adsb\x18\x02 \x01(\v2\x17.sentinel.v1.AdsbDetailH\x00R\x04adsb\x12*\n" +
@@ -1517,13 +2021,35 @@ const file_sentinel_v1_platform_proto_rawDesc = "" +
 	"\x03cot\x18\x05 \x01(\v2\x16.sentinel.v1.CotDetailH\x00R\x03cot\x12*\n" +
 	"\x03uav\x18\x06 \x01(\v2\x16.sentinel.v1.UavDetailH\x00R\x03uav\x126\n" +
 	"\ageneric\x18\a \x01(\v2\x1a.sentinel.v1.GenericDetailH\x00R\ageneric\x12'\n" +
-	"\x02rf\x18\b \x01(\v2\x15.sentinel.v1.RfDetailH\x00R\x02rfB\b\n" +
+	"\x02rf\x18\b \x01(\v2\x15.sentinel.v1.RfDetailH\x00R\x02rf\x120\n" +
+	"\x05radar\x18\t \x01(\v2\x18.sentinel.v1.RadarDetailH\x00R\x05radar\x12-\n" +
+	"\x04eoir\x18\n" +
+	" \x01(\v2\x17.sentinel.v1.EoIrDetailH\x00R\x04eoirB\b\n" +
 	"\x06detail\"\x8a\x01\n" +
 	"\rGenericDetail\x12>\n" +
 	"\x06fields\x18\x01 \x03(\v2&.sentinel.v1.GenericDetail.FieldsEntryR\x06fields\x1a9\n" +
 	"\vFieldsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B6Z4github.com/sentinel/proto-gen/sentinel/v1;sentinelv1b\x06proto3"
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*T\n" +
+	"\tRadarMode\x12\x1a\n" +
+	"\x16RADAR_MODE_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11RADAR_MODE_SEARCH\x10\x01\x12\x14\n" +
+	"\x10RADAR_MODE_TRACK\x10\x02*\xb9\x01\n" +
+	"\n" +
+	"RadarClass\x12\x1b\n" +
+	"\x17RADAR_CLASS_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13RADAR_CLASS_VEHICLE\x10\x01\x12\x15\n" +
+	"\x11RADAR_CLASS_DRONE\x10\x02\x12\x16\n" +
+	"\x12RADAR_CLASS_PERSON\x10\x03\x12\x14\n" +
+	"\x10RADAR_CLASS_BIRD\x10\x04\x12\x17\n" +
+	"\x13RADAR_CLASS_CLUTTER\x10\x05\x12\x17\n" +
+	"\x13RADAR_CLASS_UNKNOWN\x10\x06*}\n" +
+	"\bEoIrBand\x12\x1a\n" +
+	"\x16EO_IR_BAND_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12EO_IR_BAND_VISIBLE\x10\x01\x12\x13\n" +
+	"\x0fEO_IR_BAND_SWIR\x10\x02\x12\x13\n" +
+	"\x0fEO_IR_BAND_MWIR\x10\x03\x12\x13\n" +
+	"\x0fEO_IR_BAND_LWIR\x10\x04B6Z4github.com/sentinel/proto-gen/sentinel/v1;sentinelv1b\x06proto3"
 
 var (
 	file_sentinel_v1_platform_proto_rawDescOnce sync.Once
@@ -1537,36 +2063,49 @@ func file_sentinel_v1_platform_proto_rawDescGZIP() []byte {
 	return file_sentinel_v1_platform_proto_rawDescData
 }
 
-var file_sentinel_v1_platform_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_sentinel_v1_platform_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_sentinel_v1_platform_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_sentinel_v1_platform_proto_goTypes = []any{
-	(*AisDetail)(nil),       // 0: sentinel.v1.AisDetail
-	(*AdsbDetail)(nil),      // 1: sentinel.v1.AdsbDetail
-	(*TleDetail)(nil),       // 2: sentinel.v1.TleDetail
-	(*Link16Detail)(nil),    // 3: sentinel.v1.Link16Detail
-	(*CotDetail)(nil),       // 4: sentinel.v1.CotDetail
-	(*UavDetail)(nil),       // 5: sentinel.v1.UavDetail
-	(*RfDetail)(nil),        // 6: sentinel.v1.RfDetail
-	(*PlatformDetail)(nil),  // 7: sentinel.v1.PlatformDetail
-	(*GenericDetail)(nil),   // 8: sentinel.v1.GenericDetail
-	nil,                     // 9: sentinel.v1.GenericDetail.FieldsEntry
-	(NavigationalStatus)(0), // 10: sentinel.v1.NavigationalStatus
+	(RadarMode)(0),          // 0: sentinel.v1.RadarMode
+	(RadarClass)(0),         // 1: sentinel.v1.RadarClass
+	(EoIrBand)(0),           // 2: sentinel.v1.EoIrBand
+	(*AisDetail)(nil),       // 3: sentinel.v1.AisDetail
+	(*AdsbDetail)(nil),      // 4: sentinel.v1.AdsbDetail
+	(*TleDetail)(nil),       // 5: sentinel.v1.TleDetail
+	(*Link16Detail)(nil),    // 6: sentinel.v1.Link16Detail
+	(*CotDetail)(nil),       // 7: sentinel.v1.CotDetail
+	(*UavDetail)(nil),       // 8: sentinel.v1.UavDetail
+	(*RfDetail)(nil),        // 9: sentinel.v1.RfDetail
+	(*RadarDetail)(nil),     // 10: sentinel.v1.RadarDetail
+	(*NormalizedBox)(nil),   // 11: sentinel.v1.NormalizedBox
+	(*EoIrDetail)(nil),      // 12: sentinel.v1.EoIrDetail
+	(*PlatformDetail)(nil),  // 13: sentinel.v1.PlatformDetail
+	(*GenericDetail)(nil),   // 14: sentinel.v1.GenericDetail
+	nil,                     // 15: sentinel.v1.GenericDetail.FieldsEntry
+	(NavigationalStatus)(0), // 16: sentinel.v1.NavigationalStatus
 }
 var file_sentinel_v1_platform_proto_depIdxs = []int32{
-	10, // 0: sentinel.v1.AisDetail.nav_status:type_name -> sentinel.v1.NavigationalStatus
-	0,  // 1: sentinel.v1.PlatformDetail.ais:type_name -> sentinel.v1.AisDetail
-	1,  // 2: sentinel.v1.PlatformDetail.adsb:type_name -> sentinel.v1.AdsbDetail
-	2,  // 3: sentinel.v1.PlatformDetail.tle:type_name -> sentinel.v1.TleDetail
-	3,  // 4: sentinel.v1.PlatformDetail.link16:type_name -> sentinel.v1.Link16Detail
-	4,  // 5: sentinel.v1.PlatformDetail.cot:type_name -> sentinel.v1.CotDetail
-	5,  // 6: sentinel.v1.PlatformDetail.uav:type_name -> sentinel.v1.UavDetail
-	8,  // 7: sentinel.v1.PlatformDetail.generic:type_name -> sentinel.v1.GenericDetail
-	6,  // 8: sentinel.v1.PlatformDetail.rf:type_name -> sentinel.v1.RfDetail
-	9,  // 9: sentinel.v1.GenericDetail.fields:type_name -> sentinel.v1.GenericDetail.FieldsEntry
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	16, // 0: sentinel.v1.AisDetail.nav_status:type_name -> sentinel.v1.NavigationalStatus
+	0,  // 1: sentinel.v1.RadarDetail.mode:type_name -> sentinel.v1.RadarMode
+	1,  // 2: sentinel.v1.RadarDetail.classification:type_name -> sentinel.v1.RadarClass
+	2,  // 3: sentinel.v1.EoIrDetail.band:type_name -> sentinel.v1.EoIrBand
+	11, // 4: sentinel.v1.EoIrDetail.bounding_box:type_name -> sentinel.v1.NormalizedBox
+	3,  // 5: sentinel.v1.PlatformDetail.ais:type_name -> sentinel.v1.AisDetail
+	4,  // 6: sentinel.v1.PlatformDetail.adsb:type_name -> sentinel.v1.AdsbDetail
+	5,  // 7: sentinel.v1.PlatformDetail.tle:type_name -> sentinel.v1.TleDetail
+	6,  // 8: sentinel.v1.PlatformDetail.link16:type_name -> sentinel.v1.Link16Detail
+	7,  // 9: sentinel.v1.PlatformDetail.cot:type_name -> sentinel.v1.CotDetail
+	8,  // 10: sentinel.v1.PlatformDetail.uav:type_name -> sentinel.v1.UavDetail
+	14, // 11: sentinel.v1.PlatformDetail.generic:type_name -> sentinel.v1.GenericDetail
+	9,  // 12: sentinel.v1.PlatformDetail.rf:type_name -> sentinel.v1.RfDetail
+	10, // 13: sentinel.v1.PlatformDetail.radar:type_name -> sentinel.v1.RadarDetail
+	12, // 14: sentinel.v1.PlatformDetail.eoir:type_name -> sentinel.v1.EoIrDetail
+	15, // 15: sentinel.v1.GenericDetail.fields:type_name -> sentinel.v1.GenericDetail.FieldsEntry
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_sentinel_v1_platform_proto_init() }
@@ -1576,7 +2115,9 @@ func file_sentinel_v1_platform_proto_init() {
 	}
 	file_sentinel_v1_common_proto_init()
 	file_sentinel_v1_platform_proto_msgTypes[6].OneofWrappers = []any{}
-	file_sentinel_v1_platform_proto_msgTypes[7].OneofWrappers = []any{
+	file_sentinel_v1_platform_proto_msgTypes[7].OneofWrappers = []any{}
+	file_sentinel_v1_platform_proto_msgTypes[9].OneofWrappers = []any{}
+	file_sentinel_v1_platform_proto_msgTypes[10].OneofWrappers = []any{
 		(*PlatformDetail_Ais)(nil),
 		(*PlatformDetail_Adsb)(nil),
 		(*PlatformDetail_Tle)(nil),
@@ -1585,19 +2126,22 @@ func file_sentinel_v1_platform_proto_init() {
 		(*PlatformDetail_Uav)(nil),
 		(*PlatformDetail_Generic)(nil),
 		(*PlatformDetail_Rf)(nil),
+		(*PlatformDetail_Radar)(nil),
+		(*PlatformDetail_Eoir)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sentinel_v1_platform_proto_rawDesc), len(file_sentinel_v1_platform_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   10,
+			NumEnums:      3,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_sentinel_v1_platform_proto_goTypes,
 		DependencyIndexes: file_sentinel_v1_platform_proto_depIdxs,
+		EnumInfos:         file_sentinel_v1_platform_proto_enumTypes,
 		MessageInfos:      file_sentinel_v1_platform_proto_msgTypes,
 	}.Build()
 	File_sentinel_v1_platform_proto = out.File
