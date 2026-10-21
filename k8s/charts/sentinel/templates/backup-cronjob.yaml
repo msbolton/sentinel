@@ -109,12 +109,15 @@ template:
           {{- toYaml . | nindent 10 }}
         {{- end }}
         # rclone may rewrite its config (a refreshed OAuth token), so it works
-        # on a copy in /tmp. copy adds what the remote lacks and deletes
-        # nothing; unfinished dumps (.partial-*) stay behind.
+        # on a copy in /tmp, readable by its own user only and in memory, so
+        # the credentials never reach the node's disk. copy adds what the
+        # remote lacks and deletes nothing; unfinished dumps (.partial-*) stay
+        # behind.
         command: ["/bin/sh", "-c"]
         args:
           - |
             set -eu
+            umask 077
             cp /etc/rclone/rclone.conf /tmp/rclone.conf
             exec rclone copy /backups "$RCLONE_REMOTE" --config /tmp/rclone.conf \
               --exclude '.partial-*/**' --exclude 'lost+found/**' "$@"
@@ -155,7 +158,9 @@ template:
             - key: rclone.conf
               path: rclone.conf
       - name: tmp
-        emptyDir: {}
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Mi
       {{- end }}
 {{- end }}
 
