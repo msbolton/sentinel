@@ -131,6 +131,15 @@ func (r *Resolver) Resolve(ctx context.Context, reports []*Report) (*Resolution,
 	return res, nil
 }
 
+// Invalidate drops every cached key, so the next report of any key reads
+// the store again. Called after deletes: a cached id may now name a deleted
+// entity whose identities are free to bind to a new one.
+func (r *Resolver) Invalidate() {
+	r.mu.Lock()
+	r.cache = map[Key]cacheEntry{}
+	r.mu.Unlock()
+}
+
 // Forget drops a key from the cache (after a delete).
 func (r *Resolver) Forget(keys ...Key) {
 	r.mu.Lock()

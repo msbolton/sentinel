@@ -17,17 +17,31 @@ import (
 	"github.com/sentinel/entity-service/internal/store"
 )
 
+// CacheInvalidator drops cached identity resolutions; the fusion resolver
+// implements it.
+type CacheInvalidator interface {
+	Invalidate()
+}
+
 // EntityHandler handles entity HTTP endpoints.
 type EntityHandler struct {
 	store        *store.EntityStore
 	observations *store.ObservationStore
 	events       *events.Publisher
+	resolver     CacheInvalidator
 	logger       *zap.Logger
 }
 
-// NewEntityHandler creates a new entity handler.
-func NewEntityHandler(store *store.EntityStore, observations *store.ObservationStore, publisher *events.Publisher, logger *zap.Logger) *EntityHandler {
-	return &EntityHandler{store: store, observations: observations, events: publisher, logger: logger}
+// NewEntityHandler creates a new entity handler. resolver is invalidated
+// after a delete so a deleted entity's identities can bind to a new one.
+func NewEntityHandler(store *store.EntityStore, observations *store.ObservationStore, publisher *events.Publisher, resolver CacheInvalidator, logger *zap.Logger) *EntityHandler {
+	return &EntityHandler{store: store, observations: observations, events: publisher, resolver: resolver, logger: logger}
+}
+
+func (h *EntityHandler) invalidateResolver() {
+	if h.resolver != nil {
+		h.resolver.Invalidate()
+	}
 }
 
 // RegisterRoutes registers entity endpoints on the mux.
@@ -387,6 +401,7 @@ func (h *EntityHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.invalidateResolver()
 	h.events.Deleted(id, false, 0)
 
 	httputil.NoContent(w)
@@ -400,6 +415,7 @@ func (h *EntityHandler) handleDeleteAll(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	h.invalidateResolver()
 	h.events.Deleted("", true, int(count))
 
 	httputil.JSON(w, http.StatusOK, map[string]int64{"deleted": count})

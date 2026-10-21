@@ -138,3 +138,25 @@ func TestResolveEmplacementFromTwoFeedsIsOneEntity(t *testing.T) {
 		t.Fatalf("ids=%v created=%v", res.IDs, res.Created)
 	}
 }
+
+func TestInvalidateDropsCachedKeys(t *testing.T) {
+	mem := newMemIdentities()
+	r := NewResolver(mem, 100, time.Hour)
+	rep := Prepare(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "ABC123", t0, 1, 1), nil)
+	if _, err := r.Resolve(context.Background(), []*Report{rep}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Resolve(context.Background(), []*Report{rep}); err != nil {
+		t.Fatal(err)
+	}
+	if mem.lookups != 1 {
+		t.Fatalf("lookups before invalidate = %d, want 1 (cached)", mem.lookups)
+	}
+	r.Invalidate()
+	if _, err := r.Resolve(context.Background(), []*Report{rep}); err != nil {
+		t.Fatal(err)
+	}
+	if mem.lookups != 2 {
+		t.Fatalf("lookups after invalidate = %d, want 2", mem.lookups)
+	}
+}
