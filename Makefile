@@ -1,4 +1,4 @@
-.PHONY: images-push images-local help proto proto-check proto-test build test lint docker-up docker-down docker-infra clean db-schema db-seed chart-lint
+.PHONY: images-push images-local help proto proto-check proto-test build test lint docker-up docker-down docker-infra clean db-schema db-seed chart-lint deploy backup-now
 
 SHELL := /bin/bash
 
@@ -8,6 +8,8 @@ GO_SERVICES := api-gateway ingest-service entity-service track-service search-se
 # Container images (the names the Helm chart pulls as sentinel/<name>). The
 # ew-sensor simulator is not deployed, so it is not listed. "web" is built from apps/client.
 IMAGES := api-gateway entity-service track-service search-service link-analysis-service alert-service ingest-service analytics-service web
+# REGISTRY and TAG are shared by images-push and deploy, so a deploy from the
+# same commit pulls the images that commit pushed.
 REGISTRY ?=
 TAG ?= $(shell git rev-parse --short HEAD)
 PLATFORM ?= linux/amd64
@@ -248,7 +250,8 @@ db-seed: ## Seed database with sample entities, a geofence rule, and locations
 # ----------------------------------------------------------------------------
 
 # Everything the chart renders must validate (kubeconform skips the CRDs it has no schema for), with
-# the defaults, the dev overlay, the optional parts switched on, the data tier alone, the apps
+# the defaults, the dev overlay, the prod overlay alone and with the local (k3d) one over it, the
+# optional parts switched on, the data tier alone, the apps
 # against an external database and the NetworkPolicies and backups switched off. The pod specs of the
 # hardened templates (the gateway, the services, the web client, both ingest Deployments, the schema
 # and topics Jobs, the data tier and the backups) must each render runAsNonRoot: true; add a template
@@ -257,6 +260,8 @@ CHART := k8s/charts/sentinel
 CHART_HOST := sentinel.example.com
 CHART_SET := --set ingestService.serviceToken=lint --set global.host=$(CHART_HOST)
 DEV_VALUES := k8s/overlays/dev/values.yaml
+PROD_VALUES := k8s/overlays/prod/values.yaml
+LOCAL_VALUES := k8s/overlays/local/values.yaml
 RESTRICTED := --show-only templates/api-gateway-deployment.yaml --show-only templates/services.yaml --show-only templates/web.yaml \
 	--show-only templates/ingest-service-deployment.yaml --show-only templates/ingest-listener-deployment.yaml --show-only templates/db-schema-job.yaml \
 	--show-only templates/postgresql.yaml --show-only templates/kafka.yaml --show-only templates/kafka-topics-job.yaml --show-only templates/opensearch.yaml \
@@ -304,7 +309,7 @@ define chart_validate
 	printf '%s\n' "$$out" | kubeconform -strict -ignore-missing-schemas -summary
 endef
 
-chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics script, the initdb SQL, a production Keycloak realm, runAsNonRoot in every hardened pod spec and the listener's NetworkPolicy rule, and validate the output with kubeconform (needs helm and kubeconform)
+chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics script, the initdb SQL, a production Keycloak realm, runAsNonRoot in every hardened pod spec, the listener's NetworkPolicy rule and the prod overlay's reserved ports, and validate the output, the overlays' too, with kubeconform (needs helm and kubeconform)
 	helm lint $(CHART) $(CHART_SET)
 	helm template sentinel $(CHART) $(CHART_SET) | grep -q '^  70_feeds\.sql: '
 	helm template sentinel $(CHART) $(CHART_SET) | grep -q 'observations\.raw|24|'
@@ -317,6 +322,8 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics 
 	test "$$pods" -gt 0 && test "$$pods" = "$$roots" || { echo "chart-lint: $$roots runAsNonRoot: true for $$pods hardened pod specs"; exit 1; }
 	$(call chart_validate,)
 	$(call chart_validate,-f $(DEV_VALUES))
+	$(call chart_validate,-f $(PROD_VALUES))
+	$(call chart_validate,-f $(PROD_VALUES) -f $(LOCAL_VALUES))
 	$(call chart_validate,--set geoserver.enabled=true --set ingestService.serviceMonitor.enabled=true)
 	$(call chart_validate,$(APPS_OPTIONAL))
 	$(call chart_validate,$(DATA_TIER_ONLY))
@@ -338,6 +345,48 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics 
 	! printf '%s\n' "$$np" | grep -nE '^ +- port: [0-9]' || { echo "chart-lint: a NetworkPolicy names a numeric port"; exit 1; }; \
 	printf '%s\n' "$$np" | $(call chart_policy,web) | grep -qE 'port: http$$' || { echo "chart-lint: the web NetworkPolicy does not allow its http port"; exit 1; }; \
 	helm template sentinel $(CHART) $(CHART_SET) $$ports --show-only templates/web.yaml | grep -A1 -- '- name: http' | grep -q 'containerPort: 4200' || { echo "chart-lint: the web container's http port is not 4200"; exit 1; }
+	@# The prod overlay's INGEST_RESERVED_PORTS replaces the ingest service's default list, so it must
+	@# still hold every entry of that list (registry.DefaultReservedPorts), in both ingest Deployments.
+	@defaults=$$(sed -nE 's/^const DefaultReservedPorts = "([^"]*)"$$/\1/p' apps/ingest-service/internal/registry/ports.go); \
+	test -n "$$defaults" || { echo "chart-lint: DefaultReservedPorts not found in apps/ingest-service/internal/registry/ports.go"; exit 1; }; \
+	out="$$(helm template sentinel $(CHART) $(CHART_SET) -f $(PROD_VALUES) --show-only templates/ingest-service-deployment.yaml --show-only templates/ingest-listener-deployment.yaml)"; \
+	vals=$$(printf '%s\n' "$$out" | grep -A1 'name: INGEST_RESERVED_PORTS' | sed -nE 's/^ *value: "([^"]*)"$$/\1/p'); \
+	test "$$(printf '%s\n' "$$vals" | grep -c .)" = 2 || { echo "chart-lint: the prod overlay does not set INGEST_RESERVED_PORTS in both ingest Deployments"; exit 1; }; \
+	for v in $$vals; do for p in $${defaults//,/ }; do \
+		case ",$$v," in *",$$p,"*) ;; *) echo "chart-lint: the prod overlay's INGEST_RESERVED_PORTS lacks $$p of the default list"; exit 1;; esac; \
+	done; done
+
+# ----------------------------------------------------------------------------
+# Deployment (docs/deployment.md)
+# ----------------------------------------------------------------------------
+
+# make deploy installs or upgrades the release with the prod overlay, then VALUES (your site file, or
+# several, space-separated), with the images of REGISTRY and TAG: build and push them first with
+# make images-push from the same commit. No --wait and no rollback on failure: on a first install the
+# schema and topics Jobs run after the release's resources, and the services crash-loop until they
+# have. HELM_ARGS adds flags (HELM_ARGS="--wait --rollback-on-failure" for an upgrade, say). For k3d:
+#   make deploy REGISTRY=docker.io VALUES=k8s/overlays/local/values.yaml
+RELEASE ?= sentinel
+NAMESPACE ?= sentinel
+VALUES ?=
+HELM_ARGS ?=
+
+deploy: ## helm upgrade --install RELEASE (sentinel) into NAMESPACE (sentinel) with the prod overlay, VALUES and the REGISTRY/TAG images (make deploy REGISTRY=registry.example.com VALUES=site.yaml)
+	@test -n "$(REGISTRY)" || { echo "REGISTRY is required, e.g. make deploy REGISTRY=registry.example.com VALUES=site.yaml (REGISTRY=docker.io for images imported into k3d)"; exit 1; }
+	helm upgrade --install $(RELEASE) $(CHART) -n $(NAMESPACE) --create-namespace \
+		-f $(PROD_VALUES) $(foreach v,$(VALUES),-f $(v)) \
+		--set global.imageRegistry=$(REGISTRY) --set global.imageTag=$(TAG) --timeout 20m $(HELM_ARGS)
+
+backup-now: ## Run the release's backup CronJob now as a Job, wait for it and print its log (RELEASE, NAMESPACE)
+	@cj=$$(kubectl -n $(NAMESPACE) get cronjob -l app.kubernetes.io/instance=$(RELEASE),app.kubernetes.io/name=backup -o name); \
+	test -n "$$cj" || { echo "no backup CronJob for release $(RELEASE) in namespace $(NAMESPACE)"; exit 1; }; \
+	job=backup-now-$$(date -u +%Y%m%d%H%M%S); \
+	kubectl -n $(NAMESPACE) create job --from=$$cj $$job || exit 1; \
+	echo "waiting for job/$$job ..."; \
+	until state=$$(kubectl -n $(NAMESPACE) get job $$job -o jsonpath='{.status.conditions[?(@.status=="True")].type}'); \
+		case " $$state " in *" Complete "*|*" Failed "*) true;; *) false;; esac; do sleep 5; done; \
+	kubectl -n $(NAMESPACE) logs job/$$job --all-containers --prefix; \
+	case " $$state " in *" Complete "*) echo "job/$$job: Complete";; *) echo "job/$$job: Failed"; exit 1;; esac
 
 # ----------------------------------------------------------------------------
 # Cleanup
