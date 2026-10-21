@@ -248,13 +248,16 @@ db-seed: ## Seed database with sample entities, a geofence rule, and locations
 # ----------------------------------------------------------------------------
 
 # Everything the chart renders must validate (kubeconform skips the CRDs it has no schema for), with
-# the defaults, the dev overlay and the optional parts switched on. The pod specs of the hardened
-# templates (both ingest Deployments and the schema Job) must each render runAsNonRoot: true; add a
-# template to RESTRICTED when it is hardened too.
+# the defaults, the dev overlay, the optional parts switched on, the data tier alone and the apps
+# against an external database. The pod specs of the hardened templates (both ingest Deployments,
+# the schema and topics Jobs and the data tier) must each render runAsNonRoot: true; add a template
+# to RESTRICTED when it is hardened too.
 CHART := k8s/charts/sentinel
 CHART_SET := --set ingestService.serviceToken=lint
 DEV_VALUES := k8s/overlays/dev/values.yaml
-RESTRICTED := --show-only templates/ingest-service-deployment.yaml --show-only templates/ingest-listener-deployment.yaml --show-only templates/db-schema-job.yaml
+RESTRICTED := --show-only templates/ingest-service-deployment.yaml --show-only templates/ingest-listener-deployment.yaml --show-only templates/db-schema-job.yaml \
+	--show-only templates/postgresql.yaml --show-only templates/kafka.yaml --show-only templates/kafka-topics-job.yaml --show-only templates/opensearch.yaml
+DATA_TIER_ONLY := --set apiGateway.enabled=false --set ingestService.enabled=false --set ingestListener.enabled=false
 
 # kubeconform on one render. The render goes to a variable first, so a failing helm template fails
 # the target (a pipe would hide it), and a render with no resources is an error too.
@@ -264,9 +267,11 @@ define chart_validate
 	printf '%s\n' "$$out" | kubeconform -strict -ignore-missing-schemas -summary
 endef
 
-chart-lint: ## Lint the Helm chart, check that it renders db/schema and runAsNonRoot into every hardened pod spec, and validate the output with kubeconform (needs helm and kubeconform)
+chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics script and the initdb SQL and runAsNonRoot into every hardened pod spec, and validate the output with kubeconform (needs helm and kubeconform)
 	helm lint $(CHART) $(CHART_SET)
 	helm template sentinel $(CHART) $(CHART_SET) | grep -q '^  70_feeds\.sql: '
+	helm template sentinel $(CHART) $(CHART_SET) | grep -q 'observations\.raw|24|'
+	helm template sentinel $(CHART) $(CHART_SET) | grep -q 'CREATE EXTENSION IF NOT EXISTS postgis_topology;'
 	@restricted="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestListener.enabled=true $(RESTRICTED))"; \
 	pods=$$(printf '%s\n' "$$restricted" | grep -cE '^ +containers:'); \
 	roots=$$(printf '%s\n' "$$restricted" | grep -c 'runAsNonRoot: true'); \
@@ -274,6 +279,8 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema and runAsNon
 	$(call chart_validate,)
 	$(call chart_validate,-f $(DEV_VALUES))
 	$(call chart_validate,--set geoserver.enabled=true --set ingestService.serviceMonitor.enabled=true)
+	$(call chart_validate,$(DATA_TIER_ONLY))
+	$(call chart_validate,--set postgresql.existingSecret=sentinel-db --set postgresql.enabled=false --set kafka.enabled=false --set opensearch.enabled=false)
 
 # ----------------------------------------------------------------------------
 # Cleanup
