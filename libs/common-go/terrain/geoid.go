@@ -4,6 +4,15 @@
 // Sentinel keeps every altitude as metres above the WGS84 ellipsoid (HAE).
 // Terrain models such as Copernicus GLO-30 give heights above mean sea level,
 // so this package converts between the two with the EGM96 geoid.
+//
+// Copernicus tiles are PixelIsPoint: a tile's pixel centres stop one pixel
+// (about 30 m) short of its south and east edges, where the neighbouring
+// tile's first row and column lie. A height in that strip is interpolated
+// with the neighbour only if the neighbour is already in memory or on disk.
+// Otherwise the neighbour's download starts in the background and the tile's
+// own edge value is returned meanwhile, so the same point can read
+// differently once the neighbour arrives; the change is at most the local
+// slope times one pixel.
 package terrain
 
 import (

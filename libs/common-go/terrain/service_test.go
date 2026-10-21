@@ -93,6 +93,10 @@ func TestHeightAcrossTileEdge(t *testing.T) {
 			}
 			ts := newTileServer(t, tiles...)
 			s := newTestService(t, ts, nil)
+			// Neighbours are used once cached (see TestEdgeDoesNotWaitForNeighbour).
+			if n, err := s.Preload(context.Background(), 38, -78, 40, -76); n != 4 || err != nil {
+				t.Fatalf("Preload = %d, %v", n, err)
+			}
 			oneMetreLon := oneMetreLat / math.Cos(39*math.Pi/180)
 			for _, p := range []struct {
 				what     string
@@ -123,6 +127,9 @@ func TestHeightAcrossTileEdge(t *testing.T) {
 		north := testTile{south: 50, west: 10, cols: 80}
 		ts := newTileServer(t, south, north)
 		s := newTestService(t, ts, nil)
+		if n, err := s.Preload(context.Background(), 49, 10, 51, 11); n != 2 || err != nil {
+			t.Fatalf("Preload = %d, %v", n, err)
+		}
 		for _, lat := range []float64{50 - oneMetreLat, 50 + oneMetreLat, 50 + 0.5/120} {
 			for _, lon := range []float64{10.5, 10.123, 10.987} {
 				near(t, "HeightHAE", height(t, s, lat, lon), planeMSL(lat, lon)+GeoidHeight(lat, lon), 1e-3)
@@ -132,6 +139,38 @@ func TestHeightAcrossTileEdge(t *testing.T) {
 			t.Errorf("the tile south of 50°N was fetched %d times, want 1", n)
 		}
 	})
+}
+
+func TestEdgeDoesNotWaitForNeighbour(t *testing.T) {
+	tt := testTile{south: 38, west: -78}
+	below := testTile{south: 37, west: -78}
+	ts := newTileServer(t, tt, below)
+	s := newTestService(t, ts, nil)
+	height(t, s, 38.5, -77.5) // the tile itself is loaded; its neighbour is not
+	ts.setDelay(500 * time.Millisecond)
+
+	lat, lon := 38+0.5/120, -77.5 // in the strip past the last row, next to N37
+	edge := planeMSL(38+1/120.0, lon) + GeoidHeight(lat, lon)
+	truth := planeMSL(lat, lon) + GeoidHeight(lat, lon)
+	start := time.Now()
+	got := height(t, s, lat, lon)
+	if took := time.Since(start); took > 50*time.Millisecond {
+		t.Errorf("edge lookup took %v with the neighbour 500 ms away; it must not wait", took)
+	}
+	near(t, "before the neighbour arrives (edge value)", got, edge, 1e-3)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got = height(t, s, lat, lon)
+		if math.Abs(got-truth) <= 1e-3 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	near(t, "after the neighbour arrives (interpolated)", got, truth, 1e-3)
+	if n := ts.tileRequests(below.key()); n != 1 {
+		t.Errorf("neighbour fetched %d times, want 1", n)
+	}
 }
 
 func TestEdgeNextToSeaRunsDownToSeaLevel(t *testing.T) {

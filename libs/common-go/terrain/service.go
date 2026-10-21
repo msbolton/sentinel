@@ -27,7 +27,7 @@ type Config struct {
 	SourceURL     string        // default "https://copernicus-dem-30m.s3.amazonaws.com"
 	CacheDir      string        // required for New
 	MaxCacheBytes int64         // default 2 GiB
-	FetchTimeout  time.Duration // default 60s
+	FetchTimeout  time.Duration // default 300s
 	MemTiles      int           // decoded tiles kept in memory, default 4
 	HTTPClient    *http.Client
 	Logger        *zap.Logger
@@ -101,7 +101,7 @@ func New(cfg Config) (*Service, error) {
 		cfg.MaxCacheBytes = 2 << 30
 	}
 	if cfg.FetchTimeout <= 0 {
-		cfg.FetchTimeout = 60 * time.Second
+		cfg.FetchTimeout = 300 * time.Second
 	}
 	if cfg.MemTiles <= 0 {
 		cfg.MemTiles = 4
@@ -175,10 +175,12 @@ func (s *Service) HeightHAE(ctx context.Context, lat, lon float64) (float64, err
 	return MSLToHAE(lat, lon, s.interpolate(ctx, id, r, lat, lon)), nil
 }
 
-// interpolate reads a height from tile id, fetching neighbouring tiles only
+// interpolate reads a height from tile id, consulting neighbouring tiles only
 // for a point in the strip past the tile's outermost pixel centres. A
-// neighbour that is unlisted is sea; one that is in a known gap or cannot be
-// had within ctx is left out, and the tile's own edge value is used.
+// neighbour that is unlisted is sea. A listed neighbour is used only if it is
+// already in memory or on disk; otherwise its download is started in the
+// background and the tile's own edge value is used for now, as it is for a
+// neighbour in a known gap or one that failed.
 func (s *Service) interpolate(ctx context.Context, id tileID, r *raster, lat, lon float64) float64 {
 	if r.interior(lat, lon) {
 		return heightAt(id, r, lat, lon, noNeighbours)
@@ -194,8 +196,8 @@ func (s *Service) interpolate(ctx context.Context, id tileID, r *raster, lat, lo
 				if !inKnownGap(nid) {
 					v = seaRaster(nid)
 				}
-			} else if t, err := s.tile(ctx, nid); err == nil {
-				v = t
+			} else {
+				v = s.neighbourTile(ctx, nid)
 			}
 		}
 		got[nid] = v
@@ -263,14 +265,50 @@ func (s *Service) tile(ctx context.Context, id tileID) (*raster, error) {
 		}
 		delete(s.failed, id)
 	}
+	f := s.startLoadLocked(id)
+	s.mu.Unlock()
+	return f.wait(ctx)
+}
+
+// startLoadLocked returns the load in flight for a tile, starting one if
+// there is none. The caller holds s.mu.
+func (s *Service) startLoadLocked(id tileID) *flight[*raster] {
 	f := s.loading[id]
 	if f == nil {
 		f = newFlight[*raster]()
 		s.loading[id] = f
 		go s.runLoad(id, f)
 	}
+	return f
+}
+
+// neighbourTile returns a listed neighbouring tile without waiting on the
+// network: from memory, or decoded from the disk cache within ctx. A tile
+// that is not cached has its download started in the background (shared,
+// on its own FetchTimeout) and nil is returned, so the caller uses its edge
+// value now. A tile that failed recently is not retried here.
+func (s *Service) neighbourTile(ctx context.Context, id tileID) *raster {
+	s.mu.Lock()
+	if r := s.memGetLocked(id); r != nil {
+		s.mu.Unlock()
+		return r
+	}
+	if at, ok := s.failed[id]; ok && s.now().Sub(at) < failureTTL {
+		s.mu.Unlock()
+		return nil
+	}
+	_, onDisk := s.disk[id]
+	onDisk = onDisk && s.diskOK
+	f := s.startLoadLocked(id)
 	s.mu.Unlock()
-	return f.wait(ctx)
+	if !onDisk {
+		return nil
+	}
+	r, err := f.wait(ctx)
+	if err != nil {
+		return nil
+	}
+	return r
 }
 
 func (s *Service) runLoad(id tileID, f *flight[*raster]) {
