@@ -147,3 +147,64 @@ one postgresql.yaml generates, named like the host.
 {{- define "sentinel.keycloakInternalUrl" -}}
 http://{{ include "sentinel.fullname" . }}-keycloak:8080/auth
 {{- end }}
+
+{{- define "sentinel.opensearchHost" -}}
+{{ include "sentinel.fullname" . }}-opensearch
+{{- end }}
+
+{{/*
+The Secret with INGEST_SERVICE_TOKEN (key service-token), which the gateway,
+the ingest service and the listener read: ingestService.existingSecret, else
+<fullname>-ingest. The chart renders the latter only with the ingest service,
+so a gateway or listener without it needs existingSecret.
+*/}}
+{{- define "sentinel.ingestSecret" -}}
+{{- if .Values.ingestService.existingSecret -}}
+{{ .Values.ingestService.existingSecret }}
+{{- else if .Values.ingestService.enabled -}}
+{{ include "sentinel.fullname" . }}-ingest
+{{- else -}}
+{{- fail "ingestService.enabled=false drops the <fullname>-ingest Secret the gateway and the listener read: keep the ingest service, turn them off too, or set ingestService.existingSecret" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The Secret with the client secret of Keycloak's sentinel-service client (key
+service-client-secret), which the gateway uses for the registration flow:
+keycloak.clientsExistingSecret, else the <fullname>-keycloak-clients the chart
+generates.
+*/}}
+{{- define "sentinel.keycloakClientsSecret" -}}
+{{ default (printf "%s-keycloak-clients" (include "sentinel.fullname" .)) .Values.keycloak.clientsExistingSecret }}
+{{- end }}
+
+{{/*
+The Secret with the SMTP password (key password): mail.existingSecret, else
+the <fullname>-mail the chart renders from mail.password. Empty when neither
+is set: the gateway then authenticates to the relay with no password.
+*/}}
+{{- define "sentinel.mailSecret" -}}
+{{- if .Values.mail.existingSecret -}}
+{{ .Values.mail.existingSecret }}
+{{- else if .Values.mail.password -}}
+{{ include "sentinel.fullname" . }}-mail
+{{- end -}}
+{{- end }}
+
+{{/*
+Environment entries from a map of plain values (a service's env, the gateway's
+extraEnv), in key order. A key the chart sets itself (reserved) is an error:
+a duplicate name would fail the server-side apply.
+  include "sentinel.extraEnv" (dict "env" .Values.x.env "reserved" (list "PORT") "what" "x.env")
+*/}}
+{{- define "sentinel.extraEnv" -}}
+{{- $reserved := .reserved -}}
+{{- $what := .what -}}
+{{- range $k, $v := .env }}
+{{- if has $k $reserved }}
+{{- fail (printf "%s.%s: the chart sets %s itself" $what $k $k) }}
+{{- end }}
+- name: {{ $k }}
+  value: {{ $v | quote }}
+{{- end }}
+{{- end }}

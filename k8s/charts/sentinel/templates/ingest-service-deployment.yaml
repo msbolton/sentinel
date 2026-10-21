@@ -1,5 +1,5 @@
 {{- if .Values.ingestService.enabled }}
-{{- $secretName := default (printf "%s-ingest" (include "sentinel.fullname" .)) .Values.ingestService.existingSecret -}}
+{{- $secretName := include "sentinel.ingestSecret" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

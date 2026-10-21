@@ -38,9 +38,6 @@ ingestService:
 ingestListener:
   enabled: false
 
-analyticsService:
-  replicaCount: 1
-
 web:
   replicaCount: 1
   ingress:

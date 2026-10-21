@@ -25,6 +25,9 @@ global:
 
 # -- Application Services --
 
+# The Go gateway: the one entry point of the API and the WebSocket stream. It
+# runs with APP_ENV=production, so it refuses to start without a real service
+# client secret (keycloak below) and never accepts AUTH_DEV_BYPASS.
 apiGateway:
   enabled: true
   replicaCount: 2
@@ -42,12 +45,87 @@ apiGateway:
     limits:
       cpu: 1000m
       memory: 1Gi
+  # Plain environment values the chart does not set itself, as NAME: value
+  # (VIEWPORT_SYNC_ENABLED, INTELSKY_BASE_URL, LOG_LEVEL, ...; see
+  # apps/api-gateway/internal/config). A name the chart sets is an error.
+  extraEnv: {}
+  # The image's user 10001, like the services below. The gateway writes no
+  # files, so the root filesystem is read-only.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+
+# Registration mail: the gateway sends the account e-mails through this SMTP
+# relay. With host empty the chart sets no MAIL_* at all and registration
+# e-mails fail until a relay is configured (the gateway would otherwise try
+# localhost:1025, the dev mailhog).
+mail:
+  host: ""
+  port: 587
+  # Sender address. Empty: SENTINEL <sentinel@<global.host>>.
+  from: ""
+  username: ""
+  # starttls, tls (implicit TLS, usually port 465) or none. none with a
+  # password is refused: it would send the password in cleartext.
+  tls: starttls
+  # SMTP password. The chart stores it in the Secret <fullname>-mail (key
+  # password), rendered only when it is set. Or name an existing Secret with
+  # the key password in existingSecret, which wins over password.
+  password: ""
+  existingSecret: ""
+
+keycloak:
+  # Secret with the key service-client-secret: the client secret of Keycloak's
+  # sentinel-service client, which the gateway uses to create accounts.
+  # Empty: the chart generates <fullname>-keycloak-clients with 32 random
+  # characters, keeps it across upgrades and leaves it behind on helm uninstall
+  # (helm.sh/resource-policy: keep). Keycloak's sentinel-service client must
+  # carry the same secret.
+  clientsExistingSecret: ""
+
+# Shared by the six services of templates/services.yaml (entity, track, search,
+# link-analysis, alert and analytics). Each image runs as 10001 and writes no
+# files.
+appServices:
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+  # Needs the Prometheus Operator CRDs: a ServiceMonitor per service, scraping
+  # its /metrics.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+
+# Each service below gets PORT (service.port), DATABASE_URL (the Postgres
+# Secret's database-url), KAFKA_BROKERS (not link-analysis) and CORS_ORIGIN
+# (https://<global.host>) from the chart. env adds plain values the chart does
+# not set (LOG_LEVEL, ...; a name the chart sets is an error), and
+# secretEnv.existingSecret names a Secret whose keys become environment
+# variables (envFrom).
 
 entityService:
+  enabled: true
   replicaCount: 2
   image:
     repository: sentinel/entity-service
     tag: ""
+    pullPolicy: IfNotPresent
   service:
     port: 3001
   resources:
@@ -57,12 +135,17 @@ entityService:
     limits:
       cpu: 1000m
       memory: 1Gi
+  env: {}
+  secretEnv:
+    existingSecret: ""
 
 trackService:
+  enabled: true
   replicaCount: 2
   image:
     repository: sentinel/track-service
     tag: ""
+    pullPolicy: IfNotPresent
   service:
     port: 3002
   resources:
@@ -72,12 +155,17 @@ trackService:
     limits:
       cpu: 2000m
       memory: 2Gi
+  env: {}
+  secretEnv:
+    existingSecret: ""
 
 searchService:
+  enabled: true
   replicaCount: 1
   image:
     repository: sentinel/search-service
     tag: ""
+    pullPolicy: IfNotPresent
   service:
     port: 3003
   resources:
@@ -87,12 +175,21 @@ searchService:
     limits:
       cpu: 1000m
       memory: 1Gi
+  # OPENSEARCH_HOST and OPENSEARCH_PORT. Empty host: the chart's OpenSearch.
+  opensearch:
+    host: ""
+    port: 9200
+  env: {}
+  secretEnv:
+    existingSecret: ""
 
 linkAnalysisService:
+  enabled: true
   replicaCount: 1
   image:
     repository: sentinel/link-analysis-service
     tag: ""
+    pullPolicy: IfNotPresent
   service:
     port: 3004
   resources:
@@ -102,12 +199,17 @@ linkAnalysisService:
     limits:
       cpu: 1000m
       memory: 1Gi
+  env: {}
+  secretEnv:
+    existingSecret: ""
 
 alertService:
+  enabled: true
   replicaCount: 2
   image:
     repository: sentinel/alert-service
     tag: ""
+    pullPolicy: IfNotPresent
   service:
     port: 3005
   resources:
@@ -117,6 +219,9 @@ alertService:
     limits:
       cpu: 1000m
       memory: 1Gi
+  env: {}
+  secretEnv:
+    existingSecret: ""
 
 ingestService:
   # Renders the ingest-service Deployment, its Service and Secret (the listener
@@ -226,14 +331,15 @@ ingestListener:
     requests: { cpu: 250m, memory: 128Mi }
     limits: { cpu: 2000m, memory: 512Mi }
 
-# Go behavioural-analysis service. One replica: detector state is in process
-# and the hourly baseline job takes a Postgres advisory lock, so a second
-# replica would be harmless but is not planned for.
+# Go behavioural-analysis service. Always one replica (there is no
+# replicaCount): detector state is in process and the hourly baseline job
+# takes a Postgres advisory lock.
 analyticsService:
-  replicaCount: 1
+  enabled: true
   image:
     repository: sentinel/analytics-service
     tag: ""
+    pullPolicy: IfNotPresent
   service:
     port: 5000
   resources:
@@ -245,15 +351,53 @@ analyticsService:
       memory: 512Mi
   # Extra environment (ANALYTICS_* thresholds; see apps/analytics-service/internal/config)
   env: {}
+  secretEnv:
+    existingSecret: ""
 
+# The Angular client, served by unprivileged nginx (user 101) on 4200. The
+# chart replaces the image's default.conf, whose proxy blocks name Compose
+# hosts, with one that serves the static site only: the Ingress routes /api,
+# /ws and /auth.
 web:
+  enabled: true
   replicaCount: 2
   image:
     repository: sentinel/web
     tag: ""
+    pullPolicy: IfNotPresent
   service:
     type: ClusterIP
-    port: 80
+    port: 4200
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  # The map keys the client reads from /config.json, written at container
+  # start. Both are optional (empty disables the layer that needs it) and must
+  # match [A-Za-z0-9._-], or the container refuses to start. Set them here and
+  # the chart stores them in the Secret <fullname>-web, or name an existing
+  # Secret with the keys google-maps-api-key and cesium-ion-access-token
+  # (either may be missing) in existingSecret.
+  mapKeys:
+    existingSecret: ""
+    googleMapsApiKey: ""
+    cesiumIonAccessToken: ""
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 101
+    seccompProfile:
+      type: RuntimeDefault
+  # nginx writes its pid and temp files under /tmp and the entrypoint writes
+  # /var/run/sentinel/config.json: both are emptyDirs.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
   ingress:
     enabled: true
     className: nginx

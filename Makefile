@@ -253,7 +253,7 @@ db-seed: ## Seed database with sample entities, a geofence rule, and locations
 # the schema and topics Jobs and the data tier) must each render runAsNonRoot: true; add a template
 # to RESTRICTED when it is hardened too.
 CHART := k8s/charts/sentinel
-CHART_SET := --set ingestService.serviceToken=lint
+CHART_SET := --set ingestService.serviceToken=lint --set global.host=sentinel.example.com
 DEV_VALUES := k8s/overlays/dev/values.yaml
 RESTRICTED := --show-only templates/ingest-service-deployment.yaml --show-only templates/ingest-listener-deployment.yaml --show-only templates/db-schema-job.yaml \
 	--show-only templates/postgresql.yaml --show-only templates/kafka.yaml --show-only templates/kafka-topics-job.yaml --show-only templates/opensearch.yaml
