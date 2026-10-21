@@ -8,6 +8,8 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/sentinel/go-common/terrain"
+
 	"github.com/sentinel/ingest-service/internal/emplacement"
 	"github.com/sentinel/ingest-service/internal/ingesttoken"
 	"github.com/sentinel/ingest-service/internal/metrics"
@@ -89,5 +91,37 @@ func TestDriversGetTheTokenCacheAndEmplacements(t *testing.T) {
 	}
 	if got.EmplacementWriter != w {
 		t.Errorf("deps.EmplacementWriter = %v, want the supervisor's emplacement writer", got.EmplacementWriter)
+	}
+}
+
+// The drivers that turn directions into positions (grpc) get the terrain
+// service, and how long and how far to use it, from the supervisor's options.
+func TestDriversGetTerrain(t *testing.T) {
+	reg := newFakeRegistry()
+	reg.set(feedSpec("a", 1, true))
+	l := newFakeLeaser("r1")
+	svc := terrain.NewStatic(func(_, _ float64) float64 { return 12 })
+	var (
+		mu  sync.Mutex
+		got driver.Deps
+	)
+	sup := New(reg, &memPublisher{}, zap.NewNop(), metrics.New(nil), Options{
+		ReplicaID: "r1", Leaser: &replicaLeaser{fakeLeaser: l, me: "r1"}, Preferred: preferAlways("r1"),
+		Terrain: svc, TerrainWait: 1500 * time.Millisecond, TerrainMaxRangeM: 45000,
+		Factory: func(_ driver.Spec, deps driver.Deps) (driver.Driver, error) {
+			mu.Lock()
+			got = deps
+			mu.Unlock()
+			return newMockDriver(), nil
+		},
+	})
+	sup.Reconcile(context.Background())
+	mu.Lock()
+	defer mu.Unlock()
+	if got.Terrain != driver.Terrain(svc) {
+		t.Errorf("deps.Terrain = %v, want the supervisor's terrain service", got.Terrain)
+	}
+	if got.TerrainWait != 1500*time.Millisecond || got.TerrainMaxRangeM != 45000 {
+		t.Errorf("deps wait/range = %v / %v", got.TerrainWait, got.TerrainMaxRangeM)
 	}
 }

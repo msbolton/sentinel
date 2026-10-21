@@ -16,6 +16,8 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/sentinel/go-common/geo"
+	"github.com/sentinel/go-common/terrain"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
 	"github.com/sentinel/ingest-service/internal/emplacement"
@@ -81,7 +83,27 @@ type Deps struct {
 	// EmplacementWriter writes emplacements for the drivers whose senders
 	// manage or move their own (nil when there is none).
 	EmplacementWriter EmplacementWriter
+	// Terrain answers ground heights and line-of-sight intersections for the
+	// drivers that turn directions into positions (nil when terrain is off:
+	// INGEST_TERRAIN_CACHE_DIR is not set).
+	Terrain Terrain
+	// TerrainWait is how long a detection waits for terrain before it is
+	// reported without it (INGEST_TERRAIN_WAIT_MS); TerrainMaxRangeM is how far
+	// a line of sight is followed (INGEST_TERRAIN_MAX_RANGE_KM). A driver
+	// treats zero as 2 s and 30 km.
+	TerrainWait      time.Duration
+	TerrainMaxRangeM float64
 }
+
+// Terrain is the part of the terrain service the drivers use. It is nil in
+// Deps when terrain is off. *terrain.Service is the real one.
+type Terrain interface {
+	HeightHAE(ctx context.Context, lat, lon float64) (float64, error)
+	Intersect(ctx context.Context, origin geo.LLA, azDeg, elDeg, maxRangeM float64) (terrain.Hit, error)
+	DirectionCovariance(ctx context.Context, origin geo.LLA, azDeg, elDeg, maxRangeM, sigmaAzDeg, sigmaElDeg float64, hit terrain.Hit) ([6]float64, bool)
+}
+
+var _ Terrain = (*terrain.Service)(nil)
 
 // EmplacementWriter writes emplacements for the drivers whose senders manage
 // or move their own (grpc): position reports through Touch, and the
