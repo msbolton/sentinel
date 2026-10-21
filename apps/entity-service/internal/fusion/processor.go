@@ -21,6 +21,7 @@ type EntityWriter interface {
 	ApplyFused(ctx context.Context, updates []store.FusedUpdate) ([]store.FusedResult, error)
 	ApplyStatic(ctx context.Context, updates []store.StaticUpdate) ([]store.FusedResult, error)
 	MarkExercise(ctx context.Context, ids []string) ([]store.EntityRecord, error)
+	DeletedAmong(ctx context.Context, ids []string) (map[string]bool, error)
 }
 
 // ObservationWriter persists every report.
@@ -148,6 +149,10 @@ func (p *Processor) ProcessBatch(ctx context.Context, observations []*sentinelv1
 			r.Valid = false
 			r.Reject = RejectStaleFix
 		}
+	}
+
+	if err := p.forgetDeleted(ctx, reports, res.IDs, applied, staticApplied); err != nil {
+		return stats, err
 	}
 
 	// An exercise report marks its entity whatever became of its fix: the
@@ -415,4 +420,55 @@ func enumOrEmpty(e protoreflect.Enum) string {
 		return ""
 	}
 	return pbjson.EnumName(e)
+}
+
+// forgetDeleted finds the reports whose update applied nothing because their
+// entity is deleted (a delete on another replica, or one that raced the
+// cache), rejects them as ENTITY_DELETED and drops their keys from the
+// resolver cache, so the next report creates a fresh entity.
+func (p *Processor) forgetDeleted(ctx context.Context, reports []*Report, ids map[Key]string, applied, staticApplied map[string]store.FusedResult) error {
+	var missed []*Report
+	var candidates []string
+	seen := map[string]bool{}
+	for _, r := range reports {
+		id := ids[r.Key]
+		if id == "" {
+			continue
+		}
+		stale := r.Reject == RejectStaleFix
+		if _, ok := applied[id]; ok {
+			stale = false
+		}
+		_, staticOK := staticApplied[id]
+		staticMissed := r.Reject == RejectNoPosition && !staticOK
+		if !stale && !staticMissed {
+			continue
+		}
+		missed = append(missed, r)
+		if !seen[id] {
+			seen[id] = true
+			candidates = append(candidates, id)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	dead, err := p.entities.DeletedAmong(ctx, candidates)
+	if err != nil {
+		return fmt.Errorf("checking deleted entities: %w", err)
+	}
+	if len(dead) == 0 {
+		return nil
+	}
+	var forget []Key
+	for _, r := range missed {
+		if dead[ids[r.Key]] {
+			r.Valid = false
+			r.Reject = RejectEntityDeleted
+			forget = append(forget, r.Key)
+		}
+	}
+	p.resolver.Forget(forget...)
+	p.logger.Debug("forgot keys of deleted entities", zap.Int("keys", len(forget)))
+	return nil
 }

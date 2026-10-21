@@ -582,6 +582,10 @@ func TestCreateEntitiesRebindsDeletedEntitysIdentity(t *testing.T) {
 	if !oldDeleted || newDeleted {
 		t.Fatalf("old deleted=%v new deleted=%v; want true/false", oldDeleted, newDeleted)
 	}
+	dead, err := ents.DeletedAmong(ctx, []string{oldID, newID})
+	if err != nil || len(dead) != 1 || !dead[oldID] {
+		t.Fatalf("DeletedAmong = %v %v, want only %q", dead, err, oldID)
+	}
 	found, err := ids.Lookup(ctx, []identity.Key{r2.Key})
 	if err != nil || found[r2.Key] != newID {
 		t.Fatalf("lookup = %v %v, want %q", found, err, newID)

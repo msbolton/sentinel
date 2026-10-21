@@ -183,6 +183,27 @@ func (s *EntityStore) ApplyStatic(ctx context.Context, updates []StaticUpdate) (
 	return scanFused(rows)
 }
 
+// DeletedAmong reports which of the given entity ids are soft-deleted.
+func (s *EntityStore) DeletedAmong(ctx context.Context, ids []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id FROM sentinel.entities WHERE id = ANY($1::uuid[]) AND deleted = true`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("deleted among: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 // MarkExercise sets the exercise mark on entities that lack it and returns
 // the rows it changed. It is for exercise reports that did not win the fix
 // (a duplicate in their batch, or older than the entity's last fix), which

@@ -22,10 +22,11 @@ type memEntities struct {
 	class        map[string]string
 	exercise     map[string]bool
 	marked       []string // ids MarkExercise changed
+	deleted      map[string]bool
 }
 
 func newMemEntities() *memEntities {
-	return &memEntities{lastObserved: map[string]time.Time{}, state: map[string]string{}, class: map[string]string{}, exercise: map[string]bool{}}
+	return &memEntities{lastObserved: map[string]time.Time{}, state: map[string]string{}, class: map[string]string{}, exercise: map[string]bool{}, deleted: map[string]bool{}}
 }
 
 // raise mirrors sentinel.classification_max: the entity keeps the higher of
@@ -48,6 +49,9 @@ func (m *memEntities) ApplyFused(_ context.Context, updates []store.FusedUpdate)
 	m.fused = append(m.fused, updates)
 	var out []store.FusedResult
 	for _, u := range updates {
+		if m.deleted[u.EntityID] {
+			continue
+		}
 		if last, ok := m.lastObserved[u.EntityID]; ok && u.ObservedAt.Before(last) {
 			continue
 		}
@@ -66,6 +70,9 @@ func (m *memEntities) ApplyStatic(_ context.Context, updates []store.StaticUpdat
 	m.static = append(m.static, updates)
 	var out []store.FusedResult
 	for _, u := range updates {
+		if m.deleted[u.EntityID] {
+			continue
+		}
 		prevClass, class := m.raise(u.EntityID, u.Classification)
 		m.exercise[u.EntityID] = m.exercise[u.EntityID] || u.Exercise
 		out = append(out, store.FusedResult{EntityID: u.EntityID, PreviousState: m.state[u.EntityID], PreviousClassification: prevClass, Record: &store.EntityRecord{ID: u.EntityID, Name: u.Name, Classification: class, Exercise: m.exercise[u.EntityID], AgeoutState: "LIVE", CreatedAt: "2026-10-15 12:00:00+00", UpdatedAt: "2026-10-15 12:00:00+00"}})
@@ -84,6 +91,16 @@ func (m *memEntities) MarkExercise(_ context.Context, ids []string) ([]store.Ent
 		m.exercise[id] = true
 		m.marked = append(m.marked, id)
 		out = append(out, store.EntityRecord{ID: id, EntityType: "AIRCRAFT", Source: "OPENSKY", Classification: m.class[id], AgeoutState: "LIVE", Exercise: true, CreatedAt: "2026-10-15 12:00:00+00", UpdatedAt: "2026-10-15 12:00:00+00"})
+	}
+	return out, nil
+}
+
+func (m *memEntities) DeletedAmong(_ context.Context, ids []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, id := range ids {
+		if m.deleted[id] {
+			out[id] = true
+		}
 	}
 	return out, nil
 }
@@ -448,5 +465,71 @@ func TestKinematicsJSONCarriesCovarianceAndClearsOnFixWithoutCovariance(t *testi
 	noPos := &sentinelv1.Observation{}
 	if got := kinematicsJSON(noPos); got != nil {
 		t.Fatalf("kinematicsJSON without position = %s, want nil", got)
+	}
+}
+
+// A replica that cached an id before the entity was deleted elsewhere: the
+// first report fails to apply, the key is forgotten, and the next report
+// creates a fresh entity.
+func TestProcessBatchForgetsDeletedEntity(t *testing.T) {
+	p, ids, ents, obsw, _, sink := newTestProcessor()
+	ctx := context.Background()
+	o1 := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t0, 1, 1), "o1")
+	if _, err := p.ProcessBatch(ctx, []*sentinelv1.Observation{o1}); err != nil {
+		t.Fatal(err)
+	}
+	key := Prepare(o1, nil).Key
+	oldID := ids.ids[key]
+	if oldID == "" {
+		t.Fatal("no entity created")
+	}
+	// Deleted by another replica: the store no longer finds the identity,
+	// but this resolver still caches the id.
+	ents.deleted[oldID] = true
+	delete(ids.ids, key)
+
+	o2 := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t0.Add(time.Minute), 1, 1), "o2")
+	st, err := p.ProcessBatch(ctx, []*sentinelv1.Observation{o2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Accepted != 0 || st.Rejected[RejectEntityDeleted] != 1 || st.Rejected[RejectStaleFix] != 0 {
+		t.Fatalf("first batch after delete: %+v", st)
+	}
+	if last := obsw.rows[len(obsw.rows)-1]; last.RejectReason != RejectEntityDeleted {
+		t.Fatalf("stored reject = %q", last.RejectReason)
+	}
+
+	o3 := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t0.Add(2*time.Minute), 1, 1), "o3")
+	sink.events = nil
+	st, err = p.ProcessBatch(ctx, []*sentinelv1.Observation{o3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newID := ids.ids[key]
+	if st.Created != 1 || st.Accepted != 1 || newID == "" || newID == oldID {
+		t.Fatalf("second batch: %+v new %q old %q", st, newID, oldID)
+	}
+	if len(sink.events) == 0 || sink.events[0].kind != "created" || sink.events[0].entity.Id != newID {
+		t.Fatalf("events = %+v", sink.events)
+	}
+}
+
+// A genuinely stale fix on a live entity stays STALE_FIX and keeps the
+// cached id.
+func TestProcessBatchStaleFixOnLiveEntityKeepsCache(t *testing.T) {
+	p, ids, _, _, _, _ := newTestProcessor()
+	ctx := context.Background()
+	o1 := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t0.Add(time.Minute), 1, 1), "o1")
+	if _, err := p.ProcessBatch(ctx, []*sentinelv1.Observation{o1}); err != nil {
+		t.Fatal(err)
+	}
+	o2 := withID(obs("opensky", sentinelv1.EntitySource_ENTITY_SOURCE_OPENSKY, "A1B2C3", t0, 1, 1), "o2")
+	st, err := p.ProcessBatch(ctx, []*sentinelv1.Observation{o2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Rejected[RejectStaleFix] != 1 || st.Rejected[RejectEntityDeleted] != 0 || ids.lookups != 1 {
+		t.Fatalf("stale fix: %+v lookups %d", st, ids.lookups)
 	}
 }

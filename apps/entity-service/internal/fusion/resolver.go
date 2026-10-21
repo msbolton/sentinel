@@ -32,6 +32,9 @@ type Resolver struct {
 
 	mu    sync.Mutex
 	cache map[Key]cacheEntry
+	// gen rises on every Invalidate and Forget; a Resolve that started
+	// under an older generation does not cache what it read.
+	gen uint64
 }
 
 type cacheEntry struct {
@@ -65,6 +68,7 @@ func (r *Resolver) Resolve(ctx context.Context, reports []*Report) (*Resolution,
 	now := time.Now()
 
 	r.mu.Lock()
+	gen := r.gen
 	for _, rep := range reports {
 		if _, done := res.IDs[rep.Key]; done {
 			continue
@@ -105,7 +109,7 @@ func (r *Resolver) Resolve(ctx context.Context, reports []*Report) (*Resolution,
 				}
 			}
 		}
-		r.remember(res.IDs, misses)
+		r.remember(res.IDs, misses, gen)
 	}
 
 	// Secondary identities (callsign, IMO, registration) point at the
@@ -137,6 +141,7 @@ func (r *Resolver) Resolve(ctx context.Context, reports []*Report) (*Resolution,
 func (r *Resolver) Invalidate() {
 	r.mu.Lock()
 	r.cache = map[Key]cacheEntry{}
+	r.gen++
 	r.mu.Unlock()
 }
 
@@ -146,12 +151,16 @@ func (r *Resolver) Forget(keys ...Key) {
 	for _, k := range keys {
 		delete(r.cache, k)
 	}
+	r.gen++
 	r.mu.Unlock()
 }
 
-func (r *Resolver) remember(ids map[Key]string, keys []Key) {
+func (r *Resolver) remember(ids map[Key]string, keys []Key, gen uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if gen != r.gen {
+		return // invalidated while we read the store; the answer may be stale
+	}
 	if len(r.cache) >= r.max {
 		r.cache = map[Key]cacheEntry{}
 	}
