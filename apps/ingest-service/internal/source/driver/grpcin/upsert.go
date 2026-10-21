@@ -217,7 +217,8 @@ func (s *service) awaitCache(ctx context.Context, id string, version int) bool {
 // type, azimuth reference, classification) and an absent position, coverage
 // or default sigma keep what is stored, or take the defaults on create. A
 // position sent without an altitude clears the stored altitude (the caller
-// does that). The connection, creator and active flag are never read.
+// does that). The mounting height is set when the message carries one and
+// kept when it does not. The connection, creator and active flag are never read.
 func inputOf(m *sentinelv1.Emplacement) emplacement.Input {
 	name, desc := m.GetName(), m.GetDescription()
 	in := emplacement.Input{Name: &name, Description: &desc}
@@ -240,6 +241,7 @@ func inputOf(m *sentinelv1.Emplacement) emplacement.Input {
 		in.Position = &emplacement.Point{Lat: p.GetLatitude(), Lon: p.GetLongitude()}
 		in.Altitude = p.AltitudeMeters
 	}
+	in.HeightAboveGroundM = m.HeightAboveGroundM // unset keeps the stored height
 	if c := m.GetCoverage(); c != nil {
 		in.Coverage = &emplacement.Coverage{MinRangeM: c.GetMinRangeM(), MaxRangeM: c.GetMaxRangeM(), AzimuthWidthDeg: c.GetAzimuthWidthDeg(),
 			ElevationMinDeg: c.ElevationMinDeg, ElevationMaxDeg: c.ElevationMaxDeg}

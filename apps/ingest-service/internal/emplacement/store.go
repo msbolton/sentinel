@@ -42,7 +42,7 @@ const columns = `id::text, name, description, mobility, "sensorType",
 	ST_Y(position), ST_X(position), altitude, "boresightDeg", "azimuthReference",
 	coverage, "defaultSigma", "feedId", classification, exercise, active,
 	"lastReportAt", COALESCE("createdBy", ''), "createdAt", "updatedAt", version,
-	"heartbeatIntervalSec", "lastHeartbeatAt"`
+	"heartbeatIntervalSec", "lastHeartbeatAt", "heightAboveGroundM"`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -53,7 +53,7 @@ func scan(row rowScanner) (Emplacement, error) {
 	if err := row.Scan(&e.ID, &e.Name, &e.Description, &e.Mobility, &e.SensorType,
 		&lat, &lon, &e.Altitude, &e.BoresightDeg, &e.AzimuthReference,
 		&coverage, &sigma, &e.FeedID, &e.Classification, &e.Exercise, &e.Active,
-		&e.LastReportAt, &e.CreatedBy, &e.CreatedAt, &e.UpdatedAt, &e.Version, &e.HeartbeatIntervalSec, &e.LastHeartbeatAt); err != nil {
+		&e.LastReportAt, &e.CreatedBy, &e.CreatedAt, &e.UpdatedAt, &e.Version, &e.HeartbeatIntervalSec, &e.LastHeartbeatAt, &e.HeightAboveGroundM); err != nil {
 		return Emplacement{}, err
 	}
 	if lat != nil && lon != nil {
@@ -170,13 +170,13 @@ func (s *PGStore) Create(ctx context.Context, e Emplacement) (Emplacement, error
 		var err error
 		out, err = scan(tx.QueryRow(ctx, `INSERT INTO sentinel.emplacements
 			(name, description, mobility, "sensorType", position, altitude, "boresightDeg", "azimuthReference",
-			 coverage, "defaultSigma", "feedId", classification, exercise, active, "createdBy")
+			 coverage, "defaultSigma", "feedId", classification, exercise, active, "createdBy", "heightAboveGroundM")
 			VALUES ($1, $2, $3, $4,
 			        CASE WHEN $5::float8 IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint($6::float8, $5::float8), 4326) END,
-			        $7, $8, $9, $10, $11, $12, $13, $14, $15, NULLIF($16, ''))
+			        $7, $8, $9, $10, $11, $12, $13, $14, $15, NULLIF($16, ''), $17)
 			RETURNING `+columns,
 			e.Name, e.Description, e.Mobility, e.SensorType, lat, lon, e.Altitude, e.BoresightDeg, e.AzimuthReference,
-			coverage, sigma, e.FeedID, e.Classification, e.Exercise, e.Active, e.CreatedBy))
+			coverage, sigma, e.FeedID, e.Classification, e.Exercise, e.Active, e.CreatedBy, e.HeightAboveGroundM))
 		if err != nil {
 			return mapErr(err)
 		}
@@ -207,13 +207,13 @@ func (s *PGStore) Update(ctx context.Context, id string, ifVersion int, fn func(
 			position = CASE WHEN $6::float8 IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint($7::float8, $6::float8), 4326) END,
 			altitude = $8, "boresightDeg" = $9, "azimuthReference" = $10, coverage = $11, "defaultSigma" = $12,
 			"feedId" = $13, classification = $14, exercise = $15, active = $16,
-			"heartbeatIntervalSec" = $17, "lastHeartbeatAt" = $18,
+			"heartbeatIntervalSec" = $17, "lastHeartbeatAt" = $18, "heightAboveGroundM" = $19,
 			version = version + 1, "updatedAt" = NOW()
 			WHERE id = $1::uuid
 			RETURNING `+columns,
 			id, cur.Name, cur.Description, cur.Mobility, cur.SensorType, lat, lon, cur.Altitude, cur.BoresightDeg,
 			cur.AzimuthReference, coverage, sigma, cur.FeedID, cur.Classification, cur.Exercise, cur.Active,
-			cur.HeartbeatIntervalSec, cur.LastHeartbeatAt))
+			cur.HeartbeatIntervalSec, cur.LastHeartbeatAt, cur.HeightAboveGroundM))
 		if err != nil {
 			return mapErr(err)
 		}

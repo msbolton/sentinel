@@ -334,6 +334,28 @@ func TestPatchIgnoresPositionOfASendersMobileEmplacement(t *testing.T) {
 	}
 }
 
+// The mounting height is not a position: a PATCH sets it even on a sender's
+// mobile emplacement, which does not report it per position update.
+func TestPatchSetsHeightAboveGroundOfASendersMobileEmplacement(t *testing.T) {
+	e := senderEmplacement(MobilityMobile, SenderPrefix+"t1")
+	store := newMemStore(e)
+	res := serve(t, store, http.MethodPatch, "/emplacements/"+e.ID, "SECRET",
+		`{"position":{"lat":10,"lon":10},"heightAboveGroundM":9.5}`)
+	if res.Code != http.StatusOK {
+		t.Fatalf("PATCH = %d %s", res.Code, res.Body)
+	}
+	got, _ := store.Get(context.Background(), e.ID)
+	if got.Position.Lat != 50 || got.HeightAboveGroundM == nil || *got.HeightAboveGroundM != 9.5 {
+		t.Errorf("after PATCH: position %v, height %v", got.Position, got.HeightAboveGroundM)
+	}
+	if !strings.Contains(res.Body.String(), `"heightAboveGroundM":9.5`) {
+		t.Errorf("response lacks the height: %s", res.Body)
+	}
+	if res := serve(t, store, http.MethodPatch, "/emplacements/"+e.ID, "SECRET", `{"heightAboveGroundM":-3}`); res.Code != http.StatusBadRequest && res.Code != http.StatusUnprocessableEntity {
+		t.Errorf("a negative height = %d %s, want a validation refusal", res.Code, res.Body)
+	}
+}
+
 // A person's own mobile emplacement, and a sender's fixed one, are moved by
 // a PATCH; so is a sender's mobile one that the PATCH makes fixed.
 func TestPatchPositionAppliesExceptWhileASendersEmplacementStaysMobile(t *testing.T) {

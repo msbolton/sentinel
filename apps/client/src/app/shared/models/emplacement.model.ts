@@ -32,6 +32,8 @@ export interface Emplacement {
   sensorType: SensorType;
   position: EmplacementPoint | null;
   altitude: number | null;
+  /** How far above the ground the sensor is mounted (m); a camera with no altitude is placed at the terrain plus this. */
+  heightAboveGroundM?: number | null;
   boresightDeg: number;
   azimuthReference: AzimuthReference;
   coverage: EmplacementCoverage;
@@ -63,6 +65,7 @@ export interface EmplacementInput {
   sensorType?: SensorType;
   position?: EmplacementPoint;
   altitude?: number;
+  heightAboveGroundM?: number;
   boresightDeg?: number;
   azimuthReference?: AzimuthReference;
   coverage?: EmplacementCoverage;
@@ -84,6 +87,7 @@ export interface EmplacementDraft {
   sensorType: SensorType;
   position: EmplacementPoint | null;
   altitude: number | null;
+  heightAboveGroundM: number | null;
   boresightDeg: number;
   azimuthReference: AzimuthReference;
   coverage: EmplacementCoverage;
@@ -96,7 +100,7 @@ export interface EmplacementDraft {
 
 export function newDraft(): EmplacementDraft {
   return {
-    id: null, version: null, name: '', description: '', mobility: 'FIXED', sensorType: 'RADAR', position: null, altitude: null,
+    id: null, version: null, name: '', description: '', mobility: 'FIXED', sensorType: 'RADAR', position: null, altitude: null, heightAboveGroundM: null,
     boresightDeg: 0, azimuthReference: 'TRUE_NORTH', coverage: { minRangeM: 0, maxRangeM: 50_000, azimuthWidthDeg: 120 },
     defaultSigma: {}, feedId: null, classification: 'UNCLASSIFIED', exercise: false, active: true,
   };
@@ -105,7 +109,7 @@ export function newDraft(): EmplacementDraft {
 export function draftOf(e: Emplacement): EmplacementDraft {
   return {
     id: e.id, version: e.version, name: e.name, description: e.description, mobility: e.mobility, sensorType: e.sensorType,
-    position: e.position ? { ...e.position } : null, altitude: e.altitude, boresightDeg: e.boresightDeg,
+    position: e.position ? { ...e.position } : null, altitude: e.altitude, heightAboveGroundM: e.heightAboveGroundM ?? null, boresightDeg: e.boresightDeg,
     azimuthReference: e.azimuthReference, coverage: { ...e.coverage }, defaultSigma: { ...e.defaultSigma },
     feedId: e.feedId, classification: e.classification, exercise: e.exercise, active: e.active,
   };
@@ -121,6 +125,7 @@ export function inputOf(d: EmplacementDraft): EmplacementInput {
   };
   if (d.position) input.position = d.position;
   if (d.altitude != null) input.altitude = d.altitude;
+  if (d.heightAboveGroundM != null) input.heightAboveGroundM = d.heightAboveGroundM;
   return input;
 }
 
