@@ -77,9 +77,9 @@ A sender heartbeats each emplacement it reports as with an `EmplacementState` at
   - `online`: a heartbeat within three intervals.
   - `offline`: heard from, but not since then.
   - `never`: not heard from since the connection started.
-  - `pending`: not heard from yet, during the startup grace, which is the larger of three intervals and 30 s after the connection starts.
+  - `pending`: not heard from yet in this run, during the startup grace, which is the larger of three intervals and 30 s after the connection starts.
 - **Fixes.** A report bound to an emplacement that is not online is `REJECTED` `no_heartbeat`, before any other check of its content. A connection with no emplacements at all is not affected.
-- **The row.** `lastHeartbeatAt` and `heartbeatIntervalSec` are written at most every interval (and every 10 s), with no version change and no notice. A replica that takes the connection over seeds itself from the heartbeats the rows recorded, so a site heard from once reads offline, not never, until it heartbeats.
+- **The row.** `lastHeartbeatAt` and `heartbeatIntervalSec` are written at most every interval (and every 10 s), with no version change and no notice. A replica that takes the connection over (after a restart or a lease move) seeds itself from the heartbeats the rows recorded. A seeded heartbeat still inside its three intervals reads online. One that has already lapsed reads pending through the startup grace, since its sender may not have reconnected to the new replica yet, and offline after it: a site heard from once never reads never. Its next real heartbeat replaces the seed. A site heard in this run that then goes silent reads offline at once, grace or not. Pending is not online, so its fixes are still refused as `no_heartbeat`.
 - **Connection status.** A connection with emplacements is as healthy as their heartbeats, not as recent as its last report.
   - All online, or online and pending: healthy, running (`detail.heartbeat: "pending"` while some wait).
   - Some silent while others are online or pending: warn, degraded.
@@ -91,8 +91,8 @@ A sender heartbeats each emplacement it reports as with an `EmplacementState` at
 
 Each active emplacement is reported as an entity of type `SENSOR` by its own connection, under the canonical `EMPLACEMENT` identity, so it is in search and can anchor a geofence ring. Its source entity id is the emplacement id, and it carries the emplacement's name, classification (raised to the connection's floor) and exercise flag (ORed with the connection's).
 
-- **A grpc connection** publishes it at most once a second on a heartbeat, and again every `min(interval, 60 s)` whatever its state, at once when the state changes, and once more as offline when the connection stops. Each publish carries `operationalStatus` (`OPERATIONAL` online, `UNKNOWN` pending, `INACTIVE` otherwise) and a `generic` platform detail. Its fields are `heartbeat`, `heartbeatIntervalSec`, `lastHeartbeatAt` and, while silent, `silentSince`. A re-publish is stamped with the last heartbeat, never the current time.
-- **Another driver's connection** (tcp, udp, tak: rows bound before the grpc-only rule) reports its fixed emplacements every 60 s, at start and on every change. This is a reduced publisher inside the connection's runner, not a feed, and its reports carry no heartbeat state. These sites stay violet, and they do not count as the connection succeeding.
+- **A grpc connection** publishes it at most once a second on a heartbeat, and again every `min(interval, 25 s)` whatever its state, at once when the state changes, and once more as offline when the connection stops. Each publish carries `operationalStatus` (`OPERATIONAL` online, `UNKNOWN` pending, `INACTIVE` otherwise) and a `generic` platform detail. Its fields are `heartbeat`, `heartbeatIntervalSec`, `lastHeartbeatAt` and, while silent, `silentSince`. A re-publish is stamped with the last heartbeat, never the current time, but never earlier than the connection's start on this replica: the row's heartbeat is throttled and older than what the previous replica published, which entity-service would otherwise drop as out of date.
+- **Another driver's connection** (tcp, udp, tak: rows bound before the grpc-only rule) reports its fixed emplacements every 25 s, at start and on every change. This is a reduced publisher inside the connection's runner, not a feed, and its reports carry no heartbeat state. These sites stay violet, and they do not count as the connection succeeding.
 - A site's own report is never suppressed as a repeat.
 
 The sensor type picks the source label:
@@ -106,7 +106,7 @@ The sensor type picks the source label:
 | `RF` | `SIGINT` |
 | anything else | `MASINT` |
 
-**Age-out.** Site entities use the global per-source thresholds. A running connection publishes each site at least every 60 s, and every applied update refreshes the entity's last-seen time, so a running connection's sites never age out. Those of a stopped or deleted connection do.
+**Age-out.** Site entities use the global per-source thresholds. A running connection publishes each site at least every 25 s, inside the shortest stale threshold (RADAR's 30 s), and every applied update refreshes the entity's last-seen time, so a running connection's sites never go stale or age out, silent ones included. That holds across a restart or a lease move: the new run stamps its publishes no earlier than its own start, so they are newer than the previous run's last publish and are applied. Those of a stopped or deleted connection do age out.
 
 ## The client
 

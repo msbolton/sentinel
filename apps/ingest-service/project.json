@@ -22,7 +22,7 @@
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "commands": ["cd apps/ingest-service && go test -v -race ./..."],
+        "commands": ["cd apps/ingest-service && go test -v -race -p 1 ./..."],
         "cwd": "{workspaceRoot}"
       }
     }
