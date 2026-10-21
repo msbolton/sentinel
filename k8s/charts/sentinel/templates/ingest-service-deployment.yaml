@@ -1,3 +1,4 @@
+{{- if .Values.ingestService.enabled }}
 {{- $secretName := default (printf "%s-ingest" (include "sentinel.fullname" .)) .Values.ingestService.existingSecret -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -198,4 +199,5 @@ spec:
     - port: http
       path: /metrics
       interval: {{ .Values.ingestService.serviceMonitor.interval }}
+{{- end }}
 {{- end }}

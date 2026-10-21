@@ -1,3 +1,4 @@
+{{- if .Values.apiGateway.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -89,3 +90,4 @@ spec:
       name: http
   selector:
     {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "api-gateway") | nindent 4 }}
+{{- end }}

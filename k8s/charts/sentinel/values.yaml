@@ -21,6 +21,7 @@ global:
 # -- Application Services --
 
 apiGateway:
+  enabled: true
   replicaCount: 2
   image:
     repository: sentinel/api-gateway
@@ -113,6 +114,9 @@ alertService:
       memory: 1Gi
 
 ingestService:
+  # Renders the ingest-service Deployment, its Service and Secret (the listener
+  # below has a flag of its own).
+  enabled: true
   # Feeds are leased so each runs on exactly one replica; scale freely.
   replicaCount: 3
   image:
