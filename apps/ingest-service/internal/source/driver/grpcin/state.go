@@ -170,7 +170,7 @@ func fixOf(m *sentinelv1.EmplacementState, now time.Time) (f fix, why string) {
 		if !finite(*p.AltitudeMeters) {
 			return fix{}, "bad_state"
 		}
-		f.pos.Alt = *p.AltitudeMeters
+		f.pos.Alt, f.hasAlt = *p.AltitudeMeters, true
 	}
 	skewed := false
 	if t := m.GetTime(); t != nil {

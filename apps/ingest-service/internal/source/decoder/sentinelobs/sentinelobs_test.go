@@ -262,6 +262,31 @@ func TestDropNonFinitePolar(t *testing.T) {
 	}
 }
 
+// A direction-only measurement has no range: a non-finite range_m is set to
+// 0, not a reason to drop it, and a range of 0 is kept. Its azimuth and its
+// elevation, which it cannot do without, still drop it when not finite.
+func TestDropNonFiniteDirectionOnlyPolar(t *testing.T) {
+	nan, inf, el := math.NaN(), math.Inf(1), -5.0
+	for _, rng := range []float64{0, nan, inf} {
+		o := &obs.Observation{Polar: &obs.Polar{RangeM: rng, AzimuthDeg: 45, ElevationDeg: &el, DirectionOnly: true}}
+		dropNonFinite(o)
+		if o.Polar == nil || o.Polar.RangeM != 0 || o.Polar.ElevationDeg == nil || *o.Polar.ElevationDeg != -5 || !o.Polar.DirectionOnly {
+			t.Errorf("range %v: polar = %+v, want it kept with range 0", rng, o.Polar)
+		}
+	}
+	for name, p := range map[string]*obs.Polar{
+		"nan azimuth":   {AzimuthDeg: nan, ElevationDeg: &el, DirectionOnly: true},
+		"nan elevation": {AzimuthDeg: 45, ElevationDeg: &nan, DirectionOnly: true},
+		"inf elevation": {AzimuthDeg: 45, ElevationDeg: &inf, DirectionOnly: true},
+	} {
+		o := &obs.Observation{Polar: p}
+		dropNonFinite(o)
+		if o.Polar != nil {
+			t.Errorf("%s: polar = %+v, want it dropped", name, o.Polar)
+		}
+	}
+}
+
 // A message with identities but no source_entity_id takes its source id
 // from the first identity (R19), so identity-only senders without a
 // canonical identity get distinct entities and observation ids.

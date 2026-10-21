@@ -22,6 +22,7 @@ type fix struct {
 	pos     geo.LLA
 	heading *float64
 	vel     *[3]float64 // north, east, up in m/s
+	hasAlt  bool        // the report gave an altitude
 }
 
 // track is a mobile emplacement's recent fixes, in time order.
@@ -70,7 +71,7 @@ func (t *track) at(ts time.Time, tolerance time.Duration) (origin, bool) {
 			s := dt.Seconds()
 			p = geo.FromECEF(geo.ECEFOf(last.pos, geo.ENU{E: last.vel[1] * s, N: last.vel[0] * s, U: last.vel[2] * s}))
 		}
-		return origin{at: p, heading: last.heading}, true
+		return origin{at: p, heading: last.heading, hasAlt: last.hasAlt}, true
 	}
 	i := sort.Search(n, func(i int) bool { return t.fixes[i].at.After(ts) })
 	a, b := t.fixes[i-1], t.fixes[i]
@@ -82,6 +83,7 @@ func (t *track) at(ts time.Time, tolerance time.Duration) (origin, bool) {
 			Alt: a.pos.Alt + (b.pos.Alt-a.pos.Alt)*f,
 		},
 		heading: lerpHeading(a.heading, b.heading, f),
+		hasAlt:  a.hasAlt && b.hasAlt,
 	}, true
 }
 

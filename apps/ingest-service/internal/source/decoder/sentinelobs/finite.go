@@ -18,7 +18,9 @@ const maxCovariance = 1e14
 // diagonal variances are dropped and off-diagonal terms are clamped to
 // Cauchy-Schwarz bounds. A polar measurement with a non-finite range or
 // azimuth is dropped whole, since a 0 would read as a real bearing; its
-// other non-finite optional values become absent. Latitude and longitude
+// other non-finite optional values become absent. A direction-only one has
+// no range to check (a non-finite range_m becomes 0) and is dropped whole
+// for a non-finite elevation instead. Latitude and longitude
 // are not touched: the position check refuses them first.
 func dropNonFinite(o *obs.Observation) {
 	for _, p := range []**float64{&o.Altitude, &o.Heading, &o.SpeedKnots, &o.Course, &o.CircularError} {
@@ -80,7 +82,12 @@ func dropNonFinite(o *obs.Observation) {
 		}
 	}
 	if p := o.Polar; p != nil {
-		if !finite(p.RangeM, p.AzimuthDeg) {
+		// A direction-only measurement has no range (a non-finite one
+		// becomes 0) and cannot do without its elevation.
+		if p.DirectionOnly && !finite(p.RangeM) {
+			p.RangeM = 0
+		}
+		if !finite(p.RangeM, p.AzimuthDeg) || (p.DirectionOnly && p.ElevationDeg != nil && !finite(*p.ElevationDeg)) {
 			o.Polar = nil
 		} else {
 			for _, q := range []**float64{&p.ElevationDeg, &p.RangeRateMps, &p.SigmaRangeM, &p.SigmaAzimuthDeg, &p.SigmaElevationDeg} {

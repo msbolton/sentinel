@@ -234,6 +234,11 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 		return s.reject(ack, "bad_identity"), nil
 	}
 	o.ReceivedAt = s.d.now().UTC()
+	// A radar target's height above ground is the service's own figure
+	// (applyRadarTerrain), never the sender's.
+	if o.Radar != nil {
+		o.Radar.HeightAboveGroundM = nil
+	}
 	if bound {
 		o.EmplacementID, o.SensorID = e.ID, e.ID
 		if o.Source == "" {
@@ -261,8 +266,23 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 			if why != "" {
 				return s.reject(ack, why), nil
 			}
-			if why := convert(o, e, org); why != "" {
-				return s.reject(ack, why), nil
+			if o.Polar.DirectionOnly {
+				// A detection placed on the terrain goes on as a position
+				// does; a bearing is accepted and emits nothing.
+				var b *bearing
+				var why string
+				b, why, org = s.place(ctx, o, e, org)
+				switch {
+				case b != nil:
+					return s.accepted(ctx, ack, e.ID, o.ReceivedAt), nil
+				case why != "":
+					return s.reject(ack, why), nil
+				}
+			} else {
+				if why := convert(o, e, org); why != "" {
+					return s.reject(ack, why), nil
+				}
+				s.applyRadarTerrain(ctx, o)
 			}
 		}
 		if s.d.cfg.EnforceCoverage && o.HasPosition {
@@ -284,14 +304,25 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 	if err := s.sink.Emit(ctx, o); err != nil {
 		return nil, err
 	}
-	// Only an accepted report counts as its emplacement reporting.
+	empID := ""
 	if bound {
-		s.d.touch(ctx, e.ID, nil, nil, o.ReceivedAt, o.ReceivedAt)
+		empID = e.ID
+	}
+	ack = s.accepted(ctx, ack, empID, o.ReceivedAt)
+	s.sink.Succeeded(1)
+	return ack, nil
+}
+
+// accepted acks a report taken, emitted or not (a bearing emits nothing).
+// Only an accepted report counts as its emplacement (empID, "" for none)
+// reporting.
+func (s *service) accepted(ctx context.Context, ack *ingestv1.Ack, empID string, at time.Time) *ingestv1.Ack {
+	if empID != "" {
+		s.d.touch(ctx, empID, nil, nil, at, at)
 	}
 	s.d.reportsOK.Add(1)
-	s.sink.Succeeded(1)
 	ack.Status = ingestv1.AckStatus_ACK_STATUS_OK
-	return ack, nil
+	return ack
 }
 
 // declaredLevel is the level a report marks itself with, as wire maps it:

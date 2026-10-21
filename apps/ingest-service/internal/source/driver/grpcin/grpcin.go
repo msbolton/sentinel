@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"github.com/sentinel/go-common/classification"
+	"github.com/sentinel/go-common/terrain"
 	"github.com/sentinel/ingest-service/internal/emplacement"
 	"github.com/sentinel/ingest-service/internal/source/driver"
 	"github.com/sentinel/ingest-service/internal/source/driver/stream"
@@ -44,6 +45,10 @@ const (
 
 	defaultOwnshipToleranceMs = 2000
 	maxOwnshipToleranceMs     = 60000
+
+	// defaultTerrainWait is how long a detection waits for terrain when the
+	// host sets no wait.
+	defaultTerrainWait = 2 * time.Second
 )
 
 //go:embed schema.json
@@ -171,6 +176,17 @@ type Driver struct {
 	// production never does.
 	heartbeatsOff bool
 
+	// terrain answers ground heights and lines of sight (nil when terrain is
+	// off); terrainWait is how long one detection may wait for it in all, and
+	// maxRangeM how far a line of sight is followed when the emplacement's
+	// coverage gives no maximum range.
+	terrain     driver.Terrain
+	terrainWait time.Duration
+	maxRangeM   float64
+	// terrainClampSkipped counts radar targets the terrain could not answer
+	// for: their measured altitude was kept.
+	terrainClampSkipped atomic.Int64
+
 	// cacheWait is how long an upsert waits for the cache to see its write
 	// (tests shorten it).
 	cacheWait time.Duration
@@ -279,6 +295,13 @@ func New(spec driver.Spec, deps driver.Deps) (driver.Driver, error) {
 	}
 	if d.logger == nil {
 		d.logger = zap.NewNop()
+	}
+	d.terrain, d.terrainWait, d.maxRangeM = deps.Terrain, deps.TerrainWait, deps.TerrainMaxRangeM
+	if d.terrainWait <= 0 {
+		d.terrainWait = defaultTerrainWait
+	}
+	if d.maxRangeM <= 0 {
+		d.maxRangeM = terrain.DefaultMaxRangeM
 	}
 	d.limit = transport.NewLimiter(d.maxPerSec)
 	if tlsOn {

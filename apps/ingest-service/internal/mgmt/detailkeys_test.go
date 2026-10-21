@@ -63,6 +63,8 @@ var errorKeys = []errorKey{
 		`{"deliveryErrors":3}`, `{"deliveryErrors":3}`},
 	{"source/transport/guard.go", "senderRateLimited", "a listener's count of messages dropped by per-sender limits (its name only contains \"err\" by accident): a number, which the gate keeps",
 		`{"senderRateLimited":4}`, `{"senderRateLimited":4}`},
+	{"source/driver/grpcin/health.go", "terrainClampSkipped", "a grpc connection's count of radar targets the terrain could not answer for (its name only contains \"err\" by accident): a number, which the gate keeps",
+		`{"terrainClampSkipped":4}`, `{"terrainClampSkipped":4}`},
 }
 
 // errorKeysWritten finds the keys with "err" in their name that the Go files

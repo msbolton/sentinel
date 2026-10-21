@@ -23,6 +23,7 @@ func (d *Driver) Health() driver.Health {
 	detail["allowlist"] = allowDetail(len(d.cfg.Allow))
 	detail["reportsOk"] = d.reportsOK.Load()
 	detail["deadLettered"] = d.deadLettered.Load()
+	detail["terrainClampSkipped"] = d.terrainClampSkipped.Load()
 	d.rejectedMu.Lock()
 	byReason := make(map[string]int64, len(d.rejected))
 	for k, v := range d.rejected {
