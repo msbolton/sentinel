@@ -293,6 +293,9 @@ define chart_realm_check
 	! printf '%s\n' "$$uris" | grep -vE '^ *"https://$(subst .,\.,$(CHART_HOST))(/\*)?",?$$' || { echo "chart-lint: a redirect URI or web origin is not on https://$(CHART_HOST)"; exit 1; }
 endef
 
+# The NetworkPolicy named sentinel-<component> from a render on stdin, as an awk program.
+chart_policy = awk '/^kind: NetworkPolicy$$/ {np=1} /^---/ {np=0; p=0} np && /name: sentinel-$(1)$$/ {p=1} p'
+
 # kubeconform on one render. The render goes to a variable first, so a failing helm template fails
 # the target (a pipe would hide it), and a render with no resources is an error too.
 define chart_validate
@@ -323,9 +326,18 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics 
 	@# The listener's rule: with the listener on and no CIDRs PostgreSQL has no from (open in the
 	@# cluster); with CIDRs they reach both the PostgreSQL and the Kafka policy.
 	@np="$$(helm template sentinel $(CHART) $(CHART_SET) --show-only templates/networkpolicies.yaml)"; \
-	! printf '%s\n' "$$np" | awk '/name: sentinel-postgresql$$/ {p=1} p && /^---/ {exit} p' | grep -q 'from:' || { echo "chart-lint: PostgreSQL is restricted although the listener has no hostNetworkCIDRs"; exit 1; }; \
+	pg=$$(printf '%s\n' "$$np" | $(call chart_policy,postgresql)); \
+	printf '%s\n' "$$pg" | grep -q 'port: postgresql' || { echo "chart-lint: no PostgreSQL NetworkPolicy rendered"; exit 1; }; \
+	! printf '%s\n' "$$pg" | grep -q 'from:' || { echo "chart-lint: PostgreSQL is restricted although the listener has no hostNetworkCIDRs"; exit 1; }; \
 	np="$$(helm template sentinel $(CHART) $(CHART_SET) $(NETPOL_BACKUP_OPTIONAL) --show-only templates/networkpolicies.yaml)"; \
 	test "$$(printf '%s\n' "$$np" | grep -c 'cidr: "10.42.0.1/32"')" = 2 || { echo "chart-lint: hostNetworkCIDRs do not reach the PostgreSQL and Kafka policies"; exit 1; }
+	@# Policies match the pod's port, so they name the container ports: a changed Service port must
+	@# leave the web policy on the container's http port (4200) and no policy with a numeric port.
+	@ports="--set web.service.port=80 --set ingestService.service.port=8080"; \
+	np="$$(helm template sentinel $(CHART) $(CHART_SET) $$ports --show-only templates/networkpolicies.yaml)"; \
+	! printf '%s\n' "$$np" | grep -nE '^ +- port: [0-9]' || { echo "chart-lint: a NetworkPolicy names a numeric port"; exit 1; }; \
+	printf '%s\n' "$$np" | $(call chart_policy,web) | grep -qE 'port: http$$' || { echo "chart-lint: the web NetworkPolicy does not allow its http port"; exit 1; }; \
+	helm template sentinel $(CHART) $(CHART_SET) $$ports --show-only templates/web.yaml | grep -A1 -- '- name: http' | grep -q 'containerPort: 4200' || { echo "chart-lint: the web container's http port is not 4200"; exit 1; }
 
 # ----------------------------------------------------------------------------
 # Cleanup
