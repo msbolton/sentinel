@@ -226,8 +226,7 @@ spec:
 {{/*
 The sentinel realm for this deployment: config/keycloak/sentinel-realm.json
 (the dev realm, linked into the chart as files/keycloak) with
-- the users reduced to the service accounts (sentinel-service's also gets
-  view-realm, which approving a registration needs), plus the bootstrap user
+- the users reduced to the service accounts, plus the bootstrap user
   sentinel-admin (the roles of the dev admin, a password that is not temporary:
   the client signs in with the password grant, which cannot change it);
 - sentinel-web's redirect URIs, web origins and post-logout redirect URIs on
@@ -246,13 +245,6 @@ The sentinel realm for this deployment: config/keycloak/sentinel-realm.json
 {{- $users := list }}
 {{- range $realm.users }}
 {{- if .serviceAccountClientId }}
-{{- if eq .serviceAccountClientId "sentinel-service" }}
-{{- /* Approving a registration reads the realm roles (GET /roles), which needs view-realm beside manage-users. */}}
-{{- $clientRoles := .clientRoles | default dict }}
-{{- $rm := get $clientRoles "realm-management" | default list }}
-{{- $_ := set $clientRoles "realm-management" (append $rm "view-realm" | uniq) }}
-{{- $_ := set . "clientRoles" $clientRoles }}
-{{- end }}
 {{- $users = append $users . }}
 {{- end }}
 {{- end }}
