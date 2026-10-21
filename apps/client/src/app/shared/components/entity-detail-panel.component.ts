@@ -654,8 +654,8 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                   @if (emplacementName(); as name) {
                     <div class="field-row">
                       <span class="field-label">Emplacement</span>
-                      @if (canOpenConnection() && e.feedId) {
-                        <button type="button" class="field-value field-link" [title]="'Open its connection, ' + e.feedId" (click)="openConnection()">{{ name }}</button>
+                      @if (canOpenConnection() && connectionId(); as connId) {
+                        <button type="button" class="field-value field-link" [title]="'Open its connection, ' + connId" (click)="openConnection()">{{ name }}</button>
                       } @else {
                         <span class="field-value">{{ name }}</span>
                       }
@@ -1419,12 +1419,26 @@ export class EntityDetailPanelComponent {
   private readonly emplacementService = inject(EmplacementService);
   private readonly router = inject(Router);
 
+  /** The emplacement row a SENSOR entity stands for, when it is loaded. */
+  private emplacementRow = computed(() => {
+    const id = emplacementIdOf(this.entity() ?? {});
+    if (!id) return null;
+    return this.emplacementService.emplacements().find((e) => e.id === id) ?? null;
+  });
+
   /** The emplacement a SENSOR entity stands for, by name when it is loaded. */
   protected emplacementName = computed(() => {
     const id = emplacementIdOf(this.entity() ?? {});
     if (!id) return null;
-    return this.emplacementService.emplacements().find((e) => e.id === id)?.name ?? id;
+    return this.emplacementRow()?.name ?? id;
   });
+
+  /**
+   * The connection a site belongs to: its row's, since the entity's feedId is
+   * the first feed that ever reported it and an operator may have rebound it
+   * since; the entity's when the row is not loaded.
+   */
+  protected connectionId = computed(() => this.emplacementRow()?.feedId ?? this.entity()?.feedId ?? null);
 
   private readonly ws = inject(WebSocketService);
 
@@ -1438,7 +1452,7 @@ export class EntityDetailPanelComponent {
   protected canOpenConnection = computed(() => this.auth.hasAnyRole('sentinel-operator', 'sentinel-admin'));
 
   protected openConnection(): void {
-    const feedId = this.entity()?.feedId;
+    const feedId = this.connectionId();
     if (feedId) void this.router.navigate(['/connections'], { queryParams: { open: feedId } });
   }
 

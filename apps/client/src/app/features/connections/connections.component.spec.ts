@@ -40,6 +40,17 @@ function makeFeed(over: Partial<Feed> & { id: string }): Feed {
   };
 }
 
+function makeEmplacement(over: Partial<Emplacement> & { id: string }): Emplacement {
+  return {
+    name: over.id, description: '', mobility: 'FIXED', sensorType: 'RADAR',
+    position: { lat: 50, lon: -4 }, altitude: null, boresightDeg: 0, azimuthReference: 'TRUE_NORTH',
+    coverage: { minRangeM: 0, maxRangeM: 60000, azimuthWidthDeg: 360 }, defaultSigma: {},
+    feedId: null, classification: 'UNCLASSIFIED', exercise: false, active: true,
+    lastReportAt: null, createdBy: 'u', createdAt: '', updatedAt: '', version: 1,
+    ...over,
+  };
+}
+
 const drivers: FeedDriver[] = [
   {
     id: 'opensky',
@@ -602,10 +613,50 @@ describe('ConnectionsComponent', () => {
     const req = httpMock.expectOne('/api/v1/feeds/a');
     expect(req.request.method).toBe('DELETE');
     req.flush(null);
+    httpMock.expectOne('/api/v1/emplacements').flush([]); // reloaded after the delete
     fixture.detectChanges();
 
     expect(el.querySelectorAll('tr.feed-row').length).toBe(1);
     expect(() => rowOf('a')).toThrow();
+  });
+
+  it("lists a deleted connection's operator emplacements under Unassigned without a page reload", () => {
+    const bound = makeEmplacement({ id: 'mast', name: 'Mast', feedId: 'grpc-1' });
+    flushInitial([makeFeed({ id: 'grpc-1', driver: 'grpc' }), makeFeed({ id: 'grpc-2', driver: 'grpc' })], [bound]);
+    expect(el.querySelector('.unassigned')).toBeNull();
+
+    component.askDelete(component.rows()[0].feed);
+    component.confirmDelete(component.rows()[0].feed);
+    httpMock.expectOne('/api/v1/feeds/grpc-1').flush(null);
+    // The server unbound and deactivated the operator row.
+    httpMock.expectOne('/api/v1/emplacements').flush([{ ...bound, feedId: null, active: false, version: 2 }]);
+    fixture.detectChanges();
+
+    const unassigned = el.querySelector('.unassigned');
+    expect(unassigned?.querySelector('.emp-name')?.textContent).toContain('Mast');
+  });
+
+  it('reloads the emplacements with the 10 s poll', () => {
+    fixture.destroy();
+    httpMock.match(() => true).filter((r) => !r.cancelled).forEach((r) => r.flush([]));
+    jest.useFakeTimers();
+    try {
+      fixture = TestBed.createComponent(ConnectionsComponent);
+      component = fixture.componentInstance;
+      el = fixture.nativeElement as HTMLElement;
+      fixture.detectChanges();
+      flushInitial([makeFeed({ id: 'grpc-1', driver: 'grpc' })]);
+      expect(el.querySelector('.unassigned')).toBeNull();
+
+      jest.advanceTimersByTime(10_000);
+      httpMock.match('/api/v1/feeds').forEach((r) => r.flush([makeFeed({ id: 'grpc-1', driver: 'grpc' })]));
+      httpMock.expectOne('/api/v1/emplacements').flush([makeEmplacement({ id: 'loose', name: 'Loose', active: false })]);
+      fixture.detectChanges();
+      expect(el.querySelector('.unassigned .emp-name')?.textContent).toContain('Loose');
+    } finally {
+      fixture.destroy();
+      jest.useRealTimers();
+    }
   });
 
   it('surfaces a refused delete', () => {

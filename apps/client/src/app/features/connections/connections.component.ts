@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, computed, inject
 import { DecimalPipe } from '@angular/common';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { EmplacementService } from '../../core/services/emplacement.service';
 import { sitesSummaryOf } from '../../shared/models/emplacement.model';
 import { ConnectionEmplacementsComponent } from './connection-emplacements.component';
@@ -142,6 +143,7 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
 
   private release: (() => void) | null = null;
   private clock: ReturnType<typeof setInterval> | null = null;
+  private emplacementsLoad: Subscription | null = null;
 
   constructor() {
     // The expanded rows live in ?open=, so a link can open one (the entity
@@ -154,12 +156,18 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.release = this.feedService.poll(10_000);
-    this.emplacements.load().subscribe({ error: () => undefined });
+    this.reloadEmplacements();
     this.feedService.loadDrivers().subscribe({
       next: () => this.driversError.set(null),
       error: (err) => this.driversError.set(`Driver catalog unavailable: ${problemsOf(err).message}`),
     });
-    this.clock = setInterval(() => this.now.set(Date.now()), 10_000);
+    // The emplacements are reloaded with the feed poll: the server moves them
+    // (a deleted connection's operator rows go to Unassigned; a sender
+    // declares new ones) without telling this page.
+    this.clock = setInterval(() => {
+      this.now.set(Date.now());
+      this.reloadEmplacements();
+    }, 10_000);
   }
 
   ngOnDestroy(): void {
@@ -169,6 +177,14 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
       clearInterval(this.clock);
       this.clock = null;
     }
+    this.emplacementsLoad?.unsubscribe();
+    this.emplacementsLoad = null;
+  }
+
+  /** Loads the emplacements again, dropping a load still in flight. */
+  private reloadEmplacements(): void {
+    this.emplacementsLoad?.unsubscribe();
+    this.emplacementsLoad = this.emplacements.load().subscribe({ error: () => undefined });
   }
 
   // --- presentation -----------------------------------------------------
@@ -290,6 +306,8 @@ export class ConnectionsComponent implements OnInit, OnDestroy {
       next: () => {
         this.deleting.set(null);
         this.confirmingDelete.set(null);
+        // The server unbound its emplacements: its operator rows are now Unassigned.
+        this.reloadEmplacements();
       },
       error: (err) => {
         this.deleting.set(null);
