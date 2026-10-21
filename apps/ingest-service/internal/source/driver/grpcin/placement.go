@@ -22,6 +22,12 @@ const (
 // neither the measurement nor the emplacement gives one.
 const defaultDirectionSigmaDeg = 0.5
 
+// minHitRangeM is the shortest line of sight a detection is placed from. A
+// hit nearer than this means the origin is at or below the ground under it
+// (a wrong altitude, or a mounting height of 0), and placing it would put
+// the target on the camera's own site.
+const minHitRangeM = 1.0
+
 // bearing is a direction-only detection that could not be placed: a line
 // from the emplacement, LengthM long, recorded on the site instead of an
 // observation.
@@ -143,6 +149,9 @@ func (s *service) place(ctx context.Context, o *obs.Observation, e emplacement.E
 	}
 	if !hit.Found {
 		return out(reasonNoGround, maxRange)
+	}
+	if hit.RangeM < minHitRangeM {
+		return out(reasonNoOriginAltitude, maxRange)
 	}
 	// Without an honest covariance the point is not placed at all.
 	cov, ok := terr.DirectionCovariance(tctx, org.at, az, el, maxRange, sigAz, sigEl, hit)

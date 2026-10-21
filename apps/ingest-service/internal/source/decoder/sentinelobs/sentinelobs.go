@@ -202,6 +202,13 @@ func Validate(m *sentinelv1.Observation, contentType, defaultSource string) (*ob
 		return nil, decoder.Reject("bad_position", fmt.Errorf("position %v, %v is outside WGS84 bounds", o.Latitude, o.Longitude))
 	}
 	dropNonFinite(o)
+	// A radar target's height above ground is the service's own figure
+	// (ruling R2): Validate is reached only from what a sender sent, so a
+	// sender's value is dropped here. wire's decode keeps it, for Sentinel's
+	// own observations.
+	if o.Radar != nil {
+		o.Radar.HeightAboveGroundM = nil
+	}
 	if o.Source == "" {
 		o.Source = defaultSource
 	}

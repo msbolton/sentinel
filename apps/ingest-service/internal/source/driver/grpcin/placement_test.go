@@ -319,9 +319,30 @@ func TestDirectionOnlyNoOriginAltitude(t *testing.T) {
 	if want := wantGroundRange(12, 5); math.Abs(*o.Altitude-plateauM) > 0.5 || math.Abs(rng-want) > 1.5 {
 		t.Errorf("altitude %v %.1f m out, want the plateau about %.1f m out", *o.Altitude, rng, want)
 	}
+	// Mounted at 0 m, the origin is on the ground: the line of sight meets
+	// it at once, and nothing honest can be placed.
+	e.HeightAboveGroundM = ptr(0.0)
+	o = dirObs(90, -5)
+	if b, why = s.placeDirectionOnly(context.Background(), o, e, fixedOrigin(e)); b == nil || why != reasonNoOriginAltitude || b.LengthM != 30000 || o.HasPosition {
+		t.Errorf("height 0: bearing %+v reason %q placed %v, want no_origin_altitude 30000 m long", b, why, o.HasPosition)
+	}
+	e.HeightAboveGroundM = ptr(12.0)
 	// With the height but no terrain, the terrain is what is missing.
 	if b, why = placer(t, nil, nil).placeDirectionOnly(context.Background(), dirObs(90, -5), e, fixedOrigin(e)); b == nil || why != reasonTerrainUnavail {
 		t.Errorf("bearing %+v reason %q, want terrain_unavailable", b, why)
+	}
+}
+
+// An origin below the ground under it (a wrong stored altitude) meets the
+// ground at range 0: a bearing, never a point at the camera's own site.
+func TestDirectionOnlyOriginBelowGroundBecomesBearing(t *testing.T) {
+	s := placer(t, plateau(), nil)
+	e := camera(ptr(plateauM - 50))
+	o := dirObs(90, -5)
+	b, why := s.placeDirectionOnly(context.Background(), o, e, fixedOrigin(e))
+	if b == nil || why != reasonNoOriginAltitude || b.LengthM != 30000 || o.HasPosition || o.PosCovariance != nil {
+		t.Errorf("bearing %+v reason %q placed %v covariance %v, want a no_origin_altitude bearing 30000 m long and o untouched",
+			b, why, o.HasPosition, o.PosCovariance)
 	}
 }
 

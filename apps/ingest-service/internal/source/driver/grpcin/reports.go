@@ -234,11 +234,6 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 		return s.reject(ack, "bad_identity"), nil
 	}
 	o.ReceivedAt = s.d.now().UTC()
-	// A radar target's height above ground is the service's own figure
-	// (applyRadarTerrain), never the sender's.
-	if o.Radar != nil {
-		o.Radar.HeightAboveGroundM = nil
-	}
 	if bound {
 		o.EmplacementID, o.SensorID = e.ID, e.ID
 		if o.Source == "" {

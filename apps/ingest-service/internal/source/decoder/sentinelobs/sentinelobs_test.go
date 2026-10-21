@@ -676,6 +676,19 @@ func TestValidateIsTheDecodersCheck(t *testing.T) {
 	}
 }
 
+// Ruling R2: a radar target's height above ground is the service's own
+// figure. Validate is reached only from what a sender sent (the stream
+// decoder, grpc), so a sender's value never gets past it.
+func TestValidateClearsTheSendersHeightAboveGround(t *testing.T) {
+	m := &sentinelv1.Observation{SourceEntityId: "drone", Position: &sentinelv1.Coordinate{Latitude: 51, Longitude: 2},
+		Platform: &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Radar{Radar: &sentinelv1.RadarDetail{
+			RadarTrackId: "r-1", HeightAboveGroundM: proto.Float64(99)}}}}
+	o, err := Validate(m, "application/x-protobuf", "")
+	if err != nil || o.Radar == nil || o.Radar.RadarTrackID != "r-1" || o.Radar.HeightAboveGroundM != nil {
+		t.Fatalf("validate = %+v, %v; want the radar detail without a height above ground", o.Radar, err)
+	}
+}
+
 func TestDropNonFiniteRadarEoIr(t *testing.T) {
 	nan, rcs, h := math.NaN(), 3.0, 12.0
 	o := &obs.Observation{
