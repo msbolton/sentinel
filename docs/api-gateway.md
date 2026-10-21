@@ -31,7 +31,7 @@ Listens on port **3000** (`PORT`).
 | `KEYCLOAK_AUDIENCE` | `sentinel-api` | Required `aud` claim; empty disables the check |
 | `KEYCLOAK_CLIENT_ID` | `sentinel-api` | Client whose `resource_access` roles are merged into the user's roles |
 | `KEYCLOAK_SERVICE_CLIENT_ID` / `_SECRET` | `sentinel-service` / `sentinel-service-secret-dev` | Service account used for the Admin API; production refuses an empty or the dev secret |
-| `MAIL_HOST` / `MAIL_PORT` / `MAIL_FROM` | `localhost:1025` | SMTP relay for registration notices (mailhog in dev); an empty `MAIL_HOST` discards mail |
+| `MAIL_HOST` / `MAIL_PORT` / `MAIL_FROM` | `localhost:1025` | SMTP relay for registration notices (mailhog in dev); an empty `MAIL_HOST` is read as `localhost`, so mail is never discarded: it is sent to localhost, which fails unless a relay listens there |
 | `MAIL_USERNAME` / `MAIL_PASSWORD` | | SMTP login (AUTH PLAIN). Sent only over TLS: with a username set and no TLS the send fails instead of leaking the password |
 | `MAIL_TLS` | | `starttls` (upgrade required, fails if the relay does not offer it), `tls` (implicit TLS, usually port 465) or `none`. Empty keeps the dev behaviour: upgrade when the relay offers STARTTLS, otherwise plaintext. Certificates are always verified |
 | `CORS_ORIGIN` | `http://localhost:4200` | Allowed origin for REST and WebSocket |
