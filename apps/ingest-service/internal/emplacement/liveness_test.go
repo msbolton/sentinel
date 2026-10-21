@@ -70,7 +70,8 @@ func TestTrackerKeepsTheNewerHeartbeat(t *testing.T) {
 }
 
 // A replica that takes the connection over starts from the rows: those that
-// heartbeat within three of their intervals are online at once.
+// heartbeat within three of their intervals are online at once; a lapsed
+// one is pending through the startup grace and offline after it.
 func TestTrackerSeedsFromRecentRows(t *testing.T) {
 	sec := 5
 	recent, old := t0.Add(-10*time.Second), t0.Add(-20*time.Second)
@@ -80,12 +81,25 @@ func TestTrackerSeedsFromRecentRows(t *testing.T) {
 		{ID: "none"},
 	}
 	tr := NewTracker(t0)
-	tr.Seed(rows, t0)
+	tr.Seed(rows)
 	if s := tr.State("recent", sec, t0); s != HeartbeatOnline {
 		t.Errorf("recent: %s", s)
 	}
-	if s := tr.State("old", sec, t0); s != HeartbeatOffline {
-		t.Errorf("old: %s, want offline (seeded stale)", s)
+	if s := tr.State("old", sec, t0); s != HeartbeatPending {
+		t.Errorf("old at the start: %s, want pending (seeded, lapsed, in the grace)", s)
+	}
+	if s := tr.State("old", sec, t0.Add(30*time.Second-time.Millisecond)); s != HeartbeatPending {
+		t.Errorf("old just inside the grace: %s", s)
+	}
+	if s := tr.State("old", sec, t0.Add(30*time.Second)); s != HeartbeatOffline {
+		t.Errorf("old after the grace: %s, want offline", s)
+	}
+	// The recent one lapses inside the grace: seeded, so pending too.
+	if s := tr.State("recent", sec, t0.Add(10*time.Second)); s != HeartbeatPending {
+		t.Errorf("recent, lapsed in the grace: %s", s)
+	}
+	if at, _, ok := tr.Last("old"); !ok || !at.Equal(old) {
+		t.Errorf("Last(old) = %v %v, want the row's %v", at, ok, old)
 	}
 	if s := tr.State("none", 0, t0); s != HeartbeatPending {
 		t.Errorf("none: %s", s)
@@ -93,6 +107,35 @@ func TestTrackerSeedsFromRecentRows(t *testing.T) {
 	tr.Heartbeat("old", sec, t0)
 	if s := tr.State("old", sec, t0); s != HeartbeatOnline {
 		t.Errorf("old after a real heartbeat: %s", s)
+	}
+	// Heard in this run and then lapsed: offline at once, grace or not.
+	if s := tr.State("old", sec, t0.Add(15*time.Second)); s != HeartbeatOffline {
+		t.Errorf("a live heartbeat lapsed in the grace: %s, want offline", s)
+	}
+}
+
+// A seed never replaces a newer heartbeat, and a longer interval stretches
+// a lapsed seed's grace to three of its intervals.
+func TestSeedKeepsNewerBeatsAndStretchesTheGrace(t *testing.T) {
+	tr := NewTracker(t0)
+	tr.Heartbeat("a", 5, t0)
+	old := t0.Add(-time.Hour)
+	long := 20
+	tr.Seed([]Emplacement{{ID: "a", LastHeartbeatAt: &old}, {ID: "b", LastHeartbeatAt: &old, HeartbeatIntervalSec: &long}})
+	if at, _, _ := tr.Last("a"); !at.Equal(t0) {
+		t.Fatalf("the seed replaced a newer heartbeat: %v", at)
+	}
+	if s := tr.State("a", 5, t0.Add(15*time.Second)); s != HeartbeatOffline {
+		t.Errorf("a live beat lapsed: %s", s)
+	}
+	if s := tr.State("b", long, t0.Add(59*time.Second)); s != HeartbeatPending {
+		t.Errorf("a 20 s seed 59 s in: %s", s)
+	}
+	if s := tr.State("b", long, t0.Add(60*time.Second)); s != HeartbeatOffline {
+		t.Errorf("a 20 s seed 60 s in: %s", s)
+	}
+	if tr.Online("b", t0) {
+		t.Error("pending counted as online")
 	}
 }
 

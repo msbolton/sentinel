@@ -163,3 +163,11 @@ func TestHeartbeatsComesFromTheDefinition(t *testing.T) {
 		t.Error("heartbeats does not follow Definition.Heartbeats")
 	}
 }
+
+// A reduced publisher's sites go out again within entity-service's RADAR
+// stale default (30 s), so they never flip to STALE between reports.
+func TestSitesEveryIsWithinTheRadarStaleDefault(t *testing.T) {
+	if SitesEvery >= 30*time.Second {
+		t.Fatalf("SitesEvery = %v, want below 30 s", SitesEvery)
+	}
+}

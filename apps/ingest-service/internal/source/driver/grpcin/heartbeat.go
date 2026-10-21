@@ -14,8 +14,10 @@ import (
 const (
 	// republishTick is how often the bound sites are checked for a publish.
 	republishTick = time.Second
-	// maxRepublish is the longest a bound site goes unpublished.
-	maxRepublish = 60 * time.Second
+	// maxRepublish is the longest a bound site goes unpublished: below
+	// entity-service's 30 s RADAR stale default, so a silent site never
+	// flips to STALE between publishes.
+	maxRepublish = 25 * time.Second
 	// stopPublishTimeout bounds the offline publish when the run ends.
 	stopPublishTimeout = 2 * time.Second
 	// beatChangeEvery is the most often a changed interval is written: a
@@ -61,7 +63,7 @@ func (d *Driver) startLiveness(ctx context.Context) *emplacement.Tracker {
 			d.logger.Warn("reading the emplacements' last heartbeats failed; they start from none", zap.Error(err))
 		}
 	}
-	t.Seed(rows, now)
+	t.Seed(rows)
 	d.live.Store(t)
 	return t
 }
@@ -118,21 +120,30 @@ func (d *Driver) newestFix(id string) (fix, bool) {
 }
 
 // siteFor is e's SENSOR observation for a publish in state. A fixed one is
-// stamped with e's last heartbeat (the run's start when it has had none),
-// never with now, so that a re-publish of a silent site does not look like a
-// fresh report. A mobile one is placed at its newest fix and stamped with
-// that fix's time (no later than now), the clock its online publishes in
-// state use, so a re-publish never outdates the sender's next move; with no
-// fix it falls back to the heartbeat stamp. ok is false when there is
-// nowhere to place it.
+// stamped with e's last heartbeat, but never before the run's start (and the
+// run's start when it has had none), and never with now, so that a re-publish
+// of a silent site does not look like a fresh report. The floor matters after
+// a restart or a lease move: the beat seeded from the row is throttled and
+// older than the previous run's publishes (its last in-memory beat, its
+// offline publish at Stop), and entity-service drops an update older than the
+// entity's last one. A heartbeat heard in this run is never before its start,
+// so the floor only changes seeded ones. A mobile one is placed at its newest
+// fix and stamped with that fix's time (no later than now, no earlier than the
+// run's start), the clock its online publishes in state use, so a re-publish
+// never outdates the sender's next move; with no fix it falls back to the
+// heartbeat stamp. ok is false when there is nowhere to place it.
 func (d *Driver) siteFor(e emplacement.Emplacement, state emplacement.HeartbeatState, now time.Time) (*obs.Observation, bool) {
 	interval := emplacement.RowIntervalSec(e)
-	var last time.Time
+	var last, floor time.Time
 	at := now
 	if t := d.liveness(); t != nil {
-		at = t.Started()
+		floor = t.Started()
+		at = floor
 		if l, sec, ok := t.Last(e.ID); ok {
-			last, interval, at = l, sec, l
+			last, interval = l, sec
+			if l.After(at) {
+				at = l
+			}
 		}
 	}
 	if e.Mobility == emplacement.MobilityMobile {
@@ -142,6 +153,9 @@ func (d *Driver) siteFor(e emplacement.Emplacement, state emplacement.HeartbeatS
 			at = f.at
 			if at.After(now) {
 				at = now
+			}
+			if at.Before(floor) {
+				at = floor
 			}
 		}
 	}
@@ -170,7 +184,7 @@ func (d *Driver) siteDue(id string, state emplacement.HeartbeatState, every time
 }
 
 // republish publishes every bound site whatever its state: at once when the
-// state changes, else every min(interval, 60 s). That way an offline site
+// state changes, else every min(interval, 25 s). That way an offline site
 // stays searchable and anchors geofences, and turns grey without waiting for
 // a report.
 func (d *Driver) republish(ctx context.Context, sink driver.Sink) {
@@ -210,8 +224,9 @@ func (d *Driver) republish(ctx context.Context, sink driver.Sink) {
 }
 
 // publishOffline publishes every bound site once as offline when the run
-// ends (a disable, a delete, a lease move), so the map greys them now. A new
-// owner's publishes carry newer times and win.
+// ends (a disable, a delete, a lease move, a serving error), so the map greys
+// them now. A new run's publishes are stamped no earlier than its start,
+// which is after this publish, so they are never dropped as older.
 func (d *Driver) publishOffline(sink driver.Sink) {
 	ctx, cancel := context.WithTimeout(context.Background(), stopPublishTimeout)
 	defer cancel()

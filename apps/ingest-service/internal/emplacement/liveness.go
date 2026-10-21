@@ -75,6 +75,8 @@ type Liveness struct {
 type beat struct {
 	at       time.Time
 	interval int
+	// seeded: taken from a row when the run started, not heard in this run.
+	seeded bool
 }
 
 // Tracker is one connection run's heartbeats, in memory. Liveness truth is
@@ -115,14 +117,23 @@ func (t *Tracker) Forget(id string) {
 	delete(t.beats, id)
 }
 
-// Seed records the heartbeats rows hold, stale ones too: a row heard from
-// once reads offline, not never. Rows with no heartbeat are left out.
-func (t *Tracker) Seed(rows []Emplacement, _ time.Time) {
+// Seed records the heartbeats rows hold, stale ones too, marked as seeded.
+// One still inside its window reads online. One already lapsed reads pending
+// through the startup grace (its sender may simply not have reconnected to
+// the new run yet) and offline after it: heard from once, never "never".
+// Rows with no heartbeat are left out. A real heartbeat newer than the seed
+// replaces it.
+func (t *Tracker) Seed(rows []Emplacement) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	for _, e := range rows {
 		if e.LastHeartbeatAt == nil {
 			continue
 		}
-		t.Heartbeat(e.ID, RowIntervalSec(e), *e.LastHeartbeatAt)
+		if b, ok := t.beats[e.ID]; ok && !b.at.Before(*e.LastHeartbeatAt) {
+			continue
+		}
+		t.beats[e.ID] = beat{at: *e.LastHeartbeatAt, interval: RowIntervalSec(e), seeded: true}
 	}
 }
 
@@ -145,18 +156,27 @@ func (t *Tracker) State(id string, declaredSec int, now time.Time) HeartbeatStat
 
 func (t *Tracker) stateLocked(id string, declaredSec int, now time.Time) HeartbeatState {
 	if b, ok := t.beats[id]; ok {
-		if now.Before(b.at.Add(Lapse(b.interval))) {
+		switch {
+		case now.Before(b.at.Add(Lapse(b.interval))):
 			return HeartbeatOnline
+		case b.seeded && t.inGrace(b.interval, now):
+			return HeartbeatPending
 		}
 		return HeartbeatOffline
 	}
 	if declaredSec <= 0 {
 		declaredSec = DefaultHeartbeatIntervalSec
 	}
-	if now.Sub(t.started) < max(Lapse(declaredSec), MinStartupGrace) {
+	if t.inGrace(declaredSec, now) {
 		return HeartbeatPending
 	}
 	return HeartbeatNever
+}
+
+// inGrace reports whether now is within the startup grace of an emplacement
+// with intervalSec: max(three intervals, MinStartupGrace) from the start.
+func (t *Tracker) inGrace(intervalSec int, now time.Time) bool {
+	return now.Sub(t.started) < max(Lapse(intervalSec), MinStartupGrace)
 }
 
 // Online reports whether id heartbeat within three of its intervals.

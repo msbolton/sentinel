@@ -9,6 +9,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/emplacement"
 	"github.com/sentinel/ingest-service/internal/ingesttoken"
 	"github.com/sentinel/ingest-service/internal/obs"
+	"github.com/sentinel/ingest-service/internal/source/driver"
 	ingestv1 "github.com/sentinel/proto-gen/sentinel/ingest/v1"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 )
@@ -200,7 +201,9 @@ func TestStopPublishesEverySiteOffline(t *testing.T) {
 }
 
 // A replica that takes the connection over trusts heartbeats its rows hold
-// within three intervals; an older one reads offline, not pending.
+// within three intervals; an older one reads pending through the startup
+// grace (its sender may not have reconnected yet) and offline after it.
+// Pending is not online: the stale site's fixes are still refused.
 func TestLivenessIsSeededFromRecentRows(t *testing.T) {
 	base := time.Unix(1700000000, 0).UTC() // newClock's start
 	sec := 5
@@ -209,19 +212,95 @@ func TestLivenessIsSeededFromRecentRows(t *testing.T) {
 	radar.LastHeartbeatAt, radar.HeartbeatIntervalSec = &recent, &sec
 	mast := emp("mast", "grpc-1", "FIXED", "RADAR", "UNCLASSIFIED")
 	mast.LastHeartbeatAt, mast.HeartbeatIntervalSec = &old, &sec
-	r, _, _, st := liveRig(t, nil, ingesttoken.Token{}, rowsOf(radar, mast))
+	r, _, clk, st := liveRig(t, nil, ingesttoken.Token{}, rowsOf(radar, mast))
 	if ack := send(t, st, claiming(observation("T-1", 50.2, -4.1), "radar")); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
 		t.Fatalf("a fix from the seeded site: %v", ack)
 	}
 	if ack := send(t, st, claiming(observation("T-2", 50.2, -4.1), "mast")); ack.GetReason() != "no_heartbeat" {
 		t.Fatalf("a fix from the stale site: %v", ack)
 	}
-	states := map[string]emplacement.HeartbeatState{}
-	for _, l := range r.d.Health().Emplacements {
-		states[l.ID] = l.State
+	states := func() map[string]emplacement.HeartbeatState {
+		out := map[string]emplacement.HeartbeatState{}
+		for _, l := range r.d.Health().Emplacements {
+			out[l.ID] = l.State
+		}
+		return out
 	}
-	if states["radar"] != emplacement.HeartbeatOnline || states["mast"] != emplacement.HeartbeatOffline {
-		t.Fatalf("states = %v", states)
+	if s := states(); s["radar"] != emplacement.HeartbeatOnline || s["mast"] != emplacement.HeartbeatPending {
+		t.Fatalf("states at the start = %v", s)
+	}
+	clk.advance(30 * time.Second) // past the startup grace
+	if s := states(); s["radar"] != emplacement.HeartbeatOffline || s["mast"] != emplacement.HeartbeatOffline {
+		t.Fatalf("states after the grace = %v", s)
+	}
+	if ack := send(t, st, claiming(observation("T-3", 50.2, -4.1), "mast")); ack.GetReason() != "no_heartbeat" {
+		t.Fatalf("a fix from the stale site after the grace: %v", ack)
+	}
+}
+
+// I1: after a restart, a silent site's re-publishes are stamped no earlier
+// than the new run's start, so they are newer than anything the previous run
+// published (its last in-memory beat, its offline publish at Stop) and
+// entity-service applies them. Its silent-since stays the row's heartbeat.
+func TestASeededSiteIsRepublishedNoEarlierThanTheRunStart(t *testing.T) {
+	base := time.Unix(1700000000, 0).UTC() // newClock's start, the run's start
+	sec := 5
+	old := base.Add(-20 * time.Second)
+	radar := emp("radar", "grpc-1", "FIXED", "RADAR", "UNCLASSIFIED")
+	radar.LastHeartbeatAt, radar.HeartbeatIntervalSec = &old, &sec
+	r, _, clk, _ := liveRig(t, nil, ingesttoken.Token{}, rowsOf(radar))
+	if !r.d.liveness().Started().Equal(base) {
+		t.Fatalf("the run started at %v, want %v", r.d.liveness().Started(), base)
+	}
+	waitFor(t, func() bool { return sitesIn(r, "radar", emplacement.HeartbeatPending) > 0 })
+	o := lastSite(r, "radar")
+	if o.SourceTimestamp.Before(base) || o.Generic[emplacement.FieldLastHeartbeatAt] != old.Format(time.RFC3339Nano) {
+		t.Fatalf("the pending re-publish = stamp %v lastHeartbeatAt %q; want a stamp >= %v and the row's %v",
+			o.SourceTimestamp, o.Generic[emplacement.FieldLastHeartbeatAt], base, old)
+	}
+	clk.advance(30 * time.Second)
+	waitFor(t, func() bool { return sitesIn(r, "radar", emplacement.HeartbeatOffline) > 0 })
+	if o := lastSite(r, "radar"); o.SourceTimestamp.Before(base) || o.Generic[emplacement.FieldSilentSince] != old.Format(time.RFC3339Nano) {
+		t.Fatalf("the offline re-publish = stamp %v silentSince %q; want a stamp >= %v and silent since %v",
+			o.SourceTimestamp, o.Generic[emplacement.FieldSilentSince], base, old)
+	}
+	if err := r.stop(t); err != nil {
+		t.Fatal(err)
+	}
+	if o := lastSite(r, "radar"); o.Generic[emplacement.FieldHeartbeat] != "offline" || o.SourceTimestamp.Before(base) {
+		t.Fatalf("the stop publish = %+v", o)
+	}
+}
+
+// When serving fails, the run publishes every site offline, as at Stop.
+func TestAServingErrorPublishesEverySiteOffline(t *testing.T) {
+	r, _, _, st := liveRig(t, nil, ingesttoken.Token{}, rowsOf(emp("radar", "grpc-1", "FIXED", "RADAR", "UNCLASSIFIED")))
+	send(t, st, heartbeat("radar", 5))
+	waitFor(t, func() bool { return sitesIn(r, "radar", emplacement.HeartbeatOnline) > 0 })
+	r.d.gl.Load().Close() // the listener fails under grpc's Serve
+	select {
+	case err := <-r.done:
+		r.done <- err
+		if err == nil {
+			t.Fatal("Run returned nil after the listener failed")
+		}
+	case <-time.After(stopGrace + 2*time.Second):
+		t.Fatal("Run did not return after the listener failed")
+	}
+	if o := lastSite(r, "radar"); o.Generic[emplacement.FieldHeartbeat] != "offline" || o.OperationalStatus != "INACTIVE" {
+		t.Fatalf("radar after a serving error = %+v", o)
+	}
+}
+
+// grpc heartbeats its sites itself, so the supervisor runs no SitePublisher
+// for it; a silent site is re-published within the RADAR stale default.
+func TestGrpcIsAHeartbeatDriver(t *testing.T) {
+	def, ok := driver.Lookup(ID)
+	if !ok || !def.Heartbeats {
+		t.Fatalf("driver.Lookup(%q) = Heartbeats %v, %v; want true", ID, def.Heartbeats, ok)
+	}
+	if maxRepublish >= 30*time.Second {
+		t.Fatalf("maxRepublish = %v, want below the 30 s RADAR stale default", maxRepublish)
 	}
 }
 
@@ -362,6 +441,18 @@ func TestHeartbeatWritesAreThrottled(t *testing.T) {
 // re-publish never outdates the sender's next move.
 func TestAMobileSiteIsStampedOnItsFixClock(t *testing.T) {
 	r, _, clk, st := liveRig(t, nil, ingesttoken.Token{}, rowsOf(emp("ship", "grpc-1", "MOBILE", "RF", "UNCLASSIFIED")))
+	started := clk.now()
+	// A fix behind the run's start is stamped with the start.
+	early := stateReport("ship", started.Add(-30*time.Second), 50, -4, nil)
+	early.GetEmplacementState().HeartbeatIntervalSec = 5
+	if ack := send(t, st, early); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
+		t.Fatalf("a state 30 s behind at the start: %v", ack)
+	}
+	waitFor(t, func() bool { return sitesIn(r, "ship", emplacement.HeartbeatOnline) > 0 })
+	if o := lastSite(r, "ship"); !o.SourceTimestamp.Equal(started) {
+		t.Fatalf("a fix before the run's start is stamped %v, want the start %v", o.SourceTimestamp, started)
+	}
+	clk.advance(time.Minute) // the lagging fix clock is now past the start
 	behind := func() *ingestv1.Report {
 		rep := stateReport("ship", clk.now().Add(-30*time.Second), 50, -4, nil)
 		rep.GetEmplacementState().HeartbeatIntervalSec = 5
@@ -371,12 +462,13 @@ func TestAMobileSiteIsStampedOnItsFixClock(t *testing.T) {
 	if ack := send(t, st, behind()); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
 		t.Fatalf("a state 30 s behind: %v", ack)
 	}
-	waitFor(t, func() bool { return sitesIn(r, "ship", emplacement.HeartbeatOnline) > 0 })
-	if o := lastSite(r, "ship"); !o.SourceTimestamp.Equal(fixAt) {
-		t.Fatalf("online stamp = %v, want the fix time %v", o.SourceTimestamp, fixAt)
-	}
+	waitFor(t, func() bool {
+		o := lastSite(r, "ship")
+		return o.Generic[emplacement.FieldHeartbeat] == "online" && o.SourceTimestamp.Equal(fixAt)
+	})
+	offBefore := sitesIn(r, "ship", emplacement.HeartbeatOffline)
 	clk.advance(16 * time.Second)
-	waitFor(t, func() bool { return sitesIn(r, "ship", emplacement.HeartbeatOffline) > 0 })
+	waitFor(t, func() bool { return sitesIn(r, "ship", emplacement.HeartbeatOffline) > offBefore })
 	off := lastSite(r, "ship")
 	if off.SourceTimestamp.After(fixAt) {
 		t.Fatalf("offline stamp %v is past the newest fix %v", off.SourceTimestamp, fixAt)

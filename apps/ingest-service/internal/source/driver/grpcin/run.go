@@ -101,6 +101,11 @@ func (d *Driver) Run(ctx context.Context, sink driver.Sink) error {
 		d.stopping.Store(true)
 		gl.CloseAll()
 		d.stop(srv, gl)
+		stopRepub()
+		<-repubDone
+		if !d.heartbeatsOff {
+			d.publishOffline(sink)
+		}
 		return fmt.Errorf("grpc: serving stopped: %w", err)
 	case <-ctx.Done():
 	}

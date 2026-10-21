@@ -9,8 +9,9 @@ import (
 )
 
 // SitesEvery is how often a SitePublisher reports its sites again: within
-// every global age-out threshold, so the sites stay live.
-const SitesEvery = 60 * time.Second
+// every global stale threshold (RADAR's 30 s is the shortest), so the sites
+// stay live and never flip to STALE between reports.
+const SitesEvery = 25 * time.Second
 
 // SitePublisher reports the fixed emplacements bound to a connection whose
 // driver does not heartbeat them. That is every inbound driver but grpc
