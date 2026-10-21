@@ -30,6 +30,8 @@ make dev
 
 Seeded entities are queryable through the gateway as soon as the entity-service is up; it reads PostgreSQL directly (PostGIS index for spatial queries).
 
+The client in Docker Compose is a production build, which carries no map keys: its Google Maps and Cesium Ion keys come only from `.env` (`GOOGLE_MAPS_API_KEY`, `CESIUM_ION_ACCESS_TOKEN`; see `.env.example` and `docs/frontend.md`, Environments and runtime config). Without them the layers that need a key are off. `nx serve client` reads `src/environments/environment.ts` instead.
+
 ## Makefile Targets
 
 ### Development
