@@ -9,6 +9,9 @@
 global:
   # Resolves to 127.0.0.1, where k3d's load balancer publishes 80 and 443.
   host: sentinel.localhost
+  # k3d's own class (Delete), not prod's local-path-retain: a throwaway cluster
+  # should not pile up Released volumes when its namespace is deleted.
+  storageClass: local-path
 
 # No public name for Let's Encrypt: the local CA of k8s/cluster/selfsigned-issuer.yaml.
 ingress:

@@ -1,14 +1,17 @@
 # Production on one k3s node (docs/deployment.md). make deploy layers it over
 # the chart's defaults, then your site file over it:
-#   make deploy REGISTRY=registry.example.com VALUES=sentinel-site.yaml
+#   make deploy REGISTRY=registry.example.com VALUES=$HOME/sentinel/sentinel-site.yaml
 # It holds no secrets and no site settings: global.host, the issuer, mail, the
 # Secrets you create (ingest token, mail password, map keys, rclone) and the
 # pull secret go in the site file, kept outside the repository.
 #
 # Sizing. The requests below add up to about 3.2 CPU and 7.2 GiB, for a node
-# with at least 4 vCPU, 16 GB of memory and a 100 GB SSD: the rest is for k3s,
-# Traefik, cert-manager, the hook Jobs and the surge pods of a rolling update.
-# Limits are the chart's defaults, so pods can burst above their requests.
+# with at least 4 vCPU and 16 GB of memory: the rest is for k3s, Traefik,
+# cert-manager, the hook Jobs and the surge pods of a rolling update. Limits
+# are the chart's defaults, so pods can burst above their requests. The claims
+# come to 75 GiB; with the OS, k3s and the images that wants a 150 GB SSD. A
+# 100 GB disk is the bare minimum and sits near the 85% line: lower the sizes
+# in the site file there, and watch Kafka, whose topics expire by time only.
 
 global:
   # The Retain copy of k3s's local-path class (k8s/cluster/local-path-retain.yaml):
