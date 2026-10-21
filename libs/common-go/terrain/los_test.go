@@ -200,6 +200,20 @@ func TestIntersectStraightDown(t *testing.T) {
 	cov, ok := s.DirectionCovariance(context.Background(), origin, 30, -90, DefaultMaxRangeM, 0.1, 0.1, hit)
 	finiteCov(t, cov, ok)
 	near(t, "vertical variance", cov[5], VerticalSigM*VerticalSigM, 1e-9)
+	// Pointing error is isotropic looking straight down: both horizontal
+	// axes come out comparable, not one collapsed to nothing.
+	major, minor, _ := geo.EllipseFromCov2(cov[0], cov[1], cov[3])
+	if !(minor > 0) || major/minor > 2 {
+		t.Errorf("horizontal 95%% axes %.3g m and %.3g m, want within 2× of each other", major, minor)
+	}
+	// Close to straight down as well.
+	hit = intersect(t, s, origin, 30, -89.9, DefaultMaxRangeM)
+	cov, ok = s.DirectionCovariance(context.Background(), origin, 30, -89.9, DefaultMaxRangeM, 0.1, 0.1, hit)
+	finiteCov(t, cov, ok)
+	major, minor, _ = geo.EllipseFromCov2(cov[0], cov[1], cov[3])
+	if !(minor > 0) || major/minor > 2 {
+		t.Errorf("at −89.9°: horizontal 95%% axes %.3g m and %.3g m, want within 2× of each other", major, minor)
+	}
 }
 
 func TestIntersectGrazing(t *testing.T) {
@@ -266,6 +280,43 @@ func TestCovarianceAngularErrorAcrossSight(t *testing.T) {
 	finiteCov(t, cov, ok)
 	ground := horizontal(origin, hit.At)
 	near(t, "across-sight sigma", math.Sqrt(cov[3]), ground*sigAz*math.Pi/180, 0.01*ground*sigAz*math.Pi/180)
+}
+
+func TestCovarianceUnresolvedRayNotOK(t *testing.T) {
+	t.Run("cancelled", func(t *testing.T) {
+		s := NewStatic(flat(0))
+		origin := losOrigin
+		origin.Alt = 100
+		hit := intersect(t, s, origin, 0, -1, DefaultMaxRangeM)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if cov, ok := s.DirectionCovariance(ctx, origin, 0, -1, DefaultMaxRangeM, 0.1, 0.1, hit); ok {
+			t.Errorf("ok with a cancelled context, cov %v", cov)
+		}
+	})
+	t.Run("terrain unavailable on a perturbed ray", func(t *testing.T) {
+		// The ray lands inside 38°N; the shallower perturbed ray runs on
+		// south into 37°N, whose tile fails to download.
+		south := testTile{south: 37, west: -78}
+		ts := newTileServer(t, testTile{south: 38, west: -78}, south)
+		ts.setStatus(south.key(), http.StatusInternalServerError)
+		s := newTestService(t, ts, nil)
+		if n, err := s.Preload(context.Background(), 38.2, -77.6, 38.8, -77.4); n != 1 || err != nil {
+			t.Fatalf("Preload = %d, %v; want 1, nil", n, err)
+		}
+		origin := geo.LLA{Lat: 38.05, Lon: -77.5}
+		origin.Alt = MSLToHAE(origin.Lat, origin.Lon, planeMSL(origin.Lat, origin.Lon)) + 100
+		hit := intersect(t, s, origin, 180, -2, DefaultMaxRangeM)
+		if !hit.Found || hit.At.Lat < 38.01 {
+			t.Fatalf("Intersect = %+v, want a hit inside 38°N", hit)
+		}
+		if _, err := s.Intersect(context.Background(), origin, 180, -0.5, DefaultMaxRangeM); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("perturbed ray: error %v, want ErrUnavailable", err)
+		}
+		if cov, ok := s.DirectionCovariance(context.Background(), origin, 180, -2, DefaultMaxRangeM, 0.1, 1.5, hit); ok {
+			t.Errorf("ok with a perturbed ray over missing terrain, cov %v", cov)
+		}
+	})
 }
 
 func TestCovarianceMissCappedAtMaxRange(t *testing.T) {

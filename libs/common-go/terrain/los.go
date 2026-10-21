@@ -65,6 +65,9 @@ func finite(v ...float64) bool {
 // error; an origin below the ground under it is a hit at range 0. Any
 // error from HeightHAE, ErrUnavailable included, is returned, as is ctx's
 // error once it is done. Curvature is included: the ray is straight in ECEF.
+// The ground is only sampled every StepM along the ray, so a feature
+// narrower than that between two samples (a mast, a thin wall) can be
+// stepped over.
 func (s *Service) Intersect(ctx context.Context, origin geo.LLA, azDeg, elDeg, maxRangeM float64) (Hit, error) {
 	if !finite(origin.Lat, origin.Lon, origin.Alt, azDeg, elDeg, maxRangeM) || maxRangeM < 0 {
 		return Hit{}, fmt.Errorf("terrain: no line of sight from (%g, %g, %g) at azimuth %g, elevation %g, out to %g m",
@@ -153,23 +156,40 @@ func (s *Service) Visible(ctx context.Context, from, to geo.LLA) (bool, error) {
 // The angular part re-intersects the rays at azimuth ± σaz and at elevation
 // ± σel; the half-differences of each pair's hit points, horizontally, are
 // two offset vectors whose outer products are summed. A perturbed ray that
-// misses the ground, or whose terrain cannot be had, counts as its point at
-// maxRangeM. The terrain's own vertical error adds a variance of
+// misses the ground counts as its point at maxRangeM. Looking steeply down
+// the azimuth pair barely moves the hit, though pointing error there is the
+// same in every direction, so the variance across the line of sight is held
+// to at least (R·σel·|sin el|)², R the slant range to the hit: R·σel straight
+// down, fading toward level where the azimuth pair dominates.
+//
+// The terrain's own vertical error adds a variance of
 // (VerticalSigM / tan(depression))² along the line of sight, the depression
 // being the ray's angle below the horizontal at the hit and its tangent held
 // to at least VerticalSigM / maxRangeM, so the term never exceeds maxRangeM².
-// The vertical variance is VerticalSigM², uncorrelated with the horizontal.
-// A hit that was not Found is taken as the point at maxRangeM. ok is false
-// only if a term is not finite.
+// uu is that terrain term alone, VerticalSigM²; the horizontal and vertical
+// are uncorrelated (nu = eu = 0). A hit that was not Found is taken as the
+// point at maxRangeM.
+//
+// ok is false when a term is not finite or a perturbed ray cannot be
+// resolved: its Intersect fails, for instance because ctx is done or the
+// terrain is unavailable.
 func (s *Service) DirectionCovariance(ctx context.Context, origin geo.LLA, azDeg, elDeg, maxRangeM, sigmaAzDeg, sigmaElDeg float64, hit Hit) (cov [6]float64, ok bool) {
 	centre := hit.At
 	if !hit.Found {
 		centre = geo.AERToLLA(origin, azDeg, elDeg, maxRangeM)
 	}
+	unresolved := false
 	point := func(az, el float64) geo.ENU {
+		if unresolved {
+			return geo.ENU{}
+		}
 		h, err := s.Intersect(ctx, origin, az, el, maxRangeM)
+		if err != nil {
+			unresolved = true
+			return geo.ENU{}
+		}
 		p := h.At
-		if err != nil || !h.Found {
+		if !h.Found {
 			p = geo.AERToLLA(origin, az, el, maxRangeM)
 		}
 		return geo.ENUOf(centre, geo.ToECEF(p))
@@ -177,6 +197,9 @@ func (s *Service) DirectionCovariance(ctx context.Context, origin geo.LLA, azDeg
 	half := func(a, b geo.ENU) (e, n float64) { return (a.E - b.E) / 2, (a.N - b.N) / 2 }
 	aE, aN := half(point(azDeg+sigmaAzDeg, elDeg), point(azDeg-sigmaAzDeg, elDeg))
 	bE, bN := half(point(azDeg, elDeg+sigmaElDeg), point(azDeg, elDeg-sigmaElDeg))
+	if unresolved {
+		return cov, false
+	}
 
 	// The line of sight at the hit: back toward the origin, its horizontal
 	// direction and the angle of depression. Looking straight down (or from
@@ -196,13 +219,24 @@ func (s *Service) DirectionCovariance(ctx context.Context, origin geo.LLA, azDeg
 	sigAlong := VerticalSigM / tanDep
 	varAlong := sigAlong * sigAlong
 
-	cov = [6]float64{
-		aN*aN + bN*bN + varAlong*uN*uN, // nn
-		aN*aE + bN*bE + varAlong*uN*uE, // ne
-		0,                              // nu
-		aE*aE + bE*bE + varAlong*uE*uE, // ee
-		0,                              // eu
-		VerticalSigM * VerticalSigM,    // uu
+	nn := aN*aN + bN*bN + varAlong*uN*uN
+	ne := aN*aE + bN*bE + varAlong*uN*uE
+	ee := aE*aE + bE*bE + varAlong*uE*uE
+
+	// Floor the variance across the line of sight (unit vector v, square
+	// to u) where the azimuth pair leaves it short.
+	slant := maxRangeM
+	if hit.Found {
+		slant = hit.RangeM
 	}
+	floor := slant * math.Abs(sigmaElDeg) * math.Pi / 180 * math.Abs(math.Sin(elDeg*math.Pi/180))
+	vE, vN := -uN, uE
+	if short := floor*floor - (nn*vN*vN + 2*ne*vN*vE + ee*vE*vE); short > 0 {
+		nn += short * vN * vN
+		ne += short * vN * vE
+		ee += short * vE * vE
+	}
+
+	cov = [6]float64{nn, ne, 0, ee, 0, VerticalSigM * VerticalSigM} // nu = eu = 0
 	return cov, finite(cov[:]...)
 }
