@@ -7,6 +7,7 @@ import {
   SendTarget,
   endpointLabel,
   ewSensorCommand,
+  sensorSimCommand,
   goSnippet,
   grpcTarget,
   grpcurlCommand,
@@ -230,6 +231,19 @@ describe('send guide', () => {
         .toBe('ew-sensor --addr listener:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem --config examples/coastal-esm.yaml');
       expect(ewSensorCommand({ host: 'listener.example', port: 6200, tls: true, requireClientCert: true, allow: [] }))
         .toBe('ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem --cert client.pem --key client-key.pem --config examples/coastal-esm.yaml');
+    });
+
+    it('builds the sensor-sim command line for each kind', () => {
+      const plain = { host: 'listener.example', port: 6200, tls: false, requireClientCert: false, allow: [] };
+      expect(sensorSimCommand(plain, 'radar'))
+        .toBe('sensor-sim --kind radar --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure --config examples/radar.yaml');
+      expect(sensorSimCommand(plain, 'eoir'))
+        .toBe('sensor-sim --kind eoir --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure --config examples/camera.yaml');
+      expect(sensorSimCommand({ ...plain, host: '', tls: true }, 'eoir'))
+        .toBe('sensor-sim --kind eoir --addr listener:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem --config examples/camera.yaml');
+      expect(sensorSimCommand({ ...plain, tls: true, requireClientCert: true }, 'radar'))
+        .toBe('sensor-sim --kind radar --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem --cert client.pem --key client-key.pem --config examples/radar.yaml');
+      expect(sensorSimCommand({ ...plain, host: '::1' }, 'radar')).toContain(`--addr '[::1]:6200' `);
     });
 
     it('brackets an IPv6 listener host and quotes it for the shell', () => {

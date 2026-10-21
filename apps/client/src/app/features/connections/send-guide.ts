@@ -124,6 +124,17 @@ export function ewSensorCommand(t: GrpcTarget): string {
 }
 
 /**
+ * The radar or camera simulator's command line for this connection: sensor-sim runs one sensor
+ * per process, so each kind gets its own line. Its connection flags are ew-sensor's; the bundled
+ * example config names the emplacement the simulated sensor reports as.
+ */
+export function sensorSimCommand(t: GrpcTarget, kind: 'radar' | 'eoir'): string {
+  const security = !t.tls ? '--insecure' : t.requireClientCert ? '--tls --ca ca.pem --cert client.pem --key client-key.pem' : '--tls --ca ca.pem';
+  const config = kind === 'radar' ? 'examples/radar.yaml' : 'examples/camera.yaml';
+  return `sensor-sim --kind ${kind} --addr ${shellQuote(grpcEndpoint(t))} --token "$SENTINEL_INGEST_TOKEN" ${security} --config ${config}`;
+}
+
+/**
  * The framing a format and encoding imply when the config does not override it: the server's
  * tcp.FramingFor and udp.framingFor. The encoding matters to the sentinel format only.
  */

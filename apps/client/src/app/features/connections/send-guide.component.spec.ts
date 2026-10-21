@@ -96,8 +96,10 @@ describe('SendGuideComponent', () => {
       expect(blocks()).toEqual([
         'grpcurl -plaintext -import-path proto -proto sentinel/ingest/v1/ingest_service.proto -H "authorization: Bearer $SENTINEL_INGEST_TOKEN" listener.example:6200 sentinel.ingest.v1.IngestService/GetSession',
         'ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure --config examples/coastal-esm.yaml',
+        'sensor-sim --kind radar --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure --config examples/radar.yaml',
+        'sensor-sim --kind eoir --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure --config examples/camera.yaml',
       ]);
-      expect(copyButtons()).toHaveLength(2);
+      expect(copyButtons()).toHaveLength(4);
       const links = Array.from(el.querySelectorAll<HTMLAnchorElement>('.protos a')).map((a) => a.getAttribute('href'));
       expect(links).toEqual([
         'assets/proto/sentinel/ingest/v1/ingest_service.proto',
@@ -129,6 +131,15 @@ describe('SendGuideComponent', () => {
       render(makeFeed({ driver: 'tcp', config: { mode: 'listen', port: 6000 }, detail: listening('tcp', 6000) }));
       expect(el.textContent).not.toContain('authorization: Bearer');
       expect(blocks().some((b) => b.includes('grpcurl') || b.includes('ew-sensor'))).toBe(false);
+    });
+
+    it('explains radar and EO/IR detail and direction-only detections', () => {
+      render(grpcFeed());
+      const note = text(el.querySelector('.sensor-note'));
+      expect(note).toContain('RadarDetail');
+      expect(note).toContain('EoIrDetail');
+      expect(note).toContain('direction-only');
+      expect(note).toContain('bearing line');
     });
 
     it('says every emplacement must heartbeat', () => {

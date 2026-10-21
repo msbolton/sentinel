@@ -573,6 +573,202 @@ describe('EntityDetailPanelComponent', () => {
     });
   });
 
+  describe('Radar section', () => {
+    const radarEntity = (radar: Record<string, unknown>, over: Partial<Entity> = {}) =>
+      makeEntity({ entityType: EntityType.AIRCRAFT, name: 'TRACK 7', platformData: { radar } as any, ...over });
+    const sectionRows = () =>
+      Array.from(el.querySelectorAll('[data-section="platformDetails"] ~ .section-content .field-row')).map(
+        (r) => `${r.querySelector('.field-label')?.textContent?.trim()}: ${r.querySelector('.field-value')?.textContent?.replace(/\s+/g, ' ').trim()}`,
+      );
+
+    it('shows each radar row and summarises the track when collapsed', () => {
+      fixture.componentRef.setInput(
+        'entity',
+        radarEntity({
+          rangeRateMps: -12.5,
+          rcsDbsm: -18.5,
+          snrDb: 21,
+          mode: 'TRACK',
+          trackQuality: 0.85,
+          classification: 'DRONE',
+          classificationConfidence: 0.92,
+          radarTrackId: 'R-0042',
+          heightAboveGroundM: 120,
+        }),
+      );
+      fixture.detectChanges();
+
+      const toggle = el.querySelector('[data-section="platformDetails"]') as HTMLElement;
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      expect(toggle.querySelector('.section-label')?.textContent?.trim()).toBe('Radar Track');
+      const r = sectionRows();
+      expect(r).toContain('Range rate: -12.5 m/s (approaching)');
+      expect(r).toContain('RCS: -18.5 dBsm');
+      expect(r).toContain('SNR: 21 dB');
+      expect(r).toContain('Mode: TRACK');
+      expect(r).toContain('Track quality: 85 %');
+      expect(r).toContain('Classification: DRONE (92 %)');
+      expect(r).toContain('Radar track: R-0042');
+      expect(r).toContain('Height above ground: 120 m');
+
+      toggle.click();
+      fixture.detectChanges();
+      expect(toggle.querySelector('.section-summary')?.textContent?.trim()).toBe('DRONE · TRACK');
+    });
+
+    it('says nothing about direction for a receding or zero range rate, and omits absent rows', () => {
+      fixture.componentRef.setInput('entity', radarEntity({ rangeRateMps: 4, mode: 'SEARCH' }));
+      fixture.detectChanges();
+      const r = sectionRows();
+      expect(r).toContain('Range rate: 4 m/s');
+      expect(r).toContain('Mode: SEARCH');
+      expect(r.some((row) => row.startsWith('RCS:') || row.startsWith('SNR:') || row.startsWith('Classification:'))).toBe(false);
+      expect(r.some((row) => row.startsWith('Height above ground:'))).toBe(false);
+
+      fixture.componentRef.setInput('entity', radarEntity({ rangeRateMps: 0, classificationConfidence: 0.5, classification: 'VEHICLE' }));
+      fixture.detectChanges();
+      expect(sectionRows()).toContain('Range rate: 0 m/s');
+      expect(sectionRows()).toContain('Classification: VEHICLE (50 %)');
+    });
+  });
+
+  describe('EO/IR section', () => {
+    const eoirEntity = (eoir: Record<string, unknown>, over: Partial<Entity> = {}) =>
+      makeEntity({ entityType: EntityType.AIRCRAFT, name: 'CAM 3', platformData: { eoir } as any, ...over });
+    const sectionRows = () =>
+      Array.from(el.querySelectorAll('[data-section="platformDetails"] ~ .section-content .field-row')).map(
+        (r) => `${r.querySelector('.field-label')?.textContent?.trim()}: ${r.querySelector('.field-value')?.textContent?.replace(/\s+/g, ' ').trim()}`,
+      );
+
+    it('shows each EO/IR row and summarises the detection when collapsed', () => {
+      fixture.componentRef.setInput(
+        'entity',
+        eoirEntity({ band: 'LWIR', classification: 'DRONE', classificationConfidence: 0.8, horizontalFovDeg: 12.5, verticalFovDeg: 7, cameraTrackId: 'C-9' }),
+      );
+      fixture.detectChanges();
+
+      const toggle = el.querySelector('[data-section="platformDetails"]') as HTMLElement;
+      expect(toggle.querySelector('.section-label')?.textContent?.trim()).toBe('EO/IR Detection');
+      const r = sectionRows();
+      expect(r).toContain('Band: LWIR');
+      expect(r).toContain('Classification: DRONE (80 %)');
+      expect(r).toContain('Field of view: 12.5° × 7°');
+      expect(r).toContain('Camera track: C-9');
+      expect(r.some((row) => row.startsWith('Placement:'))).toBe(false);
+
+      toggle.click();
+      fixture.detectChanges();
+      expect(toggle.querySelector('.section-summary')?.textContent?.trim()).toBe('LWIR · DRONE');
+    });
+
+    it('notes a placement from a bearing, with its CEP95, only for a covariance and no radar detail', () => {
+      const cov = { kinematics: { positionCovariance: { pnPn: 900, pePe: 900 } }, circularError: 73.4 };
+      fixture.componentRef.setInput('entity', eoirEntity({ band: 'VISIBLE' }, cov));
+      fixture.detectChanges();
+      let r = sectionRows();
+      expect(r).toContain('Placement: Placed on terrain from a bearing');
+      expect(r).toContain('CEP95: 73 m');
+
+      // a covariance with a radar detail beside it is the radar's, not a bearing's
+      fixture.componentRef.setInput(
+        'entity',
+        makeEntity({ platformData: { eoir: { band: 'VISIBLE' }, radar: { mode: 'TRACK' } } as any, ...cov }),
+      );
+      fixture.detectChanges();
+      expect(sectionRows().some((row) => row.startsWith('Placement:'))).toBe(false);
+
+      // no covariance: no note
+      fixture.componentRef.setInput('entity', eoirEntity({ band: 'VISIBLE' }));
+      fixture.detectChanges();
+      r = sectionRows();
+      expect(r.some((row) => row.startsWith('Placement:') || row.startsWith('CEP95:'))).toBe(false);
+    });
+  });
+
+  describe('Site bearings', () => {
+    const bearing = (over: Record<string, unknown>) => ({
+      trackId: 'T1',
+      azimuthDeg: 123.4,
+      elevationDeg: 5.25,
+      lengthM: 5000,
+      reason: 'air_target',
+      observedAt: secondsAgo(3),
+      ...over,
+    });
+    const site = (bearings: unknown[], fields: Record<string, string> = {}) =>
+      makeEntity({
+        entityType: EntityType.SENSOR,
+        feedId: 'grpc-1',
+        identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }],
+        platformData: {
+          generic: { fields: { heartbeat: 'online', heartbeatIntervalSec: '5', lastHeartbeatAt: secondsAgo(2), bearings: JSON.stringify(bearings), ...fields } },
+        },
+      });
+    const bearingRows = () =>
+      Array.from(el.querySelectorAll('.origin-section .bearing-row')).map((r) => (r.textContent ?? '').replace(/\s+/g, ' ').trim());
+
+    function show(entity: Entity): void {
+      fixture.componentRef.setInput('entity', entity);
+      fixture.detectChanges();
+      open('origin');
+      httpMock.expectOne('/api/v1/feeds').flush([]);
+      fixture.detectChanges();
+    }
+
+    it('lists each live bearing with its class, direction, age and reason', () => {
+      show(
+        site([
+          bearing({ classification: 'DRONE', confidence: 0.91, band: 'LWIR' }),
+          bearing({ trackId: 'T2', azimuthDeg: 270, elevationDeg: -1, reason: 'no_ground_intersection', observedAt: secondsAgo(7) }),
+        ]),
+      );
+      const r = bearingRows();
+      expect(r).toHaveLength(2);
+      expect(r[0]).toContain('DRONE');
+      expect(r[0]).toContain('91 %');
+      expect(r[0]).toContain('az 123.4°');
+      expect(r[0]).toContain('el 5.3°');
+      expect(r[0]).toContain('3 s ago');
+      expect(r[0]).toContain('Airborne, distance unknown');
+      expect(r[1]).toContain('az 270°');
+      expect(r[1]).toContain('el -1°');
+      expect(r[1]).toContain('7 s ago');
+      expect(r[1]).toContain('Above the horizon');
+      expect(el.querySelector('.origin-section .bearing-list')?.closest('.field-row')?.querySelector('.field-label')?.textContent?.trim()).toBe('Bearings');
+    });
+
+    it('words every reason', () => {
+      show(
+        site([
+          bearing({ reason: 'air_target' }),
+          bearing({ reason: 'no_ground_intersection' }),
+          bearing({ reason: 'terrain_unavailable' }),
+          bearing({ reason: 'no_origin_altitude' }),
+        ]),
+      );
+      const text = bearingRows().join('|');
+      expect(text).toContain('Airborne, distance unknown');
+      expect(text).toContain('Above the horizon');
+      expect(text).toContain('Terrain unavailable');
+      expect(text).toContain('Camera height unknown');
+    });
+
+    it('hides a bearing past its time to live and the whole list when none is left', () => {
+      show(site([bearing({}), bearing({ trackId: 'T2', observedAt: secondsAgo(30) })]));
+      expect(bearingRows()).toHaveLength(1);
+
+      fixture.componentRef.setInput('entity', site([bearing({ observedAt: secondsAgo(30) })]));
+      fixture.detectChanges();
+      expect(bearingRows()).toHaveLength(0);
+      expect(el.querySelector('.origin-section .bearing-list')).toBeNull();
+    });
+
+    it('keeps a bearing the feed gave a longer time to live', () => {
+      show(site([bearing({ observedAt: secondsAgo(30) })], { bearingTtlSec: '60' }));
+      expect(bearingRows()).toHaveLength(1);
+    });
+  });
+
   it("shows a site's heartbeat and, for an operator, links to its connection", () => {
     auth.hasAnyRole.mockImplementation((...roles: string[]) => roles.includes('sentinel-operator'));
     const navigate = jest.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
