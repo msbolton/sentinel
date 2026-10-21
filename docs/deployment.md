@@ -8,12 +8,13 @@ This runbook takes one Linux machine to a running Sentinel at `https://<host>`. 
 
 `make images-push` builds and pushes the images, and `make deploy` installs or upgrades the release. Each step links to `docs/infrastructure.md`, which describes every part of the chart in detail. A [local variant on k3d](#local-cluster-on-k3d) at the end runs the same steps on a laptop.
 
-The local path is what has been run end to end. The parts that need a public name have not been run against the real Let's Encrypt yet: the HTTP-01 challenge behind the HTTP→HTTPS redirect and the NetworkPolicies. [Certificates](#certificates-do-not-arrive) says how to debug them.
+The local path is what has been run end to end. Several parts of the production path have not yet run on a real node; [Open risks](#open-risks-not-yet-exercised-on-a-real-node) lists them with what to check for each, so check them on the first install.
 
 ## What you need
 
-- **The node.** One amd64 Linux machine with at least 4 vCPU, 16 GB of memory and a 100 GB SSD, and a public IPv4 address.
+- **The node.** One amd64 Linux machine with at least 4 vCPU, 16 GB of memory and a 150 GB SSD, and a public IPv4 address.
   - The prod values request about 3.2 CPU and 7.2 GiB. The rest is for k3s, Traefik, cert-manager, the hook Jobs and rolling updates.
+  - The prod values' claims come to 75 GiB (PostgreSQL 30, Kafka 20, OpenSearch 10, backups 15). With the OS, k3s and the images (about 10 GB), that sits near the 85% line on a 100 GB disk, which is the bare minimum: on one, lower the claims in the site file and watch Kafka, whose topics are capped by time, not size.
   - Keep the disk below 85% full (see [Disk](#disk)).
 - **A DNS name** for it, such as `sentinel.example.com`, with an A record you can set.
 - **A private OCI registry** that the node can pull from (Harbor, GHCR, ECR, `registry:2` behind TLS), and an account on it that can push.
@@ -26,9 +27,11 @@ The local path is what has been run end to end. The parts that need a public nam
 
 Every command below runs on the workstation, from the repository's root, unless it says "on the node".
 
+**Keep site files out of the checkout.** The site values file, `rclone.conf` and the Secret exports below live in `~/sentinel/` (`mkdir -m 700 ~/sentinel`), never in the repository. `.gitignore` lists their names as a backstop, but a file outside the checkout cannot be committed at all.
+
 ## 1. Prepare the node
 
-**k3s.** Install it with secrets encrypted at rest and a kubeconfig only root can read. Pin the version; v1.35.5+k3s1 is the tested one:
+**k3s.** Install it with secrets encrypted at rest and a kubeconfig only root can read. Pin the version; v1.35.5+k3s1 is the tested one. `tls-san` adds the address you will reach the API server at to its certificate:
 
 ```bash
 # on the node
@@ -36,17 +39,27 @@ sudo mkdir -p /etc/rancher/k3s
 sudo tee /etc/rancher/k3s/config.yaml >/dev/null <<'EOF'
 write-kubeconfig-mode: "0600"
 secrets-encryption: true
+tls-san:
+  - 203.0.113.10            # the node's public IP, or a DNS name for it
 EOF
 curl -sfL https://get.k3s.io | sudo INSTALL_K3S_VERSION=v1.35.5+k3s1 sh -
 sudo k3s kubectl get nodes
 ```
 
+k3s puts the addresses of the node's own interfaces in that certificate. On a cloud VM behind 1:1 NAT (AWS, GCP, Azure), the public IP is not on an interface, so without `tls-san` kubectl from the workstation fails with `x509: certificate is valid for ..., not 203.0.113.10`. Providers that put the public IP on the interface (most bare-metal and many VPS hosts) work either way. To add a name later, edit the file and `sudo systemctl restart k3s`.
+
 k3s brings Traefik as the ingress controller, flannel, its NetworkPolicy controller and the `local-path` storage class. The chart relies on all four, so turn none of them off. Volumes live under `/var/lib/rancher/k3s/storage`, so put `/var/lib/rancher` on the SSD.
 
-**kubectl from the workstation.**
-1. Copy `/etc/rancher/k3s/k3s.yaml` from the node to `~/.kube/sentinel.yaml` on the workstation.
-2. In that file, replace `https://127.0.0.1:6443` with `https://<node address>:6443`.
-3. `export KUBECONFIG=~/.kube/sentinel.yaml`, and check with `kubectl get nodes`.
+**kubectl from the workstation.** The kubeconfig is readable by root only, so copy it through `sudo`, then point it at the address in `tls-san`:
+
+```bash
+mkdir -p ~/.kube
+ssh <admin>@203.0.113.10 sudo cat /etc/rancher/k3s/k3s.yaml > ~/.kube/sentinel.yaml
+chmod 600 ~/.kube/sentinel.yaml
+sed -i.bak 's#https://127.0.0.1:6443#https://203.0.113.10:6443#' ~/.kube/sentinel.yaml && rm ~/.kube/sentinel.yaml.bak
+export KUBECONFIG=~/.kube/sentinel.yaml
+kubectl get nodes
+```
 
 The file holds the cluster's admin credentials, so keep it as private as an SSH key.
 
@@ -171,6 +184,7 @@ make images-push REGISTRY=registry.example.com
         username: <user>
         password: <pull token>
   EOF
+  sudo chmod 600 /etc/rancher/k3s/registries.yaml
   sudo systemctl restart k3s
   ```
 
@@ -192,8 +206,9 @@ kubectl -n sentinel create secret generic sentinel-mail --from-literal=password=
 kubectl -n sentinel create secret generic sentinel-map-keys \
   --from-literal=google-maps-api-key=<key> --from-literal=cesium-ion-access-token=<token>
 
-# Off-node backup copies: an rclone.conf with one remote (rclone config, then copy the file).
-kubectl -n sentinel create secret generic sentinel-backup-rclone --from-file=rclone.conf=./rclone.conf
+# Off-node backup copies: an rclone.conf with one remote, written outside the checkout
+# (rclone config --config ~/sentinel/rclone.conf).
+kubectl -n sentinel create secret generic sentinel-backup-rclone --from-file=rclone.conf=$HOME/sentinel/rclone.conf
 ```
 
 **Map keys.** `apps/client/src/environments/environment.ts` has a Google Maps key and a Cesium ion token committed to the repository. Do not use them in production:
@@ -203,10 +218,10 @@ kubectl -n sentinel create secret generic sentinel-backup-rclone --from-file=rcl
 
 ## 5. The site file
 
-Your deployment's own settings go in a values file kept outside the repository, next to your other site configuration. `make deploy` layers it over the prod values. It names the Secrets above and holds no secret itself:
+Your deployment's own settings go in a values file kept outside the repository, `~/sentinel/sentinel-site.yaml`. `make deploy` layers it over the prod values. It names the Secrets above and holds no secret itself:
 
 ```yaml
-# sentinel-site.yaml
+# ~/sentinel/sentinel-site.yaml
 global:
   host: sentinel.example.com
   imagePullSecrets: [{name: registry-credentials}]   # only with an image pull secret (step 3)
@@ -252,14 +267,14 @@ After that, change them in the admin console as well (`docs/infrastructure.md`, 
 ## 6. First install
 
 ```bash
-make deploy REGISTRY=registry.example.com VALUES=~/sentinel-site.yaml
+make deploy REGISTRY=registry.example.com VALUES=$HOME/sentinel/sentinel-site.yaml
 ```
 
 This runs:
 
 ```
 helm upgrade --install sentinel k8s/charts/sentinel -n sentinel --create-namespace \
-  -f k8s/overlays/prod/values.yaml -f ~/sentinel-site.yaml \
+  -f k8s/overlays/prod/values.yaml -f $HOME/sentinel/sentinel-site.yaml \
   --set global.imageRegistry=registry.example.com --set global.imageTag=<commit> --timeout 20m
 ```
 
@@ -273,7 +288,7 @@ Until both are done, the services and the ingest pods crash-loop on the missing 
 
 Helm waits for the hooks only, up to `--timeout 20m`, and returns once they succeed. On k3d, with the images already on the node, `make deploy` returned after about a minute and every pod was ready within two. Pulling the images from your registry and the internet adds to that.
 
-**Do not add `--wait` or `--rollback-on-failure` (`--atomic` in Helm 3) to a first install.** Helm would wait for pods that cannot be ready until the post-install hooks have run, then roll back.
+**Do not add `--wait` or `--rollback-on-failure` (`--atomic` in Helm 3) to a first install.** With `--wait`, Helm waits for every pod to be ready before it runs the post-install hooks, but the services cannot be ready until those hooks have created the topics and the schema: the install times out and is marked failed. `--rollback-on-failure` then also uninstalls it.
 
 ```bash
 kubectl -n sentinel get pods -w        # until every pod is Running and 1/1 Ready
@@ -295,7 +310,7 @@ curl -skv https://sentinel.example.com/ 2>&1 | grep 'issuer:'   # ... (STAGING) 
 Then switch to production. In the site file, set `ingress.clusterIssuer: letsencrypt-prod`, and deploy again:
 
 ```bash
-make deploy REGISTRY=registry.example.com VALUES=~/sentinel-site.yaml
+make deploy REGISTRY=registry.example.com VALUES=$HOME/sentinel/sentinel-site.yaml
 curl -sI https://sentinel.example.com/ | head -1           # HTTP/2 200, no -k
 ```
 
@@ -358,7 +373,7 @@ The pods connect from their own addresses (`10.42.0.x`). The listener connects f
 ```bash
 git pull
 make images-push REGISTRY=registry.example.com
-make deploy REGISTRY=registry.example.com VALUES=~/sentinel-site.yaml HELM_ARGS=--wait
+make deploy REGISTRY=registry.example.com VALUES=$HOME/sentinel/sentinel-site.yaml HELM_ARGS=--wait
 ```
 
 **Hooks.** The upgrade runs its pre-upgrade hooks before any Deployment or StatefulSet changes:
@@ -394,18 +409,18 @@ The chart generates three Secrets, and their only copy is in the cluster:
 
 The database and Keycloak's realm hold the matching passwords. A new cluster restored from backups needs these Secrets, or the services cannot log in.
 
-Export them, with the ones you created, to an encrypted file kept off the node, in a password manager or a vault. Repeat the export after every change:
+Export them, with the ones you created, to an encrypted file kept off the node and outside the checkout, then into a password manager or a vault. Repeat the export after every change. Add `registry-credentials` to the list when you use an image pull secret (step 3), and leave out any Secret you did not create (kubectl reports a missing one and exports the rest):
 
 ```bash
 kubectl -n sentinel get secret sentinel-postgresql sentinel-keycloak sentinel-keycloak-clients \
-  sentinel-ingest-token sentinel-mail sentinel-map-keys sentinel-backup-rclone -o yaml \
+  sentinel-ingest-token sentinel-mail sentinel-map-keys sentinel-backup-rclone registry-credentials -o yaml \
   | grep -vE '^ +(resourceVersion|uid|creationTimestamp):' \
-  | gpg --symmetric --cipher-algo AES256 -o "sentinel-secrets-$(date +%F).yaml.gpg"
+  | gpg --symmetric --cipher-algo AES256 -o ~/sentinel/sentinel-secrets-$(date +%F).yaml.gpg
 ```
 
 To restore them on a new cluster:
 1. Create the namespace (step 1).
-2. Run `gpg -d sentinel-secrets-<date>.yaml.gpg | kubectl create -f -`.
+2. Run `gpg -d ~/sentinel/sentinel-secrets-<date>.yaml.gpg | kubectl create -f -`.
 3. Run `make deploy`.
 
 The chart adopts its three Secrets, since they still carry the release's annotations, and keeps their values.
@@ -489,13 +504,28 @@ k3s's Traefik writes no access log by default; keep it that way, or drop the req
 
 With that, a request's query no longer appears in the log. Request headers, including `Authorization`, are dropped by default. The same applies to any proxy or load balancer in front of the node. The gateway does not log query strings.
 
+## Open risks: not yet exercised on a real node
+
+Everything else in this runbook ran on k3d. These parts did not, because they need a real node, a public name or a real registry. Check each on the first install.
+
+| Part | The risk | Check |
+|------|----------|-------|
+| k3s `secrets-encryption: true` | It is a documented k3s option but untested here; a typo in `config.yaml` stops k3s from starting | `sudo k3s secrets-encrypt status` shows `Encryption Status: Enabled`; `journalctl -u k3s` if k3s does not start |
+| `tls-san` and the kubeconfig | The certificate lacks the address you connect to | `kubectl get nodes` from the workstation, without `--insecure-skip-tls-verify` |
+| ufw beside k3s | k3s's service load balancer (servicelb) publishes 80 and 443 through iptables rules of its own, and flannel forwards pod traffic: ufw may block them, or fail to block NodePorts | From outside: `curl -sI http://<host>/` gives 308 and `https://` 200; `nc -vz <node> 30000-30010` and `nc -vz <node> 4010` are refused. On the node: pods reach each other (`kubectl -n sentinel get pods` all Ready after `ufw enable`) |
+| `/etc/rancher/k3s/registries.yaml` | Wrong host key or credentials: pulls fail | `kubectl -n sentinel get pods` shows no `ImagePullBackOff`; `sudo k3s crictl pull registry.example.com/sentinel/web:<tag>` on the node |
+| `make images-push` to a real registry | Push permissions, registry TLS, and slow amd64 builds under emulation on Apple silicon | Each of the nine pushes ends without error; `docker buildx imagetools inspect registry.example.com/sentinel/web:<tag>` lists `linux/amd64` |
+| ACME HTTP-01 behind the redirect and the NetworkPolicies | Let's Encrypt is expected to follow the 308 to HTTPS and ignore Traefik's default certificate, and the `sentinel-acme-solver` policy is expected to admit Traefik to the solver; neither has been seen working | On `letsencrypt-staging` first: `kubectl -n sentinel get certificate` READY True within minutes; otherwise [Certificates do not arrive](#certificates-do-not-arrive) |
+| Sizing | The requests (3.2 CPU, 7.2 GiB) come from the values, not from a loaded system; busy feeds can need more CPU for ingest and entity-service, and more Kafka disk | `kubectl top pods -n sentinel` and `kubectl top node` after a day of real feeds; `df -h /var/lib/rancher`; raise requests or claims in the site file |
+| Rollout headroom | On 4 vCPU the requests leave about 0.8 CPU. An upgrade surges one extra pod per Deployment, so some new pods may wait `Pending` until older ones finish | `make deploy ... HELM_ARGS=--wait` completes within the 20 minutes; `kubectl -n sentinel get events --field-selector reason=FailedScheduling` during an upgrade. Persistent `Insufficient cpu`: a bigger node, or lower requests |
+
 ## Troubleshooting
 
 ### Certificates do not arrive
 
 `kubectl -n sentinel get certificate` stays `False`.
 
-**Tested and untested.** The HTTP-01 challenge has been checked on paper against the redirect and the NetworkPolicies, but not yet against the real Let's Encrypt:
+**Tested and untested.** The HTTP-01 challenge has been checked on paper against the redirect and the NetworkPolicies, but not yet against the real Let's Encrypt ([Open risks](#open-risks-not-yet-exercised-on-a-real-node)):
 - the redirect: Let's Encrypt follows it to HTTPS and ignores the certificate it finds there;
 - the NetworkPolicies: the chart's `sentinel-acme-solver` policy admits Traefik to the solver pod.
 
@@ -546,7 +576,8 @@ The same steps on a laptop, for trying a change before it reaches the node. k3d 
   - the local CA issuer;
   - small requests and one replica;
   - a multi-arch PostGIS image;
-  - `pullPolicy: Never` for the imported images.
+  - `pullPolicy: Never` for the imported images;
+  - k3d's own `local-path` class instead of `local-path-retain`, so deleting the namespace deletes the volumes too and nothing piles up as Released. `k3d cluster delete sentinel` removes everything.
 
 Stop Docker Compose (`make docker-down`) first, and anything else running in Docker: the stack needs about 5 GB of the Docker VM's memory.
 
@@ -556,12 +587,11 @@ Stop Docker Compose (`make docker-down`) first, and anything else running in Doc
 # 1. The cluster, publishing 80 and 443 as themselves so the issuer and redirects match the browser's URL
 k3d cluster create sentinel -p "80:80@loadbalancer" -p "443:443@loadbalancer"
 
-# 2. cert-manager, the local CA, Traefik's redirect and the Retain storage class
+# 2. cert-manager, the local CA and Traefik's redirect
 helm repo add jetstack https://charts.jetstack.io --force-update
 helm upgrade --install cert-manager jetstack/cert-manager --version v1.21.2 \
   -n cert-manager --create-namespace --set crds.enabled=true --wait
-kubectl apply -f k8s/cluster/selfsigned-issuer.yaml -f k8s/cluster/traefik-config.yaml \
-  -f k8s/cluster/local-path-retain.yaml
+kubectl apply -f k8s/cluster/selfsigned-issuer.yaml -f k8s/cluster/traefik-config.yaml
 
 # 3. The listener's node and the namespace
 kubectl label node k3d-sentinel-server-0 sentinel.io/ingest-listener=true

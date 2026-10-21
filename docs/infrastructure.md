@@ -269,7 +269,7 @@ Keycloak 26 (`quay.io/keycloak/keycloak:26.8.1`, `keycloak.image`) runs as a one
 - **PostgreSQL mounts the claim** read-only at `/backups`, so restores run in its pod with `kubectl exec`. It also makes the claim bind during the install: with a `WaitForFirstConsumer` class such as `local-path`, a claim only the CronJob used would stay `Pending` until the first run, and `helm --wait` would time out on it. Turning backups on or off therefore restarts PostgreSQL once, and when `existingClaim` is unavailable PostgreSQL cannot start.
 - **Off-node copies with rclone.** Create a Secret with the key `rclone.conf` (an S3 bucket, a B2 or SFTP remote, ...) and name a remote and path in it:
   ```bash
-  kubectl -n <namespace> create secret generic sentinel-backup-rclone --from-file=rclone.conf=./rclone.conf
+  kubectl -n <namespace> create secret generic sentinel-backup-rclone --from-file=rclone.conf=$HOME/sentinel/rclone.conf   # kept outside the checkout
   helm upgrade ... --set backup.rclone.enabled=true --set backup.rclone.existingSecret=sentinel-backup-rclone \
     --set backup.rclone.remote=offsite:sentinel-backups
   ```
