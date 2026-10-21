@@ -14,6 +14,13 @@ export function configureCesium(): void {
   }
 }
 
+/**
+ * Attribution the Copernicus DEM licence requires wherever its heights are
+ * used. The server places radar and camera detections with it.
+ */
+export const COPERNICUS_CREDIT =
+  'Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.';
+
 /** Default Cesium Viewer configuration options */
 export const CESIUM_VIEWER_OPTIONS = {
   animation: false,

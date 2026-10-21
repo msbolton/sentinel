@@ -9,6 +9,7 @@ import { WebSocketService } from '../../core/services/websocket.service';
 import { ThemeService, ThemePreset } from '../../core/services/theme.service';
 import { LocationService } from '../../core/services/location.service';
 import { BuildingsService } from '../../core/services/buildings.service';
+import { TerrainService } from '../../core/services/terrain.service';
 import { LayerVisibilityService } from '../../core/services/layer-visibility.service';
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 import { MapViewportService } from '../../core/services/map-viewport.service';
@@ -85,7 +86,7 @@ function makeFakeCesium() {
     PolylineGraphics: jest.fn(function (this: any, opts: any) {
       Object.assign(this, opts);
     }),
-    HeightReference: { NONE: 0, CLAMP_TO_GROUND: 1 },
+    HeightReference: { NONE: 0, CLAMP_TO_GROUND: 1, RELATIVE_TO_GROUND: 2 },
     VerticalOrigin: { CENTER: 0, BOTTOM: 1 },
     LabelStyle: { FILL_AND_OUTLINE: 2 },
     Math: {
@@ -100,11 +101,13 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
   let feedsSignal: ReturnType<typeof signal<Feed[]>>;
   let fakeCesium: ReturnType<typeof makeFakeCesium>;
   let addedEntities: any[];
+  let terrainOn: ReturnType<typeof signal<boolean>>;
 
   beforeEach(() => {
     feedsSignal = signal<Feed[]>([]);
     fakeCesium = makeFakeCesium();
     addedEntities = [];
+    terrainOn = signal(false);
 
     TestBed.configureTestingModule({
       imports: [MapComponent],
@@ -130,6 +133,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
         { provide: ThemeService, useValue: { activeTheme$: of(ThemePreset.NORMAL) } },
         { provide: LocationService, useValue: { flyTo$: EMPTY } },
         { provide: BuildingsService, useValue: { init: jest.fn(), enabled: signal(false) } },
+        { provide: TerrainService, useValue: { init: jest.fn(), toggle: jest.fn(), terrainEnabled: terrainOn.asReadonly(), available: signal(true) } },
         { provide: HttpClient, useValue: { get: jest.fn(() => of([])) } },
         {
           provide: LayerVisibilityService,
@@ -447,5 +451,113 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       timestamp: '2026-10-20T12:00:10Z',
     });
     expect(cesiumEnt.billboard.image).toBe(hostileUrl);
+  });
+  describe('terrain-aware heights and uncertainty', () => {
+    const cov = () => covFromEllipse(300, 120, 20);
+
+    function radarDrone(over: Partial<Entity> = {}): Entity {
+      return baseSignalEntity({
+        id: 'rdr-1',
+        entityType: EntityType.DRONE,
+        name: 'Radar drone',
+        trackEnvironment: TrackEnvironment.AIR,
+        position: { latitude: 46.5, longitude: 8.0, altitude: 940 },
+        platformData: { radar: { heightAboveGroundM: 120 } },
+        ...over,
+      });
+    }
+
+    it('adds a radar drone relative to the ground at its height above ground', () => {
+      (component as any).addOrUpdateCesiumEntity(radarDrone());
+      const ent = (component as any).entityMap.get('rdr-1');
+      expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.RELATIVE_TO_GROUND);
+      expect(ent.label.heightReference).toBe(fakeCesium.HeightReference.RELATIVE_TO_GROUND);
+      expect(ent._posProp.value).toEqual({ lon: 8.0, lat: 46.5, alt: 120 });
+    });
+
+    it('keeps a moving radar drone at its height above ground, not its ellipsoid altitude', () => {
+      (component as any).addOrUpdateCesiumEntity(
+        radarDrone({ lastSeenAt: new Date().toISOString(), kinematics: { velocity: { north: 25, east: 0, up: 0 } } }),
+      );
+      expect((component as any).deadReckoning.positionOf('rdr-1', Date.now())).not.toBeNull(); // it is dead-reckoned
+      const ent = (component as any).entityMap.get('rdr-1');
+      expect(ent._posProp.value.alt).toBe(120);
+    });
+
+    it('adds a GROUND vehicle clamped to the ground', () => {
+      (component as any).addOrUpdateCesiumEntity(
+        baseSignalEntity({
+          id: 'veh-1',
+          entityType: EntityType.VEHICLE,
+          trackEnvironment: TrackEnvironment.GROUND,
+          position: { latitude: 46.5, longitude: 8.0, altitude: 610 },
+          platformData: { eoir: { band: 'LWIR' } },
+        }),
+      );
+      const ent = (component as any).entityMap.get('veh-1');
+      expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.CLAMP_TO_GROUND);
+    });
+
+    it('adds an airborne entity with an altitude at that absolute height', () => {
+      (component as any).addOrUpdateCesiumEntity(
+        baseSignalEntity({
+          id: 'ac-9',
+          entityType: EntityType.AIRCRAFT,
+          trackEnvironment: TrackEnvironment.AIR,
+          position: { latitude: 46.5, longitude: 8.0, altitude: 9000 },
+        }),
+      );
+      const ent = (component as any).entityMap.get('ac-9');
+      expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.NONE);
+      expect(ent._posProp.value.alt).toBe(9000);
+    });
+
+    it('draws uncertainty ellipses for radar and EO/IR entities, not for a plain vehicle', () => {
+      (component as any).addOrUpdateCesiumEntity(radarDrone({ kinematics: { positionCovariance: cov() } }));
+      (component as any).addOrUpdateCesiumEntity(
+        baseSignalEntity({
+          id: 'eo-1',
+          entityType: EntityType.VEHICLE,
+          position: { latitude: 46.5, longitude: 8.0 },
+          platformData: { eoir: { band: 'MWIR' } },
+          kinematics: { positionCovariance: cov() },
+        }),
+      );
+      (component as any).addOrUpdateCesiumEntity(
+        baseSignalEntity({
+          id: 'veh-2',
+          entityType: EntityType.VEHICLE,
+          position: { latitude: 46.5, longitude: 8.0 },
+          platformData: {},
+          kinematics: { positionCovariance: cov() },
+        }),
+      );
+      const map = (component as any).entityMap;
+      expect(map.get('rdr-1').ellipse.semiMajorAxis).toBeCloseTo(300, 5);
+      expect(map.get('rdr-1').ellipse.heightReference).toBe(fakeCesium.HeightReference.CLAMP_TO_GROUND);
+      expect(map.get('eo-1').ellipse.semiMajorAxis).toBeCloseTo(300, 5);
+      expect(map.get('veh-2').ellipse).toBeUndefined();
+    });
+
+    it('drops the ellipse outline while terrain is on, and restores it when terrain is turned off', () => {
+      (component as any).addOrUpdateCesiumEntity(baseSignalEntity({ kinematics: { positionCovariance: cov() } }));
+      const ent = (component as any).entityMap.get('sig-1');
+      expect(ent.ellipse.outline).toBe(true);
+
+      terrainOn.set(true);
+      fixture.detectChanges();
+      expect(ent.ellipse.outline).toBe(false);
+      expect(ent.ellipse.semiMajorAxis).toBeCloseTo(300, 5);
+
+      // A fix arriving while terrain is on builds the ellipse without an outline too.
+      (component as any).addOrUpdateCesiumEntity(
+        baseSignalEntity({ id: 'sig-2', kinematics: { positionCovariance: cov() } }),
+      );
+      expect((component as any).entityMap.get('sig-2').ellipse.outline).toBe(false);
+
+      terrainOn.set(false);
+      fixture.detectChanges();
+      expect(ent.ellipse.outline).toBe(true);
+    });
   });
 });

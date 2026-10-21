@@ -25,13 +25,18 @@ export function showsDropLine(entity: Entity): boolean {
 /**
  * The geometry of the line that shows how high something flies: from the
  * entity straight down to the point beneath it, with the altitude written
- * at the midpoint.
+ * at the midpoint. `groundHeight` is the terrain height under the entity in
+ * metres above the ellipsoid; it is 0 over the plain ellipsoid.
  */
-export function dropLinePoints(pos: GeoPoint): { top: GeoPoint; ground: GeoPoint; mid: GeoPoint; label: string } {
+export function dropLinePoints(
+  pos: GeoPoint,
+  groundHeight = 0,
+): { top: GeoPoint; ground: GeoPoint; mid: GeoPoint; label: string } {
+  const ground = Number.isFinite(groundHeight) ? groundHeight : 0;
   return {
     top: { lat: pos.lat, lon: pos.lon, height: pos.height },
-    ground: { lat: pos.lat, lon: pos.lon, height: 0 },
-    mid: { lat: pos.lat, lon: pos.lon, height: pos.height / 2 },
+    ground: { lat: pos.lat, lon: pos.lon, height: ground },
+    mid: { lat: pos.lat, lon: pos.lon, height: (pos.height + ground) / 2 },
     label: formatAltitude(pos.height),
   };
 }
