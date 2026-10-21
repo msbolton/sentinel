@@ -249,15 +249,22 @@ db-seed: ## Seed database with sample entities, a geofence rule, and locations
 
 # Everything the chart renders must validate (kubeconform skips the CRDs it has no schema for), with
 # the defaults, the dev overlay, the optional parts switched on, the data tier alone and the apps
-# against an external database. The pod specs of the hardened templates (both ingest Deployments,
-# the schema and topics Jobs and the data tier) must each render runAsNonRoot: true; add a template
-# to RESTRICTED when it is hardened too.
+# against an external database. The pod specs of the hardened templates (the gateway, the services,
+# the web client, both ingest Deployments, the schema and topics Jobs and the data tier) must each
+# render runAsNonRoot: true; add a template to RESTRICTED when it is hardened too.
 CHART := k8s/charts/sentinel
 CHART_SET := --set ingestService.serviceToken=lint --set global.host=sentinel.example.com
 DEV_VALUES := k8s/overlays/dev/values.yaml
-RESTRICTED := --show-only templates/ingest-service-deployment.yaml --show-only templates/ingest-listener-deployment.yaml --show-only templates/db-schema-job.yaml \
+RESTRICTED := --show-only templates/api-gateway-deployment.yaml --show-only templates/services.yaml --show-only templates/web.yaml \
+	--show-only templates/ingest-service-deployment.yaml --show-only templates/ingest-listener-deployment.yaml --show-only templates/db-schema-job.yaml \
 	--show-only templates/postgresql.yaml --show-only templates/kafka.yaml --show-only templates/kafka-topics-job.yaml --show-only templates/opensearch.yaml
-DATA_TIER_ONLY := --set apiGateway.enabled=false --set ingestService.enabled=false --set ingestListener.enabled=false
+DATA_TIER_ONLY := --set apiGateway.enabled=false --set ingestService.enabled=false --set ingestListener.enabled=false --set web.enabled=false \
+	--set entityService.enabled=false --set trackService.enabled=false --set searchService.enabled=false \
+	--set linkAnalysisService.enabled=false --set alertService.enabled=false --set analyticsService.enabled=false
+# The optional parts of the application tier: registration mail with a password, the web client's
+# map keys and the services' ServiceMonitors.
+APPS_OPTIONAL := --set mail.host=smtp.example.com --set mail.username=sentinel --set mail.password=lint \
+	--set web.mapKeys.googleMapsApiKey=lint --set appServices.serviceMonitor.enabled=true
 
 # kubeconform on one render. The render goes to a variable first, so a failing helm template fails
 # the target (a pipe would hide it), and a render with no resources is an error too.
@@ -279,6 +286,7 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics 
 	$(call chart_validate,)
 	$(call chart_validate,-f $(DEV_VALUES))
 	$(call chart_validate,--set geoserver.enabled=true --set ingestService.serviceMonitor.enabled=true)
+	$(call chart_validate,$(APPS_OPTIONAL))
 	$(call chart_validate,$(DATA_TIER_ONLY))
 	$(call chart_validate,--set postgresql.existingSecret=sentinel-db --set postgresql.enabled=false --set kafka.enabled=false --set opensearch.enabled=false)
 
