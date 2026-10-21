@@ -43,7 +43,7 @@ Indexes: GiST on `position`; B-tree on `"entityType"`, `source`, `classification
 
 ### sentinel.entity_identities / sentinel.entity_sources
 
-`entity_identities` maps a natural identifier (`"identityType"`, `"identityValue"`, primary key) to an entity, with first and last seen times. An observation whose canonical identity matches joins that entity regardless of the feed it came from; a secondary identity (callsign, registration, IMO) that would merge two entities is counted, not applied. `entity_sources` keeps one row per entity and feed with the source's own id, the last observed and received times and an observation count; the ageout threshold of an entity is the largest threshold over its sources.
+`entity_identities` maps a natural identifier (`"identityType"`, `"identityValue"`, primary key) to an entity, with first and last seen times. An observation whose canonical identity matches joins that entity regardless of the feed it came from; a secondary identity (callsign, registration, IMO) that would merge two entities is counted, not applied. A soft delete keeps the entity's identity rows, but a deleted entity's identities are released to the next report that carries them: that report creates a new entity and the canonical identity row moves to it (the entity service also drops its resolver cache on every delete). `entity_sources` keeps one row per entity and feed with the source's own id, the last observed and received times and an observation count; the ageout threshold of an entity is the largest threshold over its sources.
 
 ### sentinel.observations
 
