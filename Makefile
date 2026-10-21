@@ -253,7 +253,16 @@ db-seed: ## Seed database with sample entities, a geofence rule, and locations
 # template to RESTRICTED when it is hardened too.
 CHART := k8s/charts/sentinel
 CHART_SET := --set ingestService.serviceToken=lint
+DEV_VALUES := k8s/overlays/dev/values.yaml
 RESTRICTED := --show-only templates/ingest-service-deployment.yaml --show-only templates/ingest-listener-deployment.yaml --show-only templates/db-schema-job.yaml
+
+# kubeconform on one render. The render goes to a variable first, so a failing helm template fails
+# the target (a pipe would hide it), and a render with no resources is an error too.
+define chart_validate
+	@out="$$(helm template sentinel $(CHART) $(CHART_SET) $(1))" || { echo "chart-lint: helm template failed ($(1))"; exit 1; }; \
+	test "$$(printf '%s\n' "$$out" | grep -c '^kind:')" -gt 0 || { echo "chart-lint: helm template rendered nothing ($(1))"; exit 1; }; \
+	printf '%s\n' "$$out" | kubeconform -strict -ignore-missing-schemas -summary
+endef
 
 chart-lint: ## Lint the Helm chart, check that it renders db/schema and runAsNonRoot into every hardened pod spec, and validate the output with kubeconform (needs helm and kubeconform)
 	helm lint $(CHART) $(CHART_SET)
@@ -262,9 +271,9 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema and runAsNon
 	pods=$$(printf '%s\n' "$$restricted" | grep -cE '^ +containers:'); \
 	roots=$$(printf '%s\n' "$$restricted" | grep -c 'runAsNonRoot: true'); \
 	test "$$pods" -gt 0 && test "$$pods" = "$$roots" || { echo "chart-lint: $$roots runAsNonRoot: true for $$pods hardened pod specs"; exit 1; }
-	helm template sentinel $(CHART) $(CHART_SET) | kubeconform -strict -ignore-missing-schemas -summary
-	helm template sentinel $(CHART) $(CHART_SET) -f k8s/overlays/dev/values.yaml | kubeconform -strict -ignore-missing-schemas -summary
-	helm template sentinel $(CHART) $(CHART_SET) --set geoserver.enabled=true --set ingestService.serviceMonitor.enabled=true | kubeconform -strict -ignore-missing-schemas -summary
+	$(call chart_validate,)
+	$(call chart_validate,-f $(DEV_VALUES))
+	$(call chart_validate,--set geoserver.enabled=true --set ingestService.serviceMonitor.enabled=true)
 
 # ----------------------------------------------------------------------------
 # Cleanup
