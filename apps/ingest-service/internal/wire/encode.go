@@ -84,7 +84,7 @@ func ToProto(o *obs.Observation) *sentinelv1.Observation {
 	if p := o.Polar; p != nil {
 		m.Polar = &sentinelv1.PolarMeasurement{
 			RangeM: p.RangeM, AzimuthDeg: p.AzimuthDeg, ElevationDeg: p.ElevationDeg, RangeRateMps: p.RangeRateMps,
-			AzimuthReference: parse[sentinelv1.AzimuthReference](p.AzimuthRef),
+			AzimuthReference: parse[sentinelv1.AzimuthReference](p.AzimuthRef), DirectionOnly: p.DirectionOnly,
 		}
 		if p.SigmaRangeM != nil || p.SigmaAzimuthDeg != nil || p.SigmaElevationDeg != nil {
 			m.Polar.Sigma = &sentinelv1.PolarSigma{RangeM: p.SigmaRangeM, AzimuthDeg: p.SigmaAzimuthDeg, ElevationDeg: p.SigmaElevationDeg}
@@ -175,6 +175,24 @@ func platform(o *obs.Observation) *sentinelv1.PlatformDetail {
 			PriUs: copyFloat(r.PriUs), PulseWidthUs: copyFloat(r.PulseWidthUs),
 			ScanType: r.ScanType, PowerDbm: copyFloat(r.PowerDbm),
 		}}}
+	case o.Radar != nil:
+		r := o.Radar
+		return &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Radar{Radar: &sentinelv1.RadarDetail{
+			RangeRateMps: copyFloat(r.RangeRateMps), RcsDbsm: copyFloat(r.RcsDbsm), SnrDb: copyFloat(r.SnrDb),
+			Mode: parse[sentinelv1.RadarMode](r.Mode), TrackQuality: copyFloat(r.TrackQuality),
+			Classification: parse[sentinelv1.RadarClass](r.Classification), ClassificationConfidence: copyFloat(r.ClassificationConfidence),
+			RadarTrackId: r.RadarTrackID, HeightAboveGroundM: copyFloat(r.HeightAboveGroundM),
+		}}}
+	case o.EoIr != nil:
+		e := o.EoIr
+		d := &sentinelv1.EoIrDetail{
+			Band: parse[sentinelv1.EoIrBand](e.Band), Classification: e.Classification, ClassificationConfidence: copyFloat(e.ClassificationConfidence),
+			HorizontalFovDeg: copyFloat(e.HorizontalFovDeg), VerticalFovDeg: copyFloat(e.VerticalFovDeg), CameraTrackId: e.CameraTrackID,
+		}
+		if b := e.BoundingBox; b != nil {
+			d.BoundingBox = &sentinelv1.NormalizedBox{X: b[0], Y: b[1], Width: b[2], Height: b[3]}
+		}
+		return &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Eoir{Eoir: d}}
 	case len(o.Generic) > 0:
 		return &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Generic{Generic: &sentinelv1.GenericDetail{Fields: maps.Clone(o.Generic)}}}
 	}

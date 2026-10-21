@@ -183,6 +183,39 @@ export interface RFData {
   scanRateRpm?: number;
 }
 
+/** A radar track. `mode` and `classification` are bare enum names (SEARCH, TRACK; VEHICLE, DRONE, ...). */
+export interface RadarData {
+  rangeRateMps?: number;
+  rcsDbsm?: number;
+  snrDb?: number;
+  mode?: string;
+  trackQuality?: number;
+  classification?: string;
+  classificationConfidence?: number;
+  radarTrackId?: string;
+  /** Metres above the terrain surface, computed by the server for air targets. */
+  heightAboveGroundM?: number;
+}
+
+/** Normalised image coordinates, 0..1, origin top-left. */
+export interface NormalizedBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** An EO/IR camera detection. `band` is VISIBLE, SWIR, MWIR or LWIR. */
+export interface EoIrData {
+  band?: string;
+  classification?: string;
+  classificationConfidence?: number;
+  horizontalFovDeg?: number;
+  verticalFovDeg?: number;
+  boundingBox?: NormalizedBox;
+  cameraTrackId?: string;
+}
+
 /** Output with no typed block, as flat strings: a site's heartbeat among them. */
 export interface GenericData {
   fields?: Record<string, string>;
@@ -196,6 +229,8 @@ export interface PlatformData {
   cot?: CoTData;
   uav?: UAVData;
   rf?: RFData;
+  radar?: RadarData;
+  eoir?: EoIrData;
   generic?: GenericData;
 }
 

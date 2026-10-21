@@ -156,6 +156,8 @@ type Observation struct {
 	CoT    *CoTData
 	UAV    *UAVData
 	RF     *RFData
+	Radar  *RadarData
+	EoIr   *EoIrData
 
 	// Generic is decoder or service output with no typed block, sent as a
 	// GenericDetail: a site's heartbeat (emplacement.MarkSite). Only service
@@ -181,6 +183,9 @@ type Polar struct {
 	SigmaRangeM       *float64
 	SigmaAzimuthDeg   *float64
 	SigmaElevationDeg *float64
+	// DirectionOnly marks a bearing with no range (a camera): RangeM is
+	// meaningless and the service resolves a position from terrain.
+	DirectionOnly bool
 }
 
 // observationNamespace is the UUID v5 namespace for observation ids.

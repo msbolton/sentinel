@@ -147,3 +147,32 @@ type RFData struct {
 	ScanType     string
 	PowerDbm     *float64
 }
+
+// RadarData carries a radar track's detail. Mode and Classification are the
+// bare RadarMode and RadarClass names (SEARCH, TRACK; VEHICLE, DRONE, ...).
+// HeightAboveGroundM is set by the service, not trusted from a sender.
+type RadarData struct {
+	RangeRateMps             *float64
+	RcsDbsm                  *float64
+	SnrDb                    *float64
+	Mode                     string
+	TrackQuality             *float64
+	Classification           string
+	ClassificationConfidence *float64
+	RadarTrackID             string
+	HeightAboveGroundM       *float64
+}
+
+// EoIrData carries an electro-optical or infrared camera detection. Band is
+// the bare EoIrBand name (VISIBLE, SWIR, MWIR, LWIR); Classification is the
+// camera's free-text label. BoundingBox is normalised image coordinates
+// {x, y, width, height}.
+type EoIrData struct {
+	Band                     string
+	Classification           string
+	ClassificationConfidence *float64
+	HorizontalFovDeg         *float64
+	VerticalFovDeg           *float64
+	BoundingBox              *[4]float64
+	CameraTrackID            string
+}

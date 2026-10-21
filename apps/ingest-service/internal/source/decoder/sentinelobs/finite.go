@@ -62,6 +62,23 @@ func dropNonFinite(o *obs.Observation) {
 			}
 		}
 	}
+	if r := o.Radar; r != nil {
+		for _, q := range []**float64{&r.RangeRateMps, &r.RcsDbsm, &r.SnrDb, &r.TrackQuality, &r.ClassificationConfidence, &r.HeightAboveGroundM} {
+			if *q != nil && !finite(**q) {
+				*q = nil
+			}
+		}
+	}
+	if e := o.EoIr; e != nil {
+		for _, q := range []**float64{&e.ClassificationConfidence, &e.HorizontalFovDeg, &e.VerticalFovDeg} {
+			if *q != nil && !finite(**q) {
+				*q = nil
+			}
+		}
+		if e.BoundingBox != nil && !finite(e.BoundingBox[:]...) {
+			e.BoundingBox = nil
+		}
+	}
 	if p := o.Polar; p != nil {
 		if !finite(p.RangeM, p.AzimuthDeg) {
 			o.Polar = nil

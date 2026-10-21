@@ -93,7 +93,7 @@ func FromProto(m *sentinelv1.Observation) *obs.Observation {
 		o.Polar = &obs.Polar{
 			RangeM: p.GetRangeM(), AzimuthDeg: p.GetAzimuthDeg(),
 			ElevationDeg: copyFloat(p.ElevationDeg), RangeRateMps: copyFloat(p.RangeRateMps),
-			AzimuthRef: enumName(p.GetAzimuthReference()),
+			AzimuthRef: enumName(p.GetAzimuthReference()), DirectionOnly: p.GetDirectionOnly(),
 		}
 		if s := p.GetSigma(); s != nil {
 			o.Polar.SigmaRangeM, o.Polar.SigmaAzimuthDeg, o.Polar.SigmaElevationDeg = copyFloat(s.RangeM), copyFloat(s.AzimuthDeg), copyFloat(s.ElevationDeg)
@@ -164,6 +164,23 @@ func platformFrom(o *obs.Observation, p *sentinelv1.PlatformDetail) {
 			EmitterType: r.GetEmitterType(), Modulation: r.GetModulation(),
 			PriUs: copyFloat(r.PriUs), PulseWidthUs: copyFloat(r.PulseWidthUs),
 			ScanType: r.GetScanType(), PowerDbm: copyFloat(r.PowerDbm),
+		}
+	case *sentinelv1.PlatformDetail_Radar:
+		r := d.Radar
+		o.Radar = &obs.RadarData{
+			RangeRateMps: copyFloat(r.RangeRateMps), RcsDbsm: copyFloat(r.RcsDbsm), SnrDb: copyFloat(r.SnrDb),
+			Mode: enumName(r.GetMode()), TrackQuality: copyFloat(r.TrackQuality),
+			Classification: enumName(r.GetClassification()), ClassificationConfidence: copyFloat(r.ClassificationConfidence),
+			RadarTrackID: r.GetRadarTrackId(), HeightAboveGroundM: copyFloat(r.HeightAboveGroundM),
+		}
+	case *sentinelv1.PlatformDetail_Eoir:
+		e := d.Eoir
+		o.EoIr = &obs.EoIrData{
+			Band: enumName(e.GetBand()), Classification: e.GetClassification(), ClassificationConfidence: copyFloat(e.ClassificationConfidence),
+			HorizontalFovDeg: copyFloat(e.HorizontalFovDeg), VerticalFovDeg: copyFloat(e.VerticalFovDeg), CameraTrackID: e.GetCameraTrackId(),
+		}
+		if b := e.GetBoundingBox(); b != nil {
+			o.EoIr.BoundingBox = &[4]float64{b.GetX(), b.GetY(), b.GetWidth(), b.GetHeight()}
 		}
 	}
 }

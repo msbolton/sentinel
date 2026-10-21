@@ -650,3 +650,23 @@ func TestValidateIsTheDecodersCheck(t *testing.T) {
 		t.Fatalf("NaN latitude: %v", err)
 	}
 }
+
+func TestDropNonFiniteRadarEoIr(t *testing.T) {
+	nan, rcs, h := math.NaN(), 3.0, 12.0
+	o := &obs.Observation{
+		Radar: &obs.RadarData{SnrDb: &nan, RcsDbsm: &rcs, Classification: "DRONE"},
+		EoIr:  &obs.EoIrData{HorizontalFovDeg: &h, VerticalFovDeg: &nan, BoundingBox: &[4]float64{0.1, nan, 0.3, 0.4}},
+	}
+	dropNonFinite(o)
+	if o.Radar == nil || o.Radar.SnrDb != nil || o.Radar.RcsDbsm == nil || *o.Radar.RcsDbsm != 3 || o.Radar.Classification != "DRONE" {
+		t.Errorf("radar after dropNonFinite = %+v", o.Radar)
+	}
+	if o.EoIr == nil || o.EoIr.VerticalFovDeg != nil || o.EoIr.HorizontalFovDeg == nil || *o.EoIr.HorizontalFovDeg != 12 || o.EoIr.BoundingBox != nil {
+		t.Errorf("eoir after dropNonFinite = %+v", o.EoIr)
+	}
+	ok := &obs.Observation{EoIr: &obs.EoIrData{BoundingBox: &[4]float64{0.1, 0.2, 0.3, 0.4}}}
+	dropNonFinite(ok)
+	if ok.EoIr.BoundingBox == nil || *ok.EoIr.BoundingBox != [4]float64{0.1, 0.2, 0.3, 0.4} {
+		t.Errorf("a finite box must be kept: %+v", ok.EoIr)
+	}
+}

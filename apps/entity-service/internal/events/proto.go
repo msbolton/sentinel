@@ -236,6 +236,14 @@ func platformsProto(pd map[string]interface{}) map[string]*sentinelv1.PlatformDe
 			d := &sentinelv1.RfDetail{}
 			detail.Detail = &sentinelv1.PlatformDetail_Rf{Rf: d}
 			inner = d
+		case "radar":
+			d := &sentinelv1.RadarDetail{}
+			detail.Detail = &sentinelv1.PlatformDetail_Radar{Radar: d}
+			inner = d
+		case "eoir":
+			d := &sentinelv1.EoIrDetail{}
+			detail.Detail = &sentinelv1.PlatformDetail_Eoir{Eoir: d}
+			inner = d
 		case "generic":
 			d := &sentinelv1.GenericDetail{}
 			detail.Detail = &sentinelv1.PlatformDetail_Generic{Generic: d}
