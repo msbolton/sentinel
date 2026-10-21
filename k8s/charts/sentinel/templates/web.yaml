@@ -62,6 +62,10 @@ spec:
         # A changed default.conf rolls the pods; the mounted file would change
         # under a running nginx that never reloads it.
         checksum/nginx: {{ include "sentinel.webNginxConf" . | sha256sum | trunc 16 }}
+        # The keys are read from the Secret once, at container start, so a
+        # changed inline key rolls the pods too. An existingSecret's content is
+        # invisible to Helm: restart the Deployment after changing it.
+        checksum/map-keys: {{ printf "%s/%s/%s" ($keys.googleMapsApiKey | default "") ($keys.cesiumIonAccessToken | default "") ($keys.existingSecret | default "") | sha256sum | trunc 16 }}
     spec:
       {{- with $v.podSecurityContext }}
       securityContext:
