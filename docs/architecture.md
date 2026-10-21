@@ -259,7 +259,7 @@ Partitioning by key keeps one object's reports and one entity's events in order.
 ## Deployment
 
 - **Docker Compose** runs the whole stack for development: `docker-compose.infra.yml` for the data stores and Keycloak alone, `docker-compose.yml` for everything. One-shot jobs apply the schema (`db-schema`), create topics, provision GeoServer (`geoserver-init`) and MinIO. Ingest scales with `--scale ingest-service=N`; the `inbound` profile adds the host-networked `ingest-listener`.
-- **Kubernetes** uses the Helm chart under `k8s/charts/sentinel` (gateway and ingest deployments, optional GeoServer with the same provisioning script, a TAK certificate secret mount, the host-networked ingest listener on a labelled node, and a hook Job that applies `db/schema` before each upgrade) and a Kustomize overlay per environment under `k8s/overlays`.
+- **Kubernetes** uses the Helm chart under `k8s/charts/sentinel` (gateway and ingest deployments, optional GeoServer with the same provisioning script, a TAK certificate secret mount, the host-networked ingest listener on a labelled node, and a hook Job that applies `db/schema` before each upgrade) and a values overlay per environment under `k8s/overlays`.
 - **Images** are built per service from each app's `Dockerfile`; Go services build with `-tags dynamic` for librdkafka.
 
 ## Repository layout
@@ -290,7 +290,7 @@ sentinel/
 │   └── postgres/              init-extensions.sql, TimescaleDB/AGE installer
 ├── k8s/
 │   ├── charts/sentinel/       Helm chart (templates/, files/, values.yaml)
-│   └── overlays/              Kustomize overlays per environment
+│   └── overlays/              Helm values overlays per environment
 ├── scripts/smoke.sh           exercises the running stack through the gateway
 ├── docs/                      this documentation
 ├── docker-compose.yml         full stack
