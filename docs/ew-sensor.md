@@ -88,7 +88,9 @@ export EW_SENSOR_TOKEN=si_...
   --config examples/coastal-esm.yaml)
 ```
 
-or `nx build ew-sensor` for a binary in `dist/apps/ew-sensor/`. Without a `--config` file you must give `--lat` and `--lon` (and `--name` if you do not want `ew-sensor`); the examples carry them in the YAML.
+Add `--verbose` to log every report as JSON as it is sent, and each ack.
+
+Or `nx build ew-sensor` for a binary in `dist/apps/ew-sensor/`. Without a `--config` file you must give `--lat` and `--lon` (and `--name` if you do not want `ew-sensor`); the examples carry them in the YAML.
 
 ## Flags and configuration
 
@@ -121,6 +123,7 @@ Flags override the configuration file, which overrides the defaults. Most YAML k
 | `--path` | `circle` | Ownship path: `circle` or `waypoints`. |
 | `--speed-kts` | 12 | Ownship speed. |
 | `--send-timestamps` | off | Set source timestamps (see the limits below). |
+| `--verbose` | off | Log every report as JSON as it is sent, and each ack (YAML: `verbose: true`). |
 | `--heartbeat-interval` | `5s` | How often the emplacement sends its `EmplacementState` heartbeat; whole seconds from 1s to 300s. The server calls the site offline after three missed. |
 
 **Precedence.** A flag set on the command line beats the environment, which beats the YAML, which beats the default; an explicit `--rate 1` beats a YAML `rate: 5`. The token is `--token`, then `EW_SENSOR_TOKEN`, then `SENTINEL_INGEST_TOKEN`, then the YAML. The address is `--addr`, then `EW_SENSOR_ADDR`, then the YAML. A YAML file with a token is convenient but easy to commit by mistake: prefer the environment.
@@ -129,6 +132,7 @@ Flags override the configuration file, which overrides the defaults. Most YAML k
 
 - `connection`: `addr`, `token`, `insecure`, `tls`, `ca`, `cert`, `key`.
 - `emplacement`: `emplacementId`, `name`, `lat`, `lon`, `alt`, `boresight`, `width`, `rangeKm`, `minRangeKm`, `mobility` (`FIXED` or `MOBILE`), `azimuthReference` (`TRUE_NORTH`, or `PLATFORM`, which needs `MOBILE`: the boresight is then measured from the ship's bow and turns with it).
+- `verbose` (top level): `true` logs every report and ack, as `--verbose` does.
 - `sensor`: `rate`, `pd`, `sigmaM`, `classification` (optional: empty takes the connection's level; when set it is stamped on every observation), `sendTimestamps`, `heartbeatInterval` (default `5s`, whole seconds from 1s to 300s; `--heartbeat-interval`).
 - `ownship` (mobile only): `path` (`circle` or `waypoints`), `speedKts`, `radiusKm` (circle, default 5), `waypoints` (a list of `{lat, lon}`, at least two, looped).
 - `emitters`: a list, each with `id` (unique), `displayName`, `emitterType` (for example `RADAR_SEARCH`, `RADAR_TRACK`, `SATCOM`, `COMMS_DATALINK`, `JAMMER`), `frequencyHz` (required), `bandwidthHz`, `priUs`, `pulseWidthUs`, `modulation`, `scanType`, `powerDbm`, `affiliation`, `trackEnvironment` (`AIR`, `SEA_SURFACE`, `SUBSURFACE`, `GROUND`, `SPACE`, `UNKNOWN`; unset or `LAND` is `GROUND`), `start` (`{lat, lon}`) and `motion` (`type` `static`, `random-walk` or `waypoints`, with `speedKts`, and `waypoints` for the last).

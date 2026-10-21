@@ -98,6 +98,8 @@ type Config struct {
 	// from the clock because none was given, so the caller can log it.
 	Seed          int64 `yaml:"-"`
 	SeedGenerated bool  `yaml:"-"`
+	// Verbose logs every report as it is sent, and each ack.
+	Verbose bool `yaml:"verbose"`
 	// ConfigFile is the --config path, or empty.
 	ConfigFile string `yaml:"-"`
 }
@@ -264,6 +266,7 @@ type flagValues struct {
 	speedKts                   float64
 	sendTimestamps             bool
 	heartbeatInterval          time.Duration
+	verbose                    bool
 }
 
 func newFlagSet(fv *flagValues, d Config) *flag.FlagSet {
@@ -302,6 +305,7 @@ func newFlagSet(fv *flagValues, d Config) *flag.FlagSet {
 	fs.Float64Var(&fv.speedKts, "speed-kts", d.Ownship.SpeedKts, "ownship speed, knots")
 	fs.BoolVar(&fv.sendTimestamps, "send-timestamps", false, "set source timestamps (the server refuses clocks skewed beyond +5s/-60s)")
 	fs.DurationVar(&fv.heartbeatInterval, "heartbeat-interval", d.Sensor.HeartbeatInterval, "how often the emplacement heartbeats (EmplacementState), whole seconds from 1s to 300s; the server calls it offline after three missed")
+	fs.BoolVar(&fv.verbose, "verbose", false, "log every report as JSON as it is sent, and each ack")
 	return fs
 }
 
@@ -448,6 +452,7 @@ func applyFlags(c *Config, fv *flagValues, s map[string]bool) {
 	override(s, "sigma-m", &c.Sensor.SigmaM, fv.sigmaM)
 	override(s, "send-timestamps", &c.Sensor.SendTimestamps, fv.sendTimestamps)
 	override(s, "heartbeat-interval", &c.Sensor.HeartbeatInterval, fv.heartbeatInterval)
+	override(s, "verbose", &c.Verbose, fv.verbose)
 	override(s, "seed", &c.Seed, fv.seed)
 	override(s, "duration", &c.Duration, fv.duration)
 	override(s, "path", &c.Ownship.Path, fv.path)

@@ -36,7 +36,11 @@ func run(args []string, env func(string) string, stdout, stderr io.Writer) int {
 		return client.ExitFatal
 	}
 
-	log := slog.New(slog.NewTextHandler(stderr, nil))
+	level := slog.LevelInfo
+	if cfg.Verbose {
+		level = slog.LevelDebug
+	}
+	log := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
 	log.Info("ew-sensor starting",
 		"addr", cfg.Connection.Addr,
 		"tls", cfg.Connection.TLS,
@@ -46,6 +50,7 @@ func run(args []string, env func(string) string, stdout, stderr io.Writer) int {
 		"emitters", cfg.EmitterCount,
 		"rate_hz", cfg.Sensor.Rate,
 		"mobile", cfg.Mobile(),
+		"verbose", cfg.Verbose,
 		"duration", cfg.Duration,
 		"config", cfg.ConfigFile)
 
