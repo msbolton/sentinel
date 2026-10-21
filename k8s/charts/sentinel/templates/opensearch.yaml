@@ -1,0 +1,111 @@
+{{- if .Values.opensearch.enabled }}
+{{- $name := printf "%s-opensearch" (include "sentinel.fullname" .) }}
+{{- $v := .Values.opensearch }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "opensearch" "tier" "data") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9200
+      targetPort: http
+  selector:
+    {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "opensearch") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "opensearch" "tier" "data") | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ $name }}
+  selector:
+    matchLabels:
+      {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "opensearch") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sentinel.podLabels" (dict "ctx" $ "component" "opensearch") | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: 60
+      {{- with $v.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "sentinel.imagePullSecrets" .) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: opensearch
+          image: "{{ $v.image.repository }}:{{ $v.image.tag }}"
+          imagePullPolicy: {{ $v.image.pullPolicy | default "IfNotPresent" }}
+          {{- with $v.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 9200
+          # The Compose settings, except memory_lock: locking the heap needs
+          # IPC_LOCK and an unlimited memlock limit, which a restricted pod
+          # cannot have.
+          env:
+            - name: cluster.name
+              value: sentinel-search
+            - name: node.name
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: discovery.type
+              value: single-node
+            - name: plugins.security.disabled
+              value: "true"
+            - name: DISABLE_INSTALL_DEMO_CONFIG
+              value: "true"
+            - name: bootstrap.memory_lock
+              value: "false"
+            - name: OPENSEARCH_JAVA_OPTS
+              value: {{ $v.javaOpts | quote }}
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          # local=true: the node's own view, so a busy cluster state cannot
+          # time the probe out.
+          readinessProbe:
+            httpGet:
+              path: /_cluster/health?local=true
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/opensearch/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "opensearch") | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.global.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $v.persistence.size }}
+{{- end }}

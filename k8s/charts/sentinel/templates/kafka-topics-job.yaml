@@ -1,0 +1,79 @@
+{{- if and .Values.kafka.enabled .Values.kafka.topics.enabled }}
+{{- $name := printf "%s-kafka-topics" (include "sentinel.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- $script := .Files.Get "files/kafka/create-topics.sh" }}
+{{- if not $script }}
+{{- fail "kafka.topics: files/kafka/create-topics.sh is missing; files/kafka must link to config/kafka (or set kafka.topics.enabled=false)" }}
+{{- end }}
+{{- $v := .Values.kafka }}
+# Creates the topics after a first install and before every upgrade, with the
+# script the kafka-init Compose job runs (files/kafka links to config/kafka). It
+# waits for the broker, creates the topics that are missing and leaves the
+# others alone, so a changed partition count or retention in the script reaches
+# only new topics.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "kafka-topics") | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+data:
+  create-topics.sh: |
+    {{- $script | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "kafka-topics") | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ $v.topics.backoffLimit }}
+  activeDeadlineSeconds: {{ $v.topics.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "sentinel.podLabels" (dict "ctx" $ "component" "kafka-topics") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      # As for the broker: no KAFKA_* service-link variables.
+      enableServiceLinks: false
+      {{- with $v.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "sentinel.imagePullSecrets" .) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: kafka-topics
+          image: "{{ $v.image.repository }}:{{ $v.image.tag }}"
+          imagePullPolicy: {{ $v.image.pullPolicy | default "IfNotPresent" }}
+          {{- with $v.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command: ["/bin/bash", "/scripts/create-topics.sh"]
+          env:
+            - name: KAFKA_BROKER
+              value: {{ include "sentinel.kafkaBrokers" . }}
+            - name: REPLICATION_FACTOR
+              value: {{ $v.topics.replicationFactor | quote }}
+          resources:
+            {{- toYaml $v.topics.resources | nindent 12 }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ $name }}
+{{- end }}

@@ -1,0 +1,191 @@
+{{- if .Values.postgresql.enabled }}
+{{- $name := include "sentinel.postgresHost" . }}
+{{- $v := .Values.postgresql }}
+{{- if not $v.existingSecret }}
+{{- $password := include "sentinel.secretValue" (dict "ctx" $ "name" $name "key" "password") }}
+# Generated once: lookup returns the values of the Secret already in the
+# namespace, and resource-policy keep leaves it behind on helm uninstall, so a
+# reinstall onto the kept volume has the passwords the database was created
+# with. sslmode=disable: the traffic stays inside the cluster.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "postgresql" "tier" "data") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+stringData:
+  postgres-password: {{ include "sentinel.secretValue" (dict "ctx" $ "name" $name "key" "postgres-password") | quote }}
+  username: sentinel
+  password: {{ $password | quote }}
+  keycloak-password: {{ include "sentinel.secretValue" (dict "ctx" $ "name" $name "key" "keycloak-password") | quote }}
+  database-url: {{ printf "postgres://sentinel:%s@%s:5432/sentinel?sslmode=disable" $password $name | quote }}
+---
+{{- end }}
+# Runs once, as the superuser, on the first start against an empty volume,
+# after the image's own 10_postgis.sh (which loads PostGIS into the template
+# database template_postgis). It creates what the services and the schema Job,
+# both connecting as the plain role sentinel, cannot create themselves.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-initdb
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "postgresql" "tier" "data") | nindent 4 }}
+data:
+  20-sentinel.sh: |
+    set -e
+    psql -X -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres \
+      -v sentinel_password="$SENTINEL_PASSWORD" \
+      -v keycloak_password="$KEYCLOAK_PASSWORD" <<'EOSQL'
+    CREATE ROLE sentinel LOGIN PASSWORD :'sentinel_password';
+    -- From template_postgis, so sentinel has the extensions of the Compose
+    -- database (postgis, postgis_topology, fuzzystrmatch, postgis_tiger_geocoder).
+    CREATE DATABASE sentinel OWNER sentinel TEMPLATE template_postgis;
+    CREATE ROLE keycloak LOGIN PASSWORD :'keycloak_password';
+    CREATE DATABASE keycloak OWNER keycloak;
+    -- The GeoServer role, so 90_gis_views.sql finds it and needs no CREATEROLE.
+    -- It cannot log in until ALTER ROLE sentinel_gis PASSWORD sets one.
+    CREATE ROLE sentinel_gis LOGIN;
+    \connect sentinel
+    -- Owned by sentinel, so the schema Job can create and alter the tables.
+    CREATE SCHEMA sentinel AUTHORIZATION sentinel;
+    -- config/postgres/init-extensions.sql, the script Compose runs.
+    {{- .Files.Get "files/postgres/init-extensions.sql" | nindent 4 }}
+    -- 90_gis_views.sql grants these PostGIS catalogues to sentinel_gis.
+    GRANT SELECT ON public.geometry_columns, public.spatial_ref_sys TO sentinel WITH GRANT OPTION;
+    EOSQL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "postgresql" "tier" "data") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+  selector:
+    {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "postgresql") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" "postgresql" "tier" "data") | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ $name }}
+  selector:
+    matchLabels:
+      {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "postgresql") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sentinel.podLabels" (dict "ctx" $ "component" "postgresql") | nindent 8 }}
+    spec:
+      # A fast shutdown rolls back open transactions and checkpoints; give it
+      # time before the kill.
+      terminationGracePeriodSeconds: 60
+      {{- with $v.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "sentinel.imagePullSecrets" .) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: postgresql
+          image: "{{ $v.image.repository }}:{{ $v.image.tag }}"
+          imagePullPolicy: {{ $v.image.pullPolicy | default "IfNotPresent" }}
+          {{- with $v.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_INITDB_ARGS
+              value: "--locale-provider=icu --icu-locale=en-US"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.postgresSecret" . }}
+                  key: postgres-password
+            - name: SENTINEL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.postgresSecret" . }}
+                  key: password
+            - name: KEYCLOAK_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentinel.postgresSecret" . }}
+                  key: keycloak-password
+          # Over TCP: while initdb runs, the temporary server listens on the
+          # socket only, so the pod is not ready until the real one starts.
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+            periodSeconds: 5
+            failureThreshold: 120
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d/20-sentinel.sh
+              subPath: 20-sentinel.sh
+              readOnly: true
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: initdb
+          configMap:
+            name: {{ $name }}-initdb
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ $v.shmSize }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" "postgresql") | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.global.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $v.persistence.size }}
+{{- end }}

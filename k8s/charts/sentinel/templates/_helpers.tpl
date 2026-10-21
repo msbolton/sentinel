@@ -131,6 +131,15 @@ In-cluster addresses of the data tier, which the chart deploys.
 {{ include "sentinel.fullname" . }}-postgresql
 {{- end }}
 
+{{/*
+The Secret with the database credentials (postgres-password, username,
+password, keycloak-password, database-url): postgresql.existingSecret, else the
+one postgresql.yaml generates, named like the host.
+*/}}
+{{- define "sentinel.postgresSecret" -}}
+{{ default (include "sentinel.postgresHost" .) .Values.postgresql.existingSecret }}
+{{- end }}
+
 {{- define "sentinel.kafkaBrokers" -}}
 {{ include "sentinel.fullname" . }}-kafka:9092
 {{- end }}

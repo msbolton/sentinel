@@ -38,12 +38,12 @@ spec:
             - name: DB_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "sentinel.postgresHost" . }}
+                  name: {{ include "sentinel.postgresSecret" . }}
                   key: username
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "sentinel.postgresHost" . }}
+                  name: {{ include "sentinel.postgresSecret" . }}
                   key: password
             - name: KAFKA_BROKERS
               value: {{ include "sentinel.kafkaBrokers" . }}

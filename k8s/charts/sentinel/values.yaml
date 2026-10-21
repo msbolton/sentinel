@@ -16,7 +16,12 @@ global:
   # Secrets of type kubernetes.io/dockerconfigjson for the private registry, as
   # [{name: registry-credentials}], added to every pod.
   imagePullSecrets: []
+  # StorageClass of every volume the chart claims (PostgreSQL, Kafka,
+  # OpenSearch, GeoServer). Empty uses the cluster's default class.
   storageClass: ""
+  # DNS domain of the cluster, for the fully qualified Service names the chart
+  # hands out (Kafka's advertised listener).
+  clusterDomain: cluster.local
 
 # -- Application Services --
 
@@ -261,7 +266,150 @@ web:
 
 # -- Infrastructure --
 # The data tier (PostgreSQL, Kafka, OpenSearch, Keycloak) is added to this
-# chart as templates with their own values; none comes from a subchart.
+# chart as templates with their own values; none comes from a subchart. Each is
+# a one-replica StatefulSet with a volume from global.storageClass: the chart
+# targets a single node, where backups matter more than failover.
+
+# PostgreSQL 16 with PostGIS 3.4, the image Compose runs. Its first start, on an
+# empty volume, runs an initdb script as the superuser postgres: it creates the
+# login roles sentinel and keycloak with their databases, PostGIS and the
+# optional extensions of config/postgres/init-extensions.sql in sentinel, schema
+# sentinel owned by the role sentinel, and sentinel_gis (LOGIN, no password).
+# Later starts skip it, so changing a password in the Secret afterwards does not
+# change it in the database: ALTER ROLE as well.
+postgresql:
+  enabled: true
+  image:
+    # amd64 only. On an arm64 node (k3d on Apple silicon) use a multi-arch
+    # build, such as imresamu/postgis:16-3.4.
+    repository: postgis/postgis
+    tag: "16-3.4"
+    pullPolicy: IfNotPresent
+  # Secret with the keys postgres-password (the superuser postgres), username
+  # (sentinel), password (sentinel's), keycloak-password and database-url
+  # (postgres://sentinel:<password>@<fullname>-postgresql:5432/sentinel?sslmode=disable).
+  # Empty: the chart generates <fullname>-postgresql with random passwords, keeps
+  # them across upgrades, and leaves the Secret behind on helm uninstall
+  # (helm.sh/resource-policy: keep) so a reinstall finds the volume's passwords.
+  existingSecret: ""
+  persistence:
+    size: 50Gi
+  # Memory-backed /dev/shm for parallel queries (a container gets 64 MB).
+  shmSize: 256Mi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  # The image's postgres user (999 in the Debian-based image). fsGroup makes the
+  # volume writable; the data directory is a subdirectory of it (PGDATA), since
+  # initdb refuses a mount point that holds lost+found.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+
+# Apache Kafka in KRaft combined mode (broker and controller in one process),
+# the image and cluster id Compose uses. Clients use PLAINTEXT on 9092 (the
+# NetworkPolicies keep it in the namespace); the controller listens on 9093.
+kafka:
+  enabled: true
+  image:
+    repository: apache/kafka
+    tag: "3.7.0"
+    pullPolicy: IfNotPresent
+  # The KRaft cluster id the volume is formatted with. Changing it on an
+  # existing volume stops the broker from starting.
+  clusterId: MkU3OEVBNTcwNTJENDM2Qk
+  heapOpts: "-Xms768m -Xmx768m"
+  persistence:
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 1536Mi
+  # The topics of config/kafka/create-topics.sh, created by a hook Job after a
+  # first install and before every upgrade (it skips topics that exist).
+  topics:
+    enabled: true
+    # One broker, so one replica of each partition.
+    replicationFactor: 1
+    backoffLimit: 6
+    activeDeadlineSeconds: 600
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  # appuser (1000) of the image, for the broker and the topics Job.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  # Not read-only: the image writes server.properties from the environment at
+  # start.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: [ALL]
+
+# OpenSearch, single node, with the security plugin off: no TLS and no login,
+# so only the NetworkPolicies keep other pods out. Single-node discovery skips
+# the bootstrap checks, so the node needs no vm.max_map_count change (a low one
+# still logs a warning).
+opensearch:
+  enabled: true
+  image:
+    repository: opensearchproject/opensearch
+    tag: "2.17.1"
+    pullPolicy: IfNotPresent
+  javaOpts: "-Xms1g -Xmx1g"
+  persistence:
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  # The image's opensearch user (1000).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  # Not read-only: OpenSearch writes its keystore and logs under
+  # /usr/share/opensearch.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: [ALL]
 
 # Applies db/schema with a Helm hook Job: after the first install creates the
 # release's resources, and before every upgrade (a failing Job aborts it). It
@@ -274,11 +422,13 @@ web:
 #
 # What the database must provide for the Job to work as a plain role:
 # - The Job connects as the role in the database-url key of the
-#   <fullname>-postgresql Secret, the role the services and the gateway use.
+#   <fullname>-postgresql Secret (or postgresql.existingSecret), the role the
+#   services and the gateway use.
 # - That role owns schema sentinel, and the role sentinel_gis exists. The
-#   database's initialisation creates both, but only on an empty data
-#   directory: an existing database needs, once and as a superuser, ALTER SCHEMA
-#   sentinel OWNER TO <role> and CREATE ROLE sentinel_gis LOGIN.
+#   chart's PostgreSQL creates both at its first start (postgresql above), but
+#   only on an empty data directory: another database needs, once and as a
+#   superuser, ALTER SCHEMA sentinel OWNER TO <role> and CREATE ROLE
+#   sentinel_gis LOGIN.
 # - sentinel_gis has no password, so it cannot log in until ALTER ROLE
 #   sentinel_gis PASSWORD ... sets the one GeoServer's provisioning uses
 #   (GIS_DB_PASSWORD, from geoserver.gisDbPassword).
