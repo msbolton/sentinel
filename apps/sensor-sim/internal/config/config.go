@@ -25,6 +25,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -59,6 +60,15 @@ const (
 	DefaultHeartbeatInterval = 5 * time.Second
 	// MaxHeartbeatInterval is the longest --heartbeat-interval (the server's limit).
 	MaxHeartbeatInterval = 300 * time.Second
+	// MaxHeightAboveGroundM is the tallest mounting height the server accepts.
+	MaxHeightAboveGroundM = 1000
+
+	// DefaultCameraElevMinDeg and DefaultCameraElevMaxDeg are the elevation
+	// window of a camera whose configuration sets none: it looks a little
+	// below the horizon and well up into the sky, a 90 degree vertical field.
+	// A radar's default window is unlimited, -90 to +90.
+	DefaultCameraElevMinDeg = -15.0
+	DefaultCameraElevMaxDeg = 75.0
 )
 
 // Config is everything the simulator needs to run. Load returns it normalised
@@ -66,8 +76,12 @@ const (
 type Config struct {
 	Connection Connection `yaml:"connection"`
 	Sensor     Sensor     `yaml:"sensor"`
-	// Scenario is the shared truth the sensor observes.
-	Scenario scenario.Scenario `yaml:"scenario"`
+	// Scenario is the shared truth the sensor observes. ScenarioFile names a
+	// YAML file holding it instead (its keys are the scenario's: epoch and
+	// targets), resolved relative to the configuration file, so a radar and a
+	// camera configuration can share one scenario. At most one may be set.
+	Scenario     scenario.Scenario `yaml:"scenario"`
+	ScenarioFile string            `yaml:"scenarioFile"`
 	// Seed seeds every random draw. SeedGenerated is true when it was chosen
 	// from the clock because none was given, so the caller can log it.
 	Seed          int64         `yaml:"-"`
@@ -131,6 +145,23 @@ type Sensor struct {
 type TerrainConfig struct {
 	CacheDir  string `yaml:"cacheDir"`
 	SourceURL string `yaml:"sourceUrl"`
+}
+
+// ElevationWindow is the elevation coverage in degrees once the kind's
+// defaults fill what the configuration leaves unset: a camera's are
+// DefaultCameraElevMinDeg and DefaultCameraElevMaxDeg, a radar's -90 and +90.
+func (s Sensor) ElevationWindow() (lo, hi float64) {
+	lo, hi = -90, 90
+	if strings.EqualFold(s.Kind, KindEOIR) {
+		lo, hi = DefaultCameraElevMinDeg, DefaultCameraElevMaxDeg
+	}
+	if s.ElevationMinDeg != nil {
+		lo = *s.ElevationMinDeg
+	}
+	if s.ElevationMaxDeg != nil {
+		hi = *s.ElevationMaxDeg
+	}
+	return lo, hi
 }
 
 // HeartbeatEvery is the heartbeat interval, the default when none is set.
@@ -291,6 +322,19 @@ func Load(args []string, env func(string) string) (Config, error) {
 	}
 	cfg := doc.Config
 	cfg.ConfigFile = fv.configFile
+	if cfg.ScenarioFile != "" {
+		if len(cfg.Scenario.Targets) > 0 || !cfg.Scenario.Epoch.IsZero() {
+			return Config{}, fmt.Errorf("config file %s: set scenario or scenarioFile, not both", fv.configFile)
+		}
+		path := cfg.ScenarioFile
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(filepath.Dir(fv.configFile), path)
+		}
+		if err := readScenario(path, &cfg.Scenario); err != nil {
+			return Config{}, redact(err, fv.token, env)
+		}
+		cfg.ScenarioFile = path
+	}
 	if doc.Seed != nil {
 		cfg.Seed = *doc.Seed
 	}
@@ -409,6 +453,21 @@ func readYAML(path string, doc *fileDoc) error {
 	return nil
 }
 
+// readScenario reads a scenario file: the scenario's own keys at the top level.
+func readScenario(path string, s *scenario.Scenario) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("scenario file: %w", err)
+	}
+	defer f.Close()
+	dec := yaml.NewDecoder(f)
+	dec.KnownFields(true)
+	if err := dec.Decode(s); err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("scenario file %s: %w", path, err)
+	}
+	return nil
+}
+
 // redact removes every token candidate from an error message. The errors this
 // package builds never contain the token; this covers messages that come from
 // the flag and YAML libraries, which can quote a value.
@@ -517,18 +576,28 @@ func (c Config) validateSensor(add func(string, ...any)) {
 		add("sensor lon must be in [-180,180] (got %v)", s.Lon)
 	}
 
+	terrainOn := c.Terrain.CacheDir != ""
 	switch {
 	case s.Alt != nil && s.HeightAboveGroundM != nil:
 		add("--alt and --height-above-ground are mutually exclusive")
 	case kind == KindEOIR && s.Alt == nil && s.HeightAboveGroundM == nil:
 		add("an eoir sensor needs --alt or --height-above-ground")
+	case kind == KindRadar && terrainOn && s.Alt == nil && s.HeightAboveGroundM == nil:
+		// Targets sit on the real terrain, so a site left at 0 m would look
+		// up at all of them.
+		add("a radar with terrain needs --alt or --height-above-ground: without one the site is at 0 m, below the targets on the terrain")
+	}
+	if kind == KindEOIR && !terrainOn {
+		// Without terrain the camera would see through hills, and the
+		// targets would sit at 0 m instead of on the ground.
+		add("an eoir sensor needs terrain (--terrain-cache dir): it decides what the camera can see")
 	}
 	if s.Alt != nil && !finite(*s.Alt) {
 		add("sensor alt must be finite (got %v)", *s.Alt)
 	}
 	if h := s.HeightAboveGroundM; h != nil {
-		if !nonNegative(*h) {
-			add("sensor height-above-ground must be >= 0 (got %v)", *h)
+		if !(*h >= 0 && *h <= MaxHeightAboveGroundM) {
+			add("sensor height-above-ground must be from 0 to %d metres (got %v)", MaxHeightAboveGroundM, *h)
 		}
 		if c.Terrain.CacheDir == "" {
 			add("--height-above-ground needs terrain (--terrain-cache)")
@@ -552,8 +621,11 @@ func (c Config) validateSensor(add func(string, ...any)) {
 			add("sensor %s must be in [-90,90] degrees (got %v)", name, *v)
 		}
 	}
-	if lo, hi := s.ElevationMinDeg, s.ElevationMaxDeg; lo != nil && hi != nil && !(*lo < *hi) {
-		add("sensor elev-min must be below elev-max (got %v and %v)", *lo, *hi)
+	// The window the sensor will use, defaults included: --elev-min 80 alone
+	// on a camera meets its default maximum of 75.
+	if lo, hi := s.ElevationWindow(); !(lo < hi) {
+		add("sensor elevation window %v..%v degrees is empty: elev-min must be below elev-max (a camera defaults to %v..%v, a radar to -90..90)",
+			lo, hi, DefaultCameraElevMinDeg, DefaultCameraElevMaxDeg)
 	}
 
 	if !positive(s.Rate) {

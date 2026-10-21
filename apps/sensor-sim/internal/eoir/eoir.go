@@ -35,10 +35,10 @@ const (
 
 const (
 	// DefaultElevMinDeg and DefaultElevMaxDeg are the elevation window of a
-	// camera whose configuration sets none: it looks a little below the
-	// horizon and well up into the sky, a 90 degree vertical field.
-	DefaultElevMinDeg = -15.0
-	DefaultElevMaxDeg = 75.0
+	// camera whose configuration sets none (config validates the window the
+	// camera will use against them).
+	DefaultElevMinDeg = config.DefaultCameraElevMinDeg
+	DefaultElevMaxDeg = config.DefaultCameraElevMaxDeg
 
 	// terrainWait bounds the line-of-sight check for one detection.
 	terrainWait = 2 * time.Second

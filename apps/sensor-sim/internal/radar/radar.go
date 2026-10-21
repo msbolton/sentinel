@@ -40,6 +40,11 @@ const (
 	// falls with the fourth power of range (40 dB per decade) and follows RCS.
 	snrAtMaxRange = 18.0
 	snrFloor      = 3.0
+	// MaxSNRDb caps the reported SNR. The range law grows without bound as
+	// the range shrinks (and divides by zero at the radar), while a real
+	// receiver saturates: 60 dB is a vehicle at about a seventh of the
+	// maximum range.
+	MaxSNRDb = 60.0
 )
 
 // rcsFactor scales the detection probability by how well a kind reflects.
@@ -140,7 +145,7 @@ func (r *Radar) observe(tr scenario.Truth, az, el, rangeM, rangeMax float64) *se
 	if !ok {
 		rcs = rcsDbsm[scenario.KindVehicle]
 	}
-	snr := math.Max(snrFloor, snrAtMaxRange+(rcs-rcsDbsm[scenario.KindVehicle])+40*math.Log10(rangeMax/rangeM))
+	snr := snrDb(rcs, rangeM, rangeMax)
 	quality := math.Max(0.1, math.Min(1, 1-0.5*rangeM/rangeMax))
 
 	name := tr.DisplayName
@@ -175,6 +180,18 @@ func (r *Radar) observe(tr scenario.Truth, az, el, rangeM, rangeMax float64) *se
 			RadarTrackId:             TrackIDPrefix + tr.ID,
 		}}},
 	}
+}
+
+// snrDb is the SNR of a target of radar cross-section rcs (dBsm) at rangeM:
+// snrAtMaxRange for a vehicle at rangeMax, 40 dB more per decade closer, and
+// the RCS difference from a vehicle, kept within [snrFloor, MaxSNRDb]. A range
+// at or below zero is MaxSNRDb.
+func snrDb(rcs, rangeM, rangeMax float64) float64 {
+	if !(rangeM > 0) {
+		return MaxSNRDb
+	}
+	snr := snrAtMaxRange + (rcs - rcsDbsm[scenario.KindVehicle]) + 40*math.Log10(rangeMax/rangeM)
+	return math.Max(snrFloor, math.Min(MaxSNRDb, snr))
 }
 
 // rangeRate is the rate of change of the range from site to the target, m/s:

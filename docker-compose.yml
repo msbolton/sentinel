@@ -890,6 +890,47 @@ services:
       - path: ./secrets/ew-sensor.env
         required: false
 
+  # Simulated radar and EO/IR camera (sensor-sim): one-shot CLIs, one sensor
+  # each, that watch the shared scenario in apps/sensor-sim/examples (traffic
+  # and drones around Keswick) from Latrigg and stream their detections to a
+  # `grpc` connection with sender-managed emplacements. Not started by `up`;
+  # run either or both with
+  #   docker compose -p sentinel --profile inbound --profile sim run --rm radar-sim --addr localhost:<port> --insecure
+  #   docker compose -p sentinel --profile inbound --profile sim run --rm eoir-sim --addr localhost:<port> --insecure
+  # (see docs/sensor-sim.md). Host networking for the reason given at
+  # ew-sensor. Optional secrets/sensor-sim.env (gitignored) holds
+  # SENSOR_SIM_TOKEN=si_... and, if you like, SENSOR_SIM_ADDR=localhost:<port>.
+  # Both keep their Copernicus terrain tiles in the terrain-cache volume, so a
+  # tile is downloaded once. Flags after the service name are added to the
+  # command; the transport (--insecure or --tls) is left to the run line.
+  radar-sim:
+    profiles: ["sim"]
+    image: sentinel/sensor-sim:dev
+    build:
+      context: .
+      dockerfile: ./apps/sensor-sim/Dockerfile
+    network_mode: host
+    env_file:
+      - path: ./secrets/sensor-sim.env
+        required: false
+    entrypoint: ["/app/sensor-sim", "--kind", "radar", "--config", "examples/radar.yaml", "--terrain-cache", "/var/cache/sentinel/terrain"]
+    volumes:
+      - terrain-cache:/var/cache/sentinel/terrain
+
+  eoir-sim:
+    profiles: ["sim"]
+    image: sentinel/sensor-sim:dev
+    build:
+      context: .
+      dockerfile: ./apps/sensor-sim/Dockerfile
+    network_mode: host
+    env_file:
+      - path: ./secrets/sensor-sim.env
+        required: false
+    entrypoint: ["/app/sensor-sim", "--kind", "eoir", "--config", "examples/camera.yaml", "--terrain-cache", "/var/cache/sentinel/terrain"]
+    volumes:
+      - terrain-cache:/var/cache/sentinel/terrain
+
   # ===========================================================================
   # Analytics Service (Go): behavioural baselines and findings
   # ===========================================================================
@@ -1001,6 +1042,11 @@ volumes:
   minio-data:
     driver: local
     name: sentinel-minio-data
+  # Copernicus GLO-30 terrain tiles, downloaded on first use. The simulators
+  # share it, and the ingest services mount it too.
+  terrain-cache:
+    driver: local
+    name: sentinel-terrain-cache
 
 # =============================================================================
 # Networks

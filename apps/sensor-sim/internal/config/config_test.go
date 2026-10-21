@@ -246,7 +246,32 @@ func TestValidate(t *testing.T) {
 		wantErr string
 	}{
 		{"valid", func(*Config) {}, ""},
-		{"valid eoir with alt", func(c *Config) { eoir(c); c.Sensor.Alt = f64(30) }, ""},
+		{"valid eoir with alt", func(c *Config) { eoir(c); c.Sensor.Alt = f64(30); c.Terrain.CacheDir = "/tmp/t" }, ""},
+		{"eoir needs terrain", func(c *Config) { eoir(c); c.Sensor.Alt = f64(30) }, "an eoir sensor needs terrain"},
+		{"radar with terrain needs a height", func(c *Config) { c.Terrain.CacheDir = "/tmp/t" }, "a radar with terrain needs --alt or --height-above-ground"},
+		{"radar with terrain and alt", func(c *Config) { c.Terrain.CacheDir = "/tmp/t"; c.Sensor.Alt = f64(300) }, ""},
+		{"radar with terrain and height", func(c *Config) { c.Terrain.CacheDir = "/tmp/t"; c.Sensor.HeightAboveGroundM = f64(10) }, ""},
+		{"radar without terrain needs no height", func(*Config) {}, ""},
+		{"height too tall", func(c *Config) { c.Terrain.CacheDir = "/tmp/t"; c.Sensor.HeightAboveGroundM = f64(1001) }, "height-above-ground"},
+		// The elevation window is checked after the kind's defaults apply: a
+		// camera's is -15..+75 and a radar's -90..+90.
+		{"camera elev-min alone above the default max", func(c *Config) {
+			eoir(c)
+			c.Sensor.Alt, c.Terrain.CacheDir = f64(30), "/tmp/t"
+			c.Sensor.ElevationMinDeg = f64(80)
+		}, "elevation window"},
+		{"camera elev-max alone below the default min", func(c *Config) {
+			eoir(c)
+			c.Sensor.Alt, c.Terrain.CacheDir = f64(30), "/tmp/t"
+			c.Sensor.ElevationMaxDeg = f64(-20)
+		}, "elevation window"},
+		{"camera elev-min alone inside the default", func(c *Config) {
+			eoir(c)
+			c.Sensor.Alt, c.Terrain.CacheDir = f64(30), "/tmp/t"
+			c.Sensor.ElevationMinDeg = f64(-5)
+		}, ""},
+		{"radar elev-min alone at the top", func(c *Config) { c.Sensor.ElevationMinDeg = f64(90) }, "elevation window"},
+		{"radar elev-min alone", func(c *Config) { c.Sensor.ElevationMinDeg = f64(80) }, ""},
 		{"valid eoir with height", func(c *Config) {
 			eoir(c)
 			c.Sensor.HeightAboveGroundM = f64(5)
@@ -262,7 +287,7 @@ func TestValidate(t *testing.T) {
 			c.Sensor.HeightAboveGroundM = f64(-1)
 			c.Terrain.CacheDir = "/tmp/t"
 		}, "height-above-ground"},
-		{"bad band", func(c *Config) { eoir(c); c.Sensor.Alt = f64(1); c.Sensor.Band = "UV" }, "band"},
+		{"bad band", func(c *Config) { eoir(c); c.Sensor.Alt = f64(1); c.Terrain.CacheDir = "/tmp/t"; c.Sensor.Band = "UV" }, "band"},
 		{"sigma az zero", func(c *Config) { c.Sensor.SigmaAzDeg = 0 }, "sigma-az"},
 		{"sigma el negative", func(c *Config) { c.Sensor.SigmaElDeg = -1 }, "sigma-el"},
 		{"sigma range zero", func(c *Config) { c.Sensor.SigmaRangeM = 0 }, "sigma-range-m"},
@@ -273,7 +298,7 @@ func TestValidate(t *testing.T) {
 		{"width zero", func(c *Config) { c.Sensor.Width = 0 }, "width"},
 		{"range zero", func(c *Config) { c.Sensor.RangeKm = 0 }, "range-km"},
 		{"min range above range", func(c *Config) { c.Sensor.MinRangeKm = 20 }, "min-range-km"},
-		{"elevation order", func(c *Config) { c.Sensor.ElevationMinDeg, c.Sensor.ElevationMaxDeg = f64(30), f64(10) }, "elev"},
+		{"elevation order", func(c *Config) { c.Sensor.ElevationMinDeg, c.Sensor.ElevationMaxDeg = f64(30), f64(10) }, "elevation window"},
 		{"elevation out of range", func(c *Config) { c.Sensor.ElevationMaxDeg = f64(95) }, "elev-max"},
 		{"lat unset", func(c *Config) { c.Sensor.Lat, c.Sensor.Lon = 0, 0 }, "lat/lon"},
 		{"lat out of range", func(c *Config) { c.Sensor.Lat = 91 }, "lat"},
@@ -330,4 +355,102 @@ func TestUsageMentionsEveryFlag(t *testing.T) {
 			t.Errorf("usage lacks --%s", f)
 		}
 	}
+}
+
+func TestElevationWindow(t *testing.T) {
+	tests := []struct {
+		name   string
+		kind   string
+		lo, hi *float64
+		wantLo float64
+		wantHi float64
+	}{
+		{"camera defaults", KindEOIR, nil, nil, DefaultCameraElevMinDeg, DefaultCameraElevMaxDeg},
+		{"camera min only", KindEOIR, f64(-5), nil, -5, DefaultCameraElevMaxDeg},
+		{"camera max only", KindEOIR, nil, f64(30), DefaultCameraElevMinDeg, 30},
+		{"radar unlimited", KindRadar, nil, nil, -90, 90},
+		{"radar both", KindRadar, f64(-2), f64(40), -2, 40},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := Sensor{Kind: tc.kind, ElevationMinDeg: tc.lo, ElevationMaxDeg: tc.hi}
+			lo, hi := s.ElevationWindow()
+			if lo != tc.wantLo || hi != tc.wantHi {
+				t.Fatalf("window %v..%v, want %v..%v", lo, hi, tc.wantLo, tc.wantHi)
+			}
+		})
+	}
+}
+
+// --elev-min 80 alone on a camera leaves the default max of 75 above it, so
+// Load refuses it rather than build a camera that can see nothing.
+func TestLoadRefusesCameraElevMinAboveDefaultMax(t *testing.T) {
+	file := writeFile(t, scenarioYAML())
+	_, err := Load([]string{"--kind", "eoir", "--addr", "ingest:50051", "--token", "si_flagtoken", "--insecure",
+		"--lat", "45", "--lon", "10", "--alt", "100", "--terrain-cache", "/tmp/t", "--config", file, "--elev-min", "80"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "elevation window") {
+		t.Fatalf("Load = %v, want an elevation window error", err)
+	}
+}
+
+func TestScenarioFileInclude(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	write("shared/scenario.yaml", `epoch: 2026-10-21T00:00:00Z
+targets:
+  - id: v1
+    kind: vehicle
+    speedKts: 20
+    loop: true
+    waypoints:
+      - {lat: 45.0, lon: 10.0}
+      - {lat: 45.0, lon: 10.1}
+`)
+	t.Run("relative to the config file", func(t *testing.T) {
+		cfg := write("radar.yaml", "scenarioFile: shared/scenario.yaml\n")
+		c, err := Load(baseArgs("--config", cfg), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(c.Scenario.Targets) != 1 || c.Scenario.Targets[0].ID != "v1" {
+			t.Fatalf("scenario %+v", c.Scenario)
+		}
+		if want := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC); !c.Scenario.Epoch.Equal(want) {
+			t.Fatalf("epoch %v, want %v", c.Scenario.Epoch, want)
+		}
+	})
+	t.Run("absolute path", func(t *testing.T) {
+		cfg := write("abs.yaml", "scenarioFile: "+filepath.Join(dir, "shared/scenario.yaml")+"\n")
+		if _, err := Load(baseArgs("--config", cfg), nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("not both", func(t *testing.T) {
+		cfg := write("both.yaml", "scenarioFile: shared/scenario.yaml\n"+scenarioYAML())
+		if _, err := Load(baseArgs("--config", cfg), nil); err == nil || !strings.Contains(err.Error(), "scenarioFile") {
+			t.Fatalf("Load = %v, want a scenario/scenarioFile conflict", err)
+		}
+	})
+	t.Run("missing file", func(t *testing.T) {
+		cfg := write("missing.yaml", "scenarioFile: nope.yaml\n")
+		if _, err := Load(baseArgs("--config", cfg), nil); err == nil || !strings.Contains(err.Error(), "nope.yaml") {
+			t.Fatalf("Load = %v, want an error naming the file", err)
+		}
+	})
+	t.Run("unknown keys refused", func(t *testing.T) {
+		write("bad-scenario.yaml", "epoch: 2026-10-21T00:00:00Z\nbogus: 1\n")
+		cfg := write("bad.yaml", "scenarioFile: bad-scenario.yaml\n")
+		if _, err := Load(baseArgs("--config", cfg), nil); err == nil || !strings.Contains(err.Error(), "bogus") {
+			t.Fatalf("Load = %v, want an unknown-field error", err)
+		}
+	})
 }

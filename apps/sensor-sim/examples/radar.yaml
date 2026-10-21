@@ -1,0 +1,39 @@
+# A ground surveillance radar on Latrigg, the fell above Keswick: 360
+# degrees out to 10 km, 10 m up a mast. It sees the traffic on the A66, the
+# A591 and round Derwentwater, the walker on Cat Bells and both drones,
+# except where the fells hide them.
+#
+#   sensor-sim --kind radar --addr localhost:6200 --insecure --config examples/radar.yaml
+#
+# The address, token and transport come from the command line or the
+# environment (SENSOR_SIM_ADDR, SENSOR_SIM_TOKEN or SENTINEL_INGEST_TOKEN);
+# keep the token out of this file.
+sensor:
+  kind: radar
+  # The emplacement name: unique across Sentinel, so the camera has its own.
+  name: Latrigg radar
+  lat: 54.6133
+  lon: -3.1153
+  # Mounted 10 m above the ground; the site altitude is the terrain plus
+  # this. Use alt (metres above the WGS84 ellipsoid) to give it outright.
+  heightAboveGroundM: 10
+  boresight: 0
+  width: 360
+  rangeKm: 10
+  minRangeKm: 0.2
+  rate: 1
+  pd: 0.9
+  sigmaAzDeg: 0.3
+  sigmaElDeg: 0.5
+  sigmaRangeM: 15
+  heartbeatInterval: 5s
+
+# The targets, shared with examples/camera.yaml (relative to this file).
+scenarioFile: scenario.yaml
+
+terrain:
+  # Copernicus GLO-30 tiles are downloaded here on first use (about 15 MB
+  # for this area) and reused. This is the path the Compose services mount
+  # the sentinel-terrain-cache volume at; from source pass
+  # --terrain-cache ~/.cache/sentinel/terrain or similar.
+  cacheDir: /var/cache/sentinel/terrain

@@ -344,3 +344,29 @@ func TestRadarRCSByKind(t *testing.T) {
 }
 
 func ptr(v float64) *float64 { return &v }
+
+// SNR follows the fourth-power range law but stays finite: a target at (or
+// numerically at) the radar, or one closer than the law makes sense for, is
+// capped at MaxSNRDb.
+func TestSNR(t *testing.T) {
+	tests := []struct {
+		name           string
+		rcs, rangeM    float64
+		rangeMax, want float64
+	}{
+		{"vehicle at max range", 10, 10000, 10000, snrAtMaxRange},
+		{"vehicle at a tenth of max range", 10, 1000, 10000, snrAtMaxRange + 40},
+		{"drone at max range is floored", -15, 10000, 10000, snrFloor},
+		{"vehicle very close is capped", 10, 1, 10000, MaxSNRDb},
+		{"zero range is capped", 10, 0, 10000, MaxSNRDb},
+		{"negative range is capped", 10, -5, 10000, MaxSNRDb},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := snrDb(tc.rcs, tc.rangeM, tc.rangeMax)
+			if math.IsNaN(got) || math.IsInf(got, 0) || math.Abs(got-tc.want) > 1e-9 {
+				t.Fatalf("snrDb(%v, %v, %v) = %v, want %v", tc.rcs, tc.rangeM, tc.rangeMax, got, tc.want)
+			}
+		})
+	}
+}
