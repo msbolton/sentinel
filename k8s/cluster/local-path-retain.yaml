@@ -1,0 +1,19 @@
+# k3s only: a copy of the local-path StorageClass k3s installs, with
+# reclaimPolicy Retain instead of Delete, for k8s/overlays/prod/values.yaml
+# (global.storageClass: local-path-retain). Deleting a claim, a StatefulSet's
+# claims or the whole namespace then leaves the volume's directory on the node
+# (under /var/lib/rancher/k3s/storage) and its PersistentVolume Released, so a
+# mistaken delete does not take the database with it. Apply once per cluster,
+# before the first install:
+#   kubectl apply -f k8s/cluster/local-path-retain.yaml
+# A Released volume is not bound again by itself: restore from the backups
+# (docs/infrastructure.md), or copy the files out of the directory its
+# PersistentVolume names (spec.hostPath.path). Delete Released volumes, and
+# their directories, by hand once they are no longer needed.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-path-retain
+provisioner: rancher.io/local-path
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer

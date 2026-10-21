@@ -1,0 +1,114 @@
+# Production on one k3s node (docs/deployment.md). make deploy layers it over
+# the chart's defaults, then your site file over it:
+#   make deploy REGISTRY=registry.example.com VALUES=sentinel-site.yaml
+# It holds no secrets and no site settings: global.host, the issuer, mail, the
+# Secrets you create (ingest token, mail password, map keys, rclone) and the
+# pull secret go in the site file, kept outside the repository.
+#
+# Sizing. The requests below add up to about 3.2 CPU and 7.2 GiB, for a node
+# with at least 4 vCPU, 16 GB of memory and a 100 GB SSD: the rest is for k3s,
+# Traefik, cert-manager, the hook Jobs and the surge pods of a rolling update.
+# Limits are the chart's defaults, so pods can burst above their requests.
+
+global:
+  # The Retain copy of k3s's local-path class (k8s/cluster/local-path-retain.yaml):
+  # deleting a claim, or the namespace, leaves its data on the node. The class of
+  # a StatefulSet's claims cannot change later, so create it before the first
+  # install.
+  storageClass: local-path-retain
+
+apiGateway:
+  replicaCount: 1
+  resources:
+    requests: { cpu: 200m, memory: 256Mi }
+
+entityService:
+  replicaCount: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+
+trackService:
+  replicaCount: 1
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+
+searchService:
+  replicaCount: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+
+linkAnalysisService:
+  replicaCount: 1
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+
+alertService:
+  replicaCount: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+
+analyticsService:
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+
+web:
+  replicaCount: 1
+
+ingestService:
+  # Two, so feeds fail over to the other replica (lease TTL 15 s) while one
+  # restarts. 1 is enough on a busy node.
+  replicaCount: 2
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+  env:
+    # The ports a TCP, UDP or gRPC connection may not listen on. The value
+    # REPLACES the service's default list, so it repeats Sentinel's own ports
+    # (3000-3005 ... 9600, registry.DefaultReservedPorts in
+    # apps/ingest-service/internal/registry/ports.go) and adds the node's: the
+    # k3s API server and supervisor (6443, 6444, 9345), containerd's stream
+    # server (10010), the kubelet, kube-proxy and controllers (10248-10260),
+    # etcd (2379-2381), flannel VXLAN and WireGuard (8472, 51820-51821), a node
+    # exporter (9100) and the NodePort range (30000-32767). The listener runs on
+    # the host network, so a connection on one of these would take the node's
+    # own port. Add any other port the node serves; make chart-lint checks that
+    # the default list is still covered.
+    INGEST_RESERVED_PORTS: "2379-2381,3000-3005,4000,4010,4200,5000,5001,5432,6443,6444,8080,8472,8600,9000,9001,9092,9093,9100,9200,9345,9600,10010,10248-10260,30000-32767,51820-51821"
+
+# The listener runs on the node labelled sentinel.io/ingest-listener=true (the
+# chart's default nodeSelector): label it before the first install.
+ingestListener:
+  enabled: true
+
+postgresql:
+  persistence:
+    size: 30Gi
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+
+kafka:
+  persistence:
+    size: 20Gi
+
+opensearch:
+  # OpenSearch refuses writes once the node's disk passes its high watermark
+  # (90%): keep the node's disk below 85%, whatever these sizes say (local-path
+  # does not enforce them).
+  persistence:
+    size: 10Gi
+
+networkPolicy:
+  # Where the host-network listener's connections to PostgreSQL and Kafka come
+  # from: the cni0 address of a single k3s node (flannel gives the first node
+  # 10.42.0.0/24, and its bridge 10.42.0.1). Check it on the node with
+  # ip -4 addr show cni0, and once the listener runs with
+  # SELECT DISTINCT client_addr FROM pg_stat_activity. Empty would leave
+  # PostgreSQL and Kafka open to every pod of the cluster.
+  hostNetworkCIDRs: ["10.42.0.1/32"]
+
+backup:
+  # A dump before every upgrade too (skipped on the first install), so a failed
+  # upgrade can be undone from a backup taken just before it.
+  preUpgrade:
+    enabled: true
+  persistence:
+    size: 15Gi
