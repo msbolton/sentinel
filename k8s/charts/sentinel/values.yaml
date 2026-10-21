@@ -701,10 +701,11 @@ networkPolicy:
         app.kubernetes.io/name: traefik
   # The ingest listener runs on the host network, so its connections to
   # PostgreSQL and Kafka come from a node address, not a pod address: list the
-  # CIDRs they come from (the listener node's address and, for traffic to a pod
-  # on the same node, its pod-network gateway, e.g. 10.42.0.1/32 on k3s). With
-  # the listener enabled and this list empty, PostgreSQL and Kafka accept
-  # anyone inside the cluster.
+  # CIDRs they come from: for a pod on the same node its pod-network gateway
+  # (10.42.0.1/32 on a single k3s node), from another node usually that node's
+  # address; confirm with pg_stat_activity's client_addr. With the listener
+  # enabled and this list empty, PostgreSQL and Kafka accept every source on
+  # their port (pods in any namespace, the nodes).
   hostNetworkCIDRs: []
   # Prometheus, for the services whose ServiceMonitor the chart renders
   # (appServices.serviceMonitor, ingestService.serviceMonitor). The listener's
