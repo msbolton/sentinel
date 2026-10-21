@@ -1,0 +1,30 @@
+# Build context for every image (context is the repo root). Keep the
+# Dockerfiles' COPY sources (libs, proto, apps, package files) and drop the rest.
+**/node_modules
+**/dist
+**/coverage
+.nx
+.angular
+.git
+.gitignore
+.superpowers
+.idea
+.vscode
+.DS_Store
+tmp
+out-tsc
+*.log
+
+# Deployment config and docs are not baked into images
+k8s
+docs
+
+# Secrets must never reach a build context
+.env
+.env.*
+!.env.example
+secrets
+**/*.pem
+**/*.key
+**/*.p12
+**/*.jks
