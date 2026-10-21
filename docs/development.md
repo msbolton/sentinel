@@ -61,6 +61,18 @@ Seeded entities are queryable through the gateway as soon as the entity-service 
 | `make docker-logs` | Tail all container logs |
 | `make docker-build` | Build all Docker images |
 
+### Images and deployment
+
+`docs/deployment.md` is the runbook these follow.
+
+| Command | Description |
+|---------|-------------|
+| `make images-push REGISTRY=<registry>` | Build the nine images for `PLATFORM` (`linux/amd64`) and push them as `<registry>/sentinel/<name>:<TAG>`, one at a time; `TAG` defaults to the commit's short hash |
+| `make images-local` | Build them for this machine and load them as `sentinel/<name>:<TAG>` (for `k3d image import`) |
+| `make chart-lint` | Lint and render the Helm chart, its overlays included, and validate the output with kubeconform |
+| `make deploy REGISTRY=<registry> VALUES=<site file>` | `helm upgrade --install` the release (`RELEASE`, `NAMESPACE`: `sentinel`) with `k8s/overlays/prod/values.yaml`, then `VALUES`, and the images of `REGISTRY` and `TAG`; `HELM_ARGS` adds flags |
+| `make backup-now` | Run the release's backup CronJob now, wait for it and print its log |
+
 ### Testing & Linting
 
 | Target | Description |
