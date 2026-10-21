@@ -43,7 +43,7 @@ Indexes: GiST on `position`; B-tree on `"entityType"`, `source`, `classification
 
 ### sentinel.entity_identities / sentinel.entity_sources
 
-`entity_identities` maps a natural identifier (`"identityType"`, `"identityValue"`, primary key) to an entity, with first and last seen times. An observation whose canonical identity matches joins that entity regardless of the feed it came from; a secondary identity (callsign, registration, IMO) that would merge two entities is counted, not applied. A soft delete keeps the entity's identity rows, but a deleted entity's identities are released to the next report that carries them: that report creates a new entity and the canonical identity row moves to it (the entity service also drops its resolver cache on every delete). `entity_sources` keeps one row per entity and feed with the source's own id, the last observed and received times and an observation count; the ageout threshold of an entity is the largest threshold over its sources.
+`entity_identities` maps a natural identifier (`"identityType"`, `"identityValue"`, primary key) to an entity, with first and last seen times. An observation whose canonical identity matches joins that entity regardless of the feed it came from; a secondary identity (callsign, registration, IMO) that would merge two entities is counted, not applied. A soft delete keeps the entity's identity rows, but a deleted entity's identities are released to the next report that carries them: that report creates a new entity and the canonical identity row moves to it. A replica that still caches the deleted entity's id drops it when a report for it fails to apply (that report is stored as `ENTITY_DELETED`), so the next report creates the new entity; the replica that served the delete drops its cache at once. `entity_sources` keeps one row per entity and feed with the source's own id, the last observed and received times and an observation count; the ageout threshold of an entity is the largest threshold over its sources.
 
 ### sentinel.observations
 
@@ -54,7 +54,7 @@ One row per report from any feed, accepted or not; a TimescaleDB hypertable on `
 | `"observationId"`, `"observedAt"` | Primary key. The id is a UUIDv5 over feed id, source entity id, source timestamp and decoder, so a redelivered report is a no-op |
 | `"receivedAt"`, `"ingestedAt"` | When the ingest replica received it and when the entity-service stored it |
 | `"entityId"`, `"feedId"`, `driver`, `decoder`, `"sourceEntityId"`, `source`, `"sensorId"` | Provenance |
-| `accepted`, `"rejectReason"` | `DUPLICATE`, `STALE_FIX` or `INVALID_POSITION` when not accepted |
+| `accepted`, `"rejectReason"` | `DUPLICATE`, `STALE_FIX`, `INVALID_POSITION` or `ENTITY_DELETED` (resolved to an entity deleted since) when not accepted |
 | `position`, `altitude`, `heading`, `"speedKnots"`, `course`, velocities, accelerations, errors, covariances | The fix as reported |
 | `identities` | JSON array of `{type, value}` |
 | `platform` | Platform detail as JSON |
