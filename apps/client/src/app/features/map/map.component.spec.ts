@@ -455,6 +455,8 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
   describe('terrain-aware heights and uncertainty', () => {
     const cov = () => covFromEllipse(300, 120, 20);
 
+    beforeEach(() => terrainOn.set(true));
+
     function radarDrone(over: Partial<Entity> = {}): Entity {
       return baseSignalEntity({
         id: 'rdr-1',
@@ -470,6 +472,32 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     it('adds a radar drone relative to the ground at its height above ground', () => {
       (component as any).addOrUpdateCesiumEntity(radarDrone());
       const ent = (component as any).entityMap.get('rdr-1');
+      expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.RELATIVE_TO_GROUND);
+      expect(ent.label.heightReference).toBe(fakeCesium.HeightReference.RELATIVE_TO_GROUND);
+      expect(ent._posProp.value).toEqual({ lon: 8.0, lat: 46.5, alt: 120 });
+    });
+
+    it('draws a radar drone absolute at its altitude while terrain is off', () => {
+      terrainOn.set(false);
+      (component as any).addOrUpdateCesiumEntity(radarDrone());
+      const ent = (component as any).entityMap.get('rdr-1');
+      expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.NONE);
+      expect(ent._posProp.value).toEqual({ lon: 8.0, lat: 46.5, alt: 940 });
+    });
+
+    it('switches an existing radar drone between absolute and relative when terrain toggles', () => {
+      (component as any).addOrUpdateCesiumEntity(radarDrone());
+      const ent = (component as any).entityMap.get('rdr-1');
+      expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.RELATIVE_TO_GROUND);
+
+      terrainOn.set(false);
+      fixture.detectChanges();
+      expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.NONE);
+      expect(ent.label.heightReference).toBe(fakeCesium.HeightReference.NONE);
+      expect(ent._posProp.value).toEqual({ lon: 8.0, lat: 46.5, alt: 940 });
+
+      terrainOn.set(true);
+      fixture.detectChanges();
       expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.RELATIVE_TO_GROUND);
       expect(ent.label.heightReference).toBe(fakeCesium.HeightReference.RELATIVE_TO_GROUND);
       expect(ent._posProp.value).toEqual({ lon: 8.0, lat: 46.5, alt: 120 });
@@ -540,6 +568,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     });
 
     it('drops the ellipse outline while terrain is on, and restores it when terrain is turned off', () => {
+      terrainOn.set(false);
       (component as any).addOrUpdateCesiumEntity(baseSignalEntity({ kinematics: { positionCovariance: cov() } }));
       const ent = (component as any).entityMap.get('sig-1');
       expect(ent.ellipse.outline).toBe(true);

@@ -524,7 +524,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.viewer.creditDisplay?.addStaticCredit(new Cesium.Credit(COPERNICUS_CREDIT, true));
 
       // Cesium World Terrain, on by default with an ion token. It loads in
-      // the background; the globe is the plain ellipsoid until it arrives.
+      // the background; setTerrain leaves the globe without a terrain provider
+      // (a blank placeholder globe) until World Terrain is ready, or until it
+      // fails and the service restores the ellipsoid.
       void this.terrainService.init(this.viewer, Cesium);
 
       // Set initial camera position
@@ -883,8 +885,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const rawTrail = trailBuffer ? trailBuffer.toArray() : [];
     const trail = decimateTrail(rawTrail, this.currentCameraAltitude, TRACK_TRAIL_CONFIG.decimation);
 
-    // A radar target sits at its height above the ground, not at its ellipsoid altitude.
-    const heightMode = heightModeOf(entity);
+    // A radar target sits at its height above the ground (only while terrain is
+    // on), not at its ellipsoid altitude.
+    const heightMode = heightModeOf(entity, this.terrainService.terrainEnabled());
     const relativeHeightM = heightMode.kind === 'relative' ? heightMode.heightM : undefined;
     const position = Cesium.Cartesian3.fromDegrees(
       entity.position.longitude,
@@ -1965,8 +1968,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (!axes) return undefined;
     const fillAlpha = isStale ? 0.05 : 0.12;
     const outlineAlpha = isStale ? 0.22 : 0.55;
-    // Cesium cannot outline an ellipse clamped to terrain, so the outline only
-    // exists over the plain ellipsoid.
+    // Cesium drops the outline of any CLAMP_TO_GROUND ellipse, terrain or not
+    // (GeometryUpdater). Asking for none while terrain is on only avoids its
+    // one-time warning; the behaviour is the same either way.
     const outline = !this.terrainService.terrainEnabled();
     return {
       semiMajorAxis: axes.semiMajorM,
@@ -2001,11 +2005,36 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     return typeof height === 'number' && Number.isFinite(height) ? height : 0;
   }
 
-  /** Terrain went on or off: redraw the ellipses (outline) and the drop line (ground height). */
+  /**
+   * Terrain went on or off: re-apply the height mode of every entity (a radar
+   * target is relative to the ground only with terrain), redraw the ellipses
+   * (outline) and the drop line (ground height).
+   */
   private onTerrainChanged(): void {
     if (!this.viewer || !this.Cesium || this.viewer.isDestroyed?.()) return;
+    const now = this.wsService.serverNow();
+    const terrainOn = this.terrainService.terrainEnabled();
     for (const cesiumEntity of this.entityMap.values()) {
       const entity = cesiumEntity._sentinelEntity as Entity | undefined;
+      if (entity?.position) {
+        const mode = heightModeOf(entity, terrainOn);
+        const relativeHeightM = mode.kind === 'relative' ? mode.heightM : undefined;
+        const heightRef = this.heightReferenceOf(mode);
+        if (cesiumEntity._heightRef !== heightRef || cesiumEntity._relativeHeightM !== relativeHeightM) {
+          cesiumEntity._heightRef = heightRef;
+          cesiumEntity._relativeHeightM = relativeHeightM;
+          if (cesiumEntity.billboard) cesiumEntity.billboard.heightReference = heightRef;
+          if (cesiumEntity.label) cesiumEntity.label.heightReference = heightRef;
+          const shown = this.deadReckoning.positionOf(entity.id, now);
+          cesiumEntity._posProp?.setValue(
+            this.Cesium.Cartesian3.fromDegrees(
+              shown?.lon ?? entity.position.longitude,
+              shown?.lat ?? entity.position.latitude,
+              relativeHeightM ?? shown?.alt ?? entity.position.altitude ?? 0,
+            ),
+          );
+        }
+      }
       if (!entity || (!cesiumEntity.ellipse && !drawsUncertainty(entity))) continue;
       const ellipse = this.buildSignalEllipse(entity, this.entityColor(entity), this.isEntityStale(entity));
       const key = this.ellipseKeyOf(ellipse, this.isEntityStale(entity));

@@ -11,14 +11,16 @@ export type HeightMode = { kind: 'absolute' | 'clamp' | 'relative'; heightM: num
 
 /**
  * The height rule for drawing an entity, first match wins:
- *  1. a radar height above ground: relative to the terrain at that height;
+ *  1. a radar height above ground, with terrain on: relative to the terrain at
+ *     that height (over the plain ellipsoid it would sit hundreds of metres
+ *     below its own trail, so it falls through to the altitude rules);
  *  2. a GROUND track: clamped to the terrain;
  *  3. an altitude above zero: absolute (ellipsoidal, as every altitude is);
  *  4. anything else: clamped.
  */
-export function heightModeOf(e: Entity): HeightMode {
+export function heightModeOf(e: Entity, terrainOn: boolean): HeightMode {
   const aboveGround = e.platformData?.radar?.heightAboveGroundM;
-  if (aboveGround != null && Number.isFinite(aboveGround)) {
+  if (terrainOn && aboveGround != null && Number.isFinite(aboveGround)) {
     return { kind: 'relative', heightM: aboveGround };
   }
   if (e.trackEnvironment === TrackEnvironment.GROUND) {
