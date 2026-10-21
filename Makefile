@@ -1,9 +1,16 @@
-.PHONY: help proto proto-check proto-test build test lint docker-up docker-down docker-infra clean db-schema db-seed chart-lint
+.PHONY: images-push images-local help proto proto-check proto-test build test lint docker-up docker-down docker-infra clean db-schema db-seed chart-lint
 
 SHELL := /bin/bash
 
 # Go services
 GO_SERVICES := api-gateway ingest-service entity-service track-service search-service link-analysis-service alert-service analytics-service ew-sensor
+
+# Container images (the names the Helm chart pulls as sentinel/<name>). The
+# ew-sensor simulator is not deployed, so it is not listed. "web" is built from apps/client.
+IMAGES := api-gateway entity-service track-service search-service link-analysis-service alert-service ingest-service analytics-service web
+REGISTRY ?=
+TAG ?= $(shell git rev-parse --short HEAD)
+PLATFORM ?= linux/amd64
 
 # ============================================================================
 # SENTINEL - Geospatial Intelligence Platform
@@ -155,6 +162,26 @@ docker-logs: ## Tail all service logs
 
 docker-build: ## Build all Docker images
 	docker-compose build
+
+# Needs docker buildx. Foreign-platform builds of the librdkafka services run under
+# emulation (QEMU/Rosetta), so each image is built and pushed on its own to keep
+# memory down. For a throwaway registry on this machine:
+#   docker run -d -p 5005:5000 --name reg registry:2
+#   make images-push REGISTRY=localhost:5005
+images-push: ## Build IMAGES for PLATFORM (default linux/amd64) and push REGISTRY/sentinel/<name>:TAG one at a time (make images-push REGISTRY=registry.example.com)
+	@test -n "$(REGISTRY)" || { echo "REGISTRY is required, e.g. make images-push REGISTRY=registry.example.com"; exit 1; }
+	@for img in $(IMAGES); do \
+		echo "== $$img ($(PLATFORM)) -> $(REGISTRY)/sentinel/$$img:$(TAG)"; \
+		docker buildx build --platform $(PLATFORM) -f apps/$${img/web/client}/Dockerfile \
+			-t $(REGISTRY)/sentinel/$$img:$(TAG) --push . || exit 1; \
+	done
+
+images-local: ## Build IMAGES for this machine's own platform and load them as sentinel/<name>:TAG, one at a time
+	@for img in $(IMAGES); do \
+		echo "== $$img (native) -> sentinel/$$img:$(TAG)"; \
+		docker buildx build -f apps/$${img/web/client}/Dockerfile \
+			-t sentinel/$$img:$(TAG) --load . || exit 1; \
+	done
 
 # ----------------------------------------------------------------------------
 # Testing
