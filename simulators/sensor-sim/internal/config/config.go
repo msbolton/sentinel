@@ -3,9 +3,12 @@
 // Values come from built-in defaults (which depend on the kind), an optional
 // YAML file (--config) and command-line flags, in increasing order of
 // precedence. Two connection values also read the environment: the token
-// (SENSOR_SIM_TOKEN, then SENTINEL_INGEST_TOKEN, then ew-sensor's deprecated
-// EW_SENSOR_TOKEN) and the address (SENSOR_SIM_ADDR, then the deprecated
-// EW_SENSOR_ADDR), which sit between the flags and the YAML. A flag overrides
+// (SENSOR_SIM_TOKEN, then ew-sensor's deprecated EW_SENSOR_TOKEN, then
+// SENTINEL_INGEST_TOKEN) and the address (SENSOR_SIM_ADDR, then the deprecated
+// EW_SENSOR_ADDR), which sit between the flags and the YAML. The deprecated
+// names outrank SENTINEL_INGEST_TOKEN because Compose gives esm-sim its own
+// env file (a simulator's own variables beat a generic one that a shared file
+// may also set). A flag overrides
 // only when it was set explicitly on the command line, so --rate 1 beats a
 // YAML rate of 5 even though 1 is the default.
 //
@@ -43,7 +46,8 @@ const (
 	EnvFallbackToken = "SENTINEL_INGEST_TOKEN"
 	EnvAddr          = "SENSOR_SIM_ADDR"
 	// EnvDeprecatedToken and EnvDeprecatedAddr are ew-sensor's names, read
-	// last so an existing secrets/ew-sensor.env keeps working. Load warns
+	// below EnvToken and EnvAddr but above EnvFallbackToken, so an existing
+	// secrets/ew-sensor.env keeps working for esm-sim. Load warns
 	// (Config.Warnings) whenever one is set.
 	EnvDeprecatedToken = "EW_SENSOR_TOKEN"
 	EnvDeprecatedAddr  = "EW_SENSOR_ADDR"
@@ -394,7 +398,7 @@ func newFlagSet(fv *flagValues, d Config) *flag.FlagSet {
 	fs.StringVar(&fv.configFile, "config", "", "YAML `file` with the connection, sensor, scenario and terrain; flags override it")
 
 	fs.StringVar(&fv.addr, "addr", "", "ingest service `host:port` (env "+EnvAddr+")")
-	fs.StringVar(&fv.token, "token", "", "ingest token (env "+EnvToken+" or "+EnvFallbackToken+")")
+	fs.StringVar(&fv.token, "token", "", "ingest token (env "+EnvToken+", else "+EnvDeprecatedToken+" or "+EnvFallbackToken+")")
 	fs.BoolVar(&fv.insecure, "insecure", false, "plaintext h2c; the token travels in clear (exactly one of --insecure and --tls)")
 	fs.BoolVar(&fv.tls, "tls", false, "use TLS (exactly one of --insecure and --tls)")
 	fs.StringVar(&fv.ca, "ca", "", "extra root CA `file` (requires --tls)")
@@ -509,10 +513,12 @@ func Load(args []string, env func(string) string) (Config, error) {
 	}
 	seedKnown := doc.Seed != nil
 
-	// YAML < environment < flags (only those set explicitly). The deprecated
-	// names come first, so every newer source beats them.
+	// YAML < environment < flags (only those set explicitly). Within the
+	// environment the lowest-precedence name comes first: the generic
+	// SENTINEL_INGEST_TOKEN, then the deprecated ew-sensor names, then the
+	// SENSOR_SIM_* names.
 	addrFrom := setFromEnv(env, &cfg.Connection.Addr, EnvDeprecatedAddr, EnvAddr)
-	tokenFrom := setFromEnv(env, &cfg.Connection.Token, EnvDeprecatedToken, EnvFallbackToken, EnvToken)
+	tokenFrom := setFromEnv(env, &cfg.Connection.Token, EnvFallbackToken, EnvDeprecatedToken, EnvToken)
 	applyFlags(&cfg, &fv, set)
 	if set["addr"] {
 		addrFrom = "--addr"
@@ -568,7 +574,7 @@ func deprecationWarning(env func(string) string, deprecated, replacement, usedFr
 		return nil
 	}
 	if usedFrom == deprecated {
-		return []string{fmt.Sprintf("%s is deprecated (ew-sensor's name): rename it %s", deprecated, replacement)}
+		return []string{fmt.Sprintf("%s is deprecated (ew-sensor's name) but still used: rename it %s", deprecated, replacement)}
 	}
 	return []string{fmt.Sprintf("%s is deprecated (ew-sensor's name) and ignored: %s takes precedence; remove it or rename it %s", deprecated, usedFrom, replacement)}
 }

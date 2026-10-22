@@ -282,10 +282,13 @@ sensor: {kind: esm, lat: 1, lon: 1}
 		{"yaml only", []string{"--config", y}, nil, "yaml-token", "yaml:1", nil},
 		{"EW_SENSOR_TOKEN beats yaml", []string{"--config", y}, map[string]string{EnvDeprecatedToken: "tok-est"}, "tok-est", "yaml:1",
 			[]string{EnvDeprecatedToken + " is deprecated", "rename it " + EnvToken}},
-		{"SENTINEL_INGEST_TOKEN beats EW_SENSOR_TOKEN", []string{"--config", y}, map[string]string{EnvFallbackToken: "tok-sit", EnvDeprecatedToken: "tok-est"}, "tok-sit", "yaml:1",
-			[]string{EnvDeprecatedToken + " is deprecated", "ignored", EnvFallbackToken}},
+		// A simulator's own token file (EW_SENSOR_TOKEN for esm-sim) must beat
+		// the generic SENTINEL_INGEST_TOKEN a shared env file may also set.
+		{"EW_SENSOR_TOKEN beats SENTINEL_INGEST_TOKEN", []string{"--config", y}, map[string]string{EnvFallbackToken: "tok-sit", EnvDeprecatedToken: "tok-est"}, "tok-est", "yaml:1",
+			[]string{EnvDeprecatedToken + " is deprecated", "rename it " + EnvToken}},
 		{"SENSOR_SIM_TOKEN beats both", []string{"--config", y}, map[string]string{EnvToken: "tok-sst", EnvFallbackToken: "tok-sit", EnvDeprecatedToken: "tok-est"}, "tok-sst", "yaml:1",
 			[]string{"ignored", EnvToken}},
+		{"SENTINEL_INGEST_TOKEN beats yaml", []string{"--config", y}, map[string]string{EnvFallbackToken: "tok-sit"}, "tok-sit", "yaml:1", nil},
 		{"EW_SENSOR_ADDR beats yaml", []string{"--config", y}, map[string]string{EnvDeprecatedAddr: "env:2"}, "yaml-token", "env:2",
 			[]string{EnvDeprecatedAddr + " is deprecated", "rename it " + EnvAddr}},
 		{"SENSOR_SIM_ADDR beats EW_SENSOR_ADDR", []string{"--config", y}, map[string]string{EnvAddr: "new:3", EnvDeprecatedAddr: "env:2"}, "yaml-token", "new:3",

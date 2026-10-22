@@ -886,11 +886,16 @@ services:
   # listener does: with host networking off on Docker Desktop the listener's
   # port is reachable only from inside the Docker VM, so the CLI has to run
   # there too. Host networking is incompatible with `networks:`, and
-  # `localhost` is the VM's. Optional secrets/sensor-sim.env (gitignored) holds
-  # SENSOR_SIM_TOKEN=si_... (the token issued under the connection's Tokens)
-  # and, if you like, SENSOR_SIM_ADDR=localhost:<port>; esm-sim also reads an
-  # existing secrets/ew-sensor.env (EW_SENSOR_TOKEN, EW_SENSOR_ADDR, the old
-  # names, which it accepts with a deprecation warning). The radar and the
+  # `localhost` is the VM's. Each service reads its own optional,
+  # gitignored secrets file, because the ESM sensor and the radar/camera
+  # usually report on different connections with different tokens: radar-sim
+  # and eoir-sim read secrets/sensor-sim.env, esm-sim reads secrets/esm-sim.env
+  # and then secrets/ew-sensor.env (never sensor-sim.env, so it cannot pick up
+  # the radar's token). A file holds SENSOR_SIM_TOKEN=si_... (the token issued
+  # under the connection's Tokens) and, if you like,
+  # SENSOR_SIM_ADDR=localhost:<port>; secrets/ew-sensor.env's EW_SENSOR_TOKEN
+  # and EW_SENSOR_ADDR, the old names, are accepted with a deprecation warning.
+  # The radar and the
   # camera keep their Copernicus terrain tiles in the terrain-cache volume, so
   # a tile is downloaded once; the ESM sensor needs none. Flags after the
   # service name are added to the command (a flag given twice takes its last
@@ -933,7 +938,7 @@ services:
       dockerfile: ./simulators/sensor-sim/Dockerfile
     network_mode: host
     env_file:
-      - path: ./secrets/sensor-sim.env
+      - path: ./secrets/esm-sim.env
         required: false
       - path: ./secrets/ew-sensor.env
         required: false

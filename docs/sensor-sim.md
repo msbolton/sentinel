@@ -90,7 +90,12 @@ You need the stack running with the listener replica (the `inbound` profile), wh
 
 2. **Issue a token.** Open the connection's row and issue a token under **Tokens**. The secret (`si_...`) is shown once. A token without a classification ceiling is limited to the connection's own level.
 
-3. **Give the token to the CLI.** Put it in `secrets/sensor-sim.env`, which is gitignored and which the Compose services read when it exists:
+3. **Give the token to the CLI.** Put it in a gitignored file under `secrets/`, which the Compose service reads when it exists. Each simulator service reads its own file, because the ESM sensor and the radar or camera usually report on different connections, which have different tokens:
+
+   | Service | Reads |
+   |---------|-------|
+   | `radar-sim`, `eoir-sim` | `secrets/sensor-sim.env` |
+   | `esm-sim` | `secrets/esm-sim.env`, then `secrets/ew-sensor.env` (the old file, still accepted). Never `secrets/sensor-sim.env` |
 
    ```
    SENSOR_SIM_TOKEN=si_...
@@ -98,7 +103,9 @@ You need the stack running with the listener replica (the `inbound` profile), wh
    SENSOR_SIM_ADDR=localhost:6201
    ```
 
-   Outside Compose, `export SENSOR_SIM_TOKEN=si_...`, or `SENTINEL_INGEST_TOKEN`, which the connection's send guide uses. An existing `secrets/ew-sensor.env` with `EW_SENSOR_TOKEN` and `EW_SENSOR_ADDR` still works for `esm-sim` (see "Moving from ew-sensor").
+   An old `secrets/ew-sensor.env` with `EW_SENSOR_TOKEN` and `EW_SENSOR_ADDR` keeps working for `esm-sim` (see "Moving from ew-sensor"); the deprecated names log a warning. When a service reads two files, a variable in the later file replaces the same variable in the earlier one.
+
+   Outside Compose, `export SENSOR_SIM_TOKEN=si_...`, or `SENTINEL_INGEST_TOKEN`, which the connection's send guide uses. The token is taken from `--token`, then `SENSOR_SIM_TOKEN`, then the deprecated `EW_SENSOR_TOKEN`, then `SENTINEL_INGEST_TOKEN`, then the YAML.
 
 ## Run it
 
@@ -121,7 +128,7 @@ The services run:
 
 Flags on the `run` line are added after these, and a flag given twice takes its last value: `run --rm esm-sim --addr localhost:6201 --config examples/esm-mobile.yaml` runs the ship-borne sensor.
 
-The examples choose plaintext HTTP/2 (`connection.insecure: true`), which is what the listener speaks unless you enabled `tls` on the connection, so no transport flag is needed. With `SENSOR_SIM_ADDR` in `secrets/sensor-sim.env` the services also start in the background, with no `run` line at all: `docker compose -p sentinel --profile inbound --profile sim up -d radar-sim eoir-sim esm-sim`. For TLS, add `--tls --ca /ca.pem` to the `run` line, which replaces the examples' choice, and mount the CA file, for example with `-v "$PWD/secrets/ca.pem:/ca.pem:ro"`:
+The examples choose plaintext HTTP/2 (`connection.insecure: true`), which is what the listener speaks unless you enabled `tls` on the connection, so no transport flag is needed. With `SENSOR_SIM_ADDR` in `secrets/sensor-sim.env` (and `secrets/esm-sim.env` for `esm-sim`) the services also start in the background, with no `run` line at all: `docker compose -p sentinel --profile inbound --profile sim up -d radar-sim eoir-sim esm-sim`. For TLS, add `--tls --ca /ca.pem` to the `run` line, which replaces the examples' choice, and mount the CA file, for example with `-v "$PWD/secrets/ca.pem:/ca.pem:ro"`:
 
 ```
 docker compose -p sentinel --profile inbound --profile sim run --rm \
@@ -205,7 +212,7 @@ Flags override the configuration file, which overrides the defaults; the default
 - **An ESM sensor observes emitters, not a scenario.** It needs at least one emitter (listed or `--emitters`), takes `--alt` rather than `--height-above-ground`, has no elevation limits, and refuses a `scenario` or `scenarioFile`. `azimuthReference: PLATFORM` needs a mobile sensor, and a mobile sensor needs an ownship path (a circle with a radius, or at least two waypoints) and a speed.
 - **ESM-only settings on a radar or camera are refused**: `--emplacement-id`, `--mobile`, `--emitters` or an `emitters` list, `--send-timestamps` and `sensor.classification`.
 
-**Precedence.** A flag set on the command line beats the environment, which beats the YAML, which beats the default. An explicit `--rate 1` beats a YAML `rate: 5`. The token is `--token`, then `SENSOR_SIM_TOKEN`, then `SENTINEL_INGEST_TOKEN`, then the deprecated `EW_SENSOR_TOKEN`, then the YAML; the address is `--addr`, then `SENSOR_SIM_ADDR`, then the deprecated `EW_SENSOR_ADDR`, then the YAML. A transport flag, `--insecure` or `--tls`, replaces the YAML's transport, so `--tls --ca ca.pem` works with the bundled examples although they set `insecure: true`; `--insecure` also drops the YAML's `ca`, `cert` and `key`. `--kind` beats the YAML's `sensor.kind`, and the kind chosen picks the defaults. Keep the token out of YAML files: they are easy to commit by mistake.
+**Precedence.** A flag set on the command line beats the environment, which beats the YAML, which beats the default. An explicit `--rate 1` beats a YAML `rate: 5`. The token is `--token`, then `SENSOR_SIM_TOKEN`, then the deprecated `EW_SENSOR_TOKEN`, then `SENTINEL_INGEST_TOKEN`, then the YAML (a simulator's own variable beats the generic `SENTINEL_INGEST_TOKEN`); the address is `--addr`, then `SENSOR_SIM_ADDR`, then the deprecated `EW_SENSOR_ADDR`, then the YAML. A transport flag, `--insecure` or `--tls`, replaces the YAML's transport, so `--tls --ca ca.pem` works with the bundled examples although they set `insecure: true`; `--insecure` also drops the YAML's `ca`, `cert` and `key`. `--kind` beats the YAML's `sensor.kind`, and the kind chosen picks the defaults. Keep the token out of YAML files: they are easy to commit by mistake.
 
 **YAML.** Unknown keys are an error. The top-level keys are:
 
@@ -235,12 +242,12 @@ The ESM kind is the former `ew-sensor` program: the same emitters, fixes, ellips
 | `--emplacement-id`, `--lat`, `--lon`, `--alt`, `--boresight`, `--width`, `--range-km`, `--min-range-km`, `--rate`, `--pd`, `--seed`, `--duration`, `--heartbeat-interval`, `--verbose` | unchanged; the ESM defaults are ew-sensor's (120° wide, 120 km) |
 | `--emitters`, `--sigma-m`, `--mobile`, `--path`, `--speed-kts`, `--send-timestamps` | unchanged, ESM only |
 | `--name`, default `ew-sensor` | `--name`, default `esm-sim` for the ESM kind; pass `--name ew-sensor` to keep reporting as an emplacement created with the old default |
-| env `EW_SENSOR_TOKEN` | `SENSOR_SIM_TOKEN`. `EW_SENSOR_TOKEN` is still read, last, below `SENTINEL_INGEST_TOKEN`, and logs a deprecation warning |
+| env `EW_SENSOR_TOKEN` | `SENSOR_SIM_TOKEN`. `EW_SENSOR_TOKEN` is still read, below it and above `SENTINEL_INGEST_TOKEN`, and logs a deprecation warning |
 | env `EW_SENSOR_ADDR` | `SENSOR_SIM_ADDR`. `EW_SENSOR_ADDR` is still read, below it, with a warning |
 | YAML `emplacement:` (`emplacementId`, `name`, `lat`, `lon`, `alt`, `boresight`, `width`, `rangeKm`, `minRangeKm`, `mobility`, `azimuthReference`) | the same keys under `sensor:`, with `kind: esm` |
 | YAML `sensor:` (`rate`, `pd`, `sigmaM`, `classification`, `sendTimestamps`, `heartbeatInterval`), `ownship:`, `emitters:`, `connection:`, `seed`, `duration`, `verbose` | unchanged |
 | `examples/coastal-esm.yaml`, `examples/mobile-esm.yaml` | `examples/esm-coastal.yaml`, `examples/esm-mobile.yaml`; both default to `insecure: true` (the old mobile example said `tls: true`) |
-| Compose service `ew-sensor` (no default command), `secrets/ew-sensor.env` | `esm-sim`, which runs `examples/esm-coastal.yaml`; it reads `secrets/sensor-sim.env`, and `secrets/ew-sensor.env` too when it exists |
+| Compose service `ew-sensor` (no default command), `secrets/ew-sensor.env` | `esm-sim`, which runs `examples/esm-coastal.yaml`; it reads `secrets/esm-sim.env` and then `secrets/ew-sensor.env` when they exist, and not `secrets/sensor-sim.env` (that file belongs to `radar-sim` and `eoir-sim`) |
 | `nx build ew-sensor`, `dist/adapters/ew-sensor/` | `nx build sensor-sim`, `dist/simulators/sensor-sim/` |
 | Emplacement description `ew-sensor simulator`; `client_ref` values `ew-1`, `ew-2`, ... | `sensor-sim ESM`; `sim-1`, `sim-2`, ... |
 
