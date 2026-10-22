@@ -1,4 +1,4 @@
-import { COPERNICUS_CREDIT, ENTITY_TYPE_BILLBOARD_SVGS, HEADING_ROTATED_TYPES } from './cesium-config';
+import { COPERNICUS_CREDIT, DEAD_RECKONED_TYPES, ENTITY_TYPE_BILLBOARD_SVGS, HEADING_ROTATED_TYPES } from './cesium-config';
 import { EntityType } from '../../shared/models/entity.model';
 
 describe('COPERNICUS_CREDIT', () => {
@@ -12,6 +12,10 @@ describe('COPERNICUS_CREDIT', () => {
 describe('vehicle billboard', () => {
   it('turns with the vehicle heading, like aircraft, drones and vessels', () => {
     expect(HEADING_ROTATED_TYPES.has(EntityType.VEHICLE)).toBe(true);
+  });
+
+  it('is not dead-reckoned: only aircraft, drones and vessels are', () => {
+    expect([...DEAD_RECKONED_TYPES].sort()).toEqual([EntityType.AIRCRAFT, EntityType.DRONE, EntityType.VESSEL].sort());
   });
 
   it('is a white top-down car with a black outline, so Cesium can tint it', () => {

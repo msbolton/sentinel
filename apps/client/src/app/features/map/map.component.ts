@@ -935,7 +935,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const existing = this.entityMap.get(entity.id);
     const shown = this.layerVisibility.isVisible(entity);
 
-    // Moving aircraft are dead-reckoned: the tracker owns their displayed
+    // Moving aircraft, drones and vessels are dead-reckoned (DEAD_RECKONED_TYPES;
+    // vehicles only turn): the tracker owns their displayed
     // position and blends this fix in instead of jumping to it.
     const now = this.wsService.serverNow();
     const tracked = this.deadReckoning.upsert(entity, now);

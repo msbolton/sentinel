@@ -142,6 +142,13 @@ export const HEADING_ROTATED_TYPES = new Set<string>([
   EntityType.VEHICLE,
 ]);
 
+/**
+ * Entity types moved between fixes by dead reckoning (dead-reckoning.ts).
+ * Vehicles turn with their heading but are not extrapolated: a straight line
+ * for up to a minute between fixes would leave the road.
+ */
+export const DEAD_RECKONED_TYPES = new Set<string>([EntityType.AIRCRAFT, EntityType.DRONE, EntityType.VESSEL]);
+
 /** Billboard/label LOD scaling — fade and shrink at distance */
 export const BILLBOARD_SCALE_BY_DISTANCE = [1_000, 1.0, 5_000_000, 0.3];
 export const LABEL_SCALE_BY_DISTANCE = [1_000, 1.0, 3_000_000, 0.4];
