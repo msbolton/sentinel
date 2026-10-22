@@ -62,6 +62,45 @@ apiGateway:
     readOnlyRootFilesystem: true
     capabilities:
       drop: [ALL]
+  # The public demo (DEMO_* in apps/api-gateway/internal/config): throwaway
+  # guest sessions, each visitor's site an emplacement on a grpc connection of
+  # the listener. Off, the chart sets no DEMO_* and the gateway behaves as
+  # without it. The chart sets DEMO_ENABLED, DEMO_MAX_GUESTS,
+  # DEMO_STATUS_ORIGIN, DEMO_INGEST_ADDR, DEMO_INGEST_TOKEN and, with geoip,
+  # DEMO_GEOIP_DB (each an error in extraEnv); the others (DEMO_GUEST_TTL 60m,
+  # DEMO_OFFLINE_REMOVE_AFTER 5m, DEMO_INGEST_INSECURE true,
+  # DEMO_VISITORS_FEED_ID demo-visitors, DEMO_SESSION_RATE 5/10m) keep the
+  # gateway's defaults unless extraEnv sets them.
+  demo:
+    enabled: false
+    # Port of the visitors connection (a grpc connection on the listener). The
+    # gateway sends to ingestListener.host, else its own node's address
+    # (status.hostIP), on this port: on one node that is the listener's.
+    ingestPort: 6202
+    # Secret with the visitors connection's ingest token (key token).
+    # Required with enabled.
+    tokenSecret: ""
+    # The one browser origin that may read /api/v1/demo/status.
+    statusOrigin: https://msbolton.dev
+    maxGuests: 25
+    # Locates visitors who deny the browser's location by IP: an initContainer
+    # downloads a MaxMind database at every pod start into an emptyDir that the
+    # gateway mounts read-only at /var/lib/geoip (DEMO_GEOIP_DB). The download
+    # fails open: on any error (MaxMind down, a wrong key, the daily download
+    # limit) it logs a warning and exits 0, the file is missing, and the gateway
+    # starts without the IP fallback (it logs that it cannot open the database).
+    geoip:
+      enabled: false
+      # Secret with the MaxMind account id and licence key (keys account-id and
+      # license-key). Required with enabled.
+      existingSecret: ""
+      edition: GeoLite2-City
+      # Needs sh, curl and tar with gzip. Third-party: not prefixed with
+      # global.imageRegistry.
+      image: curlimages/curl:8.10.1
+      resources:
+        requests: { cpu: 10m, memory: 32Mi }
+        limits: { cpu: 500m, memory: 128Mi }
 
 # Registration mail: the gateway (rejection notices) and Keycloak (the
 # verification e-mail sent on approval, password resets) send through this SMTP
@@ -364,6 +403,55 @@ ingestListener:
   resources:
     requests: { cpu: 250m, memory: 128Mi }
     limits: { cpu: 2000m, memory: 1Gi }
+
+# Simulated sensors (simulators/sensor-sim, docs/sensor-sim.md) streaming to a
+# grpc connection on the listener, for a demo: one Deployment of one replica per
+# entry of kinds, named <fullname>-sensor-sim-<kind>. Each runs
+#   sensor-sim --kind <kind> --insecure --config /app/examples/<config>
+# with SENSOR_SIM_ADDR at ingestListener.host, else its node's address
+# (status.hostIP), on port, and SENSOR_SIM_TOKEN from tokenSecret. Without
+# ingestListener.host the pods run on the listener's node (its nodeSelector), so
+# that address is the listener's. The connection must allow
+# senderManagedEmplacements: each simulator creates its emplacement by name.
+sensorSim:
+  enabled: false
+  image:
+    repository: sentinel/sensor-sim
+    tag: ""
+    pullPolicy: IfNotPresent
+  # kind is radar, eoir or esm, each at most once. config is a file of the
+  # image's examples/ (simulators/sensor-sim/examples), or an absolute path.
+  # radar and eoir get a terrain cache (an emptyDir of terrainCacheSizeLimit at
+  # /var/cache/sentinel/terrain, --terrain-cache).
+  kinds:
+    - kind: radar
+      config: radar.yaml
+    - kind: eoir
+      config: camera.yaml
+    - kind: esm
+      config: esm-coastal.yaml
+  # Port of the connection the simulators share.
+  port: 6201
+  # Secret with that connection's ingest token (key token). Required with
+  # enabled.
+  tokenSecret: ""
+  terrainCacheSizeLimit: 1Gi
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  # The image's user 10001. The only path written is the terrain cache, an
+  # emptyDir, so the root filesystem is read-only.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
 
 # Go behavioural-analysis service. Always one replica (there is no
 # replicaCount): detector state is in process and the hourly baseline job

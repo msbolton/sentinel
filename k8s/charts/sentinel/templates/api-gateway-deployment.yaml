@@ -10,9 +10,20 @@
   (dict "env" "ANALYTICS_SERVICE_URL" "key" "analyticsService" "name" "analytics-service")
   (dict "env" "INGEST_SERVICE_URL" "key" "ingestService" "name" "ingest-service")
 }}
-{{- $reserved := list "PORT" "APP_ENV" "DATABASE_URL" "KAFKA_BROKERS" "CORS_ORIGIN" "KEYCLOAK_URL" "KEYCLOAK_REALM" "KEYCLOAK_ISSUERS" "KEYCLOAK_SERVICE_CLIENT_SECRET" "INGEST_SERVICE_TOKEN" "MAIL_HOST" "MAIL_PORT" "MAIL_FROM" "MAIL_TLS" "MAIL_USERNAME" "MAIL_PASSWORD" "AUTH_DEV_BYPASS" }}
+{{- $reserved := list "PORT" "APP_ENV" "DATABASE_URL" "KAFKA_BROKERS" "CORS_ORIGIN" "KEYCLOAK_URL" "KEYCLOAK_REALM" "KEYCLOAK_ISSUERS" "KEYCLOAK_SERVICE_CLIENT_SECRET" "INGEST_SERVICE_TOKEN" "MAIL_HOST" "MAIL_PORT" "MAIL_FROM" "MAIL_TLS" "MAIL_USERNAME" "MAIL_PASSWORD" "AUTH_DEV_BYPASS" "HOST_IP" "DEMO_ENABLED" "DEMO_MAX_GUESTS" "DEMO_STATUS_ORIGIN" "DEMO_INGEST_ADDR" "DEMO_INGEST_TOKEN" "DEMO_GEOIP_DB" }}
 {{- range $downstream }}
 {{- $reserved = append $reserved .env }}
+{{- end }}
+{{- $demo := .Values.apiGateway.demo }}
+{{- $geoip := and $demo.enabled $demo.geoip.enabled }}
+{{- if $demo.enabled }}
+{{- required "apiGateway.demo.tokenSecret: name the Secret with the visitors connection's ingest token (key token)" $demo.tokenSecret | trunc 0 }}
+{{- end }}
+{{- if $geoip }}
+{{- required "apiGateway.demo.geoip.existingSecret: name the Secret with the MaxMind account-id and license-key" $demo.geoip.existingSecret | trunc 0 }}
+{{- if not (regexMatch "^[A-Za-z0-9-]+$" $demo.geoip.edition) }}
+{{- fail (printf "apiGateway.demo.geoip.edition must be a MaxMind edition id such as GeoLite2-City, got %q" $demo.geoip.edition) }}
+{{- end }}
 {{- end }}
 {{- with .Values.mail }}
 {{- if not (has .tls (list "starttls" "tls" "none")) }}
@@ -44,6 +55,66 @@ spec:
       {{- end }}
       {{- with (include "sentinel.imagePullSecrets" .) }}
       {{- . | nindent 6 }}
+      {{- end }}
+      {{- if $geoip }}
+      initContainers:
+        # The MaxMind database for the demo's IP fallback, fetched at every pod
+        # start (apiGateway.demo.geoip). It fails open: on any error it warns
+        # and exits 0 with no file, and the gateway starts without the
+        # fallback. The credentials reach curl on stdin, as its config, so they
+        # are in no argument list and no log line.
+        - name: geoip
+          image: {{ $demo.geoip.image | quote }}
+          imagePullPolicy: IfNotPresent
+          {{- with .Values.apiGateway.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -u
+              warn() { echo "geoip: WARNING: $1; the gateway starts without the IP fallback" >&2; rm -rf "$work"; exit 0; }
+              work=/geoip/download
+              rm -rf "$work" && mkdir -p "$work" || warn "cannot write /geoip"
+              [ -n "${GEOIP_ACCOUNT_ID:-}" ] && [ -n "${GEOIP_LICENSE_KEY:-}" ] || warn "no MaxMind account-id or license-key in the Secret"
+              printf 'user = "%s:%s"\n' "$GEOIP_ACCOUNT_ID" "$GEOIP_LICENSE_KEY" |
+                curl -q -sS -f -L --proto-redir =https --connect-timeout 20 --max-time 300 --retry 3 --retry-delay 5 \
+                  -K - -o "$work/db.tar.gz" "$GEOIP_URL" || warn "the ${GEOIP_EDITION} download failed"
+              tar -xzf "$work/db.tar.gz" -C "$work" || warn "the ${GEOIP_EDITION} archive does not extract"
+              for f in "$work"/*/"${GEOIP_EDITION}.mmdb" "$work/${GEOIP_EDITION}.mmdb"; do
+                if [ -f "$f" ]; then
+                  mv "$f" "/geoip/${GEOIP_EDITION}.mmdb" || warn "cannot move the database into place"
+                  rm -rf "$work"
+                  echo "geoip: ${GEOIP_EDITION} ready"
+                  exit 0
+                fi
+              done
+              warn "the archive holds no ${GEOIP_EDITION}.mmdb"
+          env:
+            - name: GEOIP_EDITION
+              value: {{ $demo.geoip.edition | quote }}
+            - name: GEOIP_URL
+              value: {{ printf "https://download.maxmind.com/geoip/databases/%s/download?suffix=tar.gz" $demo.geoip.edition | quote }}
+            # optional: a missing Secret fails open too, rather than holding the
+            # gateway in CreateContainerConfigError.
+            - name: GEOIP_ACCOUNT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $demo.geoip.existingSecret }}
+                  key: account-id
+                  optional: true
+            - name: GEOIP_LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $demo.geoip.existingSecret }}
+                  key: license-key
+                  optional: true
+          resources:
+            {{- toYaml $demo.geoip.resources | nindent 12 }}
+          volumeMounts:
+            - name: geoip
+              mountPath: /geoip
       {{- end }}
       containers:
         - name: api-gateway
@@ -118,6 +189,37 @@ spec:
             {{- end }}
             {{- end }}
             {{- end }}
+            {{- if $demo.enabled }}
+            # The public demo (apiGateway.demo).
+            - name: DEMO_ENABLED
+              value: "true"
+            - name: DEMO_MAX_GUESTS
+              value: {{ $demo.maxGuests | quote }}
+            - name: DEMO_STATUS_ORIGIN
+              value: {{ $demo.statusOrigin | quote }}
+            {{- if .Values.ingestListener.host }}
+            - name: DEMO_INGEST_ADDR
+              value: {{ printf "%s:%v" .Values.ingestListener.host $demo.ingestPort | quote }}
+            {{- else }}
+            # The listener's grpc port on this pod's node, which on one node is
+            # the listener's.
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: DEMO_INGEST_ADDR
+              value: {{ printf "$(HOST_IP):%v" $demo.ingestPort | quote }}
+            {{- end }}
+            - name: DEMO_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $demo.tokenSecret }}
+                  key: token
+            {{- if $geoip }}
+            - name: DEMO_GEOIP_DB
+              value: {{ printf "/var/lib/geoip/%s.mmdb" $demo.geoip.edition | quote }}
+            {{- end }}
+            {{- end }}
             {{- with (include "sentinel.extraEnv" (dict "env" .Values.apiGateway.extraEnv "reserved" $reserved "what" "apiGateway.extraEnv")) }}
             {{- . | trim | nindent 12 }}
             {{- end }}
@@ -135,6 +237,20 @@ spec:
             periodSeconds: 5
           resources:
             {{- toYaml .Values.apiGateway.resources | nindent 12 }}
+          {{- if $geoip }}
+          volumeMounts:
+            - name: geoip
+              mountPath: /var/lib/geoip
+              readOnly: true
+          {{- end }}
+      {{- if $geoip }}
+      volumes:
+        # GeoLite2-City is about 60 MB, and the archive about 35 MB while it
+        # extracts.
+        - name: geoip
+          emptyDir:
+            sizeLimit: 256Mi
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service
