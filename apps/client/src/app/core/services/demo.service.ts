@@ -3,6 +3,7 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { AuthService } from './auth.service';
 import { WebSocketService } from './websocket.service';
+import { blurPosition } from '../../shared/blur';
 
 /** What the gateway tells a new guest, minus the tokens (AuthService holds those). */
 export interface DemoSession {
@@ -46,7 +47,7 @@ const GENERIC_MESSAGE = 'Something went wrong starting the demo — try again in
 
 /**
  * The public-demo visitor: signs them in as a guest through the gateway and
- * places their (blurred, server-side) emplacement. Holds nothing durable; the
+ * places their (blurred) emplacement. Holds nothing durable; the
  * tokens live in AuthService and a reload starts a new session.
  */
 @Injectable({ providedIn: 'root' })
@@ -120,16 +121,20 @@ export class DemoService {
 
   /**
    * Tells the gateway where the visitor is (or that they declined), and keeps
-   * the answer. Null when the gateway could place nobody or the call failed.
+   * the answer. A browser fix is blurred here, before it is sent, so the
+   * precise one never leaves the machine; it is kept only for the visitor's
+   * own marker. Declined, the answer is the gateway's (blurred) IP location.
+   * Null when the gateway could place nobody or the call failed.
    */
   async reportPosition(p: { lat: number; lon: number } | 'denied'): Promise<DemoPosition | null> {
-    const body = p === 'denied' ? { denied: true } : { lat: p.lat, lon: p.lon };
+    const body = p === 'denied' ? { denied: true } : blurPosition(p.lat, p.lon);
     try {
       const res = await firstValueFrom(this.http.post<PositionResponse>('/api/v1/demo/position', body));
       if (res.source === 'none' || res.lat === undefined || res.lon === undefined) {
         return null;
       }
-      const position: DemoPosition = { lat: res.lat, lon: res.lon, source: res.source };
+      const position: DemoPosition =
+        p === 'denied' ? { lat: res.lat, lon: res.lon, source: res.source } : { lat: p.lat, lon: p.lon, source: 'browser' };
       this.ownPosition.set(position);
       this.ownEmplacementId.set(res.emplacementId ?? null);
       return position;

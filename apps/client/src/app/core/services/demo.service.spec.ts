@@ -135,13 +135,19 @@ describe('DemoService', () => {
       expect(service.ownPosition()).toEqual({ lat: 51.5, lon: -0.1, source: 'ip' });
     });
 
-    it('posts a browser position as {lat,lon}', async () => {
+    it('posts a browser position blurred to its 0.1° cell centre, and keeps the precise fix for the own marker', async () => {
       const result = service.reportPosition({ lat: 51.5074, lon: -0.1278 });
       const req = http.expectOne('/api/v1/demo/position');
-      expect(req.request.body).toEqual({ lat: 51.5074, lon: -0.1278 });
-      req.flush({ lat: 51.5074, lon: -0.1278, source: 'browser', emplacementId: 'emp-2' });
+      expect(req.request.body.lat).toBeCloseTo(51.55, 9);
+      expect(req.request.body.lon).toBeCloseTo(-0.15, 9);
+      expect(Object.keys(req.request.body).sort()).toEqual(['lat', 'lon']);
+      // The precise fix never leaves the browser.
+      expect(JSON.stringify(req.request.body)).not.toContain('51.5074');
+      req.flush({ lat: 51.55, lon: -0.15, source: 'browser', emplacementId: 'emp-2' });
 
+      // The marker is drawn at the precise fix, not at the blurred echo.
       await expect(result).resolves.toEqual({ lat: 51.5074, lon: -0.1278, source: 'browser' });
+      expect(service.ownPosition()).toEqual({ lat: 51.5074, lon: -0.1278, source: 'browser' });
       expect(service.ownEmplacementId()).toBe('emp-2');
     });
 
