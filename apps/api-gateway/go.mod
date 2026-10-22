@@ -12,8 +12,10 @@ require (
 	github.com/oschwald/maxminddb-golang/v2 v2.6.0
 	github.com/sentinel/go-common v0.0.0
 	github.com/sentinel/proto-gen v0.0.0
+	go.uber.org/goleak v1.3.0
 	go.uber.org/zap v1.27.0
 	golang.org/x/time v0.15.0
+	google.golang.org/grpc v1.72.0
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -24,9 +26,11 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
+	golang.org/x/net v0.35.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250218202821-56aae31c358a // indirect
 )
 
 replace github.com/sentinel/go-common => ../../libs/common-go
