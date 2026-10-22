@@ -245,8 +245,13 @@ The status answers browsers from `https://msbolton.dev` only (`DEMO_STATUS_ORIGI
 (function () {
   var SENTINEL = 'https://sentinel.msbolton.dev';
   var box = document.getElementById('sentinel-demo');
+  var shown = '';
 
   function show(state, exploring) {
+    // Unchanged: keep the element, so screen readers do not re-announce it
+    // and a focused link stays focused.
+    if (state + ':' + exploring === shown) return;
+    shown = state + ':' + exploring;
     box.textContent = '';
     box.setAttribute('data-state', state);
     if (state === 'live') {
@@ -279,6 +284,6 @@ The status answers browsers from `https://msbolton.dev` only (`DEMO_STATUS_ORIGI
 </script>
 ```
 
-Style it through `.sentinel-demo` and `[data-state="live" | "full" | "offline"]`. The page must be served as UTF-8 for the `·` and `—`.
+It redraws only when the state or the count changes. Style it through `.sentinel-demo` and `[data-state="live" | "full" | "offline"]`. The page must be served as UTF-8 for the `·` and `—`.
 
 **Trying it locally.** Serve the snippet from `http://localhost:8000` (`python3 -m http.server 8000` in a folder holding it as `index.html`) with `SENTINEL` set to `http://localhost:3000`, and run the gateway with `DEMO_ENABLED=true` and `DEMO_STATUS_ORIGIN=http://localhost:8000` (`docs/api-gateway.md`). It shows live while an entity event has passed within 5 minutes (a simulator on a connection does it), full with `DEMO_MAX_GUESTS=1` and one session started (`curl -X POST localhost:3000/api/v1/demo/session`), and offline once the gateway stops.

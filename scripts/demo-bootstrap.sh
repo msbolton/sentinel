@@ -86,10 +86,14 @@ done
 
 [ -n "$HOST" ] || { usage >&2; die "--host is required"; }
 HOST=${HOST%/}
+# Plain http only to this machine: the host part must be exactly localhost or
+# 127.0.0.1 (so not http://localhost:x@elsewhere), with an optional port.
+local_http='^http://(localhost|127\.0\.0\.1)(:[0-9]+)?(/|$)'
 case $HOST in
   https://*) ;;
-  http://localhost|http://localhost:*|http://127.0.0.1|http://127.0.0.1:*) ;;
-  http://*) die "refusing to send the admin password over plain http to $HOST (use https, or localhost)" ;;
+  http://*)
+    [[ $HOST =~ $local_http ]] \
+      || die "refusing to send the admin password over plain http to $HOST (use https, or http://localhost[:port])" ;;
   *) die "--host must start with https:// (or http://localhost)" ;;
 esac
 [ -n "$ADMIN_USER" ] || die "--admin-user is empty"
@@ -160,14 +164,21 @@ say "signed in as $ADMIN_USER at $HOST"
 
 # --- HTTP helpers -------------------------------------------------------------
 
-# api METHOD PATH [BODY_FILE]: one gateway call. Sets STATUS; the body is in $BODY.
-api() {
+# try_api METHOD PATH [BODY_FILE]: one gateway call. Sets STATUS (000 when the
+# gateway cannot be reached); the body is in $BODY.
+try_api() {
   local method=$1 path=$2 data=${3:-}
   local args=(-sS -K "$AUTH_CFG" -o "$BODY" -w '%{http_code}' -X "$method" -H 'Accept: application/json')
   if [ -n "$data" ]; then
     args+=(-H 'Content-Type: application/json' --data-binary "@$data")
   fi
-  STATUS=$(curl "${args[@]}" "$HOST$path") || die "cannot reach $HOST$path"
+  STATUS=$(curl "${args[@]}" "$HOST$path") || STATUS=000
+}
+
+# api METHOD PATH [BODY_FILE]: try_api, dying when the gateway cannot be reached.
+api() {
+  try_api "$@"
+  [ "$STATUS" != 000 ] || die "cannot reach $HOST$2"
 }
 
 # The error of the last response, without the body's other fields.
@@ -228,6 +239,19 @@ revoke_others() {
   done
 }
 
+# revoke_unstored FEED TOKEN_ID TOKEN_NAME REASON: nothing holds a token just
+# issued, so revoke it rather than leave it live, then die with REASON and
+# what became of the token.
+revoke_unstored() {
+  local feed=$1 id=$2 name=$3 reason=$4 why
+  try_api DELETE "/api/v1/feeds/$feed/tokens/$id"
+  if [ "$STATUS" = 204 ]; then
+    die "$reason; the new token $id was revoked again"
+  fi
+  why=$(api_error)
+  die "$reason, and revoking the new token $id failed (HTTP $STATUS${why:+, $why}): revoke \"$name\" of $feed in Connections"
+}
+
 # ensure_secret SECRET FEED FEED_IS_NEW
 ensure_secret() {
   local secret=$1 feed=$2 feed_new=$3 exists=false token_id token_name
@@ -276,9 +300,16 @@ ensure_secret() {
   expect 201 "issuing a token for $feed"
   # The secret goes from the response to a 0600 file, never to a variable or
   # argv; jq -j writes it with no newline, so the Secret holds the bare token.
-  token_id=$(jq -r '.id // empty' "$BODY")
-  jq -ej '.token | select(type == "string" and startswith("si_"))' "$BODY" >"$TOKEN_FILE" 2>/dev/null \
-    || { : >"$BODY"; die "the token response for $feed has no si_ token${token_id:+ (token $token_id: revoke it in Connections)}"; }
+  token_id=$(jq -r '.id // empty' "$BODY" 2>/dev/null || true)
+  if [ -z "$token_id" ]; then
+    : >"$BODY"
+    die "the token response for $feed names no token id, so the new token cannot be revoked from here: revoke \"$token_name\" of $feed in Connections"
+  fi
+  if ! jq -ej '.token | select(type == "string" and startswith("si_"))' "$BODY" >"$TOKEN_FILE" 2>/dev/null; then
+    : >"$BODY"
+    rm -f "$TOKEN_FILE"
+    revoke_unstored "$feed" "$token_id" "$token_name" "the token response for $feed has no si_ token"
+  fi
   : >"$BODY"
 
   local stored=true
@@ -290,9 +321,7 @@ ensure_secret() {
   fi
   rm -f "$TOKEN_FILE"
   if ! $stored; then
-    # Nothing holds the new token: revoke it rather than leave it live.
-    api DELETE "/api/v1/feeds/$feed/tokens/$token_id"
-    die "storing the token of $feed in Secret $secret failed (the token, $token_id, was revoked again)"
+    revoke_unstored "$feed" "$token_id" "$token_name" "storing the token of $feed in Secret $secret failed"
   fi
   if $exists; then
     say "Secret $secret replaced: new token \"$token_name\" ($token_id) of $feed"

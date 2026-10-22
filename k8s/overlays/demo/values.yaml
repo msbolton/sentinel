@@ -1,13 +1,19 @@
 # The public demo at sentinel.msbolton.dev (docs/demo.md). It layers over the
-# prod overlay, and your site file over it:
-#   make deploy REGISTRY=registry.example.com \
-#     VALUES="k8s/overlays/demo/values.yaml $HOME/sentinel/sentinel-site.yaml"
-# Like the prod overlay it holds no secrets: it names the Secrets that
-# scripts/demo-bootstrap.sh creates (the two ingest tokens) and the MaxMind
-# one you create (docs/demo.md, owner checklist).
+# prod overlay, and your site file over it. Like the prod overlay it holds no
+# secrets: it names the Secrets that scripts/demo-bootstrap.sh creates (the
+# two ingest tokens) and the MaxMind one you create (docs/demo.md, owner
+# checklist).
 #
-# The simulators and the gateway wait for their token Secrets: run the
-# bootstrap script after the first install, then restart them.
+# A first install runs twice (docs/demo.md, Install): the gateway with the
+# demo on cannot start without the visitors token, and the bootstrap script
+# makes that token through the gateway. So:
+#   1. make deploy REGISTRY=registry.example.com \
+#        VALUES="k8s/overlays/demo/values.yaml $HOME/sentinel/sentinel-site.yaml" \
+#        HELM_ARGS="--set apiGateway.demo.enabled=false"
+#   2. scripts/demo-bootstrap.sh --host https://sentinel.msbolton.dev
+#   3. the same make deploy without HELM_ARGS, then roll the gateway and the
+#      simulators (the script prints the kubectl rollout restart).
+# Later upgrades are step 3's make deploy alone.
 
 ingestService:
   env:
