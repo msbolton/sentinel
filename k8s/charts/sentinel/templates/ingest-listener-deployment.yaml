@@ -107,7 +107,7 @@ spec:
               value: {{ .Values.ingestService.lease.rebalanceSec | quote }}
             - name: SHUTDOWN_TIMEOUT_SEC
               value: "25"
-            {{- with (include "sentinel.ingestTerrainEnv" .) }}
+            {{- with (include "sentinel.ingestTerrainEnv" (dict "root" . "limit" (dig "limits" "memory" "" .Values.ingestListener.resources))) }}
             {{- . | nindent 12 }}
             {{- end }}
             {{- range $k, $v := .Values.ingestService.env }}

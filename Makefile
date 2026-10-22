@@ -366,7 +366,11 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics 
 		claim="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestService.terrain.existingClaim=terrain-pvc --show-only templates/$$tpl-deployment.yaml)"; \
 		printf '%s\n' "$$claim" | grep -q 'claimName: terrain-pvc' || { echo "chart-lint: $$tpl ignores ingestService.terrain.existingClaim"; exit 1; }; \
 		off="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestService.terrain.enabled=false --show-only templates/$$tpl-deployment.yaml)"; \
-		! printf '%s\n' "$$off" | grep -q 'INGEST_TERRAIN\|terrain-cache' || { echo "chart-lint: $$tpl still has terrain settings with terrain disabled"; exit 1; }; \
+		! printf '%s\n' "$$off" | grep -q 'INGEST_TERRAIN\|terrain-cache\|GOMEMLIMIT' || { echo "chart-lint: $$tpl still has terrain settings with terrain disabled"; exit 1; }; \
+		printf '%s\n' "$$on" | grep -A1 'name: INGEST_TERRAIN_MEM_TILES$$' | grep -q 'value: "4"' || { echo "chart-lint: $$tpl has no INGEST_TERRAIN_MEM_TILES of 4"; exit 1; }; \
+		printf '%s\n' "$$on" | grep -A1 'name: GOMEMLIMIT$$' | grep -q 'value: "819MiB"' || { echo "chart-lint: $$tpl's GOMEMLIMIT is not 80% of its 1Gi limit"; exit 1; }; \
+		mem="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestService.terrain.goMemLimit=700MiB --show-only templates/$$tpl-deployment.yaml)"; \
+		printf '%s\n' "$$mem" | grep -A1 'name: GOMEMLIMIT$$' | grep -q 'value: "700MiB"' || { echo "chart-lint: $$tpl ignores ingestService.terrain.goMemLimit"; exit 1; }; \
 	done
 
 # ----------------------------------------------------------------------------

@@ -234,12 +234,18 @@ INGEST_TERRAIN_CACHE_DIR is set, so none of the three renders when it is
 disabled. The settings the chart sets are an error in ingestService.env (a
 duplicate name would fail the server-side apply); INGEST_TERRAIN_FETCH_TIMEOUT_SEC
 is not one of them.
+
+ingestTerrainEnv takes a dict: root (the chart's context) and limit (the
+container's memory limit, or empty). With terrain on it also sets GOMEMLIMIT,
+terrain.goMemLimit or else 80% of limit, so the Go heap collects before
+decoded tiles push the pod past its limit.
 */}}
 {{- define "sentinel.ingestTerrainEnv" -}}
-{{- $t := .Values.ingestService.terrain -}}
+{{- $root := .root -}}
+{{- $t := $root.Values.ingestService.terrain -}}
 {{- if $t.enabled -}}
-{{- range $k := list "INGEST_TERRAIN_CACHE_DIR" "INGEST_TERRAIN_SOURCE_URL" "INGEST_TERRAIN_CACHE_MAX_MB" "INGEST_TERRAIN_WAIT_MS" "INGEST_TERRAIN_MAX_RANGE_KM" }}
-{{- if hasKey $.Values.ingestService.env $k }}
+{{- range $k := list "INGEST_TERRAIN_CACHE_DIR" "INGEST_TERRAIN_SOURCE_URL" "INGEST_TERRAIN_CACHE_MAX_MB" "INGEST_TERRAIN_WAIT_MS" "INGEST_TERRAIN_MAX_RANGE_KM" "INGEST_TERRAIN_MEM_TILES" "GOMEMLIMIT" }}
+{{- if hasKey $root.Values.ingestService.env $k }}
 {{- fail (printf "ingestService.env.%s: the chart sets %s from ingestService.terrain" $k $k) }}
 {{- end }}
 {{- end }}
@@ -253,7 +259,36 @@ is not one of them.
   value: {{ $t.waitMs | quote }}
 - name: INGEST_TERRAIN_MAX_RANGE_KM
   value: {{ $t.maxRangeKm | quote }}
+- name: INGEST_TERRAIN_MEM_TILES
+  value: {{ $t.memTiles | quote }}
+{{- $goMem := include "sentinel.goMemLimit" (dict "set" $t.goMemLimit "limit" .limit) }}
+{{- if $goMem }}
+- name: GOMEMLIMIT
+  value: {{ $goMem | quote }}
 {{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+A Go memory limit: set when given, else 80% of limit (a Kubernetes quantity
+in Ki, Mi, Gi or Ti), in MiB; empty with neither. Any other form of limit is
+an error that asks for terrain.goMemLimit.
+*/}}
+{{- define "sentinel.goMemLimit" -}}
+{{- if .set -}}
+{{- .set -}}
+{{- else if .limit -}}
+{{- $l := toString .limit -}}
+{{- $mib := 0 -}}
+{{- if hasSuffix "Ti" $l -}}{{- $mib = mul (trimSuffix "Ti" $l | int64) 1048576 -}}
+{{- else if hasSuffix "Gi" $l -}}{{- $mib = mul (trimSuffix "Gi" $l | int64) 1024 -}}
+{{- else if hasSuffix "Mi" $l -}}{{- $mib = trimSuffix "Mi" $l | int64 -}}
+{{- else if hasSuffix "Ki" $l -}}{{- $mib = div (trimSuffix "Ki" $l | int64) 1024 -}}
+{{- else -}}
+{{- fail (printf "ingestService.terrain.goMemLimit: cannot work out 80%% of the memory limit %q; set goMemLimit (for example 800MiB)" $l) -}}
+{{- end -}}
+{{- printf "%dMiB" (div (mul $mib 80) 100) -}}
+{{- end -}}
 {{- end }}
 
 {{- define "sentinel.ingestTerrainMount" -}}

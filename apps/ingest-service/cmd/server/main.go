@@ -163,6 +163,7 @@ func main() {
 			// A detection waits TerrainWait; a fetch older than that turns
 			// callers away, so a hung fetch stalls a stream about once.
 			JoinWindow: cfg.TerrainWait,
+			MemTiles:   cfg.TerrainMemTiles,
 			Logger:     logger.Named("terrain"),
 		})
 		if err != nil {
@@ -171,7 +172,7 @@ func main() {
 		terrainSvc = svc
 		promReg.MustRegister(metrics.NewTerrainCollector(svc.Stats))
 		logger.Info("terrain enabled", zap.String("cache_dir", cfg.TerrainCacheDir), zap.String("source", cfg.TerrainSourceURL),
-			zap.Int("cache_max_mb", cfg.TerrainCacheMaxMB), zap.Duration("wait", cfg.TerrainWait), zap.Float64("max_range_m", cfg.TerrainMaxRangeM))
+			zap.Int("cache_max_mb", cfg.TerrainCacheMaxMB), zap.Duration("wait", cfg.TerrainWait), zap.Float64("max_range_m", cfg.TerrainMaxRangeM), zap.Int("mem_tiles", cfg.TerrainMemTiles))
 	}
 
 	// Supervisor: runs the feeds this replica owns and reports status.

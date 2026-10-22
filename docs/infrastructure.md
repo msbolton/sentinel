@@ -93,7 +93,7 @@ The chart's `ingestListener` values:
 | `ingestListener.host` | empty | The address senders use; empty means the node's IP (`status.hostIP`). Set a DNS name or a stable address when nodes are replaced |
 | `ingestListener.nodeSelector` | `sentinel.io/ingest-listener: "true"` | Which node runs it |
 | `ingestListener.shared` | `false` | Sets `INGEST_LISTENER_SHARED`: the listener also takes its share of the ordinary feeds and runs them when no ordinary replica is live. Off, it runs listening connections and pinned feeds only |
-| `ingestListener.resources` | 250m / 128Mi requested, 2000m / 512Mi limit | |
+| `ingestListener.resources` | 250m / 128Mi requested, 2000m / 1Gi limit | The listener runs every gRPC connection and so most terrain lookups; see `docs/deployment.md`, Terrain, for the sizing |
 
 The Deployment `<fullname>-ingest-listener` (the chart's full name: `fullnameOverride` if set, else `<release>-sentinel`, or just the release name when it contains `sentinel`, so `sentinel-dev-ingest-listener` for the release `sentinel-dev`) has one replica, `hostNetwork: true` (with `dnsPolicy: ClusterFirstWithHostNet`) and health on `:4010`, bound on every interface of the node so the kubelet probes reach it (unlike Compose, which binds it to loopback). It reads the same Secret as the ingest service for `INGEST_SERVICE_TOKEN` and takes `ingestService.env`, `ingestService.lease`, the TAK certificate mount, `ingestService.secretFiles` and `ingestService.secretEnv` from the ingest values.
 
@@ -108,6 +108,8 @@ These `ingestService` values reach the ingest service and the listener alike:
 | `ingestService.terrain.cacheSizeLimit` | `4Gi` | The `sizeLimit` of the cache `emptyDir`; the kubelet evicts a pod that writes more. Keep it above `cacheMaxMB` |
 | `ingestService.terrain.cacheMaxMB` | `3072` | `INGEST_TERRAIN_CACHE_MAX_MB`: the cache deletes its least recently used tiles past this |
 | `ingestService.terrain.waitMs`, `maxRangeKm` | `2000`, `30` | `INGEST_TERRAIN_WAIT_MS` and `INGEST_TERRAIN_MAX_RANGE_KM` |
+| `ingestService.terrain.memTiles` | `4` | `INGEST_TERRAIN_MEM_TILES`: decoded tiles kept in memory per pod, up to about 52 MB each |
+| `ingestService.terrain.goMemLimit` | empty | `GOMEMLIMIT` of both ingest Deployments while terrain is on; empty sets 80% of the container's memory limit (`819MiB` of the default 1Gi). A limit not in `Ki`, `Mi`, `Gi` or `Ti` needs it set |
 | `ingestService.terrain.existingClaim` | empty | A PersistentVolumeClaim to use for the cache instead of the `emptyDir`, so it survives a pod restart; with `ingestService.replicaCount` above 1 it must be ReadWriteMany, or each replica needs its own. It must be writable by group 10001 (the pods' `fsGroup`) |
 | `ingestService.secretFiles.existingSecret` | empty | A Secret whose keys are mounted as files (mode 0440) for `file:` secret refs to name; empty mounts nothing. The Secret must exist before the pods start, and each key must be a valid file name |
 | `ingestService.secretFiles.mountPath` | `/etc/sentinel/secrets` | Where the files appear |

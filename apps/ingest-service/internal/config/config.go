@@ -65,6 +65,7 @@ type Config struct {
 	TerrainFetchTimeout time.Duration // INGEST_TERRAIN_FETCH_TIMEOUT_SEC (default: 300) one tile download
 	TerrainWait         time.Duration // INGEST_TERRAIN_WAIT_MS (default: 2000, 100-10000) how long a detection waits for terrain
 	TerrainMaxRangeM    float64       // INGEST_TERRAIN_MAX_RANGE_KM (default: 30, 1-200), in metres here
+	TerrainMemTiles     int           // INGEST_TERRAIN_MEM_TILES (default: 4, 1-64) decoded tiles kept in memory, up to about 52 MB each
 
 	// loadErrs are the integer and boolean settings Load could not read.
 	loadErrs []error
@@ -122,6 +123,7 @@ func Load() *Config {
 		TerrainFetchTimeout: ld.seconds("INGEST_TERRAIN_FETCH_TIMEOUT_SEC", 300),
 		TerrainWait:         time.Duration(ld.int("INGEST_TERRAIN_WAIT_MS", 2000)) * time.Millisecond,
 		TerrainMaxRangeM:    float64(ld.int("INGEST_TERRAIN_MAX_RANGE_KM", 30)) * 1000,
+		TerrainMemTiles:     ld.int("INGEST_TERRAIN_MEM_TILES", 4),
 
 		PublisherShards:    ld.int("PUBLISHER_SHARDS", 8),
 		ObservationBuffer:  ld.int("OBS_BUFFER", 1000),
@@ -225,6 +227,9 @@ func (c *Config) validateTerrain() error {
 	}
 	if c.TerrainMaxRangeM < 1000 || c.TerrainMaxRangeM > 200000 {
 		return fmt.Errorf("INGEST_TERRAIN_MAX_RANGE_KM must be between 1 and 200, not %g", c.TerrainMaxRangeM/1000)
+	}
+	if c.TerrainMemTiles < 1 || c.TerrainMemTiles > 64 {
+		return fmt.Errorf("INGEST_TERRAIN_MEM_TILES must be between 1 and 64, not %d", c.TerrainMemTiles)
 	}
 	if c.TerrainCacheMaxMB < 64 {
 		return fmt.Errorf("INGEST_TERRAIN_CACHE_MAX_MB must be at least 64 (a tile is up to 50 MB), not %d", c.TerrainCacheMaxMB)
