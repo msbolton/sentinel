@@ -31,31 +31,12 @@ const cacheWait = 2 * time.Second
 // whether it is active are Sentinel's to set, not the sender's. Upserts draw
 // on the same rate limits as reports.
 func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmplacementRequest) (*ingestv1.UpsertEmplacementResponse, error) {
-	if !s.d.cfg.SenderManagedEmplacements {
-		return nil, status.Error(codes.PermissionDenied, "this connection does not let senders manage their emplacements")
-	}
-	if s.d.writer == nil {
-		return nil, status.Error(codes.Unavailable, "this replica cannot write emplacements: retry")
-	}
-	a := caller(ctx)
-	from := peerOf(ctx)
-	// The sender's own bucket first, so a flooder spends none of the shared one.
-	if !s.d.perSender.Allow(transport.SenderIP(from), time.Now()) {
-		s.d.senders.RateLimited(from, 1)
-		s.d.counts.SenderRateLimited.Add(1)
-		return nil, status.Error(codes.ResourceExhausted, "rate limited")
-	}
-	if !s.d.limit.Allow() {
-		s.d.counts.RateLimited.Add(1)
-		return nil, status.Error(codes.ResourceExhausted, "rate limited")
+	ceiling, err := s.admit(ctx)
+	if err != nil {
+		return nil, err
 	}
 	feed := s.d.feedID
-	ceiling := classification.Rank(a.tok.Classification)
-	// What a sender writes was authored over this connection: a token below
-	// the connection's level could not hold it.
-	if classification.Rank(s.d.floor) > ceiling {
-		return nil, status.Error(codes.PermissionDenied, "this connection is above the token's classification")
-	}
+	a := caller(ctx)
 	m := req.GetEmplacement()
 	if m == nil {
 		return nil, status.Error(codes.InvalidArgument, "send an emplacement")
@@ -78,11 +59,7 @@ func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmp
 		}
 		return emplacement.CheckWrite(ctx, e, ceiling, own)
 	}
-	// mine is whether the senders may touch e: bound to this connection, made
-	// by a sender, and not above this token's ceiling.
-	mine := func(e emplacement.Emplacement) bool {
-		return e.FeedID != nil && *e.FeedID == feed && e.SenderManaged() && classification.Rank(e.Classification) <= ceiling
-	}
+	mine := func(e emplacement.Emplacement) bool { return s.mine(e, ceiling) }
 
 	// target is the row to update: the one the id names, else the sender's
 	// own row of the same name.
@@ -101,7 +78,6 @@ func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmp
 	}
 	var rows []emplacement.Emplacement
 	if target == nil {
-		var err error
 		if rows, err = s.d.writer.List(ctx, emplacement.Filter{FeedID: feed}); err != nil {
 			return nil, s.failed(err)
 		}
@@ -115,7 +91,6 @@ func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmp
 	}
 
 	var saved emplacement.Emplacement
-	var err error
 	if target != nil {
 		saved, err = s.d.writer.Update(ctx, target.ID, 0, func(e *emplacement.Emplacement) error {
 			if !mine(*e) { // it changed since it was read
@@ -159,6 +134,44 @@ func (s *service) UpsertEmplacement(ctx context.Context, req *ingestv1.UpsertEmp
 	return &ingestv1.UpsertEmplacementResponse{Emplacement: emplacementProto(saved)}, nil
 }
 
+// admit is the gate every call that manages a connection's emplacements
+// passes: the connection must let its senders manage them, this replica must
+// be able to write, the call must fit the sender's rate limit and the shared
+// one, and the token must reach the connection's level. It returns the
+// token's classification ceiling.
+func (s *service) admit(ctx context.Context) (int, error) {
+	if !s.d.cfg.SenderManagedEmplacements {
+		return 0, status.Error(codes.PermissionDenied, "this connection does not let senders manage their emplacements")
+	}
+	if s.d.writer == nil {
+		return 0, status.Error(codes.Unavailable, "this replica cannot write emplacements: retry")
+	}
+	from := peerOf(ctx)
+	// The sender's own bucket first, so a flooder spends none of the shared one.
+	if !s.d.perSender.Allow(transport.SenderIP(from), time.Now()) {
+		s.d.senders.RateLimited(from, 1)
+		s.d.counts.SenderRateLimited.Add(1)
+		return 0, status.Error(codes.ResourceExhausted, "rate limited")
+	}
+	if !s.d.limit.Allow() {
+		s.d.counts.RateLimited.Add(1)
+		return 0, status.Error(codes.ResourceExhausted, "rate limited")
+	}
+	ceiling := classification.Rank(caller(ctx).tok.Classification)
+	// What a sender writes was authored over this connection: a token below
+	// the connection's level could not hold it.
+	if classification.Rank(s.d.floor) > ceiling {
+		return 0, status.Error(codes.PermissionDenied, "this connection is above the token's classification")
+	}
+	return ceiling, nil
+}
+
+// mine is whether the senders may touch e: bound to this connection, made by
+// a sender, and not above this token's ceiling.
+func (s *service) mine(e emplacement.Emplacement, ceiling int) bool {
+	return e.FeedID != nil && *e.FeedID == s.d.feedID && e.SenderManaged() && classification.Rank(e.Classification) <= ceiling
+}
+
 var errNotYours = status.Error(codes.NotFound, "no emplacement of this connection's senders has that id")
 
 // failed turns a store or validation error into the sender's status.
@@ -176,7 +189,7 @@ func (s *service) failed(err error) error {
 	case errors.Is(err, emplacement.ErrNotFound):
 		return errNotYours
 	}
-	s.d.logger.Warn("upserting an emplacement failed", zap.Error(err))
+	s.d.logger.Warn("writing an emplacement failed", zap.Error(err))
 	return status.Error(codes.Internal, "the emplacement could not be saved")
 }
 

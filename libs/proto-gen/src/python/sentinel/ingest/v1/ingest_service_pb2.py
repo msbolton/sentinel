@@ -27,7 +27,7 @@ from sentinel.v1 import emplacement_pb2 as sentinel_dot_v1_dot_emplacement__pb2
 from sentinel.v1 import observation_pb2 as sentinel_dot_v1_dot_observation__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\'sentinel/ingest/v1/ingest_service.proto\x12\x12sentinel.ingest.v1\x1a\x18sentinel/v1/common.proto\x1a\x1dsentinel/v1/emplacement.proto\x1a\x1dsentinel/v1/observation.proto\"\x13\n\x11GetSessionRequest\"\xf4\x02\n\x12GetSessionResponse\x12\x17\n\x07\x66\x65\x65\x64_id\x18\x01 \x01(\tR\x06\x66\x65\x65\x64Id\x12<\n\x0c\x65mplacements\x18\x02 \x03(\x0b\x32\x18.sentinel.v1.EmplacementR\x0c\x65mplacements\x12N\n\x14\x63lassification_floor\x18\x03 \x01(\x0e\x32\x1b.sentinel.v1.ClassificationR\x13\x63lassificationFloor\x12\x1a\n\x08\x65xercise\x18\x04 \x01(\x08R\x08\x65xercise\x12>\n\x1bsender_managed_emplacements\x18\x05 \x01(\x08R\x19senderManagedEmplacements\x12*\n\x11max_message_bytes\x18\x06 \x01(\rR\x0fmaxMessageBytes\x12/\n\x14max_messages_per_sec\x18\x07 \x01(\rR\x11maxMessagesPerSec\"\x19\n\x17ListEmplacementsRequest\"X\n\x18ListEmplacementsResponse\x12<\n\x0c\x65mplacements\x18\x01 \x03(\x0b\x32\x18.sentinel.v1.EmplacementR\x0c\x65mplacements\"V\n\x18UpsertEmplacementRequest\x12:\n\x0b\x65mplacement\x18\x01 \x01(\x0b\x32\x18.sentinel.v1.EmplacementR\x0b\x65mplacement\"W\n\x19UpsertEmplacementResponse\x12:\n\x0b\x65mplacement\x18\x01 \x01(\x0b\x32\x18.sentinel.v1.EmplacementR\x0b\x65mplacement\"\xe2\x01\n\x06Report\x12\x1d\n\nclient_ref\x18\x01 \x01(\tR\tclientRef\x12<\n\x0bobservation\x18\x02 \x01(\x0b\x32\x18.sentinel.v1.ObservationH\x00R\x0bobservation\x12L\n\x11\x65mplacement_state\x18\x03 \x01(\x0b\x32\x1d.sentinel.v1.EmplacementStateH\x00R\x10\x65mplacementState\x12%\n\x0e\x65mplacement_id\x18\x04 \x01(\tR\remplacementIdB\x06\n\x04\x62ody\"\x9a\x01\n\x03\x41\x63k\x12\x1d\n\nclient_ref\x18\x01 \x01(\tR\tclientRef\x12\x35\n\x06status\x18\x02 \x01(\x0e\x32\x1d.sentinel.ingest.v1.AckStatusR\x06status\x12\x16\n\x06reason\x18\x03 \x01(\tR\x06reason\x12%\n\x0e\x65mplacement_id\x18\x04 \x01(\tR\remplacementId\"J\n\x14StreamReportsRequest\x12\x32\n\x06report\x18\x01 \x01(\x0b\x32\x1a.sentinel.ingest.v1.ReportR\x06report\"B\n\x15StreamReportsResponse\x12)\n\x03\x61\x63k\x18\x01 \x01(\x0b\x32\x17.sentinel.ingest.v1.AckR\x03\x61\x63k\"F\n\x0ePublishRequest\x12\x34\n\x07reports\x18\x01 \x03(\x0b\x32\x1a.sentinel.ingest.v1.ReportR\x07reports\">\n\x0fPublishResponse\x12+\n\x04\x61\x63ks\x18\x01 \x03(\x0b\x32\x17.sentinel.ingest.v1.AckR\x04\x61\x63ks*q\n\tAckStatus\x12\x1a\n\x16\x41\x43K_STATUS_UNSPECIFIED\x10\x00\x12\x11\n\rACK_STATUS_OK\x10\x01\x12\x17\n\x13\x41\x43K_STATUS_REJECTED\x10\x02\x12\x1c\n\x18\x41\x43K_STATUS_DEAD_LETTERED\x10\x03\x32\x8b\x04\n\rIngestService\x12[\n\nGetSession\x12%.sentinel.ingest.v1.GetSessionRequest\x1a&.sentinel.ingest.v1.GetSessionResponse\x12m\n\x10ListEmplacements\x12+.sentinel.ingest.v1.ListEmplacementsRequest\x1a,.sentinel.ingest.v1.ListEmplacementsResponse\x12p\n\x11UpsertEmplacement\x12,.sentinel.ingest.v1.UpsertEmplacementRequest\x1a-.sentinel.ingest.v1.UpsertEmplacementResponse\x12h\n\rStreamReports\x12(.sentinel.ingest.v1.StreamReportsRequest\x1a).sentinel.ingest.v1.StreamReportsResponse(\x01\x30\x01\x12R\n\x07Publish\x12\".sentinel.ingest.v1.PublishRequest\x1a#.sentinel.ingest.v1.PublishResponseB;Z9github.com/sentinel/proto-gen/sentinel/ingest/v1;ingestv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\'sentinel/ingest/v1/ingest_service.proto\x12\x12sentinel.ingest.v1\x1a\x18sentinel/v1/common.proto\x1a\x1dsentinel/v1/emplacement.proto\x1a\x1dsentinel/v1/observation.proto\"\x13\n\x11GetSessionRequest\"\xf4\x02\n\x12GetSessionResponse\x12\x17\n\x07\x66\x65\x65\x64_id\x18\x01 \x01(\tR\x06\x66\x65\x65\x64Id\x12<\n\x0c\x65mplacements\x18\x02 \x03(\x0b\x32\x18.sentinel.v1.EmplacementR\x0c\x65mplacements\x12N\n\x14\x63lassification_floor\x18\x03 \x01(\x0e\x32\x1b.sentinel.v1.ClassificationR\x13\x63lassificationFloor\x12\x1a\n\x08\x65xercise\x18\x04 \x01(\x08R\x08\x65xercise\x12>\n\x1bsender_managed_emplacements\x18\x05 \x01(\x08R\x19senderManagedEmplacements\x12*\n\x11max_message_bytes\x18\x06 \x01(\rR\x0fmaxMessageBytes\x12/\n\x14max_messages_per_sec\x18\x07 \x01(\rR\x11maxMessagesPerSec\"\x19\n\x17ListEmplacementsRequest\"X\n\x18ListEmplacementsResponse\x12<\n\x0c\x65mplacements\x18\x01 \x03(\x0b\x32\x18.sentinel.v1.EmplacementR\x0c\x65mplacements\"V\n\x18UpsertEmplacementRequest\x12:\n\x0b\x65mplacement\x18\x01 \x01(\x0b\x32\x18.sentinel.v1.EmplacementR\x0b\x65mplacement\"W\n\x19UpsertEmplacementResponse\x12:\n\x0b\x65mplacement\x18\x01 \x01(\x0b\x32\x18.sentinel.v1.EmplacementR\x0b\x65mplacement\"*\n\x18RemoveEmplacementRequest\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\"\x1b\n\x19RemoveEmplacementResponse\"\xe2\x01\n\x06Report\x12\x1d\n\nclient_ref\x18\x01 \x01(\tR\tclientRef\x12<\n\x0bobservation\x18\x02 \x01(\x0b\x32\x18.sentinel.v1.ObservationH\x00R\x0bobservation\x12L\n\x11\x65mplacement_state\x18\x03 \x01(\x0b\x32\x1d.sentinel.v1.EmplacementStateH\x00R\x10\x65mplacementState\x12%\n\x0e\x65mplacement_id\x18\x04 \x01(\tR\remplacementIdB\x06\n\x04\x62ody\"\x9a\x01\n\x03\x41\x63k\x12\x1d\n\nclient_ref\x18\x01 \x01(\tR\tclientRef\x12\x35\n\x06status\x18\x02 \x01(\x0e\x32\x1d.sentinel.ingest.v1.AckStatusR\x06status\x12\x16\n\x06reason\x18\x03 \x01(\tR\x06reason\x12%\n\x0e\x65mplacement_id\x18\x04 \x01(\tR\remplacementId\"J\n\x14StreamReportsRequest\x12\x32\n\x06report\x18\x01 \x01(\x0b\x32\x1a.sentinel.ingest.v1.ReportR\x06report\"B\n\x15StreamReportsResponse\x12)\n\x03\x61\x63k\x18\x01 \x01(\x0b\x32\x17.sentinel.ingest.v1.AckR\x03\x61\x63k\"F\n\x0ePublishRequest\x12\x34\n\x07reports\x18\x01 \x03(\x0b\x32\x1a.sentinel.ingest.v1.ReportR\x07reports\">\n\x0fPublishResponse\x12+\n\x04\x61\x63ks\x18\x01 \x03(\x0b\x32\x17.sentinel.ingest.v1.AckR\x04\x61\x63ks*q\n\tAckStatus\x12\x1a\n\x16\x41\x43K_STATUS_UNSPECIFIED\x10\x00\x12\x11\n\rACK_STATUS_OK\x10\x01\x12\x17\n\x13\x41\x43K_STATUS_REJECTED\x10\x02\x12\x1c\n\x18\x41\x43K_STATUS_DEAD_LETTERED\x10\x03\x32\xfd\x04\n\rIngestService\x12[\n\nGetSession\x12%.sentinel.ingest.v1.GetSessionRequest\x1a&.sentinel.ingest.v1.GetSessionResponse\x12m\n\x10ListEmplacements\x12+.sentinel.ingest.v1.ListEmplacementsRequest\x1a,.sentinel.ingest.v1.ListEmplacementsResponse\x12p\n\x11UpsertEmplacement\x12,.sentinel.ingest.v1.UpsertEmplacementRequest\x1a-.sentinel.ingest.v1.UpsertEmplacementResponse\x12p\n\x11RemoveEmplacement\x12,.sentinel.ingest.v1.RemoveEmplacementRequest\x1a-.sentinel.ingest.v1.RemoveEmplacementResponse\x12h\n\rStreamReports\x12(.sentinel.ingest.v1.StreamReportsRequest\x1a).sentinel.ingest.v1.StreamReportsResponse(\x01\x30\x01\x12R\n\x07Publish\x12\".sentinel.ingest.v1.PublishRequest\x1a#.sentinel.ingest.v1.PublishResponseB;Z9github.com/sentinel/proto-gen/sentinel/ingest/v1;ingestv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -35,8 +35,8 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'sentinel.ingest.v1.ingest_s
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'Z9github.com/sentinel/proto-gen/sentinel/ingest/v1;ingestv1'
-  _globals['_ACKSTATUS']._serialized_start=1507
-  _globals['_ACKSTATUS']._serialized_end=1620
+  _globals['_ACKSTATUS']._serialized_start=1580
+  _globals['_ACKSTATUS']._serialized_end=1693
   _globals['_GETSESSIONREQUEST']._serialized_start=151
   _globals['_GETSESSIONREQUEST']._serialized_end=170
   _globals['_GETSESSIONRESPONSE']._serialized_start=173
@@ -49,18 +49,22 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_UPSERTEMPLACEMENTREQUEST']._serialized_end=750
   _globals['_UPSERTEMPLACEMENTRESPONSE']._serialized_start=752
   _globals['_UPSERTEMPLACEMENTRESPONSE']._serialized_end=839
-  _globals['_REPORT']._serialized_start=842
-  _globals['_REPORT']._serialized_end=1068
-  _globals['_ACK']._serialized_start=1071
-  _globals['_ACK']._serialized_end=1225
-  _globals['_STREAMREPORTSREQUEST']._serialized_start=1227
-  _globals['_STREAMREPORTSREQUEST']._serialized_end=1301
-  _globals['_STREAMREPORTSRESPONSE']._serialized_start=1303
-  _globals['_STREAMREPORTSRESPONSE']._serialized_end=1369
-  _globals['_PUBLISHREQUEST']._serialized_start=1371
-  _globals['_PUBLISHREQUEST']._serialized_end=1441
-  _globals['_PUBLISHRESPONSE']._serialized_start=1443
-  _globals['_PUBLISHRESPONSE']._serialized_end=1505
-  _globals['_INGESTSERVICE']._serialized_start=1623
-  _globals['_INGESTSERVICE']._serialized_end=2146
+  _globals['_REMOVEEMPLACEMENTREQUEST']._serialized_start=841
+  _globals['_REMOVEEMPLACEMENTREQUEST']._serialized_end=883
+  _globals['_REMOVEEMPLACEMENTRESPONSE']._serialized_start=885
+  _globals['_REMOVEEMPLACEMENTRESPONSE']._serialized_end=912
+  _globals['_REPORT']._serialized_start=915
+  _globals['_REPORT']._serialized_end=1141
+  _globals['_ACK']._serialized_start=1144
+  _globals['_ACK']._serialized_end=1298
+  _globals['_STREAMREPORTSREQUEST']._serialized_start=1300
+  _globals['_STREAMREPORTSREQUEST']._serialized_end=1374
+  _globals['_STREAMREPORTSRESPONSE']._serialized_start=1376
+  _globals['_STREAMREPORTSRESPONSE']._serialized_end=1442
+  _globals['_PUBLISHREQUEST']._serialized_start=1444
+  _globals['_PUBLISHREQUEST']._serialized_end=1514
+  _globals['_PUBLISHRESPONSE']._serialized_start=1516
+  _globals['_PUBLISHRESPONSE']._serialized_end=1578
+  _globals['_INGESTSERVICE']._serialized_start=1696
+  _globals['_INGESTSERVICE']._serialized_end=2333
 # @@protoc_insertion_point(module_scope)

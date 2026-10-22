@@ -22,6 +22,7 @@ const (
 	IngestService_GetSession_FullMethodName        = "/sentinel.ingest.v1.IngestService/GetSession"
 	IngestService_ListEmplacements_FullMethodName  = "/sentinel.ingest.v1.IngestService/ListEmplacements"
 	IngestService_UpsertEmplacement_FullMethodName = "/sentinel.ingest.v1.IngestService/UpsertEmplacement"
+	IngestService_RemoveEmplacement_FullMethodName = "/sentinel.ingest.v1.IngestService/RemoveEmplacement"
 	IngestService_StreamReports_FullMethodName     = "/sentinel.ingest.v1.IngestService/StreamReports"
 	IngestService_Publish_FullMethodName           = "/sentinel.ingest.v1.IngestService/Publish"
 )
@@ -44,6 +45,12 @@ type IngestServiceClient interface {
 	// (ignoring surrounding whitespace) against sender-managed emplacements on
 	// this connection.
 	UpsertEmplacement(ctx context.Context, in *UpsertEmplacementRequest, opts ...grpc.CallOption) (*UpsertEmplacementResponse, error)
+	// RemoveEmplacement soft-deletes an emplacement this connection's senders
+	// made; refused unless the connection allows sender-managed ones. An id
+	// that is unknown, or names an emplacement bound elsewhere or made by
+	// someone other than a sender, is NotFound. It is idempotent: a second
+	// remove is NotFound, which a caller may ignore.
+	RemoveEmplacement(ctx context.Context, in *RemoveEmplacementRequest, opts ...grpc.CallOption) (*RemoveEmplacementResponse, error)
 	// StreamReports takes reports and answers each with an ack.
 	StreamReports(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamReportsRequest, StreamReportsResponse], error)
 	// Publish takes a batch of reports and acks each, for simple senders.
@@ -82,6 +89,16 @@ func (c *ingestServiceClient) UpsertEmplacement(ctx context.Context, in *UpsertE
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpsertEmplacementResponse)
 	err := c.cc.Invoke(ctx, IngestService_UpsertEmplacement_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ingestServiceClient) RemoveEmplacement(ctx context.Context, in *RemoveEmplacementRequest, opts ...grpc.CallOption) (*RemoveEmplacementResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveEmplacementResponse)
+	err := c.cc.Invoke(ctx, IngestService_RemoveEmplacement_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -129,6 +146,12 @@ type IngestServiceServer interface {
 	// (ignoring surrounding whitespace) against sender-managed emplacements on
 	// this connection.
 	UpsertEmplacement(context.Context, *UpsertEmplacementRequest) (*UpsertEmplacementResponse, error)
+	// RemoveEmplacement soft-deletes an emplacement this connection's senders
+	// made; refused unless the connection allows sender-managed ones. An id
+	// that is unknown, or names an emplacement bound elsewhere or made by
+	// someone other than a sender, is NotFound. It is idempotent: a second
+	// remove is NotFound, which a caller may ignore.
+	RemoveEmplacement(context.Context, *RemoveEmplacementRequest) (*RemoveEmplacementResponse, error)
 	// StreamReports takes reports and answers each with an ack.
 	StreamReports(grpc.BidiStreamingServer[StreamReportsRequest, StreamReportsResponse]) error
 	// Publish takes a batch of reports and acks each, for simple senders.
@@ -151,6 +174,9 @@ func (UnimplementedIngestServiceServer) ListEmplacements(context.Context, *ListE
 }
 func (UnimplementedIngestServiceServer) UpsertEmplacement(context.Context, *UpsertEmplacementRequest) (*UpsertEmplacementResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpsertEmplacement not implemented")
+}
+func (UnimplementedIngestServiceServer) RemoveEmplacement(context.Context, *RemoveEmplacementRequest) (*RemoveEmplacementResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveEmplacement not implemented")
 }
 func (UnimplementedIngestServiceServer) StreamReports(grpc.BidiStreamingServer[StreamReportsRequest, StreamReportsResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method StreamReports not implemented")
@@ -233,6 +259,24 @@ func _IngestService_UpsertEmplacement_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IngestService_RemoveEmplacement_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveEmplacementRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IngestServiceServer).RemoveEmplacement(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IngestService_RemoveEmplacement_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IngestServiceServer).RemoveEmplacement(ctx, req.(*RemoveEmplacementRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _IngestService_StreamReports_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(IngestServiceServer).StreamReports(&grpc.GenericServerStream[StreamReportsRequest, StreamReportsResponse]{ServerStream: stream})
 }
@@ -276,6 +320,10 @@ var IngestService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpsertEmplacement",
 			Handler:    _IngestService_UpsertEmplacement_Handler,
+		},
+		{
+			MethodName: "RemoveEmplacement",
+			Handler:    _IngestService_RemoveEmplacement_Handler,
 		},
 		{
 			MethodName: "Publish",

@@ -100,6 +100,13 @@ export interface UpsertEmplacementResponse {
   emplacement?: Emplacement | undefined;
 }
 
+export interface RemoveEmplacementRequest {
+  id: string;
+}
+
+export interface RemoveEmplacementResponse {
+}
+
 /**
  * Report is one thing a sender says: an observation, or a mobile
  * emplacement's own position. client_ref comes back on the ack.
@@ -573,6 +580,106 @@ export const UpsertEmplacementResponse = {
     message.emplacement = (object.emplacement !== undefined && object.emplacement !== null)
       ? Emplacement.fromPartial(object.emplacement)
       : undefined;
+    return message;
+  },
+};
+
+function createBaseRemoveEmplacementRequest(): RemoveEmplacementRequest {
+  return { id: "" };
+}
+
+export const RemoveEmplacementRequest = {
+  encode(message: RemoveEmplacementRequest, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.id !== "") {
+      writer.uint32(10).string(message.id);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): RemoveEmplacementRequest {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseRemoveEmplacementRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          if (tag !== 10) {
+            break;
+          }
+
+          message.id = reader.string();
+          continue;
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skipType(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): RemoveEmplacementRequest {
+    return { id: isSet(object.id) ? globalThis.String(object.id) : "" };
+  },
+
+  toJSON(message: RemoveEmplacementRequest): unknown {
+    const obj: any = {};
+    if (message.id !== "") {
+      obj.id = message.id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RemoveEmplacementRequest>, I>>(base?: I): RemoveEmplacementRequest {
+    return RemoveEmplacementRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RemoveEmplacementRequest>, I>>(object: I): RemoveEmplacementRequest {
+    const message = createBaseRemoveEmplacementRequest();
+    message.id = object.id ?? "";
+    return message;
+  },
+};
+
+function createBaseRemoveEmplacementResponse(): RemoveEmplacementResponse {
+  return {};
+}
+
+export const RemoveEmplacementResponse = {
+  encode(_: RemoveEmplacementResponse, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): RemoveEmplacementResponse {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseRemoveEmplacementResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skipType(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(_: any): RemoveEmplacementResponse {
+    return {};
+  },
+
+  toJSON(_: RemoveEmplacementResponse): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RemoveEmplacementResponse>, I>>(base?: I): RemoveEmplacementResponse {
+    return RemoveEmplacementResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RemoveEmplacementResponse>, I>>(_: I): RemoveEmplacementResponse {
+    const message = createBaseRemoveEmplacementResponse();
     return message;
   },
 };
