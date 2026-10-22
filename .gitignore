@@ -45,7 +45,6 @@ sentinel-local-ca.crt
 # Go build outputs
 apps/*/vendor/
 apps/*/server
-adapters/*/vendor/
 simulators/*/vendor/
 
 # Python

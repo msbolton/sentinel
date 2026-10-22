@@ -3,17 +3,15 @@
 SHELL := /bin/bash
 
 # Go services
-GO_SERVICES := api-gateway ingest-service entity-service track-service search-service link-analysis-service alert-service analytics-service ew-sensor sensor-sim
-# Go programs that live in adapters/ or simulators/ (everything else in
-# GO_SERVICES is in apps/). SVC_DIR expands, inside a recipe loop over $$svc,
-# to the folder.
-ADAPTERS := ew-sensor
+GO_SERVICES := api-gateway ingest-service entity-service track-service search-service link-analysis-service alert-service analytics-service sensor-sim
+# Go programs that live in simulators/ (everything else in GO_SERVICES is in
+# apps/). SVC_DIR expands, inside a recipe loop over $$svc, to the folder.
 SIMULATORS := sensor-sim
-SVC_DIR = $$(if [[ " $(ADAPTERS) " == *" $$svc "* ]]; then echo adapters; elif [[ " $(SIMULATORS) " == *" $$svc "* ]]; then echo simulators; else echo apps; fi)
+SVC_DIR = $$([[ " $(SIMULATORS) " == *" $$svc "* ]] && echo simulators || echo apps)
 
 # Container images (the names the Helm chart pulls as sentinel/<name>). The
-# ew-sensor and sensor-sim simulators are not deployed, so they are not
-# listed. "web" is built from apps/client.
+# sensor-sim simulator is not deployed, so it is not listed. "web" is built
+# from apps/client.
 IMAGES := api-gateway entity-service track-service search-service link-analysis-service alert-service ingest-service analytics-service web
 # REGISTRY and TAG are shared by images-push and deploy, so a deploy from the
 # same commit pulls the images that commit pushed.
