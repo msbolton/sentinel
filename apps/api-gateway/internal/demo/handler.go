@@ -1,0 +1,166 @@
+package demo
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"math"
+	"net/http"
+
+	"go.uber.org/zap"
+
+	"github.com/sentinel/api-gateway/internal/auth"
+	"github.com/sentinel/api-gateway/internal/registration"
+	"github.com/sentinel/go-common/httputil"
+)
+
+// maxPositionBody caps a position report; a real one is a few dozen bytes.
+const maxPositionBody = 1 << 10
+
+// Position sources reported back to the browser.
+const (
+	sourceBrowser = "browser"
+	sourceIP      = "ip"
+	sourceNone    = "none"
+)
+
+// Handler serves the demo session and position routes.
+type Handler struct {
+	guests         *Guests
+	sites          VisitorSites
+	loc            Locator
+	visitorsFeedID string
+	limiter        *registration.IPLimiter
+	logger         *zap.Logger
+}
+
+// NewHandler creates the demo handler. limiter may be nil, which disables the
+// session rate limit; loc may be nil, which never locates.
+func NewHandler(g *Guests, sites VisitorSites, loc Locator, visitorsFeedID string, limiter *registration.IPLimiter, logger *zap.Logger) *Handler {
+	if loc == nil {
+		loc = NopLocator{}
+	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &Handler{guests: g, sites: sites, loc: loc, visitorsFeedID: visitorsFeedID, limiter: limiter, logger: logger}
+}
+
+// RegisterPublicRoutes mounts the unauthenticated session endpoint.
+func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/v1/demo/session", h.handleSession)
+}
+
+// RegisterProtectedRoutes mounts the position endpoint. The caller applies
+// auth; the handler itself admits only registered guests.
+func (h *Handler) RegisterProtectedRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/v1/demo/position", h.handlePosition)
+}
+
+func (h *Handler) handleSession(w http.ResponseWriter, r *http.Request) {
+	// The limiter is keyed on the rightmost X-Forwarded-For entry; its own
+	// Middleware would trust the leftmost, which the client controls.
+	if h.limiter != nil && !h.limiter.Allow(ClientIP(r)) {
+		httputil.Error(w, http.StatusTooManyRequests, "Too many demo sessions from this address")
+		return
+	}
+	s, err := h.guests.Start(r.Context())
+	if errors.Is(err, ErrFull) {
+		httputil.JSON(w, http.StatusServiceUnavailable, map[string]string{"error": "full"})
+		return
+	}
+	if err != nil {
+		// Start has already logged the cause.
+		httputil.Error(w, http.StatusBadGateway, "Could not start a demo session")
+		return
+	}
+	s.VisitorsFeedID = h.visitorsFeedID
+	w.Header().Set("Cache-Control", "no-store")
+	httputil.JSON(w, http.StatusOK, s)
+}
+
+type positionRequest struct {
+	Lat    *float64 `json:"lat"`
+	Lon    *float64 `json:"lon"`
+	Denied bool     `json:"denied"`
+}
+
+// positionResponse echoes the visitor's own position back to them. Only the
+// blurred form reaches Place; the precise one is never stored or logged.
+type positionResponse struct {
+	Lat           *float64 `json:"lat,omitempty"`
+	Lon           *float64 `json:"lon,omitempty"`
+	Source        string   `json:"source"`
+	EmplacementID string   `json:"emplacementId,omitempty"`
+}
+
+func (h *Handler) handlePosition(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFrom(r.Context())
+	if !ok || !user.HasAnyRole(auth.RoleGuest) {
+		httputil.Error(w, http.StatusForbidden, "Only demo guests report a position")
+		return
+	}
+	guest, ok := h.guests.Lookup(user.UserID)
+	if !ok {
+		httputil.Error(w, http.StatusForbidden, "Demo session has ended")
+		return
+	}
+
+	req, ok := decodePosition(w, r)
+	if !ok {
+		httputil.Error(w, http.StatusBadRequest, "Send {\"lat\":…,\"lon\":…} or {\"denied\":true}")
+		return
+	}
+
+	var lat, lon float64
+	source := sourceBrowser
+	if req.Denied {
+		ipLat, ipLon, found := h.loc.Locate(ClientIP(r))
+		if !found || !validCoordinate(ipLat, ipLon) {
+			httputil.JSON(w, http.StatusOK, positionResponse{Source: sourceNone})
+			return
+		}
+		lat, lon, source = ipLat, ipLon, sourceIP
+	} else {
+		lat, lon = *req.Lat, *req.Lon
+	}
+
+	blurLat, blurLon := Blur(lat, lon)
+	empID, err := h.sites.Place(r.Context(), guest.GuestID, blurLat, blurLon)
+	if err != nil {
+		h.logger.Error("failed to place demo visitor", zap.String("guestId", guest.GuestID), zap.String("source", source), zap.Error(err))
+		httputil.Error(w, http.StatusBadGateway, "Could not place your site")
+		return
+	}
+	httputil.JSON(w, http.StatusOK, positionResponse{Lat: &lat, Lon: &lon, Source: source, EmplacementID: empID})
+}
+
+// decodePosition reads a body that is exactly one of a valid lat/lon pair or
+// {"denied":true}, at most maxPositionBody bytes.
+func decodePosition(w http.ResponseWriter, r *http.Request) (positionRequest, bool) {
+	var req positionRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPositionBody))
+	if err := dec.Decode(&req); err != nil {
+		return req, false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return req, false // trailing data
+	}
+	hasCoords := req.Lat != nil || req.Lon != nil
+	switch {
+	case req.Denied:
+		return req, !hasCoords
+	case req.Lat == nil || req.Lon == nil:
+		return req, false
+	default:
+		return req, validCoordinate(*req.Lat, *req.Lon)
+	}
+}
+
+// validCoordinate reports whether lat/lon are finite and on the globe.
+func validCoordinate(lat, lon float64) bool {
+	if math.IsNaN(lat) || math.IsNaN(lon) || math.IsInf(lat, 0) || math.IsInf(lon, 0) {
+		return false
+	}
+	return math.Abs(lat) <= 90 && math.Abs(lon) <= 180
+}
