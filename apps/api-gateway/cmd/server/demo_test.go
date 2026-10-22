@@ -14,6 +14,7 @@ import (
 
 	"go.uber.org/zap/zaptest"
 
+	"github.com/sentinel/api-gateway/internal/auth"
 	"github.com/sentinel/api-gateway/internal/config"
 	"github.com/sentinel/api-gateway/internal/demo"
 )
@@ -168,5 +169,28 @@ func TestDemoStatusReadsHubAndGuests(t *testing.T) {
 	ready.Store(true)
 	if !s.LastEventAt().Equal(last) {
 		t.Fatalf("LastEventAt = %v, want %v", s.LastEventAt(), last)
+	}
+}
+
+func TestAdmitStreamRefusesGuestsTheRegistryDoesNotKnow(t *testing.T) {
+	known := map[string]bool{"kc-live": true}
+	admit := admitStream(func(userID string) (demo.Guest, bool) {
+		return demo.Guest{UserID: userID}, known[userID]
+	})
+	cases := []struct {
+		user *auth.User
+		want bool
+	}{
+		{&auth.User{UserID: "kc-live", Roles: []string{auth.RoleViewer, auth.RoleGuest}}, true},
+		// A guest from before a restart, or one already ended: valid token, no session.
+		{&auth.User{UserID: "kc-zombie", Roles: []string{auth.RoleViewer, auth.RoleGuest}}, false},
+		// Everyone else is not the demo's business.
+		{&auth.User{UserID: "analyst-7", Roles: []string{auth.RoleAnalyst}}, true},
+		{&auth.User{UserID: "viewer-1", Roles: []string{auth.RoleViewer}}, true},
+	}
+	for _, c := range cases {
+		if got := admit(c.user); got != c.want {
+			t.Errorf("admit(%s %v) = %v, want %v", c.user.UserID, c.user.Roles, got, c.want)
+		}
 	}
 }

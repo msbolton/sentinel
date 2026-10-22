@@ -143,6 +143,7 @@ func main() {
 		}
 		public = append(public, demoApp.RegisterPublicRoutes)
 		protected = append(protected, demoApp.RegisterProtectedRoutes)
+		wsHandler.SetAdmission(demoApp.AdmitStream)
 	}
 
 	handler := server.New(server.Deps{

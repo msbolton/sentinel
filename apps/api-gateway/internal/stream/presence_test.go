@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -345,5 +346,57 @@ func TestHandlerRecordsUserAndCloseUserEndsRealSocket(t *testing.T) {
 	got := rec.snapshot()
 	if got[0] != (presenceEvent{"guest-1", true}) || got[1] != (presenceEvent{"guest-1", false}) {
 		t.Fatalf("events = %+v", got)
+	}
+}
+
+// An ended demo guest (say, one a gateway restart forgot) still holds a valid
+// token; the upgrade is refused with 1008 so the browser shows "session
+// ended" rather than an empty map.
+func TestHandlerRefusesUnadmittedUserWith1008(t *testing.T) {
+	hub := NewHub(zap.NewNop())
+	rec := &presenceRecorder{}
+	hub.SetPresenceListener(rec.record)
+	h := NewHandler(hub, "*", zap.NewNop())
+	h.SetAdmission(func(u *auth.User) bool { return u.UserID != "zombie" })
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	var user atomic.Pointer[auth.User]
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.ServeHTTP(w, r.WithContext(auth.WithUser(r.Context(), user.Load())))
+	}))
+	defer srv.Close()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/entities"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	user.Store(&auth.User{UserID: "zombie", Roles: []string{"sentinel-guest"}})
+	conn, _, err := websocket.Dial(ctx, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	var readErr error
+	for readErr == nil {
+		_, _, readErr = conn.Read(ctx)
+	}
+	if got := websocket.CloseStatus(readErr); got != websocket.StatusPolicyViolation {
+		t.Fatalf("close status = %v (%v), want 1008", got, readErr)
+	}
+	if n := len(rec.snapshot()); n != 0 {
+		t.Fatalf("a refused socket fired %d presence events", n)
+	}
+
+	// An admitted user is served as before.
+	user.Store(&auth.User{UserID: "guest-1", Roles: []string{"sentinel-guest"}})
+	ok, _, err := websocket.Dial(ctx, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ok.Close(websocket.StatusNormalClosure, "")
+	if _, _, err := ok.Read(ctx); err != nil {
+		t.Fatalf("admitted user: %v", err)
+	}
+	if n := hub.UsersWithRole("sentinel-guest"); n != 1 {
+		t.Fatalf("UsersWithRole = %d, want 1", n)
 	}
 }

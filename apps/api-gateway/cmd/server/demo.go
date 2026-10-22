@@ -176,6 +176,21 @@ func (d *publicDemo) RegisterPublicRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/demo/status", d.status)
 }
 
+// AdmitStream is the entity stream's admission check: a guest the registry
+// does not know as live (ended, or left by a previous process with a token
+// still valid) is refused with 1008 so its browser shows "session ended".
+func (d *publicDemo) AdmitStream(u *auth.User) bool { return admitStream(d.guests.Lookup)(u) }
+
+func admitStream(lookup func(userID string) (demo.Guest, bool)) func(*auth.User) bool {
+	return func(u *auth.User) bool {
+		if !u.HasAnyRole(auth.RoleGuest) {
+			return true
+		}
+		_, live := lookup(u.UserID)
+		return live
+	}
+}
+
 // RegisterProtectedRoutes mounts the position route.
 func (d *publicDemo) RegisterProtectedRoutes(mux *http.ServeMux) {
 	d.handler.RegisterProtectedRoutes(mux)

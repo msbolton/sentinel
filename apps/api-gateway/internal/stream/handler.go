@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -22,6 +23,7 @@ type Handler struct {
 	logger         *zap.Logger
 	originPatterns []string
 	skipOrigin     bool
+	admit          atomic.Pointer[func(*auth.User) bool]
 }
 
 // NewHandler creates the websocket handler. allowedOrigin is the CORS origin
@@ -45,6 +47,14 @@ func NewHandler(hub *Hub, allowedOrigin string, logger *zap.Logger) *Handler {
 	return h
 }
 
+// SetAdmission sets a check every authenticated user must pass to be
+// streamed to. One that fails it has the socket closed at once with 1008
+// (policy violation, "session ended"), never joining the hub; the public
+// demo uses it for guests it no longer knows.
+func (h *Handler) SetAdmission(fn func(*auth.User) bool) {
+	h.admit.Store(&fn)
+}
+
 // RegisterRoutes mounts the websocket endpoint on mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ws/entities", h.ServeHTTP)
@@ -60,6 +70,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.Debug("ws accept failed", zap.Error(err))
 		return
+	}
+
+	if u, ok := auth.UserFrom(r.Context()); ok {
+		if admit := h.admit.Load(); admit != nil && !(*admit)(u) {
+			h.logger.Debug("ws user refused: session ended", zap.String("userId", u.UserID))
+			_ = conn.Close(websocket.StatusPolicyViolation, "session ended")
+			return
+		}
 	}
 
 	client := newClient(newClientID(), h.hub, conn, h.logger)
