@@ -50,6 +50,10 @@ type fakeIngest struct {
 	removeErrs []error
 	// upsertDelay holds an upsert's answer after it has landed.
 	upsertDelay time.Duration
+	// removeEntered, when set, is told of each removal as it arrives, and
+	// the removal then waits for removeHold to close.
+	removeEntered chan string
+	removeHold    chan struct{}
 	// drop, when closed, ends every open stream with Unavailable.
 	drop chan struct{}
 }
@@ -122,6 +126,13 @@ func (f *fakeIngest) UpsertEmplacement(ctx context.Context, req *ingestv1.Upsert
 func (f *fakeIngest) RemoveEmplacement(ctx context.Context, req *ingestv1.RemoveEmplacementRequest) (*ingestv1.RemoveEmplacementResponse, error) {
 	if err := f.authed(ctx); err != nil {
 		return nil, err
+	}
+	f.mu.Lock()
+	entered, hold := f.removeEntered, f.removeHold
+	f.mu.Unlock()
+	if entered != nil {
+		entered <- req.GetId()
+		<-hold
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -765,4 +776,93 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+func (f *fakeIngest) upsertCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.upserts)
+}
+
+// A visitor back after their site was taken down (within the guest's time)
+// gets it back where it was, without the browser reporting again.
+func TestOnlineAfterScheduledRemovalPlacesTheSiteAgain(t *testing.T) {
+	f := newFakeIngest()
+	addr, _ := serveFake(t, f, "127.0.0.1:0")
+	opts := testVisitorOptions(addr)
+	opts.RemoveAfter = 100 * time.Millisecond
+	v := startVisitors(t, opts, nil)
+
+	id, err := v.Place(context.Background(), "ab12cd34", 51.55, -0.15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.Online("ab12cd34")
+	v.Offline("ab12cd34")
+	waitUntil(t, "the scheduled removal", func() bool { return len(f.removed()) == 1 })
+	time.Sleep(3 * testTick)
+
+	v.Online("ab12cd34")
+	waitUntil(t, "the site placed again", func() bool { return f.upsertCount() == 2 })
+	f.mu.Lock()
+	again := f.upserts[1]
+	f.mu.Unlock()
+	if again.GetName() != "guest-ab12cd34" || again.GetPosition().GetLatitude() != 51.55 || again.GetPosition().GetLongitude() != -0.15 {
+		t.Fatalf("placed again as %v", again)
+	}
+	n := f.stateCount(id)
+	waitUntil(t, "heartbeats again", func() bool { return f.stateCount(id) >= n+2 })
+}
+
+// Online while the scheduled removal is already talking to the service: the
+// removal lands, and the site comes back since its guest is here.
+func TestOnlineDuringInFlightRemovalPlacesTheSiteAgain(t *testing.T) {
+	f := newFakeIngest()
+	f.removeEntered, f.removeHold = make(chan string, 4), make(chan struct{})
+	addr, _ := serveFake(t, f, "127.0.0.1:0")
+	opts := testVisitorOptions(addr)
+	opts.RemoveAfter = 50 * time.Millisecond
+	v := startVisitors(t, opts, nil)
+
+	if _, err := v.Place(context.Background(), "ab12cd34", 1.05, 2.05); err != nil {
+		t.Fatal(err)
+	}
+	v.Online("ab12cd34")
+	v.Offline("ab12cd34")
+	select {
+	case <-f.removeEntered:
+	case <-time.After(visitorWait):
+		t.Fatal("the scheduled removal never started")
+	}
+	v.Online("ab12cd34")
+	f.mu.Lock()
+	f.removeEntered = nil
+	f.mu.Unlock()
+	close(f.removeHold)
+	waitUntil(t, "the site placed again", func() bool { return f.upsertCount() == 2 })
+}
+
+// An explicit Remove (the guest ended) forgets the position: presence after
+// it brings nothing back.
+func TestRemoveForgetsThePosition(t *testing.T) {
+	f := newFakeIngest()
+	addr, _ := serveFake(t, f, "127.0.0.1:0")
+	v := startVisitors(t, testVisitorOptions(addr), nil)
+
+	if _, err := v.Place(context.Background(), "ab12cd34", 1.05, 2.05); err != nil {
+		t.Fatal(err)
+	}
+	v.Online("ab12cd34")
+	v.Remove(context.Background(), "ab12cd34")
+	v.Offline("ab12cd34")
+	v.Online("ab12cd34")
+	time.Sleep(10 * testTick)
+	if n := f.upsertCount(); n != 1 {
+		t.Fatalf("upserts = %d after Remove, want 1", n)
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if e := v.visitors["ab12cd34"]; e != nil && e.last != nil {
+		t.Fatal("Remove kept the position")
+	}
 }

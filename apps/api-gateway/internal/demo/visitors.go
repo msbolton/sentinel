@@ -143,7 +143,12 @@ type visitor struct {
 	removeGen  uint64
 	dispatched uint64
 	ops        int // calls holding or waiting for lock; the entry stays while > 0
-	lock       chan struct{}
+	// last is the (blurred) position of the last successful Place, kept so
+	// a guest back after its site was taken down gets it again; replacing
+	// is set while such a re-place is pending. An explicit Remove clears it.
+	last      *[2]float64
+	replacing bool
+	lock      chan struct{}
 }
 
 func (e *visitor) schedule(at time.Time) {
@@ -178,6 +183,7 @@ type Visitors struct {
 	mu       sync.Mutex
 	started  bool
 	stopped  bool
+	runCtx   context.Context
 	api      ingestv1.IngestServiceClient // nil unless running
 	conn     *grpc.ClientConn
 	cancel   context.CancelFunc
@@ -224,7 +230,7 @@ func (v *Visitors) Start(ctx context.Context) error {
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	api := ingestv1.NewIngestServiceClient(conn)
-	v.started, v.api, v.conn, v.cancel = true, api, conn, cancel
+	v.started, v.api, v.conn, v.cancel, v.runCtx = true, api, conn, cancel, runCtx
 	v.wg.Add(2)
 	go func() {
 		defer v.wg.Done()
@@ -313,7 +319,7 @@ func (v *Visitors) entryLocked(guestID string) *visitor {
 
 // gcLocked forgets an entry with nothing left to track. v.mu is held.
 func (v *Visitors) gcLocked(guestID string, e *visitor) {
-	if e.site == siteNone && !e.online && e.ops == 0 && v.visitors[guestID] == e {
+	if e.site == siteNone && !e.online && e.ops == 0 && e.last == nil && v.visitors[guestID] == e {
 		delete(v.visitors, guestID)
 	}
 }
@@ -352,8 +358,9 @@ func (v *Visitors) signal() {
 
 // Online is the guest's first socket opening. A placed site heartbeats at
 // once and from then on every Heartbeat, and a pending removal is cancelled.
-// A guest with no site yet starts heartbeating when Place succeeds. It never
-// blocks.
+// A guest with no site yet starts heartbeating when Place succeeds; one whose
+// site was taken down after it left (and not by Remove) has it placed again
+// where it was, in the background. It never blocks.
 func (v *Visitors) Online(guestID string) {
 	if guestID == "" {
 		return
@@ -366,10 +373,65 @@ func (v *Visitors) Online(guestID string) {
 	}
 	kick := e.site == sitePlaced
 	e.kick = e.kick || kick
+	v.replaceLocked(guestID, e)
 	v.mu.Unlock()
 	if kick {
 		v.signal()
 	}
+}
+
+// replaceLocked starts placing an online guest's site again at its last
+// position when the site is gone (its scheduled removal ran while the guest
+// was away, or while it was coming back). v.mu is held.
+func (v *Visitors) replaceLocked(guestID string, e *visitor) {
+	if !e.online || e.site != siteNone || e.last == nil || e.replacing || !v.started || v.stopped || v.api == nil {
+		return
+	}
+	e.replacing = true
+	e.ops++ // keeps the entry while the re-place waits for its turn
+	ctx, api := v.runCtx, v.api
+	v.wg.Add(1) // safe: Stop sets stopped under v.mu before it waits
+	go func() {
+		defer v.wg.Done()
+		v.replace(ctx, api, guestID, e)
+	}()
+}
+
+// replace takes the guest's turn and, if its site is still gone, its guest
+// still here and its position not forgotten, places it again.
+func (v *Visitors) replace(ctx context.Context, api ingestv1.IngestServiceClient, guestID string, e *visitor) {
+	release := func() {
+		v.mu.Lock()
+		e.replacing = false
+		e.ops--
+		v.gcLocked(guestID, e)
+		v.mu.Unlock()
+	}
+	select {
+	case e.lock <- struct{}{}:
+	case <-ctx.Done():
+		release()
+		return
+	}
+	defer func() {
+		<-e.lock
+		release()
+	}()
+	v.mu.Lock()
+	e.replacing = false
+	if !e.online || e.site != siteNone || e.last == nil {
+		v.mu.Unlock()
+		return
+	}
+	lat, lon := e.last[0], e.last[1]
+	v.mu.Unlock()
+	if _, err := v.placeHeld(ctx, api, guestID, e, lat, lon); err != nil {
+		if ctx.Err() == nil {
+			v.logger.Warn("demo visitor site not placed again", zap.String("guestId", guestID), zap.Error(err))
+		}
+		return
+	}
+	v.logger.Info("demo visitor site placed again for a returning guest", zap.String("guestId", guestID))
 }
 
 // Offline is the guest's last socket closing. Heartbeats stop, so the
@@ -410,7 +472,11 @@ func (v *Visitors) Place(ctx context.Context, guestID string, lat, lon float64) 
 		return "", fmt.Errorf("placing the visitor's site: %w", err)
 	}
 	defer unlock()
+	return v.placeHeld(ctx, api, guestID, e, lat, lon)
+}
 
+// placeHeld is Place with the guest's operation lock already held.
+func (v *Visitors) placeHeld(ctx context.Context, api ingestv1.IngestServiceClient, guestID string, e *visitor, lat, lon float64) (string, error) {
 	req := &ingestv1.UpsertEmplacementRequest{Emplacement: &sentinelv1.Emplacement{
 		Name:        visitorName(guestID),
 		Description: visitorDescription,
@@ -419,7 +485,7 @@ func (v *Visitors) Place(ctx context.Context, guestID string, lat, lon float64) 
 		Position:    &sentinelv1.Coordinate{Latitude: lat, Longitude: lon},
 	}}
 	var resp *ingestv1.UpsertEmplacementResponse
-	err = v.call(ctx, func(ctx context.Context) error {
+	err := v.call(ctx, func(ctx context.Context) error {
 		var err error
 		resp, err = api.UpsertEmplacement(ctx, req)
 		return err
@@ -443,6 +509,7 @@ func (v *Visitors) Place(ctx context.Context, guestID string, lat, lon float64) 
 		return "", fmt.Errorf("placing the visitor's site: %w", err)
 	}
 	e.site, e.empID, e.placedAt = sitePlaced, id, now
+	e.last = &[2]float64{lat, lon}
 	e.retried, e.retryAt = false, time.Time{}
 	online := e.online
 	if online {
@@ -458,8 +525,8 @@ func (v *Visitors) Place(ctx context.Context, guestID string, lat, lon float64) 
 	return id, nil
 }
 
-// Remove takes the guest's site down: its heartbeats stop at once, and only
-// a later Place brings it back. It is idempotent: a guest with no site, or a
+// Remove takes the guest's site down: its heartbeats stop at once, its
+// position is forgotten, and only a later Place brings it back. It is idempotent: a guest with no site, or a
 // site the service no longer has, is done. A failed removal is retried every
 // RemoveRetry until it succeeds or the guest is placed again.
 func (v *Visitors) Remove(ctx context.Context, guestID string) {
@@ -477,6 +544,7 @@ func (v *Visitors) Remove(ctx context.Context, guestID string) {
 	}
 	defer unlock()
 	v.mu.Lock()
+	e.last = nil
 	if e.site == siteNone {
 		v.mu.Unlock()
 		return
@@ -537,6 +605,8 @@ func (v *Visitors) removeScheduled(ctx context.Context, api ingestv1.IngestServi
 	case err == nil:
 		e.site, e.empID, e.kick = siteNone, "", false
 		e.schedule(time.Time{})
+		// The guest may have come back while the removal was in flight.
+		v.replaceLocked(r.guestID, e)
 	case e.removeGen == r.gen:
 		e.schedule(v.opts.Now().Add(v.opts.RemoveRetry))
 	}
