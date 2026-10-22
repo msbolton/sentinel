@@ -227,7 +227,7 @@ They cannot:
 - open Connections, the link graph or the admin settings;
 - see anything above UNCLASSIFIED.
 
-A visitor's precise position never leaves their browser: the browser snaps its fix to the centre of a 0.1° cell before sending it (the gateway snaps again, which changes nothing), and the server stores, logs and publishes only that. The visitor's own dot is drawn at the precise fix, in their browser only. A visitor who denies the location, or leaves the prompt unanswered for 10 s, is placed from their IP address; a fix that still arrives later moves them. A guest may report a position twice at once, then once every 5 s.
+A visitor's precise position never leaves their browser: the browser snaps its fix to the centre of a 0.1° cell before sending it (the gateway snaps again, which changes nothing), and the server stores, logs and publishes only that. The visitor's own dot is drawn at the precise fix, in their browser only. The map opens, and "my location" flies, to the centre of the blurred cell rather than the fix, because the view's bounds go to the gateway as the viewport; where the visitor pans afterwards is theirs to show. A visitor who denies the location, or leaves the prompt unanswered for 10 s, is placed from their IP address; a fix that still arrives later moves them. A guest may report a position twice at once, then once every 5 s.
 
 A guest's session survives a reload, a phone evicting the tab and a second tab: the browser keeps the guest's refresh token and session details in localStorage (a guest's only, never a signed-in user's) and picks them up again. A browser that was a guest and has no session left goes back to `#/demo` for a new one, never to the login form.
 
