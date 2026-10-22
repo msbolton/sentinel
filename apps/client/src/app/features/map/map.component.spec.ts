@@ -688,26 +688,53 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       expect(map.get('veh-2').ellipse).toBeUndefined();
     });
 
-    it('drops the ellipse outline while terrain is on, and restores it when terrain is turned off', () => {
+    it('outlines each uncertainty ellipse with a ground-clamped polyline, terrain on or off, and removes it with the ellipse', () => {
+      const outlineOf = (ent: any) => addedEntities.filter((e) => e.parent === ent && e.polyline);
       terrainOn.set(false);
       (component as any).addOrUpdateCesiumEntity(baseSignalEntity({ kinematics: { positionCovariance: cov() } }));
       const ent = (component as any).entityMap.get('sig-1');
-      expect(ent.ellipse.outline).toBe(true);
+      expect(ent.ellipse.outline).toBe(false); // Cesium drops it when clamped: the polyline is the outline
+      let lines = outlineOf(ent);
+      expect(lines).toHaveLength(1);
+      expect(lines[0].polyline.clampToGround).toBe(true);
+      expect(lines[0].polyline.positions.length).toBeGreaterThan(30);
+      const first = lines[0].polyline.positions[0];
+      const last = lines[0].polyline.positions[lines[0].polyline.positions.length - 1];
+      expect(first).toEqual(last); // a closed ring
 
       terrainOn.set(true);
       fixture.detectChanges();
       expect(ent.ellipse.outline).toBe(false);
       expect(ent.ellipse.semiMajorAxis).toBeCloseTo(300, 5);
+      lines = outlineOf(ent);
+      expect(lines.length).toBeGreaterThan(0);
+      expect(lines[lines.length - 1].polyline.clampToGround).toBe(true);
 
-      // A fix arriving while terrain is on builds the ellipse without an outline too.
+      // The covariance clears: the outline goes with the ellipse.
+      const remove = (component as any).viewer.entities.remove as jest.Mock;
+      remove.mockClear();
+      (component as any).addOrUpdateCesiumEntity(baseSignalEntity({ kinematics: {} }));
+      expect(ent.ellipse).toBeUndefined();
+      expect(remove).toHaveBeenCalledWith(lines[lines.length - 1]);
+    });
+
+    it('draws a grazing-angle sliver at least 15 m wide, with a visible fill', () => {
       (component as any).addOrUpdateCesiumEntity(
-        baseSignalEntity({ id: 'sig-2', kinematics: { positionCovariance: cov() } }),
+        baseSignalEntity({ id: 'eo-2', platformData: { eoir: { band: 'LWIR' } }, kinematics: { positionCovariance: covFromEllipse(1100, 2.4, 30) } }),
       );
-      expect((component as any).entityMap.get('sig-2').ellipse.outline).toBe(false);
+      const ent = (component as any).entityMap.get('eo-2');
+      expect(ent.ellipse.semiMajorAxis).toBeCloseTo(1100, 5);
+      expect(ent.ellipse.semiMinorAxis).toBe(15);
+      expect(ent.ellipse.material.alpha).toBeGreaterThanOrEqual(0.2);
+    });
 
-      terrainOn.set(false);
-      fixture.detectChanges();
-      expect(ent.ellipse.outline).toBe(true);
+    it('removes the outline when the entity goes', () => {
+      (component as any).addOrUpdateCesiumEntity(baseSignalEntity({ kinematics: { positionCovariance: cov() } }));
+      const ent = (component as any).entityMap.get('sig-1');
+      const line = addedEntities.find((e) => e.parent === ent && e.polyline);
+      expect(line).toBeDefined();
+      (component as any).removeCesiumEntity('sig-1');
+      expect((component as any).viewer.entities.remove).toHaveBeenCalledWith(line);
     });
   });
 });

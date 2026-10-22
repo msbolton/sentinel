@@ -74,6 +74,7 @@ import { bearingTtlOf, bearingsOf, emplacementIdOf, rowHeartbeatOf, siteHeartbea
 import { FeedService } from '../../core/services/feed.service';
 import { ellipseFromCovariance } from './uncertainty';
 import { drawsUncertainty, heightModeOf, type HeightMode } from './height-mode';
+import { EllipseOutlineLayer, drawnEllipseAxes } from './ellipse-outline';
 import { isFromMilitaryFeed, sidcFor, symbolDataUrl } from './milstd2525';
 import { locationDotDataUrl } from './location-dot';
 import { GeofenceDrawTool } from './geofence-draw';
@@ -222,6 +223,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private emplacementLayer: EmplacementLayer | null = null;
   /** The bearing lines of camera sites, drawn from their SENSOR entities. */
   private bearingLayer: BearingLayer | null = null;
+  private ellipseOutlines?: EllipseOutlineLayer;
   /** The SENSOR entities that stand for loaded emplacements, by entity id; the emplacement layer draws them. */
   private readonly emplacementEntities = new Map<string, Entity>();
   /** The ids of the emplacements loaded now; only their entities are left to the emplacement layer. */
@@ -951,6 +953,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         : position;
 
     const labelText = entityLabel(entity.name, entity.exercise, satPosition ? formatAltitude(satPosition.height) : undefined);
+    const outlineCentre = shownPosition ?? { lat: entity.position.latitude, lon: entity.position.longitude };
 
     if (existing) {
       // Update existing entity
@@ -976,6 +979,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
           ? (Cesium.EllipseGraphics ? new Cesium.EllipseGraphics(signalEllipse) : signalEllipse)
           : undefined;
       }
+      this.syncEllipseOutline(entity, existing, outlineCentre, cesiumColor, isStale);
       // An entity first seen without an altitude was clamped to ground;
       // lift it once a fix with altitude arrives (and vice versa). The same
       // holds for a radar height above ground arriving or going.
@@ -1059,6 +1063,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       cesiumEntity._uses2525 = uses2525;
       cesiumEntity._ellipseKey = ellipseKey;
       this.entityMap.set(entity.id, cesiumEntity);
+      this.syncEllipseOutline(entity, cesiumEntity, outlineCentre, cesiumColor, isStale);
     }
 
     if (entity.id === this.dropLine.forId) {
@@ -1331,6 +1336,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (cesiumEntity && this.viewer) {
       if (entityId === this.dropLine.forId) this.clearDropLine();
       (cesiumEntity.entityCollection ?? this.viewer.entities).remove(cesiumEntity);
+      this.ellipseOutlines?.remove(entityId);
       this.entityMap.delete(entityId);
       this.trackTrails.delete(entityId);
       this.scheduleRender();
@@ -1905,8 +1911,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         if (this.viewer) {
           this.clearDropLine();
           this.clearFlightPath();
-          for (const cesiumEntity of this.entityMap.values()) {
+          for (const [id, cesiumEntity] of this.entityMap) {
             (cesiumEntity.entityCollection ?? this.viewer.entities).remove(cesiumEntity);
+            this.ellipseOutlines?.remove(id);
           }
         }
         this.entityMap.clear();
@@ -2014,16 +2021,21 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     }
   }
 
-  private buildSignalEllipse(entity: Entity, cesiumColor: any, isStale: boolean): any | undefined {
-    if (!drawsUncertainty(entity) || !this.Cesium) return undefined;
+  /** The axes an entity's uncertainty ellipse is drawn with (floored), or null when it has none. */
+  private signalAxesOf(entity: Entity) {
+    if (!drawsUncertainty(entity)) return null;
     const axes = ellipseFromCovariance(entity.kinematics?.positionCovariance);
+    return axes ? drawnEllipseAxes(axes) : null;
+  }
+
+  private buildSignalEllipse(entity: Entity, cesiumColor: any, isStale: boolean): any | undefined {
+    if (!this.Cesium) return undefined;
+    const axes = this.signalAxesOf(entity);
     if (!axes) return undefined;
-    const fillAlpha = isStale ? 0.05 : 0.12;
-    const outlineAlpha = isStale ? 0.22 : 0.55;
+    const fillAlpha = isStale ? 0.08 : 0.2;
     // Cesium drops the outline of any CLAMP_TO_GROUND ellipse, terrain or not
-    // (GeometryUpdater). Asking for none while terrain is on only avoids its
-    // one-time warning; the behaviour is the same either way.
-    const outline = !this.terrainService.terrainEnabled();
+    // (GeometryUpdater), so the outline is a ground-clamped polyline of its
+    // own (syncEllipseOutline), drawn with terrain on or off.
     return {
       semiMajorAxis: axes.semiMajorM,
       semiMinorAxis: axes.semiMinorM,
@@ -2031,9 +2043,21 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       height: 0,
       heightReference: this.Cesium.HeightReference.CLAMP_TO_GROUND,
       material: cesiumColor.withAlpha(fillAlpha),
-      outline,
-      ...(outline ? { outlineColor: cesiumColor.withAlpha(outlineAlpha) } : {}),
+      outline: false,
     };
+  }
+
+  /**
+   * Keep the ground-clamped outline of an entity's uncertainty ellipse in step
+   * with it: around the shown position, as a child of the Cesium entity so it
+   * shows and hides with it; removed when the entity has no ellipse.
+   */
+  private syncEllipseOutline(entity: Entity, cesiumEntity: any, centre: { lat: number; lon: number } | null, cesiumColor: any, isStale: boolean): void {
+    if (!this.Cesium) return;
+    this.ellipseOutlines ??= new EllipseOutlineLayer(this.Cesium);
+    const axes = cesiumEntity.ellipse ? this.signalAxesOf(entity) : null;
+    const collection = cesiumEntity.entityCollection ?? this.collectionFor(entity.entityType);
+    this.ellipseOutlines.sync(entity.id, cesiumEntity, collection, centre, axes, cesiumColor.withAlpha(isStale ? 0.3 : 0.8));
   }
 
   /** Identity of a built ellipse: equal keys mean the drawn ellipse needs no change. */
@@ -2093,6 +2117,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       if (cesiumEntity._ellipseKey === key) continue;
       cesiumEntity._ellipseKey = key;
       cesiumEntity.ellipse = ellipse ? (this.Cesium.EllipseGraphics ? new this.Cesium.EllipseGraphics(ellipse) : ellipse) : undefined;
+      const shownAt = this.deadReckoning.positionOf(entity.id, now);
+      const centre = shownAt ?? (entity.position ? { lat: entity.position.latitude, lon: entity.position.longitude } : null);
+      this.syncEllipseOutline(entity, cesiumEntity, centre, this.entityColor(entity), this.isEntityStale(entity));
     }
     const selected = this.dropLine.forId ? this.entityMap.get(this.dropLine.forId)?._sentinelEntity as Entity | undefined : undefined;
     if (selected) {
