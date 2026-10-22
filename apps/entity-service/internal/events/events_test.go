@@ -131,3 +131,26 @@ func TestEntityProtoMapsGenericDetail(t *testing.T) {
 		t.Fatalf("platforms = %v", e.Platforms)
 	}
 }
+
+func TestPlatformsProtoRadarEoIr(t *testing.T) {
+	got := platformsProto(map[string]interface{}{
+		"radar": map[string]interface{}{"rangeRateMps": -4.5, "rcsDbsm": 2.0, "snrDb": 17.0, "mode": "RADAR_MODE_TRACK", "trackQuality": 0.75,
+			"classification": "RADAR_CLASS_DRONE", "classificationConfidence": 0.9, "radarTrackId": "R-9", "heightAboveGroundM": 55.0},
+		"eoir": map[string]interface{}{"band": "EO_IR_BAND_LWIR", "classification": "person", "classificationConfidence": 0.6,
+			"horizontalFovDeg": 12.0, "verticalFovDeg": 8.0, "boundingBox": map[string]interface{}{"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4}, "cameraTrackId": "C-2"},
+	})
+	r, e := got["radar"].GetRadar(), got["eoir"].GetEoir()
+	if r == nil || r.GetRangeRateMps() != -4.5 || r.GetRcsDbsm() != 2 || r.GetSnrDb() != 17 || r.Mode != sentinelv1.RadarMode_RADAR_MODE_TRACK ||
+		r.GetTrackQuality() != 0.75 || r.Classification != sentinelv1.RadarClass_RADAR_CLASS_DRONE || r.GetClassificationConfidence() != 0.9 ||
+		r.RadarTrackId != "R-9" || r.GetHeightAboveGroundM() != 55 {
+		t.Errorf("radar = %v", got["radar"])
+	}
+	b := e.GetBoundingBox()
+	if e == nil || e.Band != sentinelv1.EoIrBand_EO_IR_BAND_LWIR || e.Classification != "person" || e.GetClassificationConfidence() != 0.6 ||
+		e.GetHorizontalFovDeg() != 12 || e.GetVerticalFovDeg() != 8 || e.CameraTrackId != "C-2" || b == nil || b.X != 0.1 || b.Y != 0.2 || b.Width != 0.3 || b.Height != 0.4 {
+		t.Errorf("eoir = %v", got["eoir"])
+	}
+	if len(got) != 2 {
+		t.Errorf("kinds = %v", got)
+	}
+}

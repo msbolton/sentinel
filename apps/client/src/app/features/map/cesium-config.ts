@@ -14,6 +14,13 @@ export function configureCesium(): void {
   }
 }
 
+/**
+ * Attribution the Copernicus DEM licence requires wherever its heights are
+ * used. The server places radar and camera detections with it.
+ */
+export const COPERNICUS_CREDIT =
+  'Produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.';
+
 /** Default Cesium Viewer configuration options */
 export const CESIUM_VIEWER_OPTIONS = {
   animation: false,
@@ -107,7 +114,8 @@ export const DEFAULT_CAMERA_POSITION = {
 export const ENTITY_TYPE_BILLBOARD_SVGS: Record<string, string> = {
   [EntityType.AIRCRAFT]: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 559.185 559.185" width="64" height="64"><path fill="white" stroke="black" stroke-width="12" stroke-linejoin="round" d="M325.303,181.69V81.634C325.303,54.584,303.375,0,276.324,0c-27.056,0-48.984,54.584-48.984,81.634v103.973c-71.341,23.8-186.134,67.442-186.134,101.916c0,9.352,0,16.163,0,21.059c0,3.605,2.864,5.937,6.396,5.202l179.738-37.411v182.131c-43.697,27.332-99.597,66.017-99.597,85.007c0,4.4,0,7.901,0,10.661c0,3.604,2.815,5.747,6.292,4.78l138.036-38.544c3.47-0.974,9.094-0.949,12.571,0.043l133.991,38.451c3.464,0.998,6.272-1.126,6.272-4.736c0-2.767,0-6.261,0-10.661c0-19.395-56.731-59.321-99.597-86.732V273.907l186.281,39.847c3.531,0.753,6.389-1.561,6.389-5.165c0-4.896,0-11.708,0-21.06C517.967,251.067,393.021,204.34,325.303,181.69z"/></svg>`,
   [EntityType.DRONE]: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="white" stroke-miterlimit="10" stroke-width="1.91"><path d="M4.84,8.18A3.34,3.34,0,1,1,8.18,4.84"/><path d="M8.18,19.16a3.34,3.34,0,1,1-3.34-3.34"/><path d="M15.82,4.84a3.34,3.34,0,1,1,3.34,3.34"/><path d="M19.16,15.82a3.34,3.34,0,1,1-3.34,3.34"/><line x1="19.64" y1="19.64" x2="14.86" y2="14.86"/><line x1="9.14" y1="9.14" x2="4.36" y2="4.36"/><line x1="9.14" y1="14.86" x2="4.36" y2="19.64"/><line x1="19.64" y1="4.36" x2="14.86" y2="9.14"/><path d="M14.86,9.14v5.72a2.86,2.86,0,1,1-5.72,0V9.14a2.86,2.86,0,1,1,5.72,0Z"/></svg>`,
-  [EntityType.VEHICLE]: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48"><path fill="white" d="M8 28l2-8h28l2 8v6H8v-6zm4 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm24 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM14 20l2-6h16l2 6H14z"/></svg>`,
+  // A car seen from above, nose up, so it can turn with the vehicle's heading.
+  [EntityType.VEHICLE]: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48"><g fill="white" stroke="black" stroke-width="2" stroke-linejoin="round"><rect x="13" y="9" width="4" height="8" rx="1.5"/><rect x="31" y="9" width="4" height="8" rx="1.5"/><rect x="13" y="31" width="4" height="8" rx="1.5"/><rect x="31" y="31" width="4" height="8" rx="1.5"/><rect x="15" y="4" width="18" height="40" rx="7"/></g><path d="M18.5 14h11l-1.6 6.5h-7.8z" fill="black" fill-opacity=".45"/><rect x="19" y="33" width="10" height="4" rx="1" fill="black" fill-opacity=".35"/></svg>`,
   // A hull seen from above, bow up, so it can turn with the vessel's heading.
   [EntityType.VESSEL]: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48"><path fill="white" stroke="black" stroke-width="2" stroke-linejoin="round" d="M24 3C30 10 32 16 32 22V41C32 43.5 30.5 45 28 45H20C17.5 45 16 43.5 16 41V22C16 16 18 10 24 3Z"/><rect x="20" y="27" width="8" height="8" rx="1" fill="black" fill-opacity="0.35"/></svg>`,
   // A spacecraft seen from above: bus, two solar panels on booms, a mast and
@@ -131,7 +139,15 @@ export const HEADING_ROTATED_TYPES = new Set<string>([
   EntityType.AIRCRAFT,
   EntityType.DRONE,
   EntityType.VESSEL,
+  EntityType.VEHICLE,
 ]);
+
+/**
+ * Entity types moved between fixes by dead reckoning (dead-reckoning.ts).
+ * Vehicles turn with their heading but are not extrapolated: a straight line
+ * for up to a minute between fixes would leave the road.
+ */
+export const DEAD_RECKONED_TYPES = new Set<string>([EntityType.AIRCRAFT, EntityType.DRONE, EntityType.VESSEL]);
 
 /** Billboard/label LOD scaling — fade and shrink at distance */
 export const BILLBOARD_SCALE_BY_DISTANCE = [1_000, 1.0, 5_000_000, 0.3];
@@ -182,4 +198,17 @@ export const FLIGHT_PATH_CONFIG = {
   alpha: 0.85,
   width: 2,
   dashLength: 14,
+};
+
+/** A camera's bearing lines: dashed, in the site's colour, fading over the last part of their ttl. */
+export const BEARING_LINE_CONFIG = {
+  width: 2,
+  dashLength: 16,
+  /** The last share of the ttl over which the line fades out. */
+  fadeFraction: 0.3,
+  /** The faintest a line is drawn before it expires. */
+  minAlpha: 0.1,
+  /** Alpha is rounded to this step, so a line is redrawn only when its look visibly changes. */
+  alphaStep: 0.05,
+  labelFont: '12px sans-serif',
 };

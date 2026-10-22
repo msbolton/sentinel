@@ -1,4 +1,5 @@
 import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine } from './drop-line';
+import { formatAltitude } from '../../shared/geo-format';
 import { Classification, Entity, EntityType } from '../../shared/models/entity.model';
 
 describe('dropLinePoints', () => {
@@ -9,6 +10,22 @@ describe('dropLinePoints', () => {
       mid: { lat: 51.6, lon: -0.1, height: 204_000 },
       label: '408 km',
     });
+  });
+});
+
+describe('dropLinePoints over terrain', () => {
+  it('ends on the provided ground height, with the label at the midpoint of the line', () => {
+    expect(dropLinePoints({ lat: 46.5, lon: 8.0, height: 1_400 }, 600)).toEqual({
+      top: { lat: 46.5, lon: 8.0, height: 1_400 },
+      ground: { lat: 46.5, lon: 8.0, height: 600 },
+      mid: { lat: 46.5, lon: 8.0, height: 1_000 },
+      label: formatAltitude(1_400),
+    });
+  });
+
+  it('treats a missing or non-finite ground height as sea level', () => {
+    expect(dropLinePoints({ lat: 1, lon: 2, height: 100 }).ground.height).toBe(0);
+    expect(dropLinePoints({ lat: 1, lon: 2, height: 100 }, Number.NaN).ground.height).toBe(0);
   });
 });
 

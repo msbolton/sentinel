@@ -1,6 +1,6 @@
 import {
   draftOf, emplacementIdOf, inputOf, newDraft, Emplacement, coverageSummary,
-  formatZulu, heartbeatBadgeOf, livenessOf, rowHeartbeatOf, siteHeartbeatOf, sitesSummaryOf,
+  bearingsOf, bearingClockOf, bearingEnd, formatZulu, heartbeatBadgeOf, livenessOf, rowHeartbeatOf, siteHeartbeatOf, sitesSummaryOf,
 } from './emplacement.model';
 
 const stored: Emplacement = {
@@ -97,5 +97,85 @@ describe('heartbeats', () => {
     expect(formatZulu('2026-10-20T14:02:00Z', NOW)).toBe('14:02Z');
     expect(formatZulu('2026-10-19T23:59:00Z', NOW)).toBe('10-19 23:59Z');
     expect(formatZulu('nope', NOW)).toBe('');
+  });
+});
+
+describe('bearings', () => {
+  const NOW = Date.parse('2026-10-20T14:10:00Z');
+  const site = (fields: Record<string, string>) => ({ platformData: { generic: { fields } } });
+  const b = (observedAt: string, extra: Record<string, unknown> = {}) => ({
+    trackId: 't1', azimuthDeg: 45, elevationDeg: 2, lengthM: 3000, reason: 'no_ground_intersection', observedAt, ...extra,
+  });
+
+  it('parses the bearings a site carries', () => {
+    const list = [b('2026-10-20T14:09:58Z'), b('2026-10-20T14:09:59Z', { trackId: undefined, classification: 'vehicle', confidence: 0.8 })];
+    const got = bearingsOf(site({ bearings: JSON.stringify(list), bearingTtlSec: '10' }), NOW);
+    expect(got).toHaveLength(2);
+    expect(got[0]).toMatchObject({ trackId: 't1', azimuthDeg: 45, elevationDeg: 2, lengthM: 3000, reason: 'no_ground_intersection' });
+    expect(got[1]).toMatchObject({ classification: 'vehicle', confidence: 0.8 });
+  });
+
+  it('drops a bearing whose ttl has run out, though the site has not republished', () => {
+    const list = [b('2026-10-20T14:09:49Z'), b('2026-10-20T14:09:50Z', { trackId: 'edge' }), b('2026-10-20T14:09:55Z', { trackId: 'fresh' })];
+    const ids = bearingsOf(site({ bearings: JSON.stringify(list), bearingTtlSec: '10' }), NOW).map((x) => x.trackId);
+    expect(ids).toEqual(['fresh']); // observedAt + ttl <= now is expired
+  });
+
+  it('expires a bearing from the server receipt, not the sender stamp, when it has one', () => {
+    const late = b('2026-10-20T14:09:30Z', { trackId: 'late', receivedAt: '2026-10-20T14:09:58Z' });
+    const gone = b('2026-10-20T14:09:59Z', { trackId: 'gone', receivedAt: '2026-10-20T14:09:49Z' });
+    const legacy = b('2026-10-20T14:09:55Z', { trackId: 'legacy' });
+    const ids = bearingsOf(site({ bearings: JSON.stringify([late, gone, legacy]), bearingTtlSec: '10' }), NOW).map((x) => x.trackId);
+    expect(ids).toEqual(['late', 'legacy']);
+    expect(bearingClockOf(late)).toBe('2026-10-20T14:09:58Z');
+    expect(bearingClockOf(legacy)).toBe('2026-10-20T14:09:55Z');
+    expect(bearingClockOf({ observedAt: '2026-10-20T14:09:55Z', receivedAt: 'nope' })).toBe('2026-10-20T14:09:55Z');
+  });
+
+  it('uses the default ttl when none is given or it is not a number', () => {
+    const list = JSON.stringify([b('2026-10-20T14:09:55Z'), b('2026-10-20T14:09:45Z', { trackId: 'old' })]);
+    expect(bearingsOf(site({ bearings: list }), NOW)).toHaveLength(1);
+    expect(bearingsOf(site({ bearings: list, bearingTtlSec: 'x' }), NOW)).toHaveLength(1);
+  });
+
+  it('has none for a missing field, malformed JSON, a non-array or no entity', () => {
+    expect(bearingsOf(site({}), NOW)).toEqual([]);
+    expect(bearingsOf(site({ bearings: '{nope' }), NOW)).toEqual([]);
+    expect(bearingsOf(site({ bearings: '{"a":1}' }), NOW)).toEqual([]);
+    expect(bearingsOf({ platformData: {} }, NOW)).toEqual([]);
+    expect(bearingsOf(null, NOW)).toEqual([]);
+  });
+
+  it('skips entries that are not bearings', () => {
+    const list = [null, 5, { azimuthDeg: 'x' }, b('nope'), { ...b('2026-10-20T14:09:59Z'), reason: 'bogus' }, b('2026-10-20T14:09:59Z', { trackId: 'ok' })];
+    expect(bearingsOf(site({ bearings: JSON.stringify(list), bearingTtlSec: '10' }), NOW).map((x) => x.trackId)).toEqual(['ok']);
+  });
+});
+
+describe('bearingEnd', () => {
+  const bearing = (azimuthDeg: number, elevationDeg: number, lengthM = 1000) => ({
+    azimuthDeg, elevationDeg, lengthM, reason: 'no_ground_intersection' as const, observedAt: '2026-10-20T14:10:00Z',
+  });
+
+  it('goes east along the ellipsoid from the equator, curving away from it', () => {
+    const end = bearingEnd({ lat: 0, lon: 0, alt: 0 }, bearing(90, 0));
+    expect(end.lat).toBeCloseTo(0, 5);
+    expect(Math.abs(end.lon - 0.008983)).toBeLessThan(1e-5);
+    expect(end.alt).toBeGreaterThan(0.05);
+    expect(end.alt).toBeLessThan(0.11);
+  });
+
+  it('goes north for azimuth 0', () => {
+    const end = bearingEnd({ lat: 50, lon: 10, alt: 100 }, bearing(0, 0));
+    expect(end.lat).toBeGreaterThan(50.008);
+    expect(end.lat).toBeLessThan(50.0095);
+    expect(Math.abs(end.lon - 10)).toBeLessThan(1e-6);
+  });
+
+  it('climbs with elevation and carries the origin altitude', () => {
+    const end = bearingEnd({ lat: 10, lon: 20, alt: 250 }, bearing(123, 90, 500));
+    expect(end.alt).toBeCloseTo(750, 1);
+    expect(end.lat).toBeCloseTo(10, 6);
+    expect(end.lon).toBeCloseTo(20, 6);
   });
 });

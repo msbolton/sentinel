@@ -46,6 +46,16 @@
         [class.active]="buildingsService.buildings3dEnabled()">
         <app-icon name="building" />
       </button>
+      <button
+        class="control-btn"
+        (click)="terrainService.toggle()"
+        [disabled]="!terrainService.available()"
+        [title]="terrainService.available() ? 'Toggle Terrain' : 'Terrain needs a Cesium ion token'"
+        [attr.aria-label]="terrainService.available() ? 'Toggle Terrain' : 'Terrain needs a Cesium ion token'"
+        [attr.aria-pressed]="terrainService.terrainEnabled()"
+        [class.active]="terrainService.terrainEnabled()">
+        <app-icon name="mountain" />
+      </button>
       <button class="control-btn" (click)="toggleFullscreen()" title="Fullscreen">
         <app-icon name="maximize" />
       </button>
@@ -83,6 +93,7 @@
   <!-- Entity Detail Panel -->
   <app-entity-detail-panel
     [entity]="selectedEntity()"
+    [highlightBearing]="selectedBearingKey()"
     [class.panel-offset]="panelRouteActive()"
     (close)="closeEntityPopup()"
     (flyTo)="flyToEntity($event)"

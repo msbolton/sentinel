@@ -75,6 +75,11 @@ ALTER TABLE sentinel.emplacements
   ADD COLUMN IF NOT EXISTS "heartbeatIntervalSec" INTEGER,
   ADD COLUMN IF NOT EXISTS "lastHeartbeatAt" TIMESTAMPTZ;
 
+-- 2b. How far above the ground the sensor is mounted, metres (a mast, a roof).
+--     A camera with no altitude gets its origin altitude from the terrain
+--     plus this. Not a position: a sender-managed mobile emplacement keeps it.
+ALTER TABLE sentinel.emplacements ADD COLUMN IF NOT EXISTS "heightAboveGroundM" DOUBLE PRECISION;
+
 -- 3. Every live emplacement needs a connection: an active one with none is
 --    deactivated, and the Connections page offers to assign or delete it.
 WITH parked AS (

@@ -115,6 +115,10 @@ func fill(t *testing.T, v any) {
 				f.Set(reflect.ValueOf(&val))
 				continue
 			}
+			if f.Type().Elem() == reflect.TypeOf([4]float64{}) {
+				f.Set(reflect.ValueOf(&[4]float64{0.1, 0.2, 0.3, 0.4}))
+				continue
+			}
 			fallthrough
 		default:
 			t.Fatalf("fill: unhandled kind %s for %s", f.Kind(), s.Type().Field(i).Name)
@@ -124,17 +128,20 @@ func fill(t *testing.T, v any) {
 
 func TestFromProtoCopiesEveryPlatformField(t *testing.T) {
 	adsb, ais, tle, l16, cot, uav, rf := &obs.ADSBData{}, &obs.AISData{}, &obs.TLEData{}, &obs.Link16Data{}, &obs.CoTData{}, &obs.UAVData{}, &obs.RFData{}
-	for _, d := range []any{adsb, ais, tle, l16, cot, uav, rf} {
+	radar, eoir := &obs.RadarData{}, &obs.EoIrData{}
+	for _, d := range []any{adsb, ais, tle, l16, cot, uav, rf, radar, eoir} {
 		fill(t, d)
 	}
 	ais.NavStatus = "MOORED" // an enum, so it must be a declared name
+	radar.Mode, radar.Classification, eoir.Band = "SEARCH", "DRONE", "LWIR"
 	for name, o := range map[string]*obs.Observation{
 		"adsb": {ADSB: adsb}, "ais": {AIS: ais}, "tle": {TLE: tle}, "link16": {Link16: l16}, "cot": {CoT: cot}, "uav": {UAV: uav}, "rf": {RF: rf},
+		"radar": {Radar: radar}, "eoir": {EoIr: eoir},
 	} {
 		got := FromProto(ToProto(o))
 		if !reflect.DeepEqual(got.ADSB, o.ADSB) || !reflect.DeepEqual(got.AIS, o.AIS) || !reflect.DeepEqual(got.TLE, o.TLE) ||
 			!reflect.DeepEqual(got.Link16, o.Link16) || !reflect.DeepEqual(got.CoT, o.CoT) || !reflect.DeepEqual(got.UAV, o.UAV) ||
-			!reflect.DeepEqual(got.RF, o.RF) {
+			!reflect.DeepEqual(got.RF, o.RF) || !reflect.DeepEqual(got.Radar, o.Radar) || !reflect.DeepEqual(got.EoIr, o.EoIr) {
 			t.Errorf("%s: platform detail differs\nwant %+v\ngot  %+v", name, o, got)
 		}
 	}
@@ -220,5 +227,65 @@ func TestFromProtoCopiesPolarAndIgnoresServiceOwnedEmplacementFields(t *testing.
 	el = 9
 	if *p.ElevationDeg != 2.5 {
 		t.Errorf("the copy must not share the message's value")
+	}
+}
+
+func TestFromProtoRadar(t *testing.T) {
+	rr, rcs, snr, q, conf, h := -12.5, 3.25, 21.0, 0.8, 0.9, 42.0
+	m := &sentinelv1.Observation{SourceEntityId: "trk-r", Platform: &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Radar{Radar: &sentinelv1.RadarDetail{
+		RangeRateMps: &rr, RcsDbsm: &rcs, SnrDb: &snr, Mode: sentinelv1.RadarMode_RADAR_MODE_SEARCH, TrackQuality: &q,
+		Classification: sentinelv1.RadarClass_RADAR_CLASS_DRONE, ClassificationConfidence: &conf, RadarTrackId: "R-7", HeightAboveGroundM: &h,
+	}}}}
+	o := FromProto(m)
+	r := o.Radar
+	if r == nil || o.EoIr != nil || o.RF != nil {
+		t.Fatalf("radar = %+v, eoir = %+v", r, o.EoIr)
+	}
+	if r.Classification != "DRONE" || r.Mode != "SEARCH" || r.RadarTrackID != "R-7" ||
+		r.RangeRateMps == nil || *r.RangeRateMps != -12.5 || r.RcsDbsm == nil || *r.RcsDbsm != 3.25 || r.SnrDb == nil || *r.SnrDb != 21 ||
+		r.TrackQuality == nil || *r.TrackQuality != 0.8 || r.ClassificationConfidence == nil || *r.ClassificationConfidence != 0.9 ||
+		r.HeightAboveGroundM == nil || *r.HeightAboveGroundM != 42 {
+		t.Errorf("radar = %+v", r)
+	}
+	if o2 := FromProto(&sentinelv1.Observation{Platform: &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Radar{Radar: &sentinelv1.RadarDetail{}}}}); o2.Radar == nil ||
+		o2.Radar.Mode != "" || o2.Radar.Classification != "" || o2.Radar.SnrDb != nil {
+		t.Errorf("an empty radar detail must keep absent values absent: %+v", o2.Radar)
+	}
+}
+
+func TestFromProtoEoIr(t *testing.T) {
+	conf, h, v := 0.7, 12.0, 8.0
+	m := &sentinelv1.Observation{SourceEntityId: "trk-e", Platform: &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Eoir{Eoir: &sentinelv1.EoIrDetail{
+		Band: sentinelv1.EoIrBand_EO_IR_BAND_LWIR, Classification: "person", ClassificationConfidence: &conf,
+		HorizontalFovDeg: &h, VerticalFovDeg: &v, BoundingBox: &sentinelv1.NormalizedBox{X: 0.1, Y: 0.2, Width: 0.3, Height: 0.4}, CameraTrackId: "C-3",
+	}}}}
+	o := FromProto(m)
+	e := o.EoIr
+	if e == nil || o.Radar != nil {
+		t.Fatalf("eoir = %+v, radar = %+v", e, o.Radar)
+	}
+	if e.Band != "LWIR" || e.Classification != "person" || e.CameraTrackID != "C-3" ||
+		e.ClassificationConfidence == nil || *e.ClassificationConfidence != 0.7 || e.HorizontalFovDeg == nil || *e.HorizontalFovDeg != 12 ||
+		e.VerticalFovDeg == nil || *e.VerticalFovDeg != 8 || e.BoundingBox == nil || *e.BoundingBox != [4]float64{0.1, 0.2, 0.3, 0.4} {
+		t.Errorf("eoir = %+v", e)
+	}
+	if o2 := FromProto(&sentinelv1.Observation{Platform: &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Eoir{Eoir: &sentinelv1.EoIrDetail{}}}}); o2.EoIr == nil ||
+		o2.EoIr.BoundingBox != nil || o2.EoIr.Band != "" {
+		t.Errorf("an empty eoir detail must keep absent values absent: %+v", o2.EoIr)
+	}
+}
+
+func TestPolarDirectionOnlyRoundTrip(t *testing.T) {
+	m := &sentinelv1.Observation{SourceEntityId: "trk-d", Polar: &sentinelv1.PolarMeasurement{AzimuthDeg: 30, DirectionOnly: true}}
+	o := FromProto(m)
+	if o.Polar == nil || !o.Polar.DirectionOnly {
+		t.Fatalf("polar = %+v", o.Polar)
+	}
+	if got := ToProto(o).GetPolar(); !got.GetDirectionOnly() || got.GetAzimuthDeg() != 30 {
+		t.Errorf("round trip lost direction_only: %v", got)
+	}
+	o.Polar.DirectionOnly = false
+	if ToProto(o).GetPolar().GetDirectionOnly() {
+		t.Error("direction_only must stay false when unset")
 	}
 }

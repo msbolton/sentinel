@@ -48,6 +48,38 @@ describe('EmplacementEditorComponent', () => {
     http.verify();
   });
 
+  it('has a "Height above ground (m)" field after the altitude, and sends heightAboveGroundM', () => {
+    const { el, http } = create();
+    const labels = Array.from(el.querySelectorAll('span.field-label')).map((l) => l.textContent?.trim());
+    expect(labels).toContain('Height above ground (m)');
+    const altitude = el.querySelector('input[name="altitude"]') as HTMLInputElement;
+    const height = el.querySelector('input[name="heightAboveGroundM"]') as HTMLInputElement;
+    expect(altitude.compareDocumentPosition(height) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(height.value).toBe('');
+    height.value = '12.5';
+    height.dispatchEvent(new Event('input'));
+    (el.querySelector('button[type="submit"]') as HTMLButtonElement).click();
+    const req = http.expectOne('/api/v1/emplacements');
+    expect(req.request.body).toEqual(expect.objectContaining({ heightAboveGroundM: 12.5 }));
+    req.flush({ ...req.request.body, id: 'e1', version: 1 });
+    http.verify();
+  });
+
+  it('sends no heightAboveGroundM when the field is empty, and shows the stored one', () => {
+    const { el, http, service, fixture } = create();
+    service.draft.set({ ...service.draft()!, heightAboveGroundM: 8 });
+    fixture.detectChanges();
+    expect((el.querySelector('input[name="heightAboveGroundM"]') as HTMLInputElement).value).toBe('8');
+    const height = el.querySelector('input[name="heightAboveGroundM"]') as HTMLInputElement;
+    height.value = '';
+    height.dispatchEvent(new Event('input'));
+    (el.querySelector('button[type="submit"]') as HTMLButtonElement).click();
+    const req = http.expectOne('/api/v1/emplacements');
+    expect(req.request.body).not.toHaveProperty('heightAboveGroundM');
+    req.flush({ ...req.request.body, id: 'e1', version: 1 });
+    http.verify();
+  });
+
   it('shows the position on the map, and clears the draft when it goes', () => {
     const { el, fixture, service } = create();
     (el.querySelector('button.show-on-map') as HTMLButtonElement).click();

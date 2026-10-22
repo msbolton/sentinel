@@ -1,0 +1,47 @@
+# A daylight camera on Latrigg, the fell above Keswick, looking south-south-
+# west down Derwentwater towards Borrowdale: 60 degrees wide, out to 8 km,
+# 6 m up a mast beside the radar of examples/radar.yaml. It reports
+# directions only (bearing and elevation); Sentinel places what it sees
+# where the line of sight meets the ground, and draws a bearing line for a
+# target in the air.
+#
+#   sensor-sim --kind eoir --addr localhost:6200 --config examples/camera.yaml
+#
+# The address and token come from the command line or the environment
+# (SENSOR_SIM_ADDR, SENSOR_SIM_TOKEN or SENTINEL_INGEST_TOKEN); keep the
+# token out of this file.
+connection:
+  # Plaintext h2c, which is what the dev listener speaks, so the Compose
+  # service starts with no transport flag. The token then travels in clear.
+  # For TLS pass --tls (and --ca file) on the command line; it replaces this.
+  insecure: true
+
+sensor:
+  kind: eoir
+  name: Latrigg camera
+  lat: 54.6133
+  lon: -3.1153
+  heightAboveGroundM: 6
+  boresight: 210
+  width: 60
+  rangeKm: 8
+  # The vertical field: from 15 degrees below the horizon to 75 above
+  # (the defaults, written out).
+  elevationMinDeg: -15
+  elevationMaxDeg: 75
+  band: VISIBLE
+  rate: 1
+  pd: 0.9
+  sigmaAzDeg: 0.1
+  sigmaElDeg: 0.1
+  heartbeatInterval: 5s
+
+# The targets, shared with examples/radar.yaml (relative to this file).
+scenarioFile: scenario.yaml
+
+terrain:
+  # The camera needs terrain: it decides what the camera can see. Tiles are
+  # downloaded here on first use and reused. This is the path the Compose
+  # services mount the sentinel-terrain-cache volume at; from source pass
+  # --terrain-cache ~/.cache/sentinel/terrain or similar.
+  cacheDir: /var/cache/sentinel/terrain

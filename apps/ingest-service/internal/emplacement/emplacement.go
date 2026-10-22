@@ -86,6 +86,11 @@ type Emplacement struct {
 	Exercise         bool       `json:"exercise"`
 	Active           bool       `json:"active"`
 	LastReportAt     *time.Time `json:"lastReportAt"`
+
+	// HeightAboveGroundM is how far above the ground the sensor is mounted
+	// (a mast, a roof), metres. It is not a position: a camera with no
+	// altitude gets its origin altitude from the terrain plus this.
+	HeightAboveGroundM *float64 `json:"heightAboveGroundM"`
 	// HeartbeatIntervalSec and LastHeartbeatAt are what the row last recorded
 	// of the emplacement's heartbeats (the grpc driver writes them, throttled,
 	// with the server's receive time); null until the first heartbeat and
@@ -121,6 +126,9 @@ type Input struct {
 	Classification   *string   `json:"classification"`
 	Exercise         *bool     `json:"exercise"`
 	Active           *bool     `json:"active"`
+
+	HeightAboveGroundM *float64 `json:"heightAboveGroundM"`
+
 	// Read-only fields a client may send back from a GET: accepted, ignored.
 	Heartbeat            json.RawMessage `json:"heartbeat"`
 	SilentSince          json.RawMessage `json:"silentSince"`
@@ -156,6 +164,10 @@ func (in Input) Apply(e *Emplacement) {
 	if in.Altitude != nil {
 		a := *in.Altitude
 		e.Altitude = &a
+	}
+	if in.HeightAboveGroundM != nil {
+		h := *in.HeightAboveGroundM
+		e.HeightAboveGroundM = &h
 	}
 	if in.BoresightDeg != nil {
 		e.BoresightDeg = *in.BoresightDeg

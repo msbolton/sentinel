@@ -45,6 +45,7 @@ sentinel-local-ca.crt
 # Go build outputs
 apps/*/vendor/
 apps/*/server
+simulators/*/vendor/
 
 # Python
 __pycache__/

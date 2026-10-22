@@ -1,0 +1,145 @@
+# The shared scenario for examples/radar.yaml and examples/camera.yaml:
+# traffic and drones around Keswick in the English Lake District, watched
+# from Latrigg (368 m), the fell just north of the town.
+#
+# The routes follow the real roads (the A66, the A591 towards Thirlmere, the
+# B5289 down Borrowdale and the lane under Cat Bells), traced from memory of
+# the map: close, but not surveyed, so a vehicle can cut a corner or run a
+# few tens of metres off the tarmac.
+#
+# Every target is at the start of its route at the epoch and moves at its
+# speed from then on, along the waypoints, back to the first (loop) and round
+# again. The radar and the camera are separate processes; they agree on where
+# the targets are because they share this file and the wall clock. Keep the
+# epoch explicit: left unset it is 00:00 UTC today.
+epoch: 2026-10-21T00:00:00Z
+targets:
+  # B5289 from Keswick down the east shore of Derwentwater to Rosthwaite,
+  # and back. In the camera's view along the lake, behind trees in places.
+  - id: bus-borrowdale
+    kind: vehicle
+    displayName: Borrowdale bus
+    speedKts: 22
+    loop: true
+    waypoints:
+      - {lat: 54.5988, lon: -3.1385}
+      - {lat: 54.5935, lon: -3.1395}
+      - {lat: 54.5850, lon: -3.1350}
+      - {lat: 54.5800, lon: -3.1323}
+      - {lat: 54.5760, lon: -3.1316}
+      - {lat: 54.5720, lon: -3.1332}
+      - {lat: 54.5680, lon: -3.1349}
+      - {lat: 54.5630, lon: -3.1384}
+      - {lat: 54.5545, lon: -3.1462}
+      - {lat: 54.5440, lon: -3.1478}
+      - {lat: 54.5300, lon: -3.1480}
+      - {lat: 54.5440, lon: -3.1478}
+      - {lat: 54.5545, lon: -3.1462}
+      - {lat: 54.5630, lon: -3.1384}
+      - {lat: 54.5680, lon: -3.1349}
+      - {lat: 54.5720, lon: -3.1332}
+      - {lat: 54.5760, lon: -3.1316}
+      - {lat: 54.5800, lon: -3.1323}
+      - {lat: 54.5850, lon: -3.1350}
+      - {lat: 54.5935, lon: -3.1395}
+  # A66 from Threlkeld past the foot of Latrigg and round Keswick to
+  # Braithwaite, and back.
+  - id: lorry-a66
+    kind: vehicle
+    displayName: A66 lorry
+    speedKts: 40
+    loop: true
+    waypoints:
+      - {lat: 54.6190, lon: -3.0560}
+      - {lat: 54.6150, lon: -3.0800}
+      - {lat: 54.6100, lon: -3.1000}
+      - {lat: 54.6075, lon: -3.1200}
+      - {lat: 54.6065, lon: -3.1470}
+      - {lat: 54.6060, lon: -3.1700}
+      - {lat: 54.6045, lon: -3.1920}
+      - {lat: 54.6060, lon: -3.1700}
+      - {lat: 54.6065, lon: -3.1470}
+      - {lat: 54.6075, lon: -3.1200}
+      - {lat: 54.6100, lon: -3.1000}
+      - {lat: 54.6150, lon: -3.0800}
+  # A591 from Keswick over Castlerigg to Thirlmere and Wythburn, and back.
+  # South-east of the camera's view: the radar sees it alone.
+  - id: car-a591
+    kind: vehicle
+    displayName: A591 car
+    speedKts: 35
+    loop: true
+    waypoints:
+      - {lat: 54.5990, lon: -3.1200}
+      - {lat: 54.5935, lon: -3.1050}
+      - {lat: 54.5830, lon: -3.0900}
+      - {lat: 54.5760, lon: -3.0800}
+      - {lat: 54.5620, lon: -3.0660}
+      - {lat: 54.5370, lon: -3.0590}
+      - {lat: 54.5620, lon: -3.0660}
+      - {lat: 54.5760, lon: -3.0800}
+      - {lat: 54.5830, lon: -3.0900}
+      - {lat: 54.5935, lon: -3.1050}
+  # Keswick to Portinscale and down the lane under Cat Bells to Grange,
+  # back by the B5289 to Keswick: a loop round Derwentwater.
+  - id: van-catbells
+    kind: vehicle
+    displayName: Cat Bells van
+    speedKts: 20
+    loop: true
+    waypoints:
+      - {lat: 54.6005, lon: -3.1430}
+      - {lat: 54.6000, lon: -3.1580}
+      - {lat: 54.5935, lon: -3.1625}
+      - {lat: 54.5865, lon: -3.1650}
+      - {lat: 54.5820, lon: -3.1640}
+      - {lat: 54.5750, lon: -3.1612}
+      - {lat: 54.5640, lon: -3.1592}
+      - {lat: 54.5545, lon: -3.1500}
+      - {lat: 54.5545, lon: -3.1462}
+      - {lat: 54.5630, lon: -3.1384}
+      - {lat: 54.5680, lon: -3.1349}
+      - {lat: 54.5720, lon: -3.1332}
+      - {lat: 54.5760, lon: -3.1316}
+      - {lat: 54.5800, lon: -3.1323}
+      - {lat: 54.5850, lon: -3.1350}
+      - {lat: 54.5935, lon: -3.1395}
+      - {lat: 54.5988, lon: -3.1385}
+  # A walker up the ridge from Hawes End to the top of Cat Bells and back:
+  # on the hillside the camera looks at.
+  - id: walker-catbells
+    kind: person
+    displayName: Cat Bells walker
+    speedKts: 2.5
+    loop: true
+    waypoints:
+      - {lat: 54.5870, lon: -3.1660}
+      - {lat: 54.5800, lon: -3.1690}
+      - {lat: 54.5740, lon: -3.1700}
+      - {lat: 54.5687, lon: -3.1703}
+      - {lat: 54.5740, lon: -3.1700}
+      - {lat: 54.5800, lon: -3.1690}
+  # A drone crossing Derwentwater from the west shore to the east and back,
+  # 100 m above the water, right across the camera's view with the slopes of
+  # Cat Bells and Borrowdale behind it.
+  - id: drone-lake
+    kind: drone
+    displayName: Lake drone
+    speedKts: 30
+    heightAboveGroundM: 100
+    loop: true
+    waypoints:
+      - {lat: 54.5850, lon: -3.1680}
+      - {lat: 54.5800, lon: -3.1300}
+  # A drone circling over Keswick 120 m above the rooftops.
+  - id: drone-town
+    kind: drone
+    displayName: Town drone
+    speedKts: 25
+    heightAboveGroundM: 120
+    loop: true
+    waypoints:
+      - {lat: 54.6040, lon: -3.1500}
+      - {lat: 54.5960, lon: -3.1500}
+      - {lat: 54.5960, lon: -3.1250}
+      - {lat: 54.6040, lon: -3.1250}

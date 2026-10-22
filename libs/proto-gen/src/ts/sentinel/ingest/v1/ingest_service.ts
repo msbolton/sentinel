@@ -124,7 +124,9 @@ export interface Ack {
    * Why a report was not accepted: unknown_emplacement, no_heartbeat (the
    * report's emplacement has not heartbeat within three of its intervals),
    * stale_ownship, clock_skew (EmplacementState.time >5s ahead of or >60s
-   * behind server time), …
+   * behind server time), … A direction-only report that becomes a bearing
+   * line (air_target, no_ground_intersection, terrain_unavailable,
+   * no_origin_altitude) is acked OK: it is accepted, not rejected.
    */
   reason: string;
   /** The emplacement the report was resolved to, when it was (informational). */

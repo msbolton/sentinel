@@ -11,6 +11,10 @@ import (
 // maxRangeM bounds a coverage's reach (2000 km, beyond any ground sensor).
 const maxRangeM = 2_000_000
 
+// maxHeightAboveGroundM bounds a sensor's mounting height (1 km: a tall tower
+// is a few hundred metres; more is a typo, or an altitude in the wrong field).
+const maxHeightAboveGroundM = 1000
+
 // Problem is one invalid field, as a JSON pointer and a message.
 type Problem struct {
 	Path    string `json:"path"`
@@ -66,6 +70,9 @@ func Validate(e *Emplacement) error {
 	}
 	if e.Altitude != nil && !finite(*e.Altitude) {
 		add("/altitude", "must be a number")
+	}
+	if e.HeightAboveGroundM != nil && (!finite(*e.HeightAboveGroundM) || *e.HeightAboveGroundM < 0 || *e.HeightAboveGroundM > maxHeightAboveGroundM) {
+		add("/heightAboveGroundM", "must be between 0 and 1000 (metres above the ground)")
 	}
 	if finite(e.BoresightDeg) {
 		e.BoresightDeg = math.Mod(math.Mod(e.BoresightDeg, 360)+360, 360)

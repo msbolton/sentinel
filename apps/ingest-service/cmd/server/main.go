@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	commonkafka "github.com/sentinel/go-common/kafka"
+	"github.com/sentinel/go-common/terrain"
 
 	"github.com/sentinel/ingest-service/internal/config"
 	"github.com/sentinel/ingest-service/internal/density"
@@ -34,6 +35,7 @@ import (
 	"github.com/sentinel/ingest-service/internal/publish"
 	"github.com/sentinel/ingest-service/internal/registry"
 	_ "github.com/sentinel/ingest-service/internal/source/all" // registers transports, decoders and drivers
+	"github.com/sentinel/ingest-service/internal/source/driver"
 	"github.com/sentinel/ingest-service/internal/source/driver/stream"
 )
 
@@ -147,6 +149,32 @@ func main() {
 		tokCache.Run(ctx)
 	}()
 
+	// Terrain: ground heights for the drivers that turn directions into
+	// positions. On only when a cache folder is set; a service that cannot be
+	// built is fatal, since the operator asked for terrain. It is left a nil
+	// interface otherwise, which is what drivers test for.
+	var terrainSvc driver.Terrain
+	if cfg.TerrainEnabled() {
+		svc, err := terrain.New(terrain.Config{
+			SourceURL:     cfg.TerrainSourceURL,
+			CacheDir:      cfg.TerrainCacheDir,
+			MaxCacheBytes: int64(cfg.TerrainCacheMaxMB) << 20,
+			FetchTimeout:  cfg.TerrainFetchTimeout,
+			// A detection waits TerrainWait; a fetch older than that turns
+			// callers away, so a hung fetch stalls a stream about once.
+			JoinWindow: cfg.TerrainWait,
+			MemTiles:   cfg.TerrainMemTiles,
+			Logger:     logger.Named("terrain"),
+		})
+		if err != nil {
+			logger.Fatal("failed to start the terrain service", zap.Error(err))
+		}
+		terrainSvc = svc
+		promReg.MustRegister(metrics.NewTerrainCollector(svc.Stats))
+		logger.Info("terrain enabled", zap.String("cache_dir", cfg.TerrainCacheDir), zap.String("source", cfg.TerrainSourceURL),
+			zap.Int("cache_max_mb", cfg.TerrainCacheMaxMB), zap.Duration("wait", cfg.TerrainWait), zap.Float64("max_range_m", cfg.TerrainMaxRangeM), zap.Int("mem_tiles", cfg.TerrainMemTiles))
+	}
+
 	// Supervisor: runs the feeds this replica owns and reports status.
 	supOpts := feed.Options{
 		ReplicaID:         cfg.ReplicaID,
@@ -166,6 +194,9 @@ func main() {
 		Emplacements:      empCache,
 		Tokens:            tokCache,
 		EmplacementWriter: empStore,
+		Terrain:           terrainSvc,
+		TerrainWait:       cfg.TerrainWait,
+		TerrainMaxRangeM:  cfg.TerrainMaxRangeM,
 		Density:           density.New(producer, commonkafka.TopicDensityEvents).For,
 		ConsumerFactory: func(groupID, clientID string) (outbound.Consumer, error) {
 			return commonkafka.NewBatchConsumer(cfg.KafkaBrokers, groupID, clientID, "latest", commonkafka.BatchOptions{MaxMessages: 200, MaxWait: 200 * time.Millisecond, MaxRetries: 1}, logger.With(zap.String("group", groupID)))

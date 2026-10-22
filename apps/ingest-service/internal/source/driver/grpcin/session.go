@@ -64,6 +64,8 @@ func emplacementProto(e emplacement.Emplacement) *sentinelv1.Emplacement {
 		Classification: classificationOf(e.Classification),
 		Exercise:       e.Exercise,
 		Active:         e.Active,
+
+		HeightAboveGroundM: e.HeightAboveGroundM,
 	}
 	if e.Position != nil {
 		m.Position = &sentinelv1.Coordinate{Latitude: e.Position.Lat, Longitude: e.Position.Lon, AltitudeMeters: e.Altitude}

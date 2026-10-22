@@ -59,6 +59,9 @@ describe('fixFromEntity', () => {
     expect(fixFromEntity(aircraft({ entityType: 'PERSON' } as Partial<Entity>), T0)).toBeNull();
     // Moving vessels are extrapolated too: their fixes are thinned to one every 15 s.
     expect(fixFromEntity(aircraft({ entityType: 'VESSEL' } as Partial<Entity>), T0)).not.toBeNull();
+    // Vehicles turn with their heading but are not extrapolated: a straight
+    // line between fixes would leave the road.
+    expect(fixFromEntity(aircraft({ entityType: 'VEHICLE' } as Partial<Entity>), T0)).toBeNull();
     expect(fixFromEntity(aircraft({ position: undefined }), T0)).toBeNull();
     expect(fixFromEntity(aircraft({ speedKnots: 0.5 }), T0)).toBeNull();
     expect(fixFromEntity(aircraft({ heading: undefined, course: undefined }), T0)).toBeNull();

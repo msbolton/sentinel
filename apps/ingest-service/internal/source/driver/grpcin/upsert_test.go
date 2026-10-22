@@ -349,3 +349,58 @@ func TestUpsertPositionWithoutAltitudeClearsIt(t *testing.T) {
 		t.Errorf("altitude %v, want 7", got.Altitude)
 	}
 }
+
+// The mounting height travels both ways: an upsert stores it and
+// ListEmplacements reads it back; an upsert that leaves it unset keeps it.
+func TestUpsertCarriesHeightAboveGround(t *testing.T) {
+	emps := &fakeEmplacements{}
+	w := &fakeWriter{emps: emps}
+	tok := ingesttoken.Token{ID: "t1", FeedID: "grpc-1", Classification: "CONFIDENTIAL"}
+	r := startWith(t, map[string]any{"senderManagedEmplacements": true, "maxEmplacements": 2}, nil, tokensWith(secretA, tok), emps, w, nil, nil)
+	c := r.client(t)
+	ctx, cancel := withToken(secretA)
+	defer cancel()
+	heightOf := func() *float64 {
+		t.Helper()
+		l, err := c.ListEmplacements(ctx, &ingestv1.ListEmplacementsRequest{})
+		if err != nil || len(l.GetEmplacements()) != 1 {
+			t.Fatalf("ListEmplacements = %v, %v", l, err)
+		}
+		return l.GetEmplacements()[0].HeightAboveGroundM
+	}
+
+	req := upsertReq("", "Mast camera")
+	req.Emplacement.HeightAboveGroundM = ptr(12.0)
+	res, err := c.UpsertEmplacement(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := heightOf(); h == nil || *h != 12 {
+		t.Fatalf("height after create = %v, want 12", h)
+	}
+	id := res.GetEmplacement().GetId()
+	if stored, _ := w.Get(context.Background(), id); stored.HeightAboveGroundM == nil || *stored.HeightAboveGroundM != 12 {
+		t.Errorf("stored height = %v, want 12", stored.HeightAboveGroundM)
+	}
+	// Unset on a later upsert: kept.
+	if _, err := c.UpsertEmplacement(ctx, upsertReq(id, "Mast camera")); err != nil {
+		t.Fatal(err)
+	}
+	if h := heightOf(); h == nil || *h != 12 {
+		t.Errorf("height after an upsert without one = %v, want 12", h)
+	}
+	// Set again: replaced.
+	req = upsertReq(id, "Mast camera")
+	req.Emplacement.HeightAboveGroundM = ptr(20.0)
+	if _, err := c.UpsertEmplacement(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if h := heightOf(); h == nil || *h != 20 {
+		t.Errorf("height after an upsert with 20 = %v, want 20", h)
+	}
+	// Out of range: refused.
+	req.Emplacement.HeightAboveGroundM = ptr(-1.0)
+	if _, err := c.UpsertEmplacement(ctx, req); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("a negative height: %v, want InvalidArgument", err)
+	}
+}

@@ -104,6 +104,11 @@ type Options struct {
 	// EmplacementWriter lets the drivers whose senders manage or move their
 	// own emplacements (grpc) write them.
 	EmplacementWriter driver.EmplacementWriter
+	// Terrain, TerrainWait and TerrainMaxRangeM are handed to the drivers
+	// (nil Terrain: terrain is off).
+	Terrain          driver.Terrain
+	TerrainWait      time.Duration
+	TerrainMaxRangeM float64
 	// Density builds the density-grid publisher for one feed (nil: drivers
 	// get none and keep their counts to themselves).
 	Density func(feedID, classification string) driver.DensityPublisher
@@ -751,7 +756,8 @@ func (s *Supervisor) startInstance(ctx context.Context, inst *instance) {
 	logger := s.logger.With(zap.String("feed", spec.ID), zap.String("driver", spec.Driver))
 	deps := driver.Deps{Logger: logger, Shapes: s.opts.Shapes, ListenerHost: s.opts.ListenerHost,
 		ReloadSecrets: s.secretReloader(spec), SecretReloadEvery: s.opts.SecretReloadEvery, Emplacements: s.opts.Emplacements, Tokens: s.opts.Tokens,
-		EmplacementWriter: s.opts.EmplacementWriter}
+		EmplacementWriter: s.opts.EmplacementWriter,
+		Terrain:           s.opts.Terrain, TerrainWait: s.opts.TerrainWait, TerrainMaxRangeM: s.opts.TerrainMaxRangeM}
 	if s.opts.Density != nil {
 		deps.Density = s.opts.Density(spec.ID, common.Classification)
 	}

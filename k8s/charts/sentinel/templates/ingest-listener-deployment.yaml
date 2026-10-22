@@ -107,6 +107,9 @@ spec:
               value: {{ .Values.ingestService.lease.rebalanceSec | quote }}
             - name: SHUTDOWN_TIMEOUT_SEC
               value: "25"
+            {{- with (include "sentinel.ingestTerrainEnv" (dict "root" . "limit" (dig "limits" "memory" "" .Values.ingestListener.resources))) }}
+            {{- . | nindent 12 }}
+            {{- end }}
             {{- range $k, $v := .Values.ingestService.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}
@@ -143,6 +146,10 @@ spec:
               mountPath: {{ .Values.ingestService.secretFiles.mountPath }}
               readOnly: true
             {{- end }}
+            {{- with (include "sentinel.ingestTerrainMount" .) }}
+            # Copernicus terrain tiles (ingestService.terrain), written by uid 10001.
+            {{- . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: tak-secrets
           secret:
@@ -162,5 +169,8 @@ spec:
           secret:
             secretName: {{ .Values.ingestService.secretFiles.existingSecret }}
             defaultMode: 0440
+        {{- end }}
+        {{- with (include "sentinel.ingestTerrainVolume" .) }}
+        {{- . | nindent 8 }}
         {{- end }}
 {{- end }}

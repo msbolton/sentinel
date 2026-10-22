@@ -261,8 +261,36 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 			if why != "" {
 				return s.reject(ack, why), nil
 			}
-			if why := convert(o, e, org); why != "" {
-				return s.reject(ack, why), nil
+			if o.Polar.DirectionOnly {
+				// A detection placed on the terrain goes on as a position
+				// does; a bearing is accepted and goes on the site instead.
+				var b *bearing
+				var why string
+				b, why, org = s.place(ctx, o, e, org)
+				switch {
+				case b != nil:
+					// A bearing has no range, but its direction is held to
+					// the coverage as a position is.
+					if s.d.cfg.EnforceCoverage && !directionInCoverage(e, org, b.AzimuthDeg, b.ElevationDeg) {
+						return s.reject(ack, "outside_coverage"), nil
+					}
+					// The site entity is published at the site's level (the
+					// feed's floor and the emplacement's): a report marked
+					// above it must not put its bearing there.
+					if max(classification.Rank(s.d.floor), content) > max(classification.Rank(s.d.floor), classification.Rank(e.Classification)) {
+						s.d.countBearing(reasonAboveSiteClassification)
+					} else {
+						s.d.addBearing(e.ID, *b)
+					}
+					return s.accepted(ctx, ack, e.ID, o.ReceivedAt), nil
+				case why != "":
+					return s.reject(ack, why), nil
+				}
+			} else {
+				var why string
+				if org, why = s.placeRangePolar(ctx, o, e, org); why != "" {
+					return s.reject(ack, why), nil
+				}
 			}
 		}
 		if s.d.cfg.EnforceCoverage && o.HasPosition {
@@ -284,14 +312,25 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 	if err := s.sink.Emit(ctx, o); err != nil {
 		return nil, err
 	}
-	// Only an accepted report counts as its emplacement reporting.
+	empID := ""
 	if bound {
-		s.d.touch(ctx, e.ID, nil, nil, o.ReceivedAt, o.ReceivedAt)
+		empID = e.ID
+	}
+	ack = s.accepted(ctx, ack, empID, o.ReceivedAt)
+	s.sink.Succeeded(1)
+	return ack, nil
+}
+
+// accepted acks a report taken, emitted or not (a bearing emits nothing).
+// Only an accepted report counts as its emplacement (empID, "" for none)
+// reporting.
+func (s *service) accepted(ctx context.Context, ack *ingestv1.Ack, empID string, at time.Time) *ingestv1.Ack {
+	if empID != "" {
+		s.d.touch(ctx, empID, nil, nil, at, at)
 	}
 	s.d.reportsOK.Add(1)
-	s.sink.Succeeded(1)
 	ack.Status = ingestv1.AckStatus_ACK_STATUS_OK
-	return ack, nil
+	return ack
 }
 
 // declaredLevel is the level a report marks itself with, as wire maps it:

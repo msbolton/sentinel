@@ -60,6 +60,14 @@
     border-color: var(--accent-blue);
   }
 
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background: var(--bg-panel);
+    color: var(--text-secondary);
+    border-color: var(--border-color);
+  }
+
   &--danger {
     color: var(--accent-red);
     border-color: color-mix(in srgb, var(--accent-red) 35%, transparent);

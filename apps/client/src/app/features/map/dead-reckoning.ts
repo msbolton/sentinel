@@ -1,5 +1,5 @@
 import { Entity } from '../../shared/models/entity.model';
-import { HEADING_ROTATED_TYPES } from './cesium-config';
+import { DEAD_RECKONED_TYPES } from './cesium-config';
 
 /**
  * Dead reckoning for moving tracks.
@@ -86,11 +86,11 @@ export function wrapLongitude(lon: number): number {
 
 /**
  * Build a fix from an entity, or null when the entity cannot be
- * dead-reckoned: not an aircraft or drone, no position, no usable
- * velocity, or effectively stationary.
+ * dead-reckoned: not one of DEAD_RECKONED_TYPES (aircraft, drones and
+ * vessels), no position, no usable velocity, or effectively stationary.
  */
 export function fixFromEntity(entity: Entity, nowMs: number, opts: DROptions = DR_DEFAULTS): Fix | null {
-  if (!HEADING_ROTATED_TYPES.has(entity.entityType) || !entity.position) {
+  if (!DEAD_RECKONED_TYPES.has(entity.entityType) || !entity.position) {
     return null;
   }
   const velocity = entity.kinematics?.velocity;

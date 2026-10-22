@@ -89,6 +89,38 @@ func TestValidateRefuses(t *testing.T) {
 	}
 }
 
+func TestValidateHeightAboveGround(t *testing.T) {
+	for name, h := range map[string]*float64{"unset": nil, "zero": f(0), "mast": f(12), "limit": f(1000)} {
+		e := valid()
+		e.HeightAboveGroundM = h
+		if err := Validate(&e); err != nil {
+			t.Errorf("%s: refused: %v", name, err)
+		}
+	}
+	for name, h := range map[string]float64{"nan": math.NaN(), "inf": math.Inf(1), "negative": -0.1, "too high": 1000.5} {
+		e := valid()
+		e.HeightAboveGroundM = f(h)
+		err := Validate(&e)
+		if got := paths(err); !strings.Contains(got, "/heightAboveGroundM") {
+			t.Errorf("%s: problems at %q, want /heightAboveGroundM", name, got)
+		} else if !strings.Contains(err.Error(), "heightAboveGroundM") {
+			t.Errorf("%s: error %q does not name heightAboveGroundM", name, err)
+		}
+	}
+}
+
+func TestInputApplyHeightAboveGround(t *testing.T) {
+	e := valid()
+	Input{HeightAboveGroundM: f(12)}.Apply(&e)
+	if e.HeightAboveGroundM == nil || *e.HeightAboveGroundM != 12 {
+		t.Fatalf("height = %v, want 12", e.HeightAboveGroundM)
+	}
+	Input{}.Apply(&e)
+	if e.HeightAboveGroundM == nil || *e.HeightAboveGroundM != 12 {
+		t.Errorf("an input with no height changed it to %v", e.HeightAboveGroundM)
+	}
+}
+
 func TestInputApply(t *testing.T) {
 	e := valid()
 	feed := "grpc-1"

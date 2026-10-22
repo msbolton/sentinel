@@ -584,8 +584,11 @@ type Coordinate struct {
 	Latitude float64 `protobuf:"fixed64,1,opt,name=latitude,proto3" json:"latitude,omitempty"`
 	// Longitude in decimal degrees (WGS84).
 	Longitude float64 `protobuf:"fixed64,2,opt,name=longitude,proto3" json:"longitude,omitempty"`
-	// Altitude above mean sea level in meters. Unset when the source reports
-	// no altitude; a present zero means sea level.
+	// Altitude in meters. Sentinel takes it as height above the WGS84
+	// ellipsoid and applies no geoid correction (docs/emplacements.md, "Known
+	// differences"), so an altitude above mean sea level is off by the local
+	// geoid height, tens of metres. Unset when the source reports no altitude;
+	// a present zero is an altitude of 0 m.
 	AltitudeMeters *float64 `protobuf:"fixed64,3,opt,name=altitude_meters,json=altitudeMeters,proto3,oneof" json:"altitude_meters,omitempty"`
 	// The coordinate reference system. Defaults to "EPSG:4326" (WGS84) if unset.
 	CoordinateSystem string `protobuf:"bytes,4,opt,name=coordinate_system,json=coordinateSystem,proto3" json:"coordinate_system,omitempty"`

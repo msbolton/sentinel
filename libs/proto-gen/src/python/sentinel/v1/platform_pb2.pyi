@@ -1,11 +1,51 @@
 from sentinel.v1 import common_pb2 as _common_pb2
 from google.protobuf.internal import containers as _containers
+from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from collections.abc import Mapping as _Mapping
 from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
+
+class RadarMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    RADAR_MODE_UNSPECIFIED: _ClassVar[RadarMode]
+    RADAR_MODE_SEARCH: _ClassVar[RadarMode]
+    RADAR_MODE_TRACK: _ClassVar[RadarMode]
+
+class RadarClass(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    RADAR_CLASS_UNSPECIFIED: _ClassVar[RadarClass]
+    RADAR_CLASS_VEHICLE: _ClassVar[RadarClass]
+    RADAR_CLASS_DRONE: _ClassVar[RadarClass]
+    RADAR_CLASS_PERSON: _ClassVar[RadarClass]
+    RADAR_CLASS_BIRD: _ClassVar[RadarClass]
+    RADAR_CLASS_CLUTTER: _ClassVar[RadarClass]
+    RADAR_CLASS_UNKNOWN: _ClassVar[RadarClass]
+
+class EoIrBand(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    EO_IR_BAND_UNSPECIFIED: _ClassVar[EoIrBand]
+    EO_IR_BAND_VISIBLE: _ClassVar[EoIrBand]
+    EO_IR_BAND_SWIR: _ClassVar[EoIrBand]
+    EO_IR_BAND_MWIR: _ClassVar[EoIrBand]
+    EO_IR_BAND_LWIR: _ClassVar[EoIrBand]
+RADAR_MODE_UNSPECIFIED: RadarMode
+RADAR_MODE_SEARCH: RadarMode
+RADAR_MODE_TRACK: RadarMode
+RADAR_CLASS_UNSPECIFIED: RadarClass
+RADAR_CLASS_VEHICLE: RadarClass
+RADAR_CLASS_DRONE: RadarClass
+RADAR_CLASS_PERSON: RadarClass
+RADAR_CLASS_BIRD: RadarClass
+RADAR_CLASS_CLUTTER: RadarClass
+RADAR_CLASS_UNKNOWN: RadarClass
+EO_IR_BAND_UNSPECIFIED: EoIrBand
+EO_IR_BAND_VISIBLE: EoIrBand
+EO_IR_BAND_SWIR: EoIrBand
+EO_IR_BAND_MWIR: EoIrBand
+EO_IR_BAND_LWIR: EoIrBand
 
 class AisDetail(_message.Message):
     __slots__ = ("mmsi", "imo", "callsign", "vessel_name", "ship_type", "ship_type_name", "flag", "destination", "eta", "draught", "dimension_a", "dimension_b", "dimension_c", "dimension_d", "length_overall", "beam", "nav_status", "rate_of_turn", "speed_over_ground", "course_over_ground", "true_heading", "position_accuracy_high", "special_manoeuvre", "message_type", "repeat_indicator")
@@ -249,8 +289,60 @@ class RfDetail(_message.Message):
     power_dbm: float
     def __init__(self, frequency_hz: _Optional[float] = ..., bandwidth_hz: _Optional[float] = ..., emitter_type: _Optional[str] = ..., modulation: _Optional[str] = ..., pri_us: _Optional[float] = ..., pulse_width_us: _Optional[float] = ..., scan_type: _Optional[str] = ..., power_dbm: _Optional[float] = ...) -> None: ...
 
+class RadarDetail(_message.Message):
+    __slots__ = ("range_rate_mps", "rcs_dbsm", "snr_db", "mode", "track_quality", "classification", "classification_confidence", "radar_track_id", "height_above_ground_m")
+    RANGE_RATE_MPS_FIELD_NUMBER: _ClassVar[int]
+    RCS_DBSM_FIELD_NUMBER: _ClassVar[int]
+    SNR_DB_FIELD_NUMBER: _ClassVar[int]
+    MODE_FIELD_NUMBER: _ClassVar[int]
+    TRACK_QUALITY_FIELD_NUMBER: _ClassVar[int]
+    CLASSIFICATION_FIELD_NUMBER: _ClassVar[int]
+    CLASSIFICATION_CONFIDENCE_FIELD_NUMBER: _ClassVar[int]
+    RADAR_TRACK_ID_FIELD_NUMBER: _ClassVar[int]
+    HEIGHT_ABOVE_GROUND_M_FIELD_NUMBER: _ClassVar[int]
+    range_rate_mps: float
+    rcs_dbsm: float
+    snr_db: float
+    mode: RadarMode
+    track_quality: float
+    classification: RadarClass
+    classification_confidence: float
+    radar_track_id: str
+    height_above_ground_m: float
+    def __init__(self, range_rate_mps: _Optional[float] = ..., rcs_dbsm: _Optional[float] = ..., snr_db: _Optional[float] = ..., mode: _Optional[_Union[RadarMode, str]] = ..., track_quality: _Optional[float] = ..., classification: _Optional[_Union[RadarClass, str]] = ..., classification_confidence: _Optional[float] = ..., radar_track_id: _Optional[str] = ..., height_above_ground_m: _Optional[float] = ...) -> None: ...
+
+class NormalizedBox(_message.Message):
+    __slots__ = ("x", "y", "width", "height")
+    X_FIELD_NUMBER: _ClassVar[int]
+    Y_FIELD_NUMBER: _ClassVar[int]
+    WIDTH_FIELD_NUMBER: _ClassVar[int]
+    HEIGHT_FIELD_NUMBER: _ClassVar[int]
+    x: float
+    y: float
+    width: float
+    height: float
+    def __init__(self, x: _Optional[float] = ..., y: _Optional[float] = ..., width: _Optional[float] = ..., height: _Optional[float] = ...) -> None: ...
+
+class EoIrDetail(_message.Message):
+    __slots__ = ("band", "classification", "classification_confidence", "horizontal_fov_deg", "vertical_fov_deg", "bounding_box", "camera_track_id")
+    BAND_FIELD_NUMBER: _ClassVar[int]
+    CLASSIFICATION_FIELD_NUMBER: _ClassVar[int]
+    CLASSIFICATION_CONFIDENCE_FIELD_NUMBER: _ClassVar[int]
+    HORIZONTAL_FOV_DEG_FIELD_NUMBER: _ClassVar[int]
+    VERTICAL_FOV_DEG_FIELD_NUMBER: _ClassVar[int]
+    BOUNDING_BOX_FIELD_NUMBER: _ClassVar[int]
+    CAMERA_TRACK_ID_FIELD_NUMBER: _ClassVar[int]
+    band: EoIrBand
+    classification: str
+    classification_confidence: float
+    horizontal_fov_deg: float
+    vertical_fov_deg: float
+    bounding_box: NormalizedBox
+    camera_track_id: str
+    def __init__(self, band: _Optional[_Union[EoIrBand, str]] = ..., classification: _Optional[str] = ..., classification_confidence: _Optional[float] = ..., horizontal_fov_deg: _Optional[float] = ..., vertical_fov_deg: _Optional[float] = ..., bounding_box: _Optional[_Union[NormalizedBox, _Mapping]] = ..., camera_track_id: _Optional[str] = ...) -> None: ...
+
 class PlatformDetail(_message.Message):
-    __slots__ = ("ais", "adsb", "tle", "link16", "cot", "uav", "generic", "rf")
+    __slots__ = ("ais", "adsb", "tle", "link16", "cot", "uav", "generic", "rf", "radar", "eoir")
     AIS_FIELD_NUMBER: _ClassVar[int]
     ADSB_FIELD_NUMBER: _ClassVar[int]
     TLE_FIELD_NUMBER: _ClassVar[int]
@@ -259,6 +351,8 @@ class PlatformDetail(_message.Message):
     UAV_FIELD_NUMBER: _ClassVar[int]
     GENERIC_FIELD_NUMBER: _ClassVar[int]
     RF_FIELD_NUMBER: _ClassVar[int]
+    RADAR_FIELD_NUMBER: _ClassVar[int]
+    EOIR_FIELD_NUMBER: _ClassVar[int]
     ais: AisDetail
     adsb: AdsbDetail
     tle: TleDetail
@@ -267,7 +361,9 @@ class PlatformDetail(_message.Message):
     uav: UavDetail
     generic: GenericDetail
     rf: RfDetail
-    def __init__(self, ais: _Optional[_Union[AisDetail, _Mapping]] = ..., adsb: _Optional[_Union[AdsbDetail, _Mapping]] = ..., tle: _Optional[_Union[TleDetail, _Mapping]] = ..., link16: _Optional[_Union[Link16Detail, _Mapping]] = ..., cot: _Optional[_Union[CotDetail, _Mapping]] = ..., uav: _Optional[_Union[UavDetail, _Mapping]] = ..., generic: _Optional[_Union[GenericDetail, _Mapping]] = ..., rf: _Optional[_Union[RfDetail, _Mapping]] = ...) -> None: ...
+    radar: RadarDetail
+    eoir: EoIrDetail
+    def __init__(self, ais: _Optional[_Union[AisDetail, _Mapping]] = ..., adsb: _Optional[_Union[AdsbDetail, _Mapping]] = ..., tle: _Optional[_Union[TleDetail, _Mapping]] = ..., link16: _Optional[_Union[Link16Detail, _Mapping]] = ..., cot: _Optional[_Union[CotDetail, _Mapping]] = ..., uav: _Optional[_Union[UavDetail, _Mapping]] = ..., generic: _Optional[_Union[GenericDetail, _Mapping]] = ..., rf: _Optional[_Union[RfDetail, _Mapping]] = ..., radar: _Optional[_Union[RadarDetail, _Mapping]] = ..., eoir: _Optional[_Union[EoIrDetail, _Mapping]] = ...) -> None: ...
 
 class GenericDetail(_message.Message):
     __slots__ = ("fields",)

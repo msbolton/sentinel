@@ -6,10 +6,13 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sentinel/go-common/terrain"
 
 	"github.com/sentinel/ingest-service/internal/registry"
 )
@@ -51,6 +54,18 @@ type Config struct {
 	// certificates, keys and CAs again, so a rotation takes effect without a
 	// restart (INGEST_TLS_RELOAD_SEC, default 60); 0 turns reloading off.
 	TLSReloadSec int
+
+	// Terrain: ground heights from Copernicus GLO-30, for the sensors that
+	// report directions (eoir) and the radar height clamp. It is on when
+	// TerrainCacheDir is set (INGEST_TERRAIN_CACHE_DIR); the folder must be
+	// writable and is the only path the service writes.
+	TerrainCacheDir     string        // INGEST_TERRAIN_CACHE_DIR (default: empty, terrain off)
+	TerrainSourceURL    string        // INGEST_TERRAIN_SOURCE_URL (default: the Copernicus bucket)
+	TerrainCacheMaxMB   int           // INGEST_TERRAIN_CACHE_MAX_MB (default: 2048, at least 64)
+	TerrainFetchTimeout time.Duration // INGEST_TERRAIN_FETCH_TIMEOUT_SEC (default: 300) one tile download
+	TerrainWait         time.Duration // INGEST_TERRAIN_WAIT_MS (default: 2000, 100-10000) how long a detection waits for terrain
+	TerrainMaxRangeM    float64       // INGEST_TERRAIN_MAX_RANGE_KM (default: 30, 1-200), in metres here
+	TerrainMemTiles     int           // INGEST_TERRAIN_MEM_TILES (default: 4, 1-64) decoded tiles kept in memory, up to about 52 MB each
 
 	// loadErrs are the integer and boolean settings Load could not read.
 	loadErrs []error
@@ -101,6 +116,14 @@ func Load() *Config {
 		SecretEnvAllow:        splitList(envOr("INGEST_SECRET_ENV_ALLOW", registry.DefaultSecretEnvAllow)),
 		SecretFileDirs:        splitList(envOr("INGEST_SECRET_FILE_DIRS", registry.DefaultSecretFileDirs)),
 		TLSReloadSec:          ld.int("INGEST_TLS_RELOAD_SEC", 60),
+
+		TerrainCacheDir:     envOr("INGEST_TERRAIN_CACHE_DIR", ""),
+		TerrainSourceURL:    envOr("INGEST_TERRAIN_SOURCE_URL", terrain.DefaultSourceURL),
+		TerrainCacheMaxMB:   ld.int("INGEST_TERRAIN_CACHE_MAX_MB", 2048),
+		TerrainFetchTimeout: ld.seconds("INGEST_TERRAIN_FETCH_TIMEOUT_SEC", 300),
+		TerrainWait:         time.Duration(ld.int("INGEST_TERRAIN_WAIT_MS", 2000)) * time.Millisecond,
+		TerrainMaxRangeM:    float64(ld.int("INGEST_TERRAIN_MAX_RANGE_KM", 30)) * 1000,
+		TerrainMemTiles:     ld.int("INGEST_TERRAIN_MEM_TILES", 4),
 
 		PublisherShards:    ld.int("PUBLISHER_SHARDS", 8),
 		ObservationBuffer:  ld.int("OBS_BUFFER", 1000),
@@ -179,6 +202,9 @@ func (c *Config) Validate() error {
 	if _, err := c.ReservedPortSet(); err != nil {
 		return err
 	}
+	if err := c.validateTerrain(); err != nil {
+		return err
+	}
 	if c.ListenerShared && !c.Listener {
 		return errors.New("INGEST_LISTENER_SHARED needs INGEST_LISTENER=true: only a listener replica can share")
 	}
@@ -186,6 +212,33 @@ func (c *Config) Validate() error {
 	// run every enabled feed, which a dedicated listener must not.
 	if (c.Listener || c.ListenerShared) && !c.LeaseEnabled {
 		return errors.New("INGEST_LISTENER (or INGEST_LISTENER_SHARED) needs leases: LEASE_ENABLED=false would make the listener run every feed; remove LEASE_ENABLED=false or turn the listener off")
+	}
+	return nil
+}
+
+// TerrainEnabled reports whether terrain is on (a cache folder is set).
+func (c *Config) TerrainEnabled() bool { return c.TerrainCacheDir != "" }
+
+// validateTerrain checks the terrain settings whether or not terrain is on, so
+// a typo is found when it is made rather than when the folder is first set.
+func (c *Config) validateTerrain() error {
+	if c.TerrainWait < 100*time.Millisecond || c.TerrainWait > 10*time.Second {
+		return fmt.Errorf("INGEST_TERRAIN_WAIT_MS must be between 100 and 10000, not %d", c.TerrainWait.Milliseconds())
+	}
+	if c.TerrainMaxRangeM < 1000 || c.TerrainMaxRangeM > 200000 {
+		return fmt.Errorf("INGEST_TERRAIN_MAX_RANGE_KM must be between 1 and 200, not %g", c.TerrainMaxRangeM/1000)
+	}
+	if c.TerrainMemTiles < 1 || c.TerrainMemTiles > 64 {
+		return fmt.Errorf("INGEST_TERRAIN_MEM_TILES must be between 1 and 64, not %d", c.TerrainMemTiles)
+	}
+	if c.TerrainCacheMaxMB < 64 {
+		return fmt.Errorf("INGEST_TERRAIN_CACHE_MAX_MB must be at least 64 (a tile is up to 50 MB), not %d", c.TerrainCacheMaxMB)
+	}
+	if c.TerrainFetchTimeout <= 0 {
+		return errors.New("INGEST_TERRAIN_FETCH_TIMEOUT_SEC must be positive")
+	}
+	if u, err := url.Parse(c.TerrainSourceURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("INGEST_TERRAIN_SOURCE_URL must be an http or https URL, not %q", c.TerrainSourceURL)
 	}
 	return nil
 }

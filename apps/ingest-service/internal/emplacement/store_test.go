@@ -155,6 +155,45 @@ func TestStoreCRUDAndNotify(t *testing.T) {
 	}
 }
 
+func TestStoreHeightAboveGroundRoundTrips(t *testing.T) {
+	pool, ctx := testPool(t)
+	s := NewPGStore(pool)
+
+	plain, err := s.Create(ctx, fixed("test-height-none"))
+	if err != nil || plain.HeightAboveGroundM != nil {
+		t.Fatalf("create without a height = %+v %v", plain, err)
+	}
+	e := fixed("test-height")
+	h := 12.5
+	e.HeightAboveGroundM = &h
+	created, err := s.Create(ctx, e)
+	if err != nil || created.HeightAboveGroundM == nil || *created.HeightAboveGroundM != 12.5 {
+		t.Fatalf("create = %+v %v", created, err)
+	}
+	got, err := s.Get(ctx, created.ID)
+	if err != nil || got.HeightAboveGroundM == nil || *got.HeightAboveGroundM != 12.5 {
+		t.Fatalf("get = %+v %v", got, err)
+	}
+	updated, err := s.Update(ctx, created.ID, 1, func(e *Emplacement) error { v := 30.0; e.HeightAboveGroundM = &v; return nil })
+	if err != nil || updated.HeightAboveGroundM == nil || *updated.HeightAboveGroundM != 30 {
+		t.Fatalf("update = %+v %v", updated, err)
+	}
+	// An update that leaves the height alone keeps it (Update writes every column from the row it read).
+	kept, err := s.Update(ctx, created.ID, 2, func(e *Emplacement) error { e.BoresightDeg = 90; return nil })
+	if err != nil || kept.HeightAboveGroundM == nil || *kept.HeightAboveGroundM != 30 {
+		t.Fatalf("update keeping = %+v %v", kept, err)
+	}
+	listed, err := s.List(ctx, Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range listed {
+		if l.ID == created.ID && (l.HeightAboveGroundM == nil || *l.HeightAboveGroundM != 30) {
+			t.Errorf("list height = %v, want 30", l.HeightAboveGroundM)
+		}
+	}
+}
+
 func TestStoreVersionConflict(t *testing.T) {
 	pool, ctx := testPool(t)
 	s := NewPGStore(pool)

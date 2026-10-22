@@ -9,6 +9,7 @@ import { WebSocketService } from '../../core/services/websocket.service';
 import { ThemeService, ThemePreset } from '../../core/services/theme.service';
 import { LocationService } from '../../core/services/location.service';
 import { BuildingsService } from '../../core/services/buildings.service';
+import { TerrainService } from '../../core/services/terrain.service';
 import { LayerVisibilityService } from '../../core/services/layer-visibility.service';
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 import { MapViewportService } from '../../core/services/map-viewport.service';
@@ -27,6 +28,8 @@ import {
 import { Feed } from '../../shared/models/feed.model';
 import { ELLIPSE_95 } from './uncertainty';
 import { sidcFor, symbolDataUrl } from './milstd2525';
+import { ENTITY_TYPE_BILLBOARD_SVGS, svgToDataUrl } from './cesium-config';
+import { BearingLayer } from './bearing-layer';
 
 function covFromEllipse(semiMajorM: number, semiMinorM: number, orientationDeg: number) {
   const s1 = semiMajorM / ELLIPSE_95;
@@ -85,8 +88,9 @@ function makeFakeCesium() {
     PolylineGraphics: jest.fn(function (this: any, opts: any) {
       Object.assign(this, opts);
     }),
-    HeightReference: { NONE: 0, CLAMP_TO_GROUND: 1 },
+    HeightReference: { NONE: 0, CLAMP_TO_GROUND: 1, RELATIVE_TO_GROUND: 2 },
     VerticalOrigin: { CENTER: 0, BOTTOM: 1 },
+    HorizontalOrigin: { LEFT: -1 },
     LabelStyle: { FILL_AND_OUTLINE: 2 },
     Math: {
       toRadians: (deg: number) => (deg * Math.PI) / 180,
@@ -100,11 +104,13 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
   let feedsSignal: ReturnType<typeof signal<Feed[]>>;
   let fakeCesium: ReturnType<typeof makeFakeCesium>;
   let addedEntities: any[];
+  let terrainOn: ReturnType<typeof signal<boolean>>;
 
   beforeEach(() => {
     feedsSignal = signal<Feed[]>([]);
     fakeCesium = makeFakeCesium();
     addedEntities = [];
+    terrainOn = signal(false);
 
     TestBed.configureTestingModule({
       imports: [MapComponent],
@@ -130,6 +136,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
         { provide: ThemeService, useValue: { activeTheme$: of(ThemePreset.NORMAL) } },
         { provide: LocationService, useValue: { flyTo$: EMPTY } },
         { provide: BuildingsService, useValue: { init: jest.fn(), enabled: signal(false) } },
+        { provide: TerrainService, useValue: { init: jest.fn(), toggle: jest.fn(), terrainEnabled: terrainOn.asReadonly(), available: signal(true) } },
         { provide: HttpClient, useValue: { get: jest.fn(() => of([])) } },
         {
           provide: LayerVisibilityService,
@@ -271,6 +278,60 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     expect(TestBed.inject(Router).navigateByUrl).not.toHaveBeenCalled();
   });
 
+  it("selects the camera's site entity when a bearing line is clicked", () => {
+    const actions = new Map<unknown, (e: any) => void>();
+    (fakeCesium as any).ScreenSpaceEventHandler = function () {
+      return { setInputAction: (fn: (e: any) => void, type: unknown) => actions.set(type, fn) };
+    };
+    (fakeCesium as any).ScreenSpaceEventType = { LEFT_CLICK: 'L', LEFT_DOUBLE_CLICK: 'D', MOUSE_MOVE: 'M', LEFT_DOWN: 'DN', LEFT_UP: 'UP' };
+    (fakeCesium as any).defined = (x: unknown) => x != null;
+    const viewer = (component as any).viewer;
+    viewer.scene.canvas = {};
+    viewer.scene.pick = jest.fn(() => ({ id: { id: 'bearing:site-1:t1', _sentinelBearing: 'site-1', _sentinelBearingKey: 't:t1' } }));
+    viewer.selectedEntity = { stale: true };
+    const site = baseSignalEntity({ id: 'site-1', entityType: EntityType.SENSOR, identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }] } as Partial<Entity>);
+    (component as any).emplacementEntities.set('site-1', site);
+
+    (component as any).setupEventHandlers();
+    actions.get('L')!({ position: { x: 1, y: 2 } });
+
+    expect(component.selectedEntity()).toBe(site);
+    expect(TestBed.inject(EmplacementService).select).toHaveBeenCalledWith('emp-1');
+    expect(viewer.selectedEntity).toBeUndefined();
+    expect((component as any).selectedBearingKey()).toBe('t:t1'); // the panel highlights it
+
+    // Any other click forgets it.
+    viewer.scene.pick = jest.fn(() => undefined);
+    actions.get('L')!({ position: { x: 3, y: 4 } });
+    expect((component as any).selectedBearingKey()).toBeNull();
+  });
+
+  it('draws the bearing lines a site entity carries and drops them with the site', () => {
+    const fields = {
+      bearings: JSON.stringify([{ trackId: 't1', azimuthDeg: 90, elevationDeg: 0, lengthM: 1000, reason: 'no_ground_intersection', observedAt: new Date().toISOString() }]),
+      bearingTtlSec: '60',
+    };
+    const site = baseSignalEntity({
+      id: 'site-1', entityType: EntityType.SENSOR, feedId: 'cam-1', identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }],
+      position: { latitude: 10, longitude: 20, altitude: 5 },
+      platformData: { generic: { fields } },
+    } as Partial<Entity>);
+    (fakeCesium as any).PolylineDashMaterialProperty = jest.fn(function (this: any, o: any) { Object.assign(this, o); });
+    const live = new Map<string, any>();
+    const viewer = (component as any).viewer;
+    viewer.entities.add = jest.fn((cfg: any) => { const e = { ...cfg }; live.set(cfg.id, e); return e; });
+    viewer.entities.remove = jest.fn((e: any) => live.delete(e.id));
+    (component as any).bearingLayer = new BearingLayer(viewer, fakeCesium);
+    (component as any).loadedEmplacementIds = new Set(['emp-1']);
+
+    (component as any).addOrUpdateCesiumEntity(site);
+    expect([...live.keys()]).toEqual(['bearing:site-1:t1']);
+    expect(live.get('bearing:site-1:t1').polyline.positions[0]).toEqual({ lon: 20, lat: 10, alt: 5 });
+
+    (component as any).removeCesiumEntity('site-1');
+    expect(live.size).toBe(0);
+  });
+
   it('clears any previous selection when the clicked site is not on the stream', () => {
     const actions = new Map<unknown, (e: any) => void>();
     (fakeCesium as any).ScreenSpaceEventHandler = function () {
@@ -290,6 +351,56 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     expect(component.selectedEntity()).toBeNull();
     expect(TestBed.inject(Router).navigate).not.toHaveBeenCalled();
     expect(TestBed.inject(Router).navigateByUrl).not.toHaveBeenCalled();
+  });
+
+  describe('keeping the selection live', () => {
+    const update = (entity: Entity) =>
+      (component as any).handleEntityEvent({ type: 'updated', entity, timestamp: '2026-10-20T12:00:05Z' });
+
+    it('replaces the selected entity with the newer copy from the stream', () => {
+      const old = baseSignalEntity({ id: 'ac-1', entityType: EntityType.AIRCRAFT, position: { latitude: 50, longitude: -1 }, lastSeenAt: '2026-10-20T12:00:00Z' } as Partial<Entity>);
+      const newer = baseSignalEntity({ id: 'ac-1', entityType: EntityType.AIRCRAFT, position: { latitude: 50.1, longitude: -1 }, lastSeenAt: '2026-10-20T12:00:05Z' } as Partial<Entity>);
+      component.selectedEntity.set(old);
+
+      update(newer);
+
+      expect(component.selectedEntity()).toBe(newer);
+    });
+
+    it("replaces a selected site's entity, which the emplacement layer draws", () => {
+      const site = (lastHeartbeatAt: string) =>
+        baseSignalEntity({
+          id: 'site-1',
+          entityType: EntityType.SENSOR,
+          identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }],
+          platformData: { generic: { fields: { heartbeat: 'online', lastHeartbeatAt } } },
+        } as Partial<Entity>);
+      (component as any).loadedEmplacementIds = new Set(['emp-1']);
+      const old = site('2026-10-20T12:00:00Z');
+      const newer = site('2026-10-20T12:00:05Z');
+      (component as any).emplacementEntities.set('site-1', old);
+      component.selectedEntity.set(old);
+
+      update(newer);
+
+      expect((component as any).emplacementEntities.get('site-1')).toBe(newer);
+      expect(component.selectedEntity()).toBe(newer);
+    });
+
+    it('leaves the selection alone when another entity updates', () => {
+      const selected = baseSignalEntity({ id: 'ac-1', entityType: EntityType.AIRCRAFT });
+      component.selectedEntity.set(selected);
+
+      update(baseSignalEntity({ id: 'ac-2', entityType: EntityType.AIRCRAFT }));
+
+      expect(component.selectedEntity()).toBe(selected);
+    });
+
+    it('selects nothing when nothing was selected', () => {
+      update(baseSignalEntity({ id: 'ac-2', entityType: EntityType.AIRCRAFT }));
+
+      expect(component.selectedEntity()).toBeNull();
+    });
   });
 
   it('draws a Cesium ellipse from gateway-shaped positionCovariance (pnPn/pnPe/pePe) for SIGNAL only and clears it when covariance clears', () => {
@@ -379,6 +490,26 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     expect((component as any).trackTrails.get('drn-1').toArray()).toHaveLength(1);
   });
 
+  it('turns a vehicle billboard with its heading, upright when it has none, and keeps 2525D symbols north-up', () => {
+    feedsSignal.set([{ id: 'ew-1', config: { military: false } } as unknown as Feed]);
+    fixture.detectChanges();
+
+    const vehicle = baseSignalEntity({ id: 'veh-1', entityType: EntityType.VEHICLE, heading: 90 });
+    const parked = baseSignalEntity({ id: 'veh-2', entityType: EntityType.VEHICLE });
+    (component as any).addOrUpdateCesiumEntity(vehicle);
+    (component as any).addOrUpdateCesiumEntity(parked);
+    const vehCesium = (component as any).entityMap.get('veh-1');
+    const parkedCesium = (component as any).entityMap.get('veh-2');
+    expect(vehCesium.billboard.rotation).toBeCloseTo(-Math.PI / 2, 6);
+    expect(parkedCesium.billboard.rotation).toBe(0);
+    expect(vehCesium.billboard.image).toBe(svgToDataUrl(ENTITY_TYPE_BILLBOARD_SVGS[EntityType.VEHICLE]));
+
+    feedsSignal.set([{ id: 'ew-1', config: { military: true } } as unknown as Feed]);
+    fixture.detectChanges();
+    expect(vehCesium.billboard.image).toBe(symbolDataUrl(sidcFor(vehicle)));
+    expect(vehCesium.billboard.rotation).toBe(0);
+  });
+
   it('does not resync billboards or push trail points when feed polling returns unchanged military flags', () => {
     feedsSignal.set([{ id: 'ew-1', config: { military: true } } as unknown as Feed]);
     fixture.detectChanges();
@@ -447,5 +578,169 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       timestamp: '2026-10-20T12:00:10Z',
     });
     expect(cesiumEnt.billboard.image).toBe(hostileUrl);
+  });
+  describe('terrain-aware heights and uncertainty', () => {
+    const cov = () => covFromEllipse(300, 120, 20);
+
+    beforeEach(() => terrainOn.set(true));
+
+    function radarDrone(over: Partial<Entity> = {}): Entity {
+      return baseSignalEntity({
+        id: 'rdr-1',
+        entityType: EntityType.DRONE,
+        name: 'Radar drone',
+        trackEnvironment: TrackEnvironment.AIR,
+        position: { latitude: 46.5, longitude: 8.0, altitude: 940 },
+        platformData: { radar: { heightAboveGroundM: 120 } },
+        ...over,
+      });
+    }
+
+    it('adds a radar drone relative to the ground at its height above ground', () => {
+      (component as any).addOrUpdateCesiumEntity(radarDrone());
+      const ent = (component as any).entityMap.get('rdr-1');
+      expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.RELATIVE_TO_GROUND);
+      expect(ent.label.heightReference).toBe(fakeCesium.HeightReference.RELATIVE_TO_GROUND);
+      expect(ent._posProp.value).toEqual({ lon: 8.0, lat: 46.5, alt: 120 });
+    });
+
+    it('draws a radar drone absolute at its altitude while terrain is off', () => {
+      terrainOn.set(false);
+      (component as any).addOrUpdateCesiumEntity(radarDrone());
+      const ent = (component as any).entityMap.get('rdr-1');
+      expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.NONE);
+      expect(ent._posProp.value).toEqual({ lon: 8.0, lat: 46.5, alt: 940 });
+    });
+
+    it('switches an existing radar drone between absolute and relative when terrain toggles', () => {
+      (component as any).addOrUpdateCesiumEntity(radarDrone());
+      const ent = (component as any).entityMap.get('rdr-1');
+      expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.RELATIVE_TO_GROUND);
+
+      terrainOn.set(false);
+      fixture.detectChanges();
+      expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.NONE);
+      expect(ent.label.heightReference).toBe(fakeCesium.HeightReference.NONE);
+      expect(ent._posProp.value).toEqual({ lon: 8.0, lat: 46.5, alt: 940 });
+
+      terrainOn.set(true);
+      fixture.detectChanges();
+      expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.RELATIVE_TO_GROUND);
+      expect(ent.label.heightReference).toBe(fakeCesium.HeightReference.RELATIVE_TO_GROUND);
+      expect(ent._posProp.value).toEqual({ lon: 8.0, lat: 46.5, alt: 120 });
+    });
+
+    it('keeps a moving radar drone at its height above ground, not its ellipsoid altitude', () => {
+      (component as any).addOrUpdateCesiumEntity(
+        radarDrone({ lastSeenAt: new Date().toISOString(), kinematics: { velocity: { north: 25, east: 0, up: 0 } } }),
+      );
+      expect((component as any).deadReckoning.positionOf('rdr-1', Date.now())).not.toBeNull(); // it is dead-reckoned
+      const ent = (component as any).entityMap.get('rdr-1');
+      expect(ent._posProp.value.alt).toBe(120);
+    });
+
+    it('adds a GROUND vehicle clamped to the ground', () => {
+      (component as any).addOrUpdateCesiumEntity(
+        baseSignalEntity({
+          id: 'veh-1',
+          entityType: EntityType.VEHICLE,
+          trackEnvironment: TrackEnvironment.GROUND,
+          position: { latitude: 46.5, longitude: 8.0, altitude: 610 },
+          platformData: { eoir: { band: 'LWIR' } },
+        }),
+      );
+      const ent = (component as any).entityMap.get('veh-1');
+      expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.CLAMP_TO_GROUND);
+    });
+
+    it('adds an airborne entity with an altitude at that absolute height', () => {
+      (component as any).addOrUpdateCesiumEntity(
+        baseSignalEntity({
+          id: 'ac-9',
+          entityType: EntityType.AIRCRAFT,
+          trackEnvironment: TrackEnvironment.AIR,
+          position: { latitude: 46.5, longitude: 8.0, altitude: 9000 },
+        }),
+      );
+      const ent = (component as any).entityMap.get('ac-9');
+      expect(ent.billboard.heightReference).toBe(fakeCesium.HeightReference.NONE);
+      expect(ent._posProp.value.alt).toBe(9000);
+    });
+
+    it('draws uncertainty ellipses for radar and EO/IR entities, not for a plain vehicle', () => {
+      (component as any).addOrUpdateCesiumEntity(radarDrone({ kinematics: { positionCovariance: cov() } }));
+      (component as any).addOrUpdateCesiumEntity(
+        baseSignalEntity({
+          id: 'eo-1',
+          entityType: EntityType.VEHICLE,
+          position: { latitude: 46.5, longitude: 8.0 },
+          platformData: { eoir: { band: 'MWIR' } },
+          kinematics: { positionCovariance: cov() },
+        }),
+      );
+      (component as any).addOrUpdateCesiumEntity(
+        baseSignalEntity({
+          id: 'veh-2',
+          entityType: EntityType.VEHICLE,
+          position: { latitude: 46.5, longitude: 8.0 },
+          platformData: {},
+          kinematics: { positionCovariance: cov() },
+        }),
+      );
+      const map = (component as any).entityMap;
+      expect(map.get('rdr-1').ellipse.semiMajorAxis).toBeCloseTo(300, 5);
+      expect(map.get('rdr-1').ellipse.heightReference).toBe(fakeCesium.HeightReference.CLAMP_TO_GROUND);
+      expect(map.get('eo-1').ellipse.semiMajorAxis).toBeCloseTo(300, 5);
+      expect(map.get('veh-2').ellipse).toBeUndefined();
+    });
+
+    it('outlines each uncertainty ellipse with a ground-clamped polyline, terrain on or off, and removes it with the ellipse', () => {
+      const outlineOf = (ent: any) => addedEntities.filter((e) => e.parent === ent && e.polyline);
+      terrainOn.set(false);
+      (component as any).addOrUpdateCesiumEntity(baseSignalEntity({ kinematics: { positionCovariance: cov() } }));
+      const ent = (component as any).entityMap.get('sig-1');
+      expect(ent.ellipse.outline).toBe(false); // Cesium drops it when clamped: the polyline is the outline
+      let lines = outlineOf(ent);
+      expect(lines).toHaveLength(1);
+      expect(lines[0].polyline.clampToGround).toBe(true);
+      expect(lines[0].polyline.positions.length).toBeGreaterThan(30);
+      const first = lines[0].polyline.positions[0];
+      const last = lines[0].polyline.positions[lines[0].polyline.positions.length - 1];
+      expect(first).toEqual(last); // a closed ring
+
+      terrainOn.set(true);
+      fixture.detectChanges();
+      expect(ent.ellipse.outline).toBe(false);
+      expect(ent.ellipse.semiMajorAxis).toBeCloseTo(300, 5);
+      lines = outlineOf(ent);
+      expect(lines.length).toBeGreaterThan(0);
+      expect(lines[lines.length - 1].polyline.clampToGround).toBe(true);
+
+      // The covariance clears: the outline goes with the ellipse.
+      const remove = (component as any).viewer.entities.remove as jest.Mock;
+      remove.mockClear();
+      (component as any).addOrUpdateCesiumEntity(baseSignalEntity({ kinematics: {} }));
+      expect(ent.ellipse).toBeUndefined();
+      expect(remove).toHaveBeenCalledWith(lines[lines.length - 1]);
+    });
+
+    it('draws a grazing-angle sliver at least 15 m wide, with a visible fill', () => {
+      (component as any).addOrUpdateCesiumEntity(
+        baseSignalEntity({ id: 'eo-2', platformData: { eoir: { band: 'LWIR' } }, kinematics: { positionCovariance: covFromEllipse(1100, 2.4, 30) } }),
+      );
+      const ent = (component as any).entityMap.get('eo-2');
+      expect(ent.ellipse.semiMajorAxis).toBeCloseTo(1100, 5);
+      expect(ent.ellipse.semiMinorAxis).toBe(15);
+      expect(ent.ellipse.material.alpha).toBeGreaterThanOrEqual(0.2);
+    });
+
+    it('removes the outline when the entity goes', () => {
+      (component as any).addOrUpdateCesiumEntity(baseSignalEntity({ kinematics: { positionCovariance: cov() } }));
+      const ent = (component as any).entityMap.get('sig-1');
+      const line = addedEntities.find((e) => e.parent === ent && e.polyline);
+      expect(line).toBeDefined();
+      (component as any).removeCesiumEntity('sig-1');
+      expect((component as any).viewer.entities.remove).toHaveBeenCalledWith(line);
+    });
   });
 });

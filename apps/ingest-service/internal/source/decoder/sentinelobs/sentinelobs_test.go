@@ -262,6 +262,31 @@ func TestDropNonFinitePolar(t *testing.T) {
 	}
 }
 
+// A direction-only measurement has no range: a non-finite range_m is set to
+// 0, not a reason to drop it, and a range of 0 is kept. Its azimuth and its
+// elevation, which it cannot do without, still drop it when not finite.
+func TestDropNonFiniteDirectionOnlyPolar(t *testing.T) {
+	nan, inf, el := math.NaN(), math.Inf(1), -5.0
+	for _, rng := range []float64{0, nan, inf} {
+		o := &obs.Observation{Polar: &obs.Polar{RangeM: rng, AzimuthDeg: 45, ElevationDeg: &el, DirectionOnly: true}}
+		dropNonFinite(o)
+		if o.Polar == nil || o.Polar.RangeM != 0 || o.Polar.ElevationDeg == nil || *o.Polar.ElevationDeg != -5 || !o.Polar.DirectionOnly {
+			t.Errorf("range %v: polar = %+v, want it kept with range 0", rng, o.Polar)
+		}
+	}
+	for name, p := range map[string]*obs.Polar{
+		"nan azimuth":   {AzimuthDeg: nan, ElevationDeg: &el, DirectionOnly: true},
+		"nan elevation": {AzimuthDeg: 45, ElevationDeg: &nan, DirectionOnly: true},
+		"inf elevation": {AzimuthDeg: 45, ElevationDeg: &inf, DirectionOnly: true},
+	} {
+		o := &obs.Observation{Polar: p}
+		dropNonFinite(o)
+		if o.Polar != nil {
+			t.Errorf("%s: polar = %+v, want it dropped", name, o.Polar)
+		}
+	}
+}
+
 // A message with identities but no source_entity_id takes its source id
 // from the first identity (R19), so identity-only senders without a
 // canonical identity get distinct entities and observation ids.
@@ -648,5 +673,38 @@ func TestValidateIsTheDecodersCheck(t *testing.T) {
 	bad := &sentinelv1.Observation{SourceEntityId: "x", Position: &sentinelv1.Coordinate{Latitude: math.NaN(), Longitude: 0}}
 	if _, err := Validate(bad, "", ""); decoder.RejectReason(err) != "bad_position" {
 		t.Fatalf("NaN latitude: %v", err)
+	}
+}
+
+// Ruling R2: a radar target's height above ground is the service's own
+// figure. Validate is reached only from what a sender sent (the stream
+// decoder, grpc), so a sender's value never gets past it.
+func TestValidateClearsTheSendersHeightAboveGround(t *testing.T) {
+	m := &sentinelv1.Observation{SourceEntityId: "drone", Position: &sentinelv1.Coordinate{Latitude: 51, Longitude: 2},
+		Platform: &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Radar{Radar: &sentinelv1.RadarDetail{
+			RadarTrackId: "r-1", HeightAboveGroundM: proto.Float64(99)}}}}
+	o, err := Validate(m, "application/x-protobuf", "")
+	if err != nil || o.Radar == nil || o.Radar.RadarTrackID != "r-1" || o.Radar.HeightAboveGroundM != nil {
+		t.Fatalf("validate = %+v, %v; want the radar detail without a height above ground", o.Radar, err)
+	}
+}
+
+func TestDropNonFiniteRadarEoIr(t *testing.T) {
+	nan, rcs, h := math.NaN(), 3.0, 12.0
+	o := &obs.Observation{
+		Radar: &obs.RadarData{SnrDb: &nan, RcsDbsm: &rcs, Classification: "DRONE"},
+		EoIr:  &obs.EoIrData{HorizontalFovDeg: &h, VerticalFovDeg: &nan, BoundingBox: &[4]float64{0.1, nan, 0.3, 0.4}},
+	}
+	dropNonFinite(o)
+	if o.Radar == nil || o.Radar.SnrDb != nil || o.Radar.RcsDbsm == nil || *o.Radar.RcsDbsm != 3 || o.Radar.Classification != "DRONE" {
+		t.Errorf("radar after dropNonFinite = %+v", o.Radar)
+	}
+	if o.EoIr == nil || o.EoIr.VerticalFovDeg != nil || o.EoIr.HorizontalFovDeg == nil || *o.EoIr.HorizontalFovDeg != 12 || o.EoIr.BoundingBox != nil {
+		t.Errorf("eoir after dropNonFinite = %+v", o.EoIr)
+	}
+	ok := &obs.Observation{EoIr: &obs.EoIrData{BoundingBox: &[4]float64{0.1, 0.2, 0.3, 0.4}}}
+	dropNonFinite(ok)
+	if ok.EoIr.BoundingBox == nil || *ok.EoIr.BoundingBox != [4]float64{0.1, 0.2, 0.3, 0.4} {
+		t.Errorf("a finite box must be kept: %+v", ok.EoIr)
 	}
 }

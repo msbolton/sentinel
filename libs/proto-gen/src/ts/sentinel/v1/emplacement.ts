@@ -236,7 +236,11 @@ export interface PolarSigma {
  * PolarMeasurement is a measurement relative to an emplacement. An
  * observation that carries one and no position has its position derived by
  * the ingest service from the emplacement's location. elevation_deg unset
- * means the target is at the observation's altitude, else the emplacement's.
+ * means the target is at the observation's altitude, else the origin's: the
+ * emplacement's altitude, else the terrain under it plus
+ * height_above_ground_m.
+ * direction_only marks a camera-style report: range_m is ignored,
+ * elevation_deg is required, and the target is placed on terrain.
  */
 export interface PolarMeasurement {
   rangeM: number;
@@ -245,6 +249,7 @@ export interface PolarMeasurement {
   rangeRateMps?: number | undefined;
   azimuthReference: AzimuthReference;
   sigma?: PolarSigma | undefined;
+  directionOnly: boolean;
 }
 
 /**
@@ -257,6 +262,10 @@ export interface Emplacement {
   description: string;
   mobility: Mobility;
   sensorType: SensorType;
+  /**
+   * position.altitude_meters is the sensor's height above the WGS84
+   * ellipsoid, not mean sea level: see height_above_ground_m.
+   */
   position?: Coordinate | undefined;
   boresightDeg: number;
   azimuthReference: AzimuthReference;
@@ -267,7 +276,20 @@ export interface Emplacement {
   /** The connection allowed to report as this emplacement; empty when none. */
   feedId: string;
   active: boolean;
-  updatedAt?: string | undefined;
+  updatedAt?:
+    | string
+    | undefined;
+  /**
+   * Height of the sensor above the ground, metres (a mast, a roof). Used
+   * only when the position has no altitude: the sensor is then at the
+   * terrain height under it plus this, for a range measurement (radar) as
+   * for a direction-only one (camera). A position's altitude_meters is read
+   * as metres above the WGS84 ellipsoid; a sensor whose altitude is above
+   * mean sea level, or of unknown datum, should send this and no altitude,
+   * since an origin tens of metres off moves a camera's ground placements
+   * by hundreds of metres.
+   */
+  heightAboveGroundM?: number | undefined;
 }
 
 /**
@@ -509,6 +531,7 @@ function createBasePolarMeasurement(): PolarMeasurement {
     rangeRateMps: undefined,
     azimuthReference: AzimuthReference.UNSPECIFIED,
     sigma: undefined,
+    directionOnly: false,
   };
 }
 
@@ -531,6 +554,9 @@ export const PolarMeasurement = {
     }
     if (message.sigma !== undefined) {
       PolarSigma.encode(message.sigma, writer.uint32(50).fork()).ldelim();
+    }
+    if (message.directionOnly !== false) {
+      writer.uint32(56).bool(message.directionOnly);
     }
     return writer;
   },
@@ -584,6 +610,13 @@ export const PolarMeasurement = {
 
           message.sigma = PolarSigma.decode(reader, reader.uint32());
           continue;
+        case 7:
+          if (tag !== 56) {
+            break;
+          }
+
+          message.directionOnly = reader.bool();
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -603,6 +636,7 @@ export const PolarMeasurement = {
         ? azimuthReferenceFromJSON(object.azimuthReference)
         : AzimuthReference.UNSPECIFIED,
       sigma: isSet(object.sigma) ? PolarSigma.fromJSON(object.sigma) : undefined,
+      directionOnly: isSet(object.directionOnly) ? globalThis.Boolean(object.directionOnly) : false,
     };
   },
 
@@ -626,6 +660,9 @@ export const PolarMeasurement = {
     if (message.sigma !== undefined) {
       obj.sigma = PolarSigma.toJSON(message.sigma);
     }
+    if (message.directionOnly !== false) {
+      obj.directionOnly = message.directionOnly;
+    }
     return obj;
   },
 
@@ -642,6 +679,7 @@ export const PolarMeasurement = {
     message.sigma = (object.sigma !== undefined && object.sigma !== null)
       ? PolarSigma.fromPartial(object.sigma)
       : undefined;
+    message.directionOnly = object.directionOnly ?? false;
     return message;
   },
 };
@@ -663,6 +701,7 @@ function createBaseEmplacement(): Emplacement {
     feedId: "",
     active: false,
     updatedAt: undefined,
+    heightAboveGroundM: undefined,
   };
 }
 
@@ -712,6 +751,9 @@ export const Emplacement = {
     }
     if (message.updatedAt !== undefined) {
       Timestamp.encode(toTimestamp(message.updatedAt), writer.uint32(122).fork()).ldelim();
+    }
+    if (message.heightAboveGroundM !== undefined) {
+      writer.uint32(129).double(message.heightAboveGroundM);
     }
     return writer;
   },
@@ -828,6 +870,13 @@ export const Emplacement = {
 
           message.updatedAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
           continue;
+        case 16:
+          if (tag !== 129) {
+            break;
+          }
+
+          message.heightAboveGroundM = reader.double();
+          continue;
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -858,6 +907,7 @@ export const Emplacement = {
       feedId: isSet(object.feedId) ? globalThis.String(object.feedId) : "",
       active: isSet(object.active) ? globalThis.Boolean(object.active) : false,
       updatedAt: isSet(object.updatedAt) ? globalThis.String(object.updatedAt) : undefined,
+      heightAboveGroundM: isSet(object.heightAboveGroundM) ? globalThis.Number(object.heightAboveGroundM) : undefined,
     };
   },
 
@@ -908,6 +958,9 @@ export const Emplacement = {
     if (message.updatedAt !== undefined) {
       obj.updatedAt = message.updatedAt;
     }
+    if (message.heightAboveGroundM !== undefined) {
+      obj.heightAboveGroundM = message.heightAboveGroundM;
+    }
     return obj;
   },
 
@@ -937,6 +990,7 @@ export const Emplacement = {
     message.feedId = object.feedId ?? "";
     message.active = object.active ?? false;
     message.updatedAt = object.updatedAt ?? undefined;
+    message.heightAboveGroundM = object.heightAboveGroundM ?? undefined;
     return message;
   },
 };

@@ -31,7 +31,21 @@
       }
     </p>
     <p class="muted note">Save them as <code>proto/sentinel/ingest/v1/ingest_service.proto</code> and under <code>proto/sentinel/v1/</code>: grpcurl reads them from <code>proto/</code>.</p>
-    @if (ewSensor(); as cmd) {
+    @if (esmSim(); as cmd) {
+      <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: cmd }" />
+    }
+    <p class="muted note sensor-note">
+      A radar track carries a <code>RadarDetail</code> (range rate, RCS, SNR, mode, track quality, classification); a camera
+      detection carries an <code>EoIrDetail</code> (band, classification, field of view, bounding box). A camera knows a
+      direction, not a distance: report it as direction-only polar (<code>direction_only</code>) and the server places it where
+      its line of sight meets the terrain. When it can't (an aircraft, a line that never reaches the ground, no terrain, no camera
+      height) the report is still accepted and drawn as a bearing line from the camera's site, listed under Bearings in its
+      details.
+    </p>
+    @if (radarSim(); as cmd) {
+      <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: cmd }" />
+    }
+    @if (eoirSim(); as cmd) {
       <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: cmd }" />
     }
     <span class="sr-only" aria-live="polite">{{ copied() ? 'Copied to the clipboard' : '' }}</span>

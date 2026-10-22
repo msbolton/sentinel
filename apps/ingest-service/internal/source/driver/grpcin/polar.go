@@ -13,9 +13,11 @@ import (
 
 // origin is where an emplacement measures from at a moment, and the
 // platform heading a PLATFORM azimuth is relative to (nil when unknown).
+// hasAlt is false when nothing gave the altitude: at.Alt is then 0.
 type origin struct {
 	at      geo.LLA
 	heading *float64
+	hasAlt  bool
 }
 
 // maxPolarRangeM bounds a measured range: past it (about half the Earth's
@@ -27,8 +29,18 @@ func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 // badPolar reports a measurement nothing can be made of. It is read from the
 // message before Validate, which would otherwise drop it silently and let
 // the report through without it.
+//
+// A direction-only measurement has no range, so range_m is not looked at
+// (a sender may leave it at 0), but it needs an elevation.
 func badPolar(p *sentinelv1.PolarMeasurement) bool {
-	if !finite(p.GetRangeM()) || p.GetRangeM() < 0 || p.GetRangeM() > maxPolarRangeM || !finite(p.GetAzimuthDeg()) {
+	if !finite(p.GetAzimuthDeg()) {
+		return true
+	}
+	if p.GetDirectionOnly() {
+		if p.ElevationDeg == nil {
+			return true
+		}
+	} else if !finite(p.GetRangeM()) || p.GetRangeM() < 0 || p.GetRangeM() > maxPolarRangeM {
 		return true
 	}
 	if el := p.ElevationDeg; el != nil && (!finite(*el) || *el < -90 || *el > 90) {
@@ -66,7 +78,7 @@ func trueAzimuth(az float64, ref string, heading *float64) (float64, bool) {
 func fixedOrigin(e emplacement.Emplacement) origin {
 	o := origin{at: geo.LLA{Lat: e.Position.Lat, Lon: e.Position.Lon}}
 	if e.Altitude != nil {
-		o.at.Alt = *e.Altitude
+		o.at.Alt, o.hasAlt = *e.Altitude, true
 	}
 	return o
 }
@@ -153,6 +165,17 @@ func inCoverage(e emplacement.Emplacement, org origin, target geo.LLA) bool {
 	az, el, rng := geo.LLAToAER(org.at, target)
 	if rng < c.MinRangeM || (c.MaxRangeM > 0 && rng > c.MaxRangeM) {
 		return false
+	}
+	return directionInCoverage(e, org, az, el)
+}
+
+// directionInCoverage reports whether a true azimuth and an elevation from
+// org lie in e's coverage: within half its azimuth width of the boresight,
+// and within its elevations. Range is not looked at (a bearing has none).
+func directionInCoverage(e emplacement.Emplacement, org origin, az, el float64) bool {
+	c := e.Coverage
+	if c.Empty() {
+		return true
 	}
 	if c.AzimuthWidthDeg > 0 && c.AzimuthWidthDeg < 360 {
 		bore, ok := trueAzimuth(e.BoresightDeg, e.AzimuthReference, org.heading)

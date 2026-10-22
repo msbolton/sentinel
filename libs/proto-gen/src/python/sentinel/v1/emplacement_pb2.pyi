@@ -75,23 +75,25 @@ class PolarSigma(_message.Message):
     def __init__(self, range_m: _Optional[float] = ..., azimuth_deg: _Optional[float] = ..., elevation_deg: _Optional[float] = ...) -> None: ...
 
 class PolarMeasurement(_message.Message):
-    __slots__ = ("range_m", "azimuth_deg", "elevation_deg", "range_rate_mps", "azimuth_reference", "sigma")
+    __slots__ = ("range_m", "azimuth_deg", "elevation_deg", "range_rate_mps", "azimuth_reference", "sigma", "direction_only")
     RANGE_M_FIELD_NUMBER: _ClassVar[int]
     AZIMUTH_DEG_FIELD_NUMBER: _ClassVar[int]
     ELEVATION_DEG_FIELD_NUMBER: _ClassVar[int]
     RANGE_RATE_MPS_FIELD_NUMBER: _ClassVar[int]
     AZIMUTH_REFERENCE_FIELD_NUMBER: _ClassVar[int]
     SIGMA_FIELD_NUMBER: _ClassVar[int]
+    DIRECTION_ONLY_FIELD_NUMBER: _ClassVar[int]
     range_m: float
     azimuth_deg: float
     elevation_deg: float
     range_rate_mps: float
     azimuth_reference: AzimuthReference
     sigma: PolarSigma
-    def __init__(self, range_m: _Optional[float] = ..., azimuth_deg: _Optional[float] = ..., elevation_deg: _Optional[float] = ..., range_rate_mps: _Optional[float] = ..., azimuth_reference: _Optional[_Union[AzimuthReference, str]] = ..., sigma: _Optional[_Union[PolarSigma, _Mapping]] = ...) -> None: ...
+    direction_only: bool
+    def __init__(self, range_m: _Optional[float] = ..., azimuth_deg: _Optional[float] = ..., elevation_deg: _Optional[float] = ..., range_rate_mps: _Optional[float] = ..., azimuth_reference: _Optional[_Union[AzimuthReference, str]] = ..., sigma: _Optional[_Union[PolarSigma, _Mapping]] = ..., direction_only: _Optional[bool] = ...) -> None: ...
 
 class Emplacement(_message.Message):
-    __slots__ = ("id", "name", "description", "mobility", "sensor_type", "position", "boresight_deg", "azimuth_reference", "coverage", "default_sigma", "classification", "exercise", "feed_id", "active", "updated_at")
+    __slots__ = ("id", "name", "description", "mobility", "sensor_type", "position", "boresight_deg", "azimuth_reference", "coverage", "default_sigma", "classification", "exercise", "feed_id", "active", "updated_at", "height_above_ground_m")
     ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
@@ -107,6 +109,7 @@ class Emplacement(_message.Message):
     FEED_ID_FIELD_NUMBER: _ClassVar[int]
     ACTIVE_FIELD_NUMBER: _ClassVar[int]
     UPDATED_AT_FIELD_NUMBER: _ClassVar[int]
+    HEIGHT_ABOVE_GROUND_M_FIELD_NUMBER: _ClassVar[int]
     id: str
     name: str
     description: str
@@ -122,7 +125,8 @@ class Emplacement(_message.Message):
     feed_id: str
     active: bool
     updated_at: _timestamp_pb2.Timestamp
-    def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., mobility: _Optional[_Union[Mobility, str]] = ..., sensor_type: _Optional[_Union[SensorType, str]] = ..., position: _Optional[_Union[_common_pb2.Coordinate, _Mapping]] = ..., boresight_deg: _Optional[float] = ..., azimuth_reference: _Optional[_Union[AzimuthReference, str]] = ..., coverage: _Optional[_Union[Coverage, _Mapping]] = ..., default_sigma: _Optional[_Union[PolarSigma, _Mapping]] = ..., classification: _Optional[_Union[_common_pb2.Classification, str]] = ..., exercise: _Optional[bool] = ..., feed_id: _Optional[str] = ..., active: _Optional[bool] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    height_above_ground_m: float
+    def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., mobility: _Optional[_Union[Mobility, str]] = ..., sensor_type: _Optional[_Union[SensorType, str]] = ..., position: _Optional[_Union[_common_pb2.Coordinate, _Mapping]] = ..., boresight_deg: _Optional[float] = ..., azimuth_reference: _Optional[_Union[AzimuthReference, str]] = ..., coverage: _Optional[_Union[Coverage, _Mapping]] = ..., default_sigma: _Optional[_Union[PolarSigma, _Mapping]] = ..., classification: _Optional[_Union[_common_pb2.Classification, str]] = ..., exercise: _Optional[bool] = ..., feed_id: _Optional[str] = ..., active: _Optional[bool] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., height_above_ground_m: _Optional[float] = ...) -> None: ...
 
 class EmplacementState(_message.Message):
     __slots__ = ("emplacement_id", "time", "position", "heading", "velocity", "orientation", "heartbeat_interval_sec")

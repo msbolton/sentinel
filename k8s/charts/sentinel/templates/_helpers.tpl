@@ -228,6 +228,97 @@ a duplicate name would fail the server-side apply.
 {{- end }}
 
 {{/*
+The terrain cache of both ingest Deployments (ingestService.terrain): the
+environment, the volume mount and the volume. Terrain is on when
+INGEST_TERRAIN_CACHE_DIR is set, so none of the three renders when it is
+disabled. The settings the chart sets are an error in ingestService.env (a
+duplicate name would fail the server-side apply); INGEST_TERRAIN_FETCH_TIMEOUT_SEC
+is not one of them.
+
+ingestTerrainEnv takes a dict: root (the chart's context) and limit (the
+container's memory limit, or empty). With terrain on it also sets GOMEMLIMIT,
+terrain.goMemLimit or else 80% of limit, so the Go heap collects before
+decoded tiles push the pod past its limit.
+*/}}
+{{- define "sentinel.ingestTerrainEnv" -}}
+{{- $root := .root -}}
+{{- $t := $root.Values.ingestService.terrain -}}
+{{- if $t.enabled -}}
+{{- range $k := list "INGEST_TERRAIN_CACHE_DIR" "INGEST_TERRAIN_SOURCE_URL" "INGEST_TERRAIN_CACHE_MAX_MB" "INGEST_TERRAIN_WAIT_MS" "INGEST_TERRAIN_MAX_RANGE_KM" "INGEST_TERRAIN_MEM_TILES" "GOMEMLIMIT" }}
+{{- if hasKey $root.Values.ingestService.env $k }}
+{{- fail (printf "ingestService.env.%s: the chart sets %s from ingestService.terrain" $k $k) }}
+{{- end }}
+{{- end }}
+- name: INGEST_TERRAIN_CACHE_DIR
+  value: /var/cache/sentinel/terrain
+- name: INGEST_TERRAIN_SOURCE_URL
+  value: {{ $t.sourceUrl | quote }}
+- name: INGEST_TERRAIN_CACHE_MAX_MB
+  value: {{ $t.cacheMaxMB | quote }}
+- name: INGEST_TERRAIN_WAIT_MS
+  value: {{ $t.waitMs | quote }}
+- name: INGEST_TERRAIN_MAX_RANGE_KM
+  value: {{ $t.maxRangeKm | quote }}
+- name: INGEST_TERRAIN_MEM_TILES
+  value: {{ $t.memTiles | quote }}
+{{- $goMem := include "sentinel.goMemLimit" (dict "set" $t.goMemLimit "limit" .limit) }}
+{{- if $goMem }}
+- name: GOMEMLIMIT
+  value: {{ $goMem | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+A Go memory limit: set when given, else 80% of limit (a Kubernetes quantity
+in Ki, Mi, Gi or Ti, whole or fractional, such as 1.5Gi), rounded down to
+whole MiB; empty with neither. Any other form of limit, or one whose 80% is
+under 1 MiB, is an error that asks for terrain.goMemLimit.
+*/}}
+{{- define "sentinel.goMemLimit" -}}
+{{- if .set -}}
+{{- .set -}}
+{{- else if .limit -}}
+{{- $l := toString .limit -}}
+{{- $n := "" -}}
+{{- $perMiB := 0.0 -}}
+{{- if hasSuffix "Ti" $l -}}{{- $n = trimSuffix "Ti" $l -}}{{- $perMiB = 1048576.0 -}}
+{{- else if hasSuffix "Gi" $l -}}{{- $n = trimSuffix "Gi" $l -}}{{- $perMiB = 1024.0 -}}
+{{- else if hasSuffix "Mi" $l -}}{{- $n = trimSuffix "Mi" $l -}}{{- $perMiB = 1.0 -}}
+{{- else if hasSuffix "Ki" $l -}}{{- $n = trimSuffix "Ki" $l -}}{{- $perMiB = 0.0009765625 -}}
+{{- else -}}
+{{- fail (printf "ingestService.terrain.goMemLimit: cannot work out 80%% of the memory limit %q; set goMemLimit (for example 800MiB)" $l) -}}
+{{- end -}}
+{{- $mib := floor (divf (mulf (float64 $n) $perMiB 80) 100) | int64 -}}
+{{- if lt $mib 1 -}}
+{{- fail (printf "ingestService.terrain.goMemLimit: 80%% of the memory limit %q is under 1 MiB; set goMemLimit (for example 800MiB) or a larger limit" $l) -}}
+{{- end -}}
+{{- printf "%dMiB" $mib -}}
+{{- end -}}
+{{- end }}
+
+{{- define "sentinel.ingestTerrainMount" -}}
+{{- if .Values.ingestService.terrain.enabled -}}
+- name: terrain-cache
+  mountPath: /var/cache/sentinel/terrain
+{{- end }}
+{{- end }}
+
+{{- define "sentinel.ingestTerrainVolume" -}}
+{{- $t := .Values.ingestService.terrain -}}
+{{- if $t.enabled -}}
+- name: terrain-cache
+  {{- if $t.existingClaim }}
+  persistentVolumeClaim:
+    claimName: {{ $t.existingClaim }}
+  {{- else }}
+  emptyDir:
+    sizeLimit: {{ $t.cacheSizeLimit }}
+  {{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
 The head of a NetworkPolicy for one workload's pods, named
 <fullname>-<component>, for the ingress rules that follow it:
   include "sentinel.networkPolicyMeta" (dict "ctx" $ "component" "web")

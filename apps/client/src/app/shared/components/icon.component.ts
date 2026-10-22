@@ -7,7 +7,7 @@ export const ICON_NAMES = [
   'skip-back', 'play', 'pause', 'skip-forward', 'square',
   'zoom-in', 'zoom-out', 'fit', 'zap', 'share',
   'alert-octagon', 'alert-triangle', 'alert-circle', 'info', 'user', 'box', 'arrow-up',
-  'hexagon', 'rectangle', 'circle-dot', 'ring', 'plus', 'radar',
+  'hexagon', 'rectangle', 'circle-dot', 'ring', 'plus', 'radar', 'mountain',
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -162,6 +162,9 @@ export type IconName = (typeof ICON_NAMES)[number];
         }
         @case ('arrow-up') {
           <svg:path d="M12 19V5"/><svg:path d="M5 12l7-7 7 7"/>
+        }
+        @case ('mountain') {
+          <svg:path d="M3 20l6-11 4 7 3-4 5 8z"/>
         }
         @case ('box') {
           <svg:path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><svg:polyline points="3.27 6.96 12 12.01 20.73 6.96"/><svg:line x1="12" y1="22.08" x2="12" y2="12"/>

@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sentinel/ingest-service/internal/registry"
 )
@@ -326,5 +327,90 @@ func TestReservedPortsAreValidated(t *testing.T) {
 		if err := Load().Validate(); err == nil || !strings.Contains(err.Error(), "INGEST_RESERVED_PORTS") {
 			t.Errorf("INGEST_RESERVED_PORTS=%q: Validate() = %v, want an error that names the variable", bad, err)
 		}
+	}
+}
+
+func TestTerrainDefaults(t *testing.T) {
+	for _, k := range []string{"INGEST_TERRAIN_CACHE_DIR", "INGEST_TERRAIN_SOURCE_URL", "INGEST_TERRAIN_CACHE_MAX_MB", "INGEST_TERRAIN_FETCH_TIMEOUT_SEC", "INGEST_TERRAIN_WAIT_MS", "INGEST_TERRAIN_MAX_RANGE_KM", "INGEST_TERRAIN_MEM_TILES"} {
+		t.Setenv(k, "")
+	}
+	c := Load()
+	if c.TerrainCacheDir != "" {
+		t.Errorf("terrain must be off without a cache dir, got %q", c.TerrainCacheDir)
+	}
+	if c.TerrainSourceURL != "https://copernicus-dem-30m.s3.amazonaws.com" {
+		t.Errorf("source = %q", c.TerrainSourceURL)
+	}
+	if c.TerrainCacheMaxMB != 2048 || c.TerrainFetchTimeout != 300*time.Second || c.TerrainWait != 2*time.Second || c.TerrainMaxRangeM != 30000 {
+		t.Errorf("defaults = %d MB, %v, %v, %v m", c.TerrainCacheMaxMB, c.TerrainFetchTimeout, c.TerrainWait, c.TerrainMaxRangeM)
+	}
+	if c.TerrainMemTiles != 4 {
+		t.Errorf("mem tiles default = %d, want 4", c.TerrainMemTiles)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTerrainEnvParsed(t *testing.T) {
+	t.Setenv("INGEST_TERRAIN_CACHE_DIR", "/var/cache/terrain")
+	t.Setenv("INGEST_TERRAIN_SOURCE_URL", "http://mirror.local:9000/dem")
+	t.Setenv("INGEST_TERRAIN_CACHE_MAX_MB", "512")
+	t.Setenv("INGEST_TERRAIN_FETCH_TIMEOUT_SEC", "90")
+	t.Setenv("INGEST_TERRAIN_WAIT_MS", "1500")
+	t.Setenv("INGEST_TERRAIN_MAX_RANGE_KM", "45")
+	t.Setenv("INGEST_TERRAIN_MEM_TILES", "8")
+	c := Load()
+	if c.TerrainMemTiles != 8 {
+		t.Errorf("mem tiles = %d, want 8", c.TerrainMemTiles)
+	}
+	if c.TerrainCacheDir != "/var/cache/terrain" || c.TerrainSourceURL != "http://mirror.local:9000/dem" {
+		t.Errorf("dir/source = %q %q", c.TerrainCacheDir, c.TerrainSourceURL)
+	}
+	if c.TerrainCacheMaxMB != 512 || c.TerrainFetchTimeout != 90*time.Second || c.TerrainWait != 1500*time.Millisecond || c.TerrainMaxRangeM != 45000 {
+		t.Errorf("parsed = %d MB, %v, %v, %v m", c.TerrainCacheMaxMB, c.TerrainFetchTimeout, c.TerrainWait, c.TerrainMaxRangeM)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTerrainValidate(t *testing.T) {
+	cases := []struct {
+		env, val string
+	}{
+		{"INGEST_TERRAIN_WAIT_MS", "99"},
+		{"INGEST_TERRAIN_WAIT_MS", "10001"},
+		{"INGEST_TERRAIN_MAX_RANGE_KM", "0"},
+		{"INGEST_TERRAIN_MAX_RANGE_KM", "201"},
+		{"INGEST_TERRAIN_CACHE_MAX_MB", "63"},
+		{"INGEST_TERRAIN_FETCH_TIMEOUT_SEC", "0"},
+		{"INGEST_TERRAIN_SOURCE_URL", "ftp://example.com/dem"},
+		{"INGEST_TERRAIN_SOURCE_URL", "copernicus.example.com"},
+		{"INGEST_TERRAIN_WAIT_MS", "soon"},
+		{"INGEST_TERRAIN_MEM_TILES", "0"},
+		{"INGEST_TERRAIN_MEM_TILES", "65"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.env+"="+tc.val, func(t *testing.T) {
+			t.Setenv(tc.env, tc.val)
+			err := Load().Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.env) {
+				t.Errorf("want an error naming %s, got %v", tc.env, err)
+			}
+		})
+	}
+	// The edges are accepted.
+	for _, tc := range []struct{ env, val string }{
+		{"INGEST_TERRAIN_WAIT_MS", "100"}, {"INGEST_TERRAIN_WAIT_MS", "10000"},
+		{"INGEST_TERRAIN_MAX_RANGE_KM", "1"}, {"INGEST_TERRAIN_MAX_RANGE_KM", "200"},
+		{"INGEST_TERRAIN_CACHE_MAX_MB", "64"}, {"INGEST_TERRAIN_SOURCE_URL", "https://example.com"},
+		{"INGEST_TERRAIN_MEM_TILES", "1"}, {"INGEST_TERRAIN_MEM_TILES", "64"},
+	} {
+		t.Setenv(tc.env, tc.val)
+		if err := Load().Validate(); err != nil {
+			t.Errorf("%s=%s: %v", tc.env, tc.val, err)
+		}
+		t.Setenv(tc.env, "")
 	}
 }

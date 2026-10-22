@@ -8,8 +8,8 @@ import { EmplacementEditorComponent } from './emplacement-editor.component';
 /**
  * A connection's emplacements, in its expanded row: each with its heartbeat
  * (from the connection's status, the owning replica's truth), its interval,
- * and edit, deactivate and delete. Only a grpc connection takes new ones
- * until the TCP/UDP and TAK heartbeats exist.
+ * and edit, deactivate and delete. Only a grpc connection takes new ones: it
+ * is the only driver that heartbeats its emplacements.
  */
 @Component({
   selector: 'app-connection-emplacements',

@@ -12,7 +12,7 @@ import { FlightPathService } from '../../core/services/flight-path.service';
 import { FLIGHT_PATH_DAYS } from '../models/flight-path.model';
 import { pathSummary } from '../../features/map/flight-path';
 import { Entity, EntitySource } from '../models/entity.model';
-import { SiteHeartbeat, emplacementIdOf, formatZulu, siteHeartbeatOf } from '../models/emplacement.model';
+import { BearingReason, SiteBearing, SiteHeartbeat, bearingKeyOf, bearingsOf, emplacementIdOf, formatZulu, siteHeartbeatOf } from '../models/emplacement.model';
 import { WebSocketService } from '../../core/services/websocket.service';
 import { EntityBaseline, EntityPlace, Finding, findingKindLabel, formatDuration, formatMetres } from '../models/finding.model';
 import { Location } from '../models/location.model';
@@ -33,6 +33,14 @@ type SectionKey =
   | 'affiliations'
   | 'description'
   | 'metadata';
+
+/** Why a camera's detection is a bearing line rather than a place. */
+const BEARING_REASON_TEXT: Record<BearingReason, string> = {
+  air_target: 'Airborne, distance unknown',
+  no_ground_intersection: 'Above the horizon',
+  terrain_unavailable: 'Terrain unavailable',
+  no_origin_altitude: 'Camera height unknown',
+};
 
 const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
   identity: true,
@@ -316,6 +324,8 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                       @case ('cot') { CoT Data }
                       @case ('link16') { Link 16 Data }
                       @case ('uav') { UAV Data }
+                      @case ('radar') { Radar Track }
+                      @case ('eoir') { EO/IR Detection }
                       @case ('rf') { RF }
                     }
                   </h4>
@@ -534,6 +544,56 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                           }
                         }
                       }
+                      @case ('radar') {
+                        @if (e.platformData?.radar; as radar) {
+                          @if (radar.rangeRateMps != null) {
+                            <div class="field-row"><span class="field-label">Range rate</span><span class="field-value mono">{{ rangeRateText(radar.rangeRateMps) }}</span></div>
+                          }
+                          @if (radar.rcsDbsm != null) {
+                            <div class="field-row"><span class="field-label">RCS</span><span class="field-value mono">{{ num(radar.rcsDbsm) }} dBsm</span></div>
+                          }
+                          @if (radar.snrDb != null) {
+                            <div class="field-row"><span class="field-label">SNR</span><span class="field-value mono">{{ num(radar.snrDb) }} dB</span></div>
+                          }
+                          @if (radar.mode) {
+                            <div class="field-row"><span class="field-label">Mode</span><span class="field-value mono">{{ radar.mode }}</span></div>
+                          }
+                          @if (radar.trackQuality != null) {
+                            <div class="field-row"><span class="field-label">Track quality</span><span class="field-value mono">{{ percent(radar.trackQuality) }}</span></div>
+                          }
+                          @if (classificationText(radar.classification, radar.classificationConfidence); as cls) {
+                            <div class="field-row"><span class="field-label">Classification</span><span class="field-value mono">{{ cls }}</span></div>
+                          }
+                          @if (radar.radarTrackId) {
+                            <div class="field-row"><span class="field-label">Radar track</span><span class="field-value mono">{{ radar.radarTrackId }}</span></div>
+                          }
+                          @if (radar.heightAboveGroundM != null) {
+                            <div class="field-row"><span class="field-label">Height above ground</span><span class="field-value mono">{{ num(radar.heightAboveGroundM) }} m</span></div>
+                          }
+                        }
+                      }
+                      @case ('eoir') {
+                        @if (e.platformData?.eoir; as eoir) {
+                          @if (eoir.band) {
+                            <div class="field-row"><span class="field-label">Band</span><span class="field-value mono">{{ eoir.band }}</span></div>
+                          }
+                          @if (classificationText(eoir.classification, eoir.classificationConfidence); as cls) {
+                            <div class="field-row"><span class="field-label">Classification</span><span class="field-value mono">{{ cls }}</span></div>
+                          }
+                          @if (fovText(eoir.horizontalFovDeg, eoir.verticalFovDeg); as fov) {
+                            <div class="field-row"><span class="field-label">Field of view</span><span class="field-value mono">{{ fov }}</span></div>
+                          }
+                          @if (eoir.cameraTrackId) {
+                            <div class="field-row"><span class="field-label">Camera track</span><span class="field-value mono">{{ eoir.cameraTrackId }}</span></div>
+                          }
+                          @if (placedFromBearing()) {
+                            <div class="field-row"><span class="field-label">Placement</span><span class="field-value">Placed on terrain from a bearing</span></div>
+                            @if (e.circularError != null) {
+                              <div class="field-row"><span class="field-label">CEP95</span><span class="field-value mono">{{ e.circularError | number:'1.0-0' }} m</span></div>
+                            }
+                          }
+                        }
+                      }
                       @case ('rf') {
                         @if (e.platformData?.rf; as rf) {
                           @if (formatRfHz(rf.frequencyHz); as freq) {
@@ -666,6 +726,22 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                       <span class="field-label">Heartbeat</span>
                       <span class="field-value mono">{{ heartbeatLabel(hb) }}</span>
                     </div>
+                  }
+                  @if (siteBearings(); as bearings) {
+                    @if (bearings.length > 0) {
+                      <div class="field-row field-row-stack">
+                        <span class="field-label">Bearings</span>
+                        <ul class="bearing-list">
+                          @for (b of bearings; track $index) {
+                            <li class="bearing-row mono" [class.highlighted]="bearingKey(b) === highlightBearing()">
+                              <span class="bearing-head">{{ bearingHead(b) }}</span>
+                              <span>az {{ num(b.azimuthDeg) }}° · el {{ num(b.elevationDeg) }}° · {{ bearingAge(b) }}</span>
+                              <span class="bearing-reason">{{ bearingReasonText(b.reason) }}</span>
+                            </li>
+                          }
+                        </ul>
+                      </div>
+                    }
                   }
                   @if (cotUid(); as uid) {
                     <div class="field-row">
@@ -1300,6 +1376,38 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       color: var(--text-muted);
     }
 
+    .bearing-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+
+      li {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+      }
+    }
+
+    .bearing-head {
+      color: var(--text-primary);
+    }
+
+    .bearing-row.highlighted {
+      margin: 0 -6px;
+      padding: 2px 6px;
+      border-left: 2px solid var(--accent-cyan);
+      background: color-mix(in srgb, var(--accent-cyan) 12%, transparent);
+    }
+
+    .bearing-reason {
+      color: var(--text-muted);
+    }
+
     .chip-source {
       background: color-mix(in srgb, var(--accent-cyan) 15%, transparent);
       color: var(--accent-cyan);
@@ -1456,6 +1564,62 @@ export class EntityDetailPanelComponent {
     if (feedId) void this.router.navigate(['/connections'], { queryParams: { open: feedId } });
   }
 
+  /** A camera site's live bearings, judged against the server's clock, every second. */
+  protected siteBearings = computed(() => {
+    this.now();
+    return bearingsOf(this.entity(), this.ws.serverNow());
+  });
+
+  protected bearingKey(b: SiteBearing): string {
+    return bearingKeyOf(b);
+  }
+
+  protected bearingHead(b: SiteBearing): string {
+    const parts = [b.classification || 'Unidentified target'];
+    if (b.confidence != null) parts.push(this.percent(b.confidence));
+    if (b.band) parts.push(b.band);
+    return parts.join(' · ');
+  }
+
+  protected bearingAge(b: SiteBearing): string {
+    const t = Date.parse(b.observedAt);
+    const sec = Number.isNaN(t) ? 0 : Math.max(0, Math.round((this.ws.serverNow() - t) / 1000));
+    return `${sec} s ago`;
+  }
+
+  protected bearingReasonText(reason: BearingReason): string {
+    return BEARING_REASON_TEXT[reason] ?? reason;
+  }
+
+  /** A number to at most one decimal, without a trailing zero. */
+  protected num(n: number): string {
+    return String(Number(n.toFixed(1)));
+  }
+
+  /** A 0..1 share as a percentage. */
+  protected percent(share: number): string {
+    return `${Math.round(share * 100)} %`;
+  }
+
+  protected rangeRateText(mps: number): string {
+    return `${this.num(mps)} m/s${mps < 0 ? ' (approaching)' : ''}`;
+  }
+
+  protected classificationText(name: string | undefined, confidence: number | undefined): string {
+    if (!name) return '';
+    return confidence != null ? `${name} (${this.percent(confidence)})` : name;
+  }
+
+  protected fovText(h: number | undefined, v: number | undefined): string {
+    return h != null && v != null ? `${this.num(h)}° × ${this.num(v)}°` : '';
+  }
+
+  /** A camera detection placed from a bearing: a covariance and no radar detail beside it. */
+  protected placedFromBearing = computed(() => {
+    const e = this.entity();
+    return !!e?.platformData?.eoir && !e.platformData.radar && !!e.kinematics?.positionCovariance;
+  });
+
   protected heartbeatLabel(hb: SiteHeartbeat): string {
     const state =
       hb.state === 'online' ? 'online'
@@ -1480,6 +1644,10 @@ export class EntityDetailPanelComponent {
   private readonly now = signal(Date.now());
 
   entity = input<Entity | null>(null);
+  /** The bearing line clicked on the map (bearingKeyOf), whose row is highlighted; null for none. */
+  highlightBearing = input<string | null>(null);
+  /** Changes only when another entity is shown, not when the shown one is updated. */
+  private readonly entityId = computed(() => this.entity()?.id);
   close = output<void>();
   flyTo = output<Entity>();
 
@@ -1487,18 +1655,27 @@ export class EntityDetailPanelComponent {
     const tick = setInterval(() => this.now.set(Date.now()), 1000);
     this.destroyRef.onDestroy(() => clearInterval(tick));
 
+    // These two follow which entity is shown, not its every update: the map
+    // hands the panel a newer copy of the selection with each fix.
     effect(() => {
-      const e = this.entity();
+      this.entityId();
       // A satellite's platform section holds the orbit toggles, a vessel's its
       // voyage, a signal emitter's its RF parameters, and a military aircraft's
       // its flight path: open them.
+      const e = untracked(() => this.entity());
       const pd = e?.platformData;
-      this.expandedSections.set({ ...DEFAULT_SECTIONS, platformDetails: !!(pd?.tle || pd?.ais || pd?.rf || (pd?.adsb && e?.source === EntitySource.INTELSKY)) });
+      this.expandedSections.set({ ...DEFAULT_SECTIONS, platformDetails: !!(pd?.tle || pd?.ais || pd?.rf || pd?.radar || pd?.eoir || (pd?.adsb && e?.source === EntitySource.INTELSKY)) });
+    });
+    // A bearing line clicked on the map: open the section that lists it. It
+    // follows the entity too, since a click can change both at once.
+    effect(() => {
+      this.entityId();
+      if (this.highlightBearing()) untracked(() => this.expandedSections.update((s) => ({ ...s, origin: true })));
     });
     // Behaviour: the baseline and open findings of the shown entity. A
     // request counter drops answers for an entity that is no longer shown.
     effect(() => {
-      const id = this.entity()?.id;
+      const id = this.entityId();
       const request = ++this.behaviourRequest;
       this.baseline.set(undefined);
       this.findings.set([]);
@@ -1592,6 +1769,8 @@ export class EntityDetailPanelComponent {
     else if (pd.cot) parts.push(pd.cot.cotType);
     else if (pd.link16) parts.push(pd.link16.jSeriesLabel);
     else if (pd.uav) parts.push(pd.uav.make, pd.uav.model);
+    else if (pd.radar) parts.push(pd.radar.classification, pd.radar.mode);
+    else if (pd.eoir) parts.push(pd.eoir.band, pd.eoir.classification);
     else if (pd.rf) parts.push(this.formatRfHz(pd.rf.frequencyHz), pd.rf.emitterType);
     return parts.filter((p): p is string => typeof p === 'string' && p !== '').join(' · ');
   });
@@ -1738,6 +1917,8 @@ export class EntityDetailPanelComponent {
     if (pd.link16) return 'link16' as const;
     if (pd.cot) return 'cot' as const;
     if (pd.uav) return 'uav' as const;
+    if (pd.radar) return 'radar' as const;
+    if (pd.eoir) return 'eoir' as const;
     if (pd.rf) return 'rf' as const;
     return null;
   });

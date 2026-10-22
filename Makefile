@@ -3,10 +3,15 @@
 SHELL := /bin/bash
 
 # Go services
-GO_SERVICES := api-gateway ingest-service entity-service track-service search-service link-analysis-service alert-service analytics-service ew-sensor
+GO_SERVICES := api-gateway ingest-service entity-service track-service search-service link-analysis-service alert-service analytics-service sensor-sim
+# Go programs that live in simulators/ (everything else in GO_SERVICES is in
+# apps/). SVC_DIR expands, inside a recipe loop over $$svc, to the folder.
+SIMULATORS := sensor-sim
+SVC_DIR = $$([[ " $(SIMULATORS) " == *" $$svc "* ]] && echo simulators || echo apps)
 
 # Container images (the names the Helm chart pulls as sentinel/<name>). The
-# ew-sensor simulator is not deployed, so it is not listed. "web" is built from apps/client.
+# sensor-sim simulator is not deployed, so it is not listed. "web" is built
+# from apps/client.
 IMAGES := api-gateway entity-service track-service search-service link-analysis-service alert-service ingest-service analytics-service web
 # REGISTRY and TAG are shared by images-push and deploy, so a deploy from the
 # same commit pulls the images that commit pushed.
@@ -64,7 +69,7 @@ install: ## Install all dependencies
 	npm install
 	@for svc in $(GO_SERVICES); do \
 		echo "Tidying $$svc..."; \
-		cd apps/$$svc && go mod tidy && cd ../..; \
+		cd $(SVC_DIR)/$$svc && go mod tidy && cd ../..; \
 	done
 	cd libs/common-go && go mod tidy
 
@@ -355,6 +360,25 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics 
 	for v in $$vals; do for p in $${defaults//,/ }; do \
 		case ",$$v," in *",$$p,"*) ;; *) echo "chart-lint: the prod overlay's INGEST_RESERVED_PORTS lacks $$p of the default list"; exit 1;; esac; \
 	done; done
+	@# Terrain is on while INGEST_TERRAIN_CACHE_DIR is set: both ingest Deployments carry it, with
+	@# its mounted volume, when ingestService.terrain.enabled, and neither when it is not.
+	@for tpl in ingest-service ingest-listener; do \
+		on="$$(helm template sentinel $(CHART) $(CHART_SET) --show-only templates/$$tpl-deployment.yaml)"; \
+		printf '%s\n' "$$on" | grep -q 'name: INGEST_TERRAIN_CACHE_DIR' || { echo "chart-lint: $$tpl has no INGEST_TERRAIN_CACHE_DIR with terrain enabled"; exit 1; }; \
+		printf '%s\n' "$$on" | grep -q 'mountPath: /var/cache/sentinel/terrain' || { echo "chart-lint: $$tpl does not mount the terrain cache"; exit 1; }; \
+		printf '%s\n' "$$on" | grep -A3 'name: terrain-cache$$' | grep -q 'emptyDir:' || { echo "chart-lint: $$tpl's terrain cache is not an emptyDir"; exit 1; }; \
+		claim="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestService.terrain.existingClaim=terrain-pvc --show-only templates/$$tpl-deployment.yaml)"; \
+		printf '%s\n' "$$claim" | grep -q 'claimName: terrain-pvc' || { echo "chart-lint: $$tpl ignores ingestService.terrain.existingClaim"; exit 1; }; \
+		off="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestService.terrain.enabled=false --show-only templates/$$tpl-deployment.yaml)"; \
+		! printf '%s\n' "$$off" | grep -q 'INGEST_TERRAIN\|terrain-cache\|GOMEMLIMIT' || { echo "chart-lint: $$tpl still has terrain settings with terrain disabled"; exit 1; }; \
+		printf '%s\n' "$$on" | grep -A1 'name: INGEST_TERRAIN_MEM_TILES$$' | grep -q 'value: "4"' || { echo "chart-lint: $$tpl has no INGEST_TERRAIN_MEM_TILES of 4"; exit 1; }; \
+		printf '%s\n' "$$on" | grep -A1 'name: GOMEMLIMIT$$' | grep -q 'value: "819MiB"' || { echo "chart-lint: $$tpl's GOMEMLIMIT is not 80% of its 1Gi limit"; exit 1; }; \
+		mem="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestService.terrain.goMemLimit=700MiB --show-only templates/$$tpl-deployment.yaml)"; \
+		printf '%s\n' "$$mem" | grep -A1 'name: GOMEMLIMIT$$' | grep -q 'value: "700MiB"' || { echo "chart-lint: $$tpl ignores ingestService.terrain.goMemLimit"; exit 1; }; \
+	done
+	@# GOMEMLIMIT is 80% of a fractional limit too (1.5Gi is 1536 MiB), never "0MiB".
+	@frac="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestService.resources.limits.memory=1.5Gi --show-only templates/ingest-service-deployment.yaml)"; \
+	printf '%s\n' "$$frac" | grep -A1 'name: GOMEMLIMIT$$' | grep -q 'value: "1228MiB"' || { echo "chart-lint: ingest-service's GOMEMLIMIT is not 80% of a 1.5Gi limit (1228MiB)"; exit 1; }
 
 # ----------------------------------------------------------------------------
 # Deployment (docs/deployment.md)
@@ -406,7 +430,7 @@ backup-now: ## Run the release's backup CronJob now as a Job, wait for it (BACKU
 clean: ## Clean all build artifacts
 	rm -rf dist/ node_modules/.cache
 	@for svc in $(GO_SERVICES); do \
-		cd apps/$$svc && go clean && cd ../..; \
+		cd $(SVC_DIR)/$$svc && go clean && cd ../..; \
 	done
 	cd libs/common-go && go clean
 	find . -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true

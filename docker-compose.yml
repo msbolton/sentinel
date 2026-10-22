@@ -760,6 +760,8 @@ services:
       INGEST_RESERVED_PORTS: ${INGEST_RESERVED_PORTS:-}
       # How long a graceful shutdown may take (the default). Keep stop_grace_period above it.
       SHUTDOWN_TIMEOUT_SEC: "25"
+      # Copernicus terrain tiles (docs/feeds.md "Terrain"): set, it turns terrain on; empty, off.
+      INGEST_TERRAIN_CACHE_DIR: /var/cache/sentinel/terrain
     volumes:
       # Runs as 10001:10001: Linux hosts need both folders readable by gid 10001 (docs/development.md).
       # Certificates and other files that secretRefs reference as file:/etc/sentinel/tak/...
@@ -768,6 +770,8 @@ services:
       # Other files that secretRefs reference as file:/etc/sentinel/secrets/..., such as the
       # PEMs of a TCP connection with mutual TLS (gitignored; empty is fine).
       - ./secrets/ingest:/etc/sentinel/secrets:ro
+      # The terrain tiles, shared with the sensor-sim containers and the listener.
+      - terrain-cache:/var/cache/sentinel/terrain
     depends_on:
       postgres:
         condition: service_healthy
@@ -841,10 +845,12 @@ services:
       AISSTREAM_API_KEY: ${AISSTREAM_API_KEY:-}
       INGEST_RESERVED_PORTS: ${INGEST_RESERVED_PORTS:-}
       SHUTDOWN_TIMEOUT_SEC: "25"
+      INGEST_TERRAIN_CACHE_DIR: /var/cache/sentinel/terrain
     volumes:
       # As for ingest-service: Linux hosts need both folders readable by gid 10001 (docs/development.md).
       - ./secrets/tak:/etc/sentinel/tak:ro
       - ./secrets/ingest:/etc/sentinel/secrets:ro
+      - terrain-cache:/var/cache/sentinel/terrain
     depends_on:
       postgres:
         condition: service_healthy
@@ -867,28 +873,76 @@ services:
           memory: 128m
           cpus: "0.1"
 
-  # Simulated EW (ESM) sensor: a one-shot CLI that streams RF emitter fixes to a
-  # `grpc` connection on the ingest listener. Not started by `up`; run it with
-  #   docker compose -p sentinel --profile inbound --profile sim run --rm ew-sensor \
-  #     --addr localhost:<port> --insecure --config examples/coastal-esm.yaml
-  # (see docs/ew-sensor.md). It shares the host's network because the listener
-  # does: with host networking off on Docker Desktop the listener's port is
-  # reachable only from inside the Docker VM, so the CLI has to run there too.
-  # Host networking is incompatible with `networks:`, and `localhost` is the VM's.
-  # Optional secrets/ew-sensor.env (gitignored) holds EW_SENSOR_TOKEN=si_... (the
-  # token issued under the connection's Tokens) and, if you like,
-  # EW_SENSOR_ADDR=localhost:<port>. No restart policy and no default command:
-  # pass the flags on the `run` line.
-  ew-sensor:
+  # Simulated sensors (sensor-sim, simulators/sensor-sim): one-shot CLIs, one
+  # sensor each, that stream to a `grpc` connection on the ingest listener.
+  # radar-sim and eoir-sim watch the shared scenario in the image's examples/
+  # (traffic and drones around Keswick) from Latrigg; esm-sim geolocates RF
+  # emitters off the Monterey coast (examples/esm-coastal.yaml). Not started by
+  # `up`; run any of them with
+  #   docker compose -p sentinel --profile inbound --profile sim run --rm radar-sim --addr localhost:<port>
+  #   docker compose -p sentinel --profile inbound --profile sim run --rm eoir-sim --addr localhost:<port>
+  #   docker compose -p sentinel --profile inbound --profile sim run --rm esm-sim --addr localhost:<port>
+  # (see docs/sensor-sim.md). They share the host's network because the
+  # listener does: with host networking off on Docker Desktop the listener's
+  # port is reachable only from inside the Docker VM, so the CLI has to run
+  # there too. Host networking is incompatible with `networks:`, and
+  # `localhost` is the VM's. Each service reads its own optional,
+  # gitignored secrets file, because the ESM sensor and the radar/camera
+  # usually report on different connections with different tokens: radar-sim
+  # and eoir-sim read secrets/sensor-sim.env, esm-sim reads secrets/esm-sim.env
+  # and then secrets/ew-sensor.env (never sensor-sim.env, so it cannot pick up
+  # the radar's token). A file holds SENSOR_SIM_TOKEN=si_... (the token issued
+  # under the connection's Tokens) and, if you like,
+  # SENSOR_SIM_ADDR=localhost:<port>; secrets/ew-sensor.env's EW_SENSOR_TOKEN
+  # and EW_SENSOR_ADDR, the old names, are accepted with a deprecation warning.
+  # The radar and the
+  # camera keep their Copernicus terrain tiles in the terrain-cache volume, so
+  # a tile is downloaded once; the ESM sensor needs none. Flags after the
+  # service name are added to the command (a flag given twice takes its last
+  # value). The examples are plaintext (connection.insecure), as the dev
+  # listener is, so with SENSOR_SIM_ADDR set `up -d radar-sim eoir-sim esm-sim`
+  # works too; for TLS add `--tls --ca <file>` to the run line, which replaces it.
+  radar-sim:
     profiles: ["sim"]
-    image: sentinel/ew-sensor:dev
+    image: sentinel/sensor-sim:dev
     build:
       context: .
-      dockerfile: ./apps/ew-sensor/Dockerfile
+      dockerfile: ./simulators/sensor-sim/Dockerfile
     network_mode: host
     env_file:
+      - path: ./secrets/sensor-sim.env
+        required: false
+    entrypoint: ["/app/sensor-sim", "--kind", "radar", "--config", "examples/radar.yaml", "--terrain-cache", "/var/cache/sentinel/terrain"]
+    volumes:
+      - terrain-cache:/var/cache/sentinel/terrain
+
+  eoir-sim:
+    profiles: ["sim"]
+    image: sentinel/sensor-sim:dev
+    build:
+      context: .
+      dockerfile: ./simulators/sensor-sim/Dockerfile
+    network_mode: host
+    env_file:
+      - path: ./secrets/sensor-sim.env
+        required: false
+    entrypoint: ["/app/sensor-sim", "--kind", "eoir", "--config", "examples/camera.yaml", "--terrain-cache", "/var/cache/sentinel/terrain"]
+    volumes:
+      - terrain-cache:/var/cache/sentinel/terrain
+
+  esm-sim:
+    profiles: ["sim"]
+    image: sentinel/sensor-sim:dev
+    build:
+      context: .
+      dockerfile: ./simulators/sensor-sim/Dockerfile
+    network_mode: host
+    env_file:
+      - path: ./secrets/esm-sim.env
+        required: false
       - path: ./secrets/ew-sensor.env
         required: false
+    entrypoint: ["/app/sensor-sim", "--kind", "esm", "--config", "examples/esm-coastal.yaml"]
 
   # ===========================================================================
   # Analytics Service (Go): behavioural baselines and findings
@@ -1001,6 +1055,12 @@ volumes:
   minio-data:
     driver: local
     name: sentinel-minio-data
+  # Copernicus GLO-30 terrain tiles, downloaded on first use. The simulators
+  # and the ingest services share it. Every image that mounts it creates the
+  # folder owned by 10001, so it is writable whichever container starts first.
+  terrain-cache:
+    driver: local
+    name: sentinel-terrain-cache
 
 # =============================================================================
 # Networks

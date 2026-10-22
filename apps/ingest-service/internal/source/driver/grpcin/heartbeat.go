@@ -68,12 +68,14 @@ func (d *Driver) startLiveness(ctx context.Context) *emplacement.Tracker {
 	return t
 }
 
-// watchBindings forgets the heartbeats of an emplacement that leaves the
-// connection or is deactivated: if it comes back, it starts from none.
+// watchBindings forgets the heartbeats and bearings of an emplacement that
+// leaves the connection or is deactivated: if it comes back, it starts from
+// none.
 func (d *Driver) watchBindings(t *emplacement.Tracker) (cancel func()) {
 	return d.emps.OnChange(func(id string) {
 		if e, ok := d.emps.Get(id); !ok || !e.Active || e.FeedID == nil || *e.FeedID != d.feedID {
 			t.Forget(id)
+			d.clearBearings(id)
 		}
 	})
 }
@@ -131,8 +133,13 @@ func (d *Driver) newestFix(id string) (fix, bool) {
 // fix and stamped with that fix's time (no later than now, no earlier than the
 // run's start), the clock its online publishes in state use, so a re-publish
 // never outdates the sender's next move; with no fix it falls back to the
-// heartbeat stamp. ok is false when there is nowhere to place it.
+// heartbeat stamp. The site carries its active bearings; an offline one's
+// are forgotten first, so it carries none. ok is false when there is
+// nowhere to place it.
 func (d *Driver) siteFor(e emplacement.Emplacement, state emplacement.HeartbeatState, now time.Time) (*obs.Observation, bool) {
+	if state == emplacement.HeartbeatOffline {
+		d.clearBearings(e.ID)
+	}
 	interval := emplacement.RowIntervalSec(e)
 	var last, floor time.Time
 	at := now
@@ -165,18 +172,21 @@ func (d *Driver) siteFor(e emplacement.Emplacement, state emplacement.HeartbeatS
 	o := emplacement.Observation(e, at)
 	o.Decoder, o.ReceivedAt = Decoder, now
 	emplacement.MarkSite(o, state, last, interval)
+	d.markBearings(o, e.ID, now)
 	return o, true
 }
 
 // siteDue reports whether a site's publish is due: its heartbeat state has
-// changed since the last one went out, or every has passed. It marks it
-// emitted when it is. It shares sensorDue's clock, so the two never publish
-// the same state twice within a second.
-func (d *Driver) siteDue(id string, state emplacement.HeartbeatState, every time.Duration, now time.Time) bool {
+// changed since the last one went out, or every has passed, or its bearings
+// have changed and sensorEvery has passed. It marks it emitted when it is.
+// It shares sensorDue's clock, so the two never publish the same state twice
+// within a second, nor a site's changing bearings more than once a second.
+func (d *Driver) siteDue(id string, state emplacement.HeartbeatState, every time.Duration, bearings bool, now time.Time) bool {
 	d.tracksMu.Lock()
 	defer d.tracksMu.Unlock()
 	last, seen := d.emittedAt[id]
-	if seen && d.emittedState[id] == state && now.Sub(last) < every && last.Sub(now) < every {
+	within := func(w time.Duration) bool { return now.Sub(last) < w && last.Sub(now) < w }
+	if seen && d.emittedState[id] == state && within(every) && (!bearings || within(sensorEvery)) {
 		return false
 	}
 	d.emittedAt[id], d.emittedState[id] = now, state
@@ -186,7 +196,8 @@ func (d *Driver) siteDue(id string, state emplacement.HeartbeatState, every time
 // republish publishes every bound site whatever its state: at once when the
 // state changes, else every min(interval, 25 s). That way an offline site
 // stays searchable and anchors geofences, and turns grey without waiting for
-// a report.
+// a report. A site whose bearings changed (one added, or one expired) goes
+// out too, at most once a second.
 func (d *Driver) republish(ctx context.Context, sink driver.Sink) {
 	tick := time.NewTicker(d.republishTick)
 	defer tick.Stop()
@@ -209,7 +220,7 @@ func (d *Driver) republish(ctx context.Context, sink driver.Sink) {
 				interval = sec
 			}
 			every := min(time.Duration(interval)*time.Second, maxRepublish)
-			if !d.siteDue(e.ID, state, every, now) {
+			if !d.siteDue(e.ID, state, every, d.bearingsChanged(e.ID, now), now) {
 				continue
 			}
 			o, ok := d.siteFor(e, state, now)

@@ -1,0 +1,23 @@
+{
+  "name": "sensor-sim",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "simulators/sensor-sim",
+  "projectType": "application",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/dist/simulators/sensor-sim"],
+      "options": {
+        "commands": ["cd simulators/sensor-sim && CGO_ENABLED=0 go build -o ../../dist/simulators/sensor-sim/sensor-sim ./cmd/sensor-sim"],
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": ["cd simulators/sensor-sim && go test -v -race ./..."],
+        "cwd": "{workspaceRoot}"
+      }
+    }
+  }
+}

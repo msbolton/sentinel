@@ -23,6 +23,7 @@ func (d *Driver) Health() driver.Health {
 	detail["allowlist"] = allowDetail(len(d.cfg.Allow))
 	detail["reportsOk"] = d.reportsOK.Load()
 	detail["deadLettered"] = d.deadLettered.Load()
+	detail["terrainClampSkipped"] = d.terrainClampSkipped.Load()
 	d.rejectedMu.Lock()
 	byReason := make(map[string]int64, len(d.rejected))
 	for k, v := range d.rejected {
@@ -30,6 +31,13 @@ func (d *Driver) Health() driver.Health {
 	}
 	d.rejectedMu.Unlock()
 	detail["reportsRejected"] = byReason
+	d.bearingCountMu.Lock()
+	bearings := make(map[string]int64, len(d.bearingCounts))
+	for k, v := range d.bearingCounts {
+		bearings[k] = v
+	}
+	d.bearingCountMu.Unlock()
+	detail["bearings"] = bearings
 	st := transport.State{Connected: d.connected.Load(), Detail: detail}
 	d.tlsrc.Apply(&st)
 	h := driver.Health{Connected: st.Connected, LastError: st.LastError, Detail: st.Detail}

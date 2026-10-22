@@ -30,6 +30,7 @@ import { WebSocketService } from '../../core/services/websocket.service';
 import { ThemeService, ThemePreset } from '../../core/services/theme.service';
 import { LocationService } from '../../core/services/location.service';
 import { BuildingsService } from '../../core/services/buildings.service';
+import { TerrainService } from '../../core/services/terrain.service';
 import { LayerVisibilityService } from '../../core/services/layer-visibility.service';
 import { MapViewportService } from '../../core/services/map-viewport.service';
 import { Location } from '../../shared/models/location.model';
@@ -47,6 +48,7 @@ import {
   ORBIT_OVERLAY_CONFIG,
   DENSITY_OVERLAY_CONFIG,
   FLIGHT_PATH_CONFIG,
+  COPERNICUS_CREDIT,
 } from './cesium-config';
 import { CircularBuffer, decimateTrail, TrailPoint } from './trail-utils';
 import { isGlobalBounds, rectangleToBounds } from './viewport-bounds';
@@ -65,11 +67,14 @@ import { formatAltitude } from '../../shared/geo-format';
 import { entityLabel } from './entity-label';
 import { GeofenceService } from '../../core/services/geofence.service';
 import { DRAFT_ID, GeofenceLayer } from './geofence-layer';
-import { EMPLACEMENT_DRAFT_ID, EmplacementLayer, emplacementDrawingOf, siteEntityOf, sitesShown } from './emplacement-layer';
+import { EMPLACEMENT_DRAFT_ID, EmplacementLayer, SILENT_SITE_COLOR, emplacementDrawingOf, isSilent, siteEntityOf, sitesShown } from './emplacement-layer';
+import { BearingLayer, type BearingSite } from './bearing-layer';
 import { EmplacementService } from '../../core/services/emplacement.service';
-import { emplacementIdOf, rowHeartbeatOf, siteHeartbeatOf } from '../../shared/models/emplacement.model';
+import { bearingTtlOf, bearingsOf, emplacementIdOf, rowHeartbeatOf, siteHeartbeatOf } from '../../shared/models/emplacement.model';
 import { FeedService } from '../../core/services/feed.service';
 import { ellipseFromCovariance } from './uncertainty';
+import { drawsUncertainty, heightModeOf, type HeightMode } from './height-mode';
+import { EllipseOutlineLayer, drawnEllipseAxes } from './ellipse-outline';
 import { isFromMilitaryFeed, sidcFor, symbolDataUrl } from './milstd2525';
 import { locationDotDataUrl } from './location-dot';
 import { GeofenceDrawTool } from './geofence-draw';
@@ -174,6 +179,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   viewer: any = null;
   selectedEntity = signal<Entity | null>(null);
+  /** The bearing line last clicked (bearingKeyOf), for the panel to highlight; null after any other click. */
+  readonly selectedBearingKey = signal<string | null>(null);
   showLayerPanel = signal<boolean>(false);
   flyingTo = signal<string | null>(null);
   panelRouteActive = signal<boolean>(false);
@@ -216,6 +223,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   /** Saved geofences drawn on the globe; see geofence-layer.ts. */
   private geofenceLayer: GeofenceLayer | null = null;
   private emplacementLayer: EmplacementLayer | null = null;
+  /** The bearing lines of camera sites, drawn from their SENSOR entities. */
+  private bearingLayer: BearingLayer | null = null;
+  private ellipseOutlines?: EllipseOutlineLayer;
   /** The SENSOR entities that stand for loaded emplacements, by entity id; the emplacement layer draws them. */
   private readonly emplacementEntities = new Map<string, Entity>();
   /** The ids of the emplacements loaded now; only their entities are left to the emplacement layer. */
@@ -262,6 +272,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     private readonly themeService: ThemeService,
     private readonly locationService: LocationService,
     readonly buildingsService: BuildingsService,
+    readonly terrainService: TerrainService,
     private readonly http: HttpClient,
     private readonly layerVisibility: LayerVisibilityService,
     private readonly orbitOverlay: OrbitOverlayService,
@@ -370,6 +381,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       untracked(() => this.ngZone.runOutsideAngular(() => this.flyToFocus()));
     });
 
+    // Turning terrain on or off changes which ellipses can have an outline and
+    // where the ground is under the drop line.
+    effect(() => {
+      this.terrainService.terrainEnabled();
+      this.ngZone.runOutsideAngular(() => untracked(() => this.onTerrainChanged()));
+    });
+
     // A selected aircraft, drone or satellite shows how high it flies: a line to the ground.
     effect(() => {
       const selected = this.selectedEntity();
@@ -435,6 +453,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.geofenceLayer = null;
     this.emplacementLayer?.destroy();
     this.emplacementLayer = null;
+    this.bearingLayer?.destroy();
+    this.bearingLayer = null;
     this.clearOrbitOverlay();
     this.clearFlightPath();
     if (this.ageoutConfigTimer) clearInterval(this.ageoutConfigTimer);
@@ -482,6 +502,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.setupClusterSources();
       this.geofenceLayer = new GeofenceLayer(this.viewer, Cesium);
       this.emplacementLayer = new EmplacementLayer(this.viewer, Cesium);
+      this.bearingLayer = new BearingLayer(this.viewer, Cesium);
       this.drawTool = new GeofenceDrawTool(this.viewer, Cesium);
       this.geofenceLayer.sync(this.geofences.zones(), this.geofences.selectedId(), (id) => this.geofenceAnchorPosition(id));
       this.resyncEmplacements();
@@ -505,8 +526,18 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       // Larger tile cache to reduce network requests
       this.viewer.scene.globe.tileCacheSize = 1000;
 
-      // Enable depth testing for entities behind the globe
+      // Entities behind a hill stay visible: no depth test against terrain.
       this.viewer.scene.globe.depthTestAgainstTerrain = false;
+
+      // The credit display is hidden (see creditContainer above); the
+      // Copernicus attribution is registered with it all the same.
+      this.viewer.creditDisplay?.addStaticCredit(new Cesium.Credit(COPERNICUS_CREDIT, true));
+
+      // Cesium World Terrain, on by default with an ion token. It loads in
+      // the background; setTerrain leaves the globe without a terrain provider
+      // (a blank placeholder globe) until World Terrain is ready, or until it
+      // fails and the service restores the ellipsoid.
+      void this.terrainService.init(this.viewer, Cesium);
 
       // Set initial camera position
       this.viewer.camera.setView({
@@ -537,6 +568,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         this.viewer.selectedEntity = undefined; // the viewer's own bracket means nothing while drawing
         return;
       }
+      this.selectedBearingKey.set(null);
 
       if (Cesium.defined(pickedObject) && (pickedObject.id?._sentinelOrbit || pickedObject.id?._sentinelFlightPath)) {
         return; // a click on the selection's own overlay keeps the selection
@@ -558,6 +590,18 @@ export class MapComponent implements AfterViewInit, OnDestroy {
             this.selectedEntity.set(site); // null when the site is not on the stream: never keep an unrelated selection
           });
         }
+        return;
+      }
+      if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelBearing) {
+        // A bearing line selects the camera's site entity, as a click on the site does.
+        const site = this.emplacementEntities.get(pickedObject.id._sentinelBearing as string) ?? null;
+        const emplacementId = site ? emplacementIdOf(site) : null;
+        this.viewer.selectedEntity = undefined;
+        this.ngZone.run(() => {
+          if (emplacementId) this.emplacements.select(emplacementId);
+          this.selectedEntity.set(site);
+          this.selectedBearingKey.set(site ? ((pickedObject.id._sentinelBearingKey as string | undefined) ?? null) : null);
+        });
         return;
       }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelDensity) {
@@ -823,6 +867,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
             ? { ...event.entity, affiliation: prev.affiliation }
             : event.entity;
         this.addOrUpdateCesiumEntity(merged);
+        // The detail panel shows the selection, not the stream: hand it the newer copy.
+        if (untracked(() => this.selectedEntity())?.id === merged.id) this.selectedEntity.set(merged);
         break;
       }
       case 'deleted':
@@ -836,6 +882,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // A loaded emplacement's own SENSOR entity is drawn by the emplacement layer.
     if (emplacementDrawingOf(entity, this.loadedEmplacementIds)) {
       this.emplacementEntities.set(entity.id, entity);
+      this.resyncBearings();
       return;
     }
     if (!entity.position) {
@@ -864,16 +911,17 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const rawTrail = trailBuffer ? trailBuffer.toArray() : [];
     const trail = decimateTrail(rawTrail, this.currentCameraAltitude, TRACK_TRAIL_CONFIG.decimation);
 
+    // A radar target sits at its height above the ground (only while terrain is
+    // on), not at its ellipsoid altitude.
+    const heightMode = heightModeOf(entity, this.terrainService.terrainEnabled());
+    const relativeHeightM = heightMode.kind === 'relative' ? heightMode.heightM : undefined;
     const position = Cesium.Cartesian3.fromDegrees(
       entity.position.longitude,
       entity.position.latitude,
-      entity.position.altitude ?? 0,
+      relativeHeightM ?? entity.position.altitude ?? 0,
     );
 
-    const hasAltitude = entity.position.altitude != null && entity.position.altitude > 0;
-    const heightRef = hasAltitude
-      ? Cesium.HeightReference.NONE
-      : Cesium.HeightReference.CLAMP_TO_GROUND;
+    const heightRef = this.heightReferenceOf(heightMode);
 
     // Vessels point along their heading only while moving or when they report a true heading.
     // MIL-STD-2525D symbols stay north-up.
@@ -886,14 +934,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         : HEADING_ROTATED_TYPES.has(entity.entityType) ? entity.heading ?? null : null;
     const rotation = headingDeg != null ? -Cesium.Math.toRadians(headingDeg) : 0;
     const signalEllipse = this.buildSignalEllipse(entity, cesiumColor, isStale);
-    const ellipseKey = signalEllipse
-      ? `${signalEllipse.semiMajorAxis}:${signalEllipse.semiMinorAxis}:${signalEllipse.rotation}:${isStale}`
-      : '';
+    const ellipseKey = this.ellipseKeyOf(signalEllipse, isStale);
 
     const existing = this.entityMap.get(entity.id);
     const shown = this.layerVisibility.isVisible(entity);
 
-    // Moving aircraft are dead-reckoned: the tracker owns their displayed
+    // Moving aircraft, drones and vessels are dead-reckoned (DEAD_RECKONED_TYPES;
+    // vehicles only turn): the tracker owns their displayed
     // position and blends this fix in instead of jumping to it.
     const now = this.wsService.serverNow();
     const tracked = this.deadReckoning.upsert(entity, now);
@@ -905,17 +952,19 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const shownPosition = tracked ? this.deadReckoning.positionOf(entity.id, now) : null;
     const satPosition = satTracked ? this.satellites.positionOf(entity.id, now) : null;
     const displayPosition = shownPosition
-      ? Cesium.Cartesian3.fromDegrees(shownPosition.lon, shownPosition.lat, shownPosition.alt)
+      ? Cesium.Cartesian3.fromDegrees(shownPosition.lon, shownPosition.lat, relativeHeightM ?? shownPosition.alt)
       : satPosition
         ? Cesium.Cartesian3.fromDegrees(satPosition.lon, satPosition.lat, satPosition.height)
         : position;
 
     const labelText = entityLabel(entity.name, entity.exercise, satPosition ? formatAltitude(satPosition.height) : undefined);
+    const outlineCentre = shownPosition ?? { lat: entity.position.latitude, lon: entity.position.longitude };
 
     if (existing) {
       // Update existing entity
       existing.show = shown;
       existing._posProp.setValue(displayPosition);
+      existing._relativeHeightM = relativeHeightM;
       if (existing._labelText !== labelText) {
         existing._labelText = labelText;
         existing.label.text = labelText;
@@ -935,8 +984,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
           ? (Cesium.EllipseGraphics ? new Cesium.EllipseGraphics(signalEllipse) : signalEllipse)
           : undefined;
       }
+      this.syncEllipseOutline(entity, existing, outlineCentre, cesiumColor, isStale);
       // An entity first seen without an altitude was clamped to ground;
-      // lift it once a fix with altitude arrives (and vice versa).
+      // lift it once a fix with altitude arrives (and vice versa). The same
+      // holds for a radar height above ground arriving or going.
       if (existing._heightRef !== heightRef) {
         existing._heightRef = heightRef;
         if (existing.billboard) existing.billboard.heightReference = heightRef;
@@ -955,7 +1006,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
             positions: trailPositions,
             width: TRACK_TRAIL_CONFIG.width,
             material: cesiumColor.withAlpha(trailAlpha),
-            clampToGround: !hasAltitude,
+            clampToGround: heightMode.kind === 'clamp',
           });
         }
       }
@@ -1003,7 +1054,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
                 ),
                 width: TRACK_TRAIL_CONFIG.width,
                 material: cesiumColor.withAlpha(trailAlpha),
-                clampToGround: !hasAltitude,
+                clampToGround: heightMode.kind === 'clamp',
               }
             : undefined,
       });
@@ -1012,10 +1063,12 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       cesiumEntity._sentinelEntity = entity;
       cesiumEntity._posProp = posProp;
       cesiumEntity._heightRef = heightRef;
+      cesiumEntity._relativeHeightM = relativeHeightM;
       cesiumEntity._labelText = labelText;
       cesiumEntity._uses2525 = uses2525;
       cesiumEntity._ellipseKey = ellipseKey;
       this.entityMap.set(entity.id, cesiumEntity);
+      this.syncEllipseOutline(entity, cesiumEntity, outlineCentre, cesiumColor, isStale);
     }
 
     if (entity.id === this.dropLine.forId) {
@@ -1062,8 +1115,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         continue;
       }
       // setValue clones, so the scratch Cartesian3 is safe to reuse.
+      // A radar target stays at its height above the ground between fixes.
       cesiumEntity._posProp.setValue(
-        Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, pos.alt, undefined, this.drScratch),
+        Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, cesiumEntity._relativeHeightM ?? pos.alt, undefined, this.drScratch),
       );
       if (id === this.dropLine.forId) this.moveDropLine({ lat: pos.lat, lon: pos.lon, height: pos.alt });
       moved++;
@@ -1279,7 +1333,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   private removeCesiumEntity(entityId: string): void {
-    this.emplacementEntities.delete(entityId);
+    if (this.emplacementEntities.delete(entityId)) this.resyncBearings();
     this.deadReckoning.remove(entityId);
     this.satellites.remove(entityId);
     if (entityId === this.orbit.forId) this.clearOrbitOverlay();
@@ -1287,6 +1341,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (cesiumEntity && this.viewer) {
       if (entityId === this.dropLine.forId) this.clearDropLine();
       (cesiumEntity.entityCollection ?? this.viewer.entities).remove(cesiumEntity);
+      this.ellipseOutlines?.remove(entityId);
       this.entityMap.delete(entityId);
       this.trackTrails.delete(entityId);
       this.scheduleRender();
@@ -1517,6 +1572,37 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.ngZone.runOutsideAngular(() =>
       this.emplacementLayer?.sync(list, selectedId, draft, coverage, (id) => this.emplacementPosition(id), heartbeat),
     );
+    this.resyncBearings();
+  }
+
+  /**
+   * Redraw the bearing lines of camera sites from their SENSOR entities. Every
+   * 3 s with the emplacement layer, and whenever a site entity updates, so a
+   * line fades and expires on that cadence. Each line takes its site's colour
+   * and its connection's layer toggle.
+   */
+  private resyncBearings(): void {
+    if (!this.bearingLayer) return;
+    const now = this.wsService.serverNow();
+    const rows = new Map(this.emplacements.emplacements().map((e) => [e.id, e]));
+    const sites: BearingSite[] = [];
+    for (const entity of this.emplacementEntities.values()) {
+      if (!entity.position || entity.ageoutState === 'AGED_OUT') continue;
+      const bearings = bearingsOf(entity, now);
+      if (bearings.length === 0) continue;
+      const emplacementId = emplacementIdOf(entity);
+      const row = emplacementId ? rows.get(emplacementId) : undefined;
+      const hb = siteHeartbeatOf(entity, now) ?? (row ? rowHeartbeatOf(row) : null);
+      sites.push({
+        siteEntityId: entity.id,
+        feedId: row?.feedId ?? entity.feedId ?? null,
+        origin: { lat: entity.position.latitude, lon: entity.position.longitude, alt: entity.position.altitude ?? null },
+        color: isSilent(hb) ? SILENT_SITE_COLOR : (ENTITY_TYPE_PIN_COLORS[EntityType.SENSOR] ?? '#8b5cf6'),
+        bearings,
+        ttlSec: bearingTtlOf(entity),
+      });
+    }
+    this.ngZone.runOutsideAngular(() => this.bearingLayer?.sync(sites, this.layerVisibility.hidden(), now));
   }
 
   /** "Show on map" from an emplacement editor: fly there once, when the viewer is up. */
@@ -1653,7 +1739,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   private moveDropLine(pos: GeoPoint): void {
     const Cesium = this.Cesium;
-    const geometry = dropLinePoints(pos);
+    const geometry = dropLinePoints(pos, this.groundHeightAt(pos.lat, pos.lon));
     this.dropLine.positions = [
       Cesium.Cartesian3.fromDegrees(geometry.top.lon, geometry.top.lat, geometry.top.height),
       Cesium.Cartesian3.fromDegrees(geometry.ground.lon, geometry.ground.lat, geometry.ground.height),
@@ -1830,12 +1916,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         if (this.viewer) {
           this.clearDropLine();
           this.clearFlightPath();
-          for (const cesiumEntity of this.entityMap.values()) {
+          for (const [id, cesiumEntity] of this.entityMap) {
             (cesiumEntity.entityCollection ?? this.viewer.entities).remove(cesiumEntity);
+            this.ellipseOutlines?.remove(id);
           }
         }
         this.entityMap.clear();
         this.emplacementEntities.clear();
+        this.resyncBearings();
         this.trackTrails.clear();
         this.deadReckoning.clear();
         this.satellites.clear();
@@ -1938,12 +2026,21 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     }
   }
 
-  private buildSignalEllipse(entity: Entity, cesiumColor: any, isStale: boolean): any | undefined {
-    if (entity.entityType !== EntityType.SIGNAL || !this.Cesium) return undefined;
+  /** The axes an entity's uncertainty ellipse is drawn with (floored), or null when it has none. */
+  private signalAxesOf(entity: Entity) {
+    if (!drawsUncertainty(entity)) return null;
     const axes = ellipseFromCovariance(entity.kinematics?.positionCovariance);
+    return axes ? drawnEllipseAxes(axes) : null;
+  }
+
+  private buildSignalEllipse(entity: Entity, cesiumColor: any, isStale: boolean): any | undefined {
+    if (!this.Cesium) return undefined;
+    const axes = this.signalAxesOf(entity);
     if (!axes) return undefined;
-    const fillAlpha = isStale ? 0.05 : 0.12;
-    const outlineAlpha = isStale ? 0.22 : 0.55;
+    const fillAlpha = isStale ? 0.08 : 0.2;
+    // Cesium drops the outline of any CLAMP_TO_GROUND ellipse, terrain or not
+    // (GeometryUpdater), so the outline is a ground-clamped polyline of its
+    // own (syncEllipseOutline), drawn with terrain on or off.
     return {
       semiMajorAxis: axes.semiMajorM,
       semiMinorAxis: axes.semiMinorM,
@@ -1951,9 +2048,90 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       height: 0,
       heightReference: this.Cesium.HeightReference.CLAMP_TO_GROUND,
       material: cesiumColor.withAlpha(fillAlpha),
-      outline: true,
-      outlineColor: cesiumColor.withAlpha(outlineAlpha),
+      outline: false,
     };
+  }
+
+  /**
+   * Keep the ground-clamped outline of an entity's uncertainty ellipse in step
+   * with it: around the shown position, as a child of the Cesium entity so it
+   * shows and hides with it; removed when the entity has no ellipse.
+   */
+  private syncEllipseOutline(entity: Entity, cesiumEntity: any, centre: { lat: number; lon: number } | null, cesiumColor: any, isStale: boolean): void {
+    if (!this.Cesium) return;
+    this.ellipseOutlines ??= new EllipseOutlineLayer(this.Cesium);
+    const axes = cesiumEntity.ellipse ? this.signalAxesOf(entity) : null;
+    const collection = cesiumEntity.entityCollection ?? this.collectionFor(entity.entityType);
+    this.ellipseOutlines.sync(entity.id, cesiumEntity, collection, centre, axes, cesiumColor.withAlpha(isStale ? 0.3 : 0.8));
+  }
+
+  /** Identity of a built ellipse: equal keys mean the drawn ellipse needs no change. */
+  private ellipseKeyOf(ellipse: any | undefined, isStale: boolean): string {
+    return ellipse
+      ? `${ellipse.semiMajorAxis}:${ellipse.semiMinorAxis}:${ellipse.rotation}:${isStale}:${ellipse.outline}`
+      : '';
+  }
+
+  private heightReferenceOf(mode: HeightMode): number {
+    const ref = this.Cesium.HeightReference;
+    return mode.kind === 'relative' ? ref.RELATIVE_TO_GROUND : mode.kind === 'clamp' ? ref.CLAMP_TO_GROUND : ref.NONE;
+  }
+
+  /** Terrain height under a point in metres above the ellipsoid; 0 without terrain or before its tile loads. */
+  private groundHeightAt(lat: number, lon: number): number {
+    if (!this.terrainService.terrainEnabled()) return 0;
+    const globe = this.viewer?.scene?.globe;
+    if (!globe || !this.Cesium?.Cartographic) return 0;
+    const height = globe.getHeight(this.Cesium.Cartographic.fromDegrees(lon, lat));
+    return typeof height === 'number' && Number.isFinite(height) ? height : 0;
+  }
+
+  /**
+   * Terrain went on or off: re-apply the height mode of every entity (a radar
+   * target is relative to the ground only with terrain), redraw the ellipses
+   * (outline) and the drop line (ground height).
+   */
+  private onTerrainChanged(): void {
+    if (!this.viewer || !this.Cesium || this.viewer.isDestroyed?.()) return;
+    const now = this.wsService.serverNow();
+    const terrainOn = this.terrainService.terrainEnabled();
+    for (const cesiumEntity of this.entityMap.values()) {
+      const entity = cesiumEntity._sentinelEntity as Entity | undefined;
+      if (entity?.position) {
+        const mode = heightModeOf(entity, terrainOn);
+        const relativeHeightM = mode.kind === 'relative' ? mode.heightM : undefined;
+        const heightRef = this.heightReferenceOf(mode);
+        if (cesiumEntity._heightRef !== heightRef || cesiumEntity._relativeHeightM !== relativeHeightM) {
+          cesiumEntity._heightRef = heightRef;
+          cesiumEntity._relativeHeightM = relativeHeightM;
+          if (cesiumEntity.billboard) cesiumEntity.billboard.heightReference = heightRef;
+          if (cesiumEntity.label) cesiumEntity.label.heightReference = heightRef;
+          const shown = this.deadReckoning.positionOf(entity.id, now);
+          cesiumEntity._posProp?.setValue(
+            this.Cesium.Cartesian3.fromDegrees(
+              shown?.lon ?? entity.position.longitude,
+              shown?.lat ?? entity.position.latitude,
+              relativeHeightM ?? shown?.alt ?? entity.position.altitude ?? 0,
+            ),
+          );
+        }
+      }
+      if (!entity || (!cesiumEntity.ellipse && !drawsUncertainty(entity))) continue;
+      const ellipse = this.buildSignalEllipse(entity, this.entityColor(entity), this.isEntityStale(entity));
+      const key = this.ellipseKeyOf(ellipse, this.isEntityStale(entity));
+      if (cesiumEntity._ellipseKey === key) continue;
+      cesiumEntity._ellipseKey = key;
+      cesiumEntity.ellipse = ellipse ? (this.Cesium.EllipseGraphics ? new this.Cesium.EllipseGraphics(ellipse) : ellipse) : undefined;
+      const shownAt = this.deadReckoning.positionOf(entity.id, now);
+      const centre = shownAt ?? (entity.position ? { lat: entity.position.latitude, lon: entity.position.longitude } : null);
+      this.syncEllipseOutline(entity, cesiumEntity, centre, this.entityColor(entity), this.isEntityStale(entity));
+    }
+    const selected = this.dropLine.forId ? this.entityMap.get(this.dropLine.forId)?._sentinelEntity as Entity | undefined : undefined;
+    if (selected) {
+      const pos = this.displayedGeoPoint(selected, this.wsService.serverNow());
+      if (pos) this.moveDropLine(pos);
+    }
+    this.scheduleRender();
   }
 
   private getBillboardImage(entity: Entity): string {

@@ -8,7 +8,7 @@ import {
   INGEST_PROTO_FILES,
   PROTO_FILES,
   endpointLabel,
-  ewSensorCommand,
+  sensorSimCommand,
   goSnippet,
   grpcEndpoint,
   grpcTarget,
@@ -113,10 +113,20 @@ export class SendGuideComponent {
     const g = this.grpc();
     return g ? { key: 'grpcurl', title: 'Check a token with grpcurl (run it from the directory that holds proto/)', text: grpcurlCommand(g) } : null;
   });
-  /** The EW sensor simulator pointed at this connection. */
-  readonly ewSensor = computed<Snippet | null>(() => {
+  /** The ESM sensor simulator pointed at this connection. */
+  readonly esmSim = computed<Snippet | null>(() => {
     const g = this.grpc();
-    return g ? { key: 'ew-sensor', title: 'Send simulated sensor reports with ew-sensor', text: ewSensorCommand(g) } : null;
+    return g ? { key: 'sensor-sim-esm', title: 'Send simulated ESM (RF emitter) fixes with sensor-sim', text: sensorSimCommand(g, 'esm') } : null;
+  });
+  /** The radar simulator pointed at this connection. */
+  readonly radarSim = computed<Snippet | null>(() => {
+    const g = this.grpc();
+    return g ? { key: 'sensor-sim-radar', title: 'Send simulated radar tracks with sensor-sim', text: sensorSimCommand(g, 'radar') } : null;
+  });
+  /** The camera simulator pointed at this connection. */
+  readonly eoirSim = computed<Snippet | null>(() => {
+    const g = this.grpc();
+    return g ? { key: 'sensor-sim-eoir', title: 'Send simulated camera detections with sensor-sim', text: sensorSimCommand(g, 'eoir') } : null;
   });
   readonly endpoint = computed(() => {
     const t = this.target();

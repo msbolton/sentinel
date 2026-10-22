@@ -91,6 +91,8 @@ sentinel/
 │   ├── alert-service/        # Alerting engine (:3005)
 │   ├── ingest-service/       # Go data ingest (:4000)
 │   └── analytics-service/    # Go behavioural analysis (:5000)
+├── simulators/
+│   └── sensor-sim/           # Simulated radar, EO/IR camera and ESM sensor, a gRPC sender (not deployed)
 ├── libs/
 │   ├── common-go/            # Shared Go: config, Kafka, health, auth headers, models
 │   └── proto-gen/            # Protobuf generated code (TS for the client, Go, Python)
@@ -115,7 +117,7 @@ sentinel/
 | [Data Model](docs/data-model.md) | PostgreSQL schema, entity types, Kafka topics |
 | [Development](docs/development.md) | Local setup, Makefile targets, debugging tips |
 | [Deployment](docs/deployment.md) | Production runbook: one k3s node, TLS, images, first install, upgrades, backups |
-| [EW sensor simulator](docs/ew-sensor.md) | `ew-sensor` CLI: simulated ESM sensor streaming RF emitter fixes over gRPC |
+| [Sensor simulator](docs/sensor-sim.md) | `sensor-sim` CLI: a simulated radar, EO/IR camera or ESM sensor streaming detections over gRPC |
 
 ## Key Commands
 

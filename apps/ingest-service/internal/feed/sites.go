@@ -14,8 +14,8 @@ import (
 const SitesEvery = 25 * time.Second
 
 // SitePublisher reports the fixed emplacements bound to a connection whose
-// driver does not heartbeat them. That is every inbound driver but grpc
-// until the TCP/UDP and TAK heartbeats exist.
+// driver does not heartbeat them. That is every inbound driver but grpc: only
+// rows bound before emplacements were limited to grpc can still be there.
 //
 // It reports each active one with a position as its SENSOR entity: when the
 // connection starts, whenever its row changes, and every interval, so the

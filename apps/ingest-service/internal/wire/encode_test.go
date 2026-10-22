@@ -135,3 +135,31 @@ func TestGenericDetailOnWire(t *testing.T) {
 		t.Fatalf("operational status = %v", m.GetOperationalStatus())
 	}
 }
+
+func TestToProtoRadar(t *testing.T) {
+	snr := 18.5
+	o := &obs.Observation{FeedID: "f", SourceEntityID: "r-1", Radar: &obs.RadarData{SnrDb: &snr, Mode: "TRACK", Classification: "VEHICLE", RadarTrackID: "R-1"}}
+	r := ToProto(o).GetPlatform().GetRadar()
+	if r == nil || r.GetSnrDb() != 18.5 || r.Mode != sentinelv1.RadarMode_RADAR_MODE_TRACK ||
+		r.Classification != sentinelv1.RadarClass_RADAR_CLASS_VEHICLE || r.RadarTrackId != "R-1" || r.RcsDbsm != nil {
+		t.Fatalf("platform = %v", ToProto(o).GetPlatform())
+	}
+	if ToProto(&obs.Observation{Radar: &obs.RadarData{}}).GetPlatform().GetRadar() == nil {
+		t.Error("an empty radar block must still select the radar detail")
+	}
+}
+
+func TestToProtoEoIr(t *testing.T) {
+	h := 10.0
+	o := &obs.Observation{FeedID: "f", SourceEntityID: "c-1", EoIr: &obs.EoIrData{
+		Band: "LWIR", Classification: "person", HorizontalFovDeg: &h, BoundingBox: &[4]float64{0.1, 0.2, 0.3, 0.4}, CameraTrackID: "C-1"}}
+	e := ToProto(o).GetPlatform().GetEoir()
+	b := e.GetBoundingBox()
+	if e == nil || e.Band != sentinelv1.EoIrBand_EO_IR_BAND_LWIR || e.Classification != "person" || e.GetHorizontalFovDeg() != 10 ||
+		e.VerticalFovDeg != nil || e.CameraTrackId != "C-1" || b == nil || b.X != 0.1 || b.Y != 0.2 || b.Width != 0.3 || b.Height != 0.4 {
+		t.Fatalf("platform = %v", ToProto(o).GetPlatform())
+	}
+	if ToProto(&obs.Observation{EoIr: &obs.EoIrData{}}).GetPlatform().GetEoir().GetBoundingBox() != nil {
+		t.Error("no bounding box must leave the field unset")
+	}
+}
