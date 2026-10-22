@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -17,6 +18,13 @@ import (
 
 // maxPositionBody caps a position report; a real one is a few dozen bytes.
 const maxPositionBody = 1 << 10
+
+// A guest may report its position positionBurst times at once, then once per
+// positionWindow/positionBurst (5 s): each report costs an upsert in ingest.
+const (
+	positionBurst  = 2
+	positionWindow = 10 * time.Second
+)
 
 // Position sources reported back to the browser.
 const (
@@ -32,6 +40,7 @@ type Handler struct {
 	loc            Locator
 	visitorsFeedID string
 	limiter        *registration.IPLimiter
+	positions      *registration.IPLimiter // keyed by guest id
 	logger         *zap.Logger
 }
 
@@ -44,7 +53,8 @@ func NewHandler(g *Guests, sites VisitorSites, loc Locator, visitorsFeedID strin
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Handler{guests: g, sites: sites, loc: loc, visitorsFeedID: visitorsFeedID, limiter: limiter, logger: logger}
+	return &Handler{guests: g, sites: sites, loc: loc, visitorsFeedID: visitorsFeedID, limiter: limiter,
+		positions: registration.NewIPLimiter(positionBurst, positionWindow), logger: logger}
 }
 
 // RegisterPublicRoutes mounts the unauthenticated session endpoint.
@@ -95,8 +105,9 @@ type positionRequest struct {
 	Denied bool     `json:"denied"`
 }
 
-// positionResponse echoes the visitor's own position back to them. Only the
-// blurred form reaches Place; the precise one is never stored or logged.
+// positionResponse tells the visitor where their site was placed: the
+// blurred position, the only one the server handles beyond this request.
+// The browser blurs before it sends, and keeps its precise fix to itself.
 type positionResponse struct {
 	Lat           *float64 `json:"lat,omitempty"`
 	Lon           *float64 `json:"lon,omitempty"`
@@ -119,6 +130,11 @@ func (h *Handler) handlePosition(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodePosition(w, r)
 	if !ok {
 		httputil.Error(w, http.StatusBadRequest, "Send {\"lat\":…,\"lon\":…} or {\"denied\":true}")
+		return
+	}
+	if !h.positions.Allow(guest.GuestID) {
+		w.Header().Set("Retry-After", "5")
+		httputil.Error(w, http.StatusTooManyRequests, "Too many position reports; try again in a few seconds")
 		return
 	}
 
@@ -151,7 +167,7 @@ func (h *Handler) handlePosition(w http.ResponseWriter, r *http.Request) {
 		httputil.Error(w, http.StatusForbidden, "Demo session has ended")
 		return
 	}
-	httputil.JSON(w, http.StatusOK, positionResponse{Lat: &lat, Lon: &lon, Source: source, EmplacementID: empID})
+	httputil.JSON(w, http.StatusOK, positionResponse{Lat: &blurLat, Lon: &blurLon, Source: source, EmplacementID: empID})
 }
 
 // decodePosition reads a body that is exactly one of a valid lat/lon pair or

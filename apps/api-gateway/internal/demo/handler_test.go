@@ -187,9 +187,14 @@ func TestPositionStoresOnlyBlurred(t *testing.T) {
 	if p.GuestID != s.GuestID || !near(p.Lat, 51.55) || !near(p.Lon, -0.15) {
 		t.Fatalf("Place(%q, %v, %v), want (%q, 51.55, -0.15)", p.GuestID, p.Lat, p.Lon, s.GuestID)
 	}
+	// The echo is the blurred position too: the precise one stays with the
+	// browser that sent it (which blurs before sending anyway).
 	got := decodeResponse(t, rec)
-	if got["lat"] != 51.5074 || got["lon"] != -0.1278 || got["source"] != "browser" || got["emplacementId"] != "emp-"+s.GuestID {
-		t.Fatalf("response = %s", rec.Body)
+	if !near(got["lat"].(float64), 51.55) || !near(got["lon"].(float64), -0.15) || got["source"] != "browser" || got["emplacementId"] != "emp-"+s.GuestID {
+		t.Fatalf("response = %s, want the blurred 51.55,-0.15", rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "51.5074") || strings.Contains(rec.Body.String(), "-0.1278") {
+		t.Fatalf("response echoes the precise position: %s", rec.Body)
 	}
 }
 
@@ -211,8 +216,8 @@ func TestPositionDeniedUsesIP(t *testing.T) {
 		t.Fatalf("Place(%q, %v, %v), want (%q, %v, %v)", p.GuestID, p.Lat, p.Lon, s.GuestID, wantLat, wantLon)
 	}
 	got := decodeResponse(t, rec)
-	if got["lat"] != 48.8566 || got["lon"] != 2.3522 || got["source"] != "ip" || got["emplacementId"] != "emp-"+s.GuestID {
-		t.Fatalf("response = %s", rec.Body)
+	if got["lat"] != wantLat || got["lon"] != wantLon || got["source"] != "ip" || got["emplacementId"] != "emp-"+s.GuestID {
+		t.Fatalf("response = %s, want the blurred %v,%v", rec.Body, wantLat, wantLon)
 	}
 }
 
@@ -356,8 +361,8 @@ func TestPositionRejectsBadBodies(t *testing.T) {
 
 func TestPositionBoundaryCoordinatesAccepted(t *testing.T) {
 	rig := newHandlerRig(t, 25, nil, nil)
-	u, _ := rig.startGuest(t)
 	for _, body := range []string{`{"lat":90,"lon":180}`, `{"lat":-90,"lon":-180}`, `{"lat":0,"lon":0}`} {
+		u, _ := rig.startGuest(t) // one each: a guest may report only so often
 		if rec := rig.postPosition(t, u, body, ""); rec.Code != http.StatusOK {
 			t.Errorf("%s: status %d, want 200", body, rec.Code)
 		}
@@ -387,13 +392,14 @@ func TestPositionNeverLogsPrecise(t *testing.T) {
 	loc := fakeLocator{"203.0.113.7": {51.5074, -0.1278}}
 	rig := newHandlerRig(t, 25, loc, nil)
 	u, _ := rig.startGuest(t)
+	u2, _ := rig.startGuest(t) // a guest may report only twice at once
 
 	// Success, IP fallback, a failed Place and a bad body all get a chance to log.
 	rig.postPosition(t, u, `{"lat":51.5074,"lon":-0.1278}`, "")
 	rig.postPosition(t, u, `{"denied":true}`, "203.0.113.7")
 	rig.sites.placeErr = errors.New("ingest down")
-	rig.postPosition(t, u, `{"lat":51.5074,"lon":-0.1278}`, "")
-	rig.postPosition(t, u, `{"lat":51.5074,"lon":-0.1278,"x":`, "")
+	rig.postPosition(t, u2, `{"lat":51.5074,"lon":-0.1278}`, "")
+	rig.postPosition(t, u2, `{"lat":51.5074,"lon":-0.1278,"x":`, "")
 
 	if rig.logs.FilterMessage("failed to place demo visitor").Len() == 0 {
 		t.Fatal("expected the failed Place to be logged; the check below would be vacuous")
@@ -416,5 +422,29 @@ func TestSessionRateLimitKeysIPv6By64(t *testing.T) {
 	}
 	if rec := rig.postSession(t, "2001:db8:1:2::3"); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("3rd request from one /64: status %d, want 429", rec.Code)
+	}
+}
+
+// Each report costs an upsert in the ingest service, so a guest may report
+// once per 5 s with a burst of 2 (a fix after the IP fallback, say).
+func TestPositionRateLimitedPerGuest(t *testing.T) {
+	rig := newHandlerRig(t, 25, nil, nil)
+	u, _ := rig.startGuest(t)
+	for i := 0; i < 2; i++ {
+		if rec := rig.postPosition(t, u, `{"lat":51.55,"lon":-0.15}`, ""); rec.Code != http.StatusOK {
+			t.Fatalf("report %d: status %d, want 200", i+1, rec.Code)
+		}
+	}
+	rec := rig.postPosition(t, u, `{"lat":51.55,"lon":-0.15}`, "")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("3rd report: status %d, want 429", rec.Code)
+	}
+	if n := len(rig.sites.placements()); n != 2 {
+		t.Fatalf("Place called %d times, want 2", n)
+	}
+	// Another guest is unaffected.
+	other, _ := rig.startGuest(t)
+	if rec := rig.postPosition(t, other, `{"denied":true}`, ""); rec.Code != http.StatusOK {
+		t.Fatalf("other guest: status %d, want 200", rec.Code)
 	}
 }
