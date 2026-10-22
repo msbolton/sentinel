@@ -218,9 +218,10 @@ func TestIntersectStraightDown(t *testing.T) {
 
 func TestIntersectGrazing(t *testing.T) {
 	// Barely below level, the ray strikes a cliff 5 km out. At the cliff the
-	// Earth's curvature has the ray climbing away from the ground, so the
-	// along-sight term from the terrain's vertical error must be capped
-	// rather than blow up.
+	// Earth's curvature has the ray climbing away from the ground, but the
+	// cliff face (200 m over 50 m, a slope of 4) rises much faster: the
+	// terrain's vertical error moves the crossing by only about
+	// VerticalSigM / 4 along the line of sight, not the maximum range (I1).
 	origin := losOrigin
 	origin.Alt = 100
 	surface := func(lat, lon float64) float64 {
@@ -235,12 +236,11 @@ func TestIntersectGrazing(t *testing.T) {
 	if d := northOf(hit.At.Lat, hit.At.Lon); d < 5000 || d > 5050 {
 		t.Errorf("hit %.0f m north, want on the cliff (5000–5050 m)", d)
 	}
-	cov, ok := s.DirectionCovariance(context.Background(), origin, 0, -0.01, maxRange, 0.01, 0.01, hit)
+	cov, ok := s.DirectionCovariance(context.Background(), origin, 0, -0.01, maxRange, 0, 0, hit)
 	finiteCov(t, cov, ok)
-	along := alongSightSigma(cov, 0)
-	if along < maxRange || along > maxRange*1.001 {
-		t.Errorf("along-sight sigma %.1f m, want capped at %.0f m", along, maxRange)
-	}
+	// The ray's own descent (0.01° less the curvature over 5 km) is under
+	// 0.1 % of the cliff's slope.
+	near(t, "along-sight sigma", alongSightSigma(cov, 0), VerticalSigM/4, 0.01*VerticalSigM/4)
 }
 
 func TestCovarianceElongatesAlongSight(t *testing.T) {
@@ -460,4 +460,65 @@ func TestIntersectCrossesTileEdge(t *testing.T) {
 	}
 	want := bisectRange(t, origin, 0, -1, 0, DefaultMaxRangeM, surface)
 	near(t, "range", hit.RangeM, want, 1)
+}
+
+// slope is a plane through 0 m at losOrigin rising k metres per metre
+// northward (falling for k < 0).
+func slope(k float64) func(lat, lon float64) float64 {
+	return func(lat, lon float64) float64 { return k * northOf(lat, lon) }
+}
+
+// I1: on a plane, the terrain's vertical error moves the crossing along the
+// line of sight by σh / |tan(depression) + slope|, the slope rising away from
+// the camera: the ray and the ground close on each other at that rate per
+// horizontal metre. The expectations below are worked out from that
+// geometry alone (σh, the elevation and the slope), not from the code.
+func TestCovarianceTerrainTermOnSlopes(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		k, height, el float64
+	}{
+		// A camera in a valley looking up at a 15 % hillside: the ray rises,
+		// but the ground rises faster.
+		{"up-slope, rising ray", 0.15, 10, 2},
+		{"up-slope, falling ray", 0.15, 10, -1},
+		// The ground falls away from the camera, more gently than the ray.
+		{"down-slope", -0.05, 100, -5},
+		{"flat", 0, 100, -5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewStatic(slope(tc.k))
+			origin := losOrigin
+			origin.Alt = tc.height
+			hit := intersect(t, s, origin, 0, tc.el, DefaultMaxRangeM)
+			if !hit.Found {
+				t.Fatal("no hit")
+			}
+			tanDep := -math.Tan(tc.el * math.Pi / 180)
+			// Where the ray meets the plane, horizontally: height + x·tan(el) = k·x.
+			wantX := tc.height / (tanDep + tc.k)
+			near(t, "hit distance", horizontal(origin, hit.At), wantX, 0.01*wantX+0.5)
+			cov, ok := s.DirectionCovariance(context.Background(), origin, 0, tc.el, DefaultMaxRangeM, 0, 0, hit)
+			finiteCov(t, cov, ok)
+			want := VerticalSigM / math.Abs(tanDep+tc.k)
+			near(t, "along-sight sigma", alongSightSigma(cov, 0), want, 0.03*want)
+		})
+	}
+}
+
+// I1: the slope's term keeps the same cap. A ray climbing at 8° onto a 15 %
+// hillside closes on it at only 0.0095 per metre, so σh over that (421 m)
+// is held to the maximum range, 100 m here.
+func TestCovarianceTerrainTermOnSlopesCapped(t *testing.T) {
+	s := NewStatic(slope(0.15))
+	origin := losOrigin
+	origin.Alt = 0.5
+	const maxRange = 100.0
+	hit := intersect(t, s, origin, 0, 8, maxRange)
+	if !hit.Found {
+		t.Fatal("no hit")
+	}
+	cov, ok := s.DirectionCovariance(context.Background(), origin, 0, 8, maxRange, 0, 0, hit)
+	finiteCov(t, cov, ok)
+	near(t, "along-sight sigma", alongSightSigma(cov, 0), maxRange, 0.001*maxRange)
 }

@@ -163,9 +163,15 @@ func (s *Service) Visible(ctx context.Context, from, to geo.LLA) (bool, error) {
 // down, fading toward level where the azimuth pair dominates.
 //
 // The terrain's own vertical error adds a variance of
-// (VerticalSigM / tan(depression))² along the line of sight, the depression
-// being the ray's angle below the horizontal at the hit and its tangent held
-// to at least VerticalSigM / maxRangeM, so the term never exceeds maxRangeM².
+// (VerticalSigM / |tan(depression) + slope|)² along the line of sight: the
+// depression is the ray's angle below the horizontal at the hit (negative
+// for a ray looking up), and the slope is the ground's rise per horizontal
+// metre away from the origin there, by a central difference StepM either
+// side of the hit. Their sum is the rate at which the ray and the ground
+// close, so the term is right on flat ground, on a hillside facing the
+// camera (a ray looking up included) and on ground falling away. The sum
+// is held to at least VerticalSigM / maxRangeM, so the term never exceeds
+// maxRangeM².
 // uu is that terrain term alone, VerticalSigM²; the horizontal and vertical
 // are uncorrelated (nu = eu = 0). A hit that was not Found is taken as the
 // point at maxRangeM.
@@ -215,8 +221,20 @@ func (s *Service) DirectionCovariance(ctx context.Context, origin geo.LLA, azDeg
 	case back.U > 0:
 		tanDep = math.Inf(1)
 	}
-	tanDep = math.Max(tanDep, VerticalSigM/maxRangeM)
-	sigAlong := VerticalSigM / tanDep
+	// The ray and the ground close on each other at tanDep + the ground's
+	// slope away from the origin, per horizontal metre: a vertical error
+	// moves the crossing by VerticalSigM over that. On rising ground a ray
+	// looking up still closes; on falling ground it closes slower.
+	closing := tanDep
+	if hit.Found && horiz > 1e-6 && !math.IsInf(tanDep, 0) {
+		k, err := s.slopeAway(ctx, centre, -uE, -uN)
+		if err != nil {
+			return cov, false
+		}
+		closing = math.Abs(tanDep + k)
+	}
+	closing = math.Max(closing, VerticalSigM/maxRangeM)
+	sigAlong := VerticalSigM / closing
 	varAlong := sigAlong * sigAlong
 
 	nn := aN*aN + bN*bN + varAlong*uN*uN
@@ -239,4 +257,22 @@ func (s *Service) DirectionCovariance(ctx context.Context, origin geo.LLA, azDeg
 
 	cov = [6]float64{nn, ne, 0, ee, 0, VerticalSigM * VerticalSigM} // nu = eu = 0
 	return cov, finite(cov[:]...)
+}
+
+// slopeAway is the ground's slope at p along the horizontal unit direction
+// (fE, fN), rise over run, by a central difference StepM either side.
+func (s *Service) slopeAway(ctx context.Context, p geo.LLA, fE, fN float64) (float64, error) {
+	ground := func(d float64) (float64, error) {
+		q := geo.FromECEF(geo.ECEFOf(geo.LLA{Lat: p.Lat, Lon: p.Lon, Alt: p.Alt}, geo.ENU{E: d * fE, N: d * fN}))
+		return s.HeightHAE(ctx, q.Lat, q.Lon)
+	}
+	ahead, err := ground(StepM)
+	if err != nil {
+		return 0, err
+	}
+	behind, err := ground(-StepM)
+	if err != nil {
+		return 0, err
+	}
+	return (ahead - behind) / (2 * StepM), nil
 }
