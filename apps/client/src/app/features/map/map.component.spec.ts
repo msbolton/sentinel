@@ -827,6 +827,70 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       expect(camera.flyTo).not.toHaveBeenCalled();
     });
 
+    it('asks for the location with a 10 s timeout, accepting a fix up to a minute old', () => {
+      geolocation({ lat: 51.5, lon: -0.12 });
+      (component as any).initUserLocation();
+      expect((navigator.geolocation.getCurrentPosition as jest.Mock).mock.calls[0][2]).toEqual({ timeout: 10_000, maximumAge: 60_000 });
+    });
+
+    it('falls back to the IP location when the prompt goes unanswered for 10 s, then refines if the browser answers later', async () => {
+      jest.useFakeTimers();
+      try {
+        let answer!: (p: any) => void;
+        Object.defineProperty(navigator, 'geolocation', {
+          configurable: true,
+          value: { getCurrentPosition: jest.fn((ok: (p: any) => void) => (answer = ok)) },
+        });
+        demo.reportPosition.mockResolvedValueOnce({ lat: 48.85, lon: 2.35, source: 'ip' });
+
+        (component as any).initUserLocation();
+        jest.advanceTimersByTime(9_999);
+        expect(demo.reportPosition).not.toHaveBeenCalled();
+        jest.advanceTimersByTime(1);
+        expect(demo.reportPosition).toHaveBeenCalledTimes(1);
+        expect(demo.reportPosition).toHaveBeenCalledWith('denied');
+
+        answer({ coords: { latitude: 51.5, longitude: -0.12 } });
+        expect(demo.reportPosition).toHaveBeenCalledTimes(2);
+        expect(demo.reportPosition).toHaveBeenLastCalledWith({ lat: 51.5, lon: -0.12 });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('a refusal after the fallback, or a timeout error, does not report twice', () => {
+      jest.useFakeTimers();
+      try {
+        let fail!: (e: any) => void;
+        Object.defineProperty(navigator, 'geolocation', {
+          configurable: true,
+          value: { getCurrentPosition: jest.fn((_ok: unknown, no: (e: any) => void) => (fail = no)) },
+        });
+        (component as any).initUserLocation();
+        jest.advanceTimersByTime(10_000);
+        fail({ code: 3 });
+        expect(demo.reportPosition).toHaveBeenCalledTimes(1);
+        expect(demo.reportPosition).toHaveBeenCalledWith('denied');
+        jest.advanceTimersByTime(60_000);
+        expect(demo.reportPosition).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('a quick refusal reports once, at once, with no fallback later', () => {
+      jest.useFakeTimers();
+      try {
+        geolocation('denied');
+        (component as any).initUserLocation();
+        expect(demo.reportPosition).toHaveBeenCalledTimes(1);
+        jest.advanceTimersByTime(20_000);
+        expect(demo.reportPosition).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('waits for the welcome card to be on screen before asking for the location, then asks once', () => {
       demo.welcomeShown.set(false);
       geolocation({ lat: 51.5, lon: -0.12 });

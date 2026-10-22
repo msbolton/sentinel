@@ -168,6 +168,8 @@ interface LayerConfig {
   color: string;
 }
 
+/** How long a demo guest's location prompt may go unanswered before they are placed from their IP. */
+const GUEST_LOCATION_TIMEOUT_MS = 10_000;
 
 @Component({
   selector: 'app-map',
@@ -2380,13 +2382,33 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       declined();
       return;
     }
+    // An ignored permission prompt never answers (the API's timeout only
+    // starts once permission is given), so after GUEST_LOCATION_TIMEOUT_MS
+    // the visitor is placed from their IP. A fix that still arrives later
+    // refines that: it is reported in turn.
+    let answered = false;
+    let fellBack = false;
+    const fallback = setTimeout(() => {
+      if (!answered) {
+        fellBack = true;
+        declined();
+      }
+    }, GUEST_LOCATION_TIMEOUT_MS);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        answered = true;
+        clearTimeout(fallback);
         const { latitude: lat, longitude: lon } = pos.coords;
         void this.demo.reportPosition({ lat, lon });
         flyTo(lon, lat);
       },
-      declined,
+      () => {
+        if (answered) return;
+        answered = true;
+        clearTimeout(fallback);
+        if (!fellBack) declined();
+      },
+      { timeout: GUEST_LOCATION_TIMEOUT_MS, maximumAge: 60_000 },
     );
   }
 
