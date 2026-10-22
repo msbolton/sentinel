@@ -28,6 +28,7 @@ function rig(groundHeight: number | undefined = undefined) {
     VerticalOrigin: { BOTTOM: 1 },
     HorizontalOrigin: { LEFT: 1 },
     NearFarScalar: function (this: any, ...a: number[]) { this.v = a; },
+    ArcType: { NONE: 0, GEODESIC: 1, RHUMB: 2 },
   };
   return { viewer, Cesium, live, layer: new BearingLayer(viewer, Cesium) };
 }
@@ -82,6 +83,8 @@ describe('BearingLayer', () => {
     expect(line.polyline.positions[0]).toEqual({ lon: 0, lat: 0, h: 10 });
     expect(line.polyline.positions[1].lon).toBeCloseTo(0.008983, 5);
     expect(line._sentinelBearing).toBe('site-1');
+    expect(line.polyline.arcType).toBe(0); // ArcType.NONE: a straight line, as the bearing is
+    expect(line.polyline.clampToGround).not.toBe(true);
     expect(line.label.text).toBe('Unknown');
   });
 

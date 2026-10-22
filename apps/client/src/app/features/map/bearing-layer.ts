@@ -101,6 +101,9 @@ export class BearingLayer {
         positions: [C.Cartesian3.fromDegrees(lon, lat, alt), C.Cartesian3.fromDegrees(end.lon, end.lat, end.alt)],
         width: BEARING_LINE_CONFIG.width,
         material: new C.PolylineDashMaterialProperty({ color, dashLength: BEARING_LINE_CONFIG.dashLength }),
+        // Straight, as the line of sight is: the default geodesic arc follows
+        // the ellipsoid and sags (about 18 m at 30 km) below it.
+        arcType: C.ArcType?.NONE,
       },
       label: {
         text: bearingLabel(b),
