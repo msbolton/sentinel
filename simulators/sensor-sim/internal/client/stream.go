@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -17,6 +18,9 @@ import (
 
 	ingestv1 "github.com/sentinel/proto-gen/sentinel/ingest/v1"
 	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
+
+	"github.com/sentinel/sensor-sim/internal/config"
+	"github.com/sentinel/sensor-sim/internal/scenario"
 )
 
 // Ack reasons the client acts on.
@@ -40,20 +44,28 @@ type activeStream struct {
 	broken bool // a Send failed: wait for done, send nothing more
 }
 
-// sim is the simulated sensor: each scan is the scenario truth at the wall
-// clock (so separate radar and camera processes see the same targets) put
-// through the detector.
+// sim is the simulated sensor. A radar's or camera's scan is the scenario
+// truth at the wall clock (so separate radar and camera processes see the
+// same targets) put through the detector. A stepped source (the ESM sensor)
+// runs on its own clock t instead, which advances by the tick interval in
+// force at each tick, never from wall-clock readings, so a fixed seed
+// reproduces the same fixes.
 type sim struct {
-	src   Source
-	empID string
-	hbSec uint32
+	src    Source
+	empID  string
+	hbSec  uint32
+	mobile bool
+	t      time.Time // the stepped clock
 }
 
 // scan returns the reports for one scan at now. ctx bounds its terrain work.
 func (s *sim) scan(ctx context.Context, now time.Time) ([]*ingestv1.Report, error) {
-	truth, err := s.src.Truth(ctx, now)
-	if err != nil {
-		return nil, err
+	var truth []scenario.Truth
+	if s.src.Truth != nil {
+		var err error
+		if truth, err = s.src.Truth(ctx, now); err != nil {
+			return nil, err
+		}
 	}
 	obs := s.src.Detector.Detect(ctx, now, truth)
 	out := make([]*ingestv1.Report, len(obs))
@@ -63,9 +75,14 @@ func (s *sim) scan(ctx context.Context, now time.Time) ([]*ingestv1.Report, erro
 	return out, nil
 }
 
-// state is the emplacement's heartbeat. A fixed site's position is ignored by
-// the server; it is sent for the record.
-func (s *sim) state() *ingestv1.Report {
+// state is the emplacement's heartbeat at now: the source's (an ESM
+// sensor's platform pose), else the fixed site, whose position the server
+// ignores; it is sent for the record.
+func (s *sim) state(now time.Time) *ingestv1.Report {
+	if s.src.State != nil {
+		st := s.src.State(s.empID, now)
+		return &ingestv1.Report{Body: &ingestv1.Report_EmplacementState{EmplacementState: st}}
+	}
 	p := s.src.Site
 	st := &sentinelv1.EmplacementState{
 		EmplacementId:        s.empID,
@@ -97,30 +114,90 @@ type loop struct {
 }
 
 func (c *Client) newLoop(api ingestv1.IngestServiceClient, sess *ingestv1.GetSessionResponse, emp *sentinelv1.Emplacement) (*loop, error) {
-	s := c.cfg.Sensor
-	c.log.Info("sensor", "kind", s.Kind, "emplacement_id", emp.GetId(),
-		"lat", c.src.Site.Lat, "lon", c.src.Site.Lon, "alt", c.src.Site.Alt,
-		"boresight", s.Boresight, "width", s.Width, "range_km", s.RangeKm, "min_range_km", s.MinRangeKm,
-		"targets", len(c.cfg.Scenario.Targets), "rate_hz", s.Rate)
+	cfg, src := c.cfg, c.src
+	if cfg.ESM() {
+		var err error
+		if cfg, src, err = c.esmSite(sess, emp); err != nil {
+			return nil, err
+		}
+	}
+	s := cfg.Sensor
+	attrs := []any{"kind", s.Kind, "emplacement_id", emp.GetId(),
+		"lat", src.Site.Lat, "lon", src.Site.Lon, "alt", src.Site.Alt,
+		"boresight", s.Boresight, "width", s.Width, "range_km", s.RangeKm, "min_range_km", s.MinRangeKm}
+	if cfg.ESM() {
+		attrs = append(attrs, "mobile", cfg.Mobile(), "emitters", cfg.EmitterCount)
+	} else {
+		attrs = append(attrs, "targets", len(cfg.Scenario.Targets))
+	}
+	c.log.Info("sensor", append(attrs, "rate_hz", s.Rate)...)
+	start := c.opts.Now()
 	return &loop{
 		c:   c,
 		api: api,
 		sim: sim{
-			src:   c.src,
-			empID: emp.GetId(),
-			hbSec: s.HeartbeatSeconds(),
+			src:    src,
+			empID:  emp.GetId(),
+			hbSec:  s.HeartbeatSeconds(),
+			mobile: cfg.Mobile(),
+			t:      start,
 		},
 		maxBytes: int(sess.GetMaxMessageBytes()),
 		bo:       newBackoff(c.opts.BackoffMin, c.opts.BackoffMax, c.opts.Jitter),
 	}, nil
 }
 
+// esmSite is the configuration and source an ESM sensor runs with once its
+// emplacement is known: a bound emplacement's geometry is the server's, and
+// a PLATFORM azimuth reference needs a MOBILE emplacement.
+func (c *Client) esmSite(sess *ingestv1.GetSessionResponse, emp *sentinelv1.Emplacement) (config.Config, Source, error) {
+	cfg, src := c.cfg, c.src
+	rebuild := false
+	if strings.TrimSpace(cfg.Sensor.EmplacementID) != "" || !sess.GetSenderManagedEmplacements() {
+		var err error
+		if cfg, err = withServerGeometry(cfg, emp); err != nil {
+			return cfg, src, err
+		}
+		rebuild = true
+		if emp.GetCoverage().GetMaxRangeM() <= 0 {
+			c.log.Warn("the emplacement has no coverage on the server; simulating the configured (or default) sector around its boresight",
+				"emplacement_id", emp.GetId(), "width_deg", cfg.Sensor.Width, "range_km", cfg.Sensor.RangeKm, "min_range_km", cfg.Sensor.MinRangeKm)
+		}
+		if cfg.Mobile() != c.cfg.Mobile() {
+			c.log.Warn("using the emplacement's mobility from the server", "mobility", cfg.Sensor.Mobility)
+		}
+	}
+	if strings.EqualFold(cfg.Sensor.AzimuthReference, config.AzimuthPlatform) && !cfg.Mobile() {
+		c.log.Warn("a PLATFORM azimuth reference needs a MOBILE emplacement; simulating TRUE_NORTH")
+		cfg.Sensor.AzimuthReference = config.AzimuthTrueNorth
+		rebuild = true
+	}
+	cfg.Sensor.EmplacementID = emp.GetId()
+	if rebuild {
+		var err error
+		if src, err = buildSource(c.build, cfg); err != nil {
+			return cfg, src, err
+		}
+	}
+	return cfg, src, nil
+}
+
+// now is the scan time: the stepped clock for a stepped source, else the
+// wall clock.
+func (l *loop) now() time.Time {
+	if l.sim.src.Stepped {
+		return l.sim.t
+	}
+	return l.c.opts.Now()
+}
+
 // scan runs one scan, bounded by the scan timeout, and sends its detections.
 // A scan the terrain cannot answer in time is skipped: the download it
 // started carries on, and later scans use the tile once it is in.
-func (l *loop) scan(ctx context.Context) {
+func (l *loop) scan(ctx context.Context, interval time.Duration) {
+	l.sim.t = l.sim.t.Add(interval)
 	sctx, cancel := context.WithTimeout(ctx, l.c.opts.ScanTimeout)
-	reports, err := l.sim.scan(sctx, l.c.opts.Now())
+	reports, err := l.sim.scan(sctx, l.now())
 	cancel()
 	if err != nil {
 		if ctx.Err() != nil {
@@ -156,9 +233,14 @@ func (l *loop) run(ctx context.Context) error {
 	defer ticker.Stop()
 	stats := time.NewTicker(l.c.opts.StatsEvery)
 	defer stats.Stop()
-	// The emplacement's heartbeat: an EmplacementState every heartbeat
-	// interval, declaring the configured interval.
-	st := time.NewTicker(l.c.opts.HeartbeatEvery)
+	// The emplacement's heartbeat: a mobile one's position reports at 1 Hz, a
+	// fixed one's EmplacementState every heartbeat interval. Both declare the
+	// configured interval.
+	every := l.c.opts.HeartbeatEvery
+	if l.sim.mobile {
+		every = l.c.opts.StateEvery
+	}
+	st := time.NewTicker(every)
 	defer st.Stop()
 	stateC := st.C
 
@@ -172,7 +254,7 @@ func (l *loop) run(ctx context.Context) error {
 			return nil
 
 		case <-ticker.C:
-			l.scan(ctx)
+			l.scan(ctx, interval)
 			if next := l.c.tickInterval(); next != interval {
 				interval = next
 				ticker.Reset(interval)
@@ -181,14 +263,14 @@ func (l *loop) run(ctx context.Context) error {
 			}
 
 		case <-stateC:
-			l.send(l.sim.state(), false)
+			l.send(l.sim.state(l.now()), false)
 
 		case <-stats.C:
 			l.c.logStats("stats")
 
 		case <-l.c.wake:
 			if l.c.takeStateKick() {
-				l.send(l.sim.state(), false)
+				l.send(l.sim.state(l.now()), false)
 			}
 			l.armRetry()
 
@@ -232,7 +314,7 @@ func (l *loop) connect(ctx context.Context) error {
 	l.cur = a
 	go l.c.readAcks(a)
 	l.c.log.Info("stream open", "stream", a.gen)
-	l.send(l.sim.state(), false)
+	l.send(l.sim.state(l.now()), false)
 	return nil
 }
 

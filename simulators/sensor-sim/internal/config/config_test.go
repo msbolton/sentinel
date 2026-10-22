@@ -459,7 +459,8 @@ targets:
 // --insecure themselves (Compose's `up` passes no transport flag); a
 // transport on the command line still replaces their choice.
 func TestExamplesDefaultToInsecure(t *testing.T) {
-	for _, tc := range []struct{ kind, file string }{{"radar", "radar.yaml"}, {"eoir", "camera.yaml"}} {
+	for _, tc := range []struct{ kind, file string }{{"radar", "radar.yaml"}, {"eoir", "camera.yaml"},
+		{"esm", "esm-coastal.yaml"}, {"esm", "esm-mobile.yaml"}} {
 		t.Run(tc.file, func(t *testing.T) {
 			base := []string{"--kind", tc.kind, "--addr", "localhost:6200", "--token", "si_exampletoken",
 				"--config", filepath.Join("..", "..", "examples", tc.file)}

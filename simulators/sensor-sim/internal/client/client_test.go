@@ -26,6 +26,7 @@ import (
 	"github.com/sentinel/sensor-sim/internal/config"
 	"github.com/sentinel/sensor-sim/internal/detect"
 	"github.com/sentinel/sensor-sim/internal/eoir"
+	"github.com/sentinel/sensor-sim/internal/esm"
 	"github.com/sentinel/sensor-sim/internal/radar"
 	"github.com/sentinel/sensor-sim/internal/scenario"
 )
@@ -288,8 +289,18 @@ func eoirConfig(c *config.Config) {
 func f64(v float64) *float64 { return &v }
 
 // testSource builds what main would for cfg, on flat ground at 0 m: the
-// radar with no terrain, the camera with a static one.
+// radar with no terrain, the camera with a static one, the ESM sensor with
+// none.
 func testSource(cfg config.Config) Source {
+	if cfg.ESM() {
+		s := esm.New(cfg)
+		return Source{
+			Site:     geo.LLA{Lat: cfg.Sensor.Lat, Lon: cfg.Sensor.Lon, Alt: cfg.Sensor.AltM()},
+			Detector: s,
+			State:    s.State,
+			Stepped:  true,
+		}
+	}
 	site := geo.LLA{Lat: cfg.Sensor.Lat, Lon: cfg.Sensor.Lon}
 	if cfg.Sensor.Alt != nil {
 		site.Alt = *cfg.Sensor.Alt
@@ -336,6 +347,7 @@ func newHarnessSrc(t *testing.T, f *fake, mut func(*config.Config, *Options), sr
 		BackoffMin:    time.Millisecond,
 		BackoffMax:    5 * time.Millisecond,
 		StatsEvery:    time.Hour,
+		StateEvery:    10 * time.Millisecond,
 		RetryDelay:    time.Millisecond,
 		RateLimitHold: 10 * time.Second,
 		GraceWindow:   5 * time.Second,
@@ -349,11 +361,14 @@ func newHarnessSrc(t *testing.T, f *fake, mut func(*config.Config, *Options), sr
 	if mut != nil {
 		mut(&h.cfg, &opts)
 	}
-	src := testSource(h.cfg)
-	if srcMut != nil {
-		srcMut(&src)
+	build := func(cfg config.Config) (Source, error) {
+		src := testSource(cfg)
+		if srcMut != nil {
+			srcMut(&src)
+		}
+		return src, nil
 	}
-	c, err := New(h.cfg, src, opts)
+	c, err := New(h.cfg, build, opts)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1177,7 +1192,7 @@ func TestNoHeartbeatSendsAStateAndRetriesTheFixOnce(t *testing.T) {
 // Many refusals in a moment send one heartbeat, not one each.
 func TestNoHeartbeatKicksAreDebounced(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
-	c, err := New(testConfig(), testSource(testConfig()), Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: clock.Now, HeartbeatKickMin: time.Second})
+	c, err := New(testConfig(), FixedSource(testSource(testConfig())), Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: clock.Now, HeartbeatKickMin: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}

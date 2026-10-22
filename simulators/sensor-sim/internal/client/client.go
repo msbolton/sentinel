@@ -1,8 +1,8 @@
 // Package client is sensor-sim's gRPC side: it opens a session with the
-// ingest service, upserts the emplacement the simulated sensor reports as,
-// and streams its heartbeats and detections, reconnecting with backoff and
-// keeping stats. It is ew-sensor's client adapted to a radar or camera
-// (Go's internal/ rule keeps the two modules from sharing it).
+// ingest service, resolves the emplacement the simulated sensor reports as
+// (a radar or camera always upserts its own; an ESM sensor can also report as
+// a bound one), and streams its heartbeats and detections, reconnecting with
+// backoff and keeping stats.
 //
 // Concurrency: one loop goroutine owns the simulation and every
 // stream.Send; one goroutine per open stream reads its acks. They share
@@ -25,13 +25,14 @@ import (
 
 	"github.com/sentinel/go-common/geo"
 	ingestv1 "github.com/sentinel/proto-gen/sentinel/ingest/v1"
+	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 
 	"github.com/sentinel/sensor-sim/internal/config"
 	"github.com/sentinel/sensor-sim/internal/detect"
 	"github.com/sentinel/sensor-sim/internal/scenario"
 )
 
-// Exit codes, as ew-sensor's.
+// Exit codes.
 const (
 	// ExitOK is a normal end: --duration elapsed, a signal, or --help.
 	ExitOK = 0
@@ -75,7 +76,8 @@ type Options struct {
 	// (tests add an in-memory dialer).
 	DialOptions []grpc.DialOption
 	// Now is the clock for the rate-limit hold, the upsert grace window,
-	// stream health and the scenario truth. Default time.Now.
+	// stream health, the scenario truth and the start of a stepped
+	// simulation. Default time.Now.
 	Now func() time.Time
 	// Jitter returns a number in [0,1) for the backoff. Default rand.Float64.
 	Jitter func() float64
@@ -84,6 +86,7 @@ type Options struct {
 	BackoffMax   time.Duration // default 30s
 	HealthyAfter time.Duration // a stream open this long resets the backoff; default 30s
 	StatsEvery   time.Duration // default 10s
+	StateEvery   time.Duration // a mobile sensor's EmplacementState period; default 1s
 	// ScanTimeout bounds one scan's terrain work (the truth's two height
 	// lookups per target and the camera's line-of-sight checks); a scan that
 	// runs out is skipped. Default 2s.
@@ -93,8 +96,8 @@ type Options struct {
 	RetryDelay    time.Duration // delay before that retry; default 250ms
 	RPCTimeout    time.Duration // per unary call; default 30s
 
-	// HeartbeatEvery is the heartbeat period; default the configured
-	// --heartbeat-interval (tests shorten it).
+	// HeartbeatEvery is a fixed site's heartbeat period; default the
+	// configured --heartbeat-interval (tests shorten it).
 	HeartbeatEvery time.Duration
 	// HeartbeatKickMin is the least time between two heartbeats sent because
 	// of no_heartbeat acks; default 1s.
@@ -124,6 +127,7 @@ func (o *Options) defaults() {
 	set(&o.BackoffMax, 30*time.Second)
 	set(&o.HealthyAfter, 30*time.Second)
 	set(&o.StatsEvery, 10*time.Second)
+	set(&o.StateEvery, time.Second)
 	set(&o.ScanTimeout, DefaultScanTimeout)
 	set(&o.RateLimitHold, 10*time.Second)
 	set(&o.GraceWindow, 5*time.Second)
@@ -139,14 +143,36 @@ const DefaultScanTimeout = 2 * time.Second
 // Source is the simulated sensor: where it stands, the truth it observes and
 // the detector that turns the truth into observations.
 type Source struct {
-	// Site is the sensor's position; its altitude is resolved, in metres
-	// above the WGS84 ellipsoid.
+	// Site is the sensor's position, the one an upserted emplacement
+	// declares; its altitude is resolved, in metres above the WGS84
+	// ellipsoid.
 	Site geo.LLA
 	// Truth returns the scenario truth at now (scenario.TruthAt with the
-	// terrain). An error skips the scan.
+	// terrain). An error skips the scan. Nil passes the detector no truth:
+	// the ESM sensor's emitters are its own.
 	Truth func(ctx context.Context, now time.Time) ([]scenario.Truth, error)
-	// Detector is the radar or the camera.
+	// Detector is the radar, the camera or the ESM sensor.
 	Detector detect.Detector
+	// State, when set, builds the emplacement's heartbeat at the scan time
+	// (the ESM sensor's, which reports the platform's pose); nil sends the
+	// fixed Site.
+	State func(emplacementID string, now time.Time) *sentinelv1.EmplacementState
+	// Stepped puts the source on a simulation clock: it starts at the
+	// stream loop's start and advances by the tick interval in force at
+	// each tick, never from wall-clock readings, so a fixed seed reproduces
+	// the same output (the ESM sensor). Otherwise each scan reads
+	// Options.Now, so that a radar and a camera see one wall-clock scenario.
+	Stepped bool
+}
+
+// SourceFunc builds the Source for the configuration the client runs with:
+// the loaded one, then, for an ESM sensor reporting as a bound emplacement,
+// that configuration with the server's geometry.
+type SourceFunc func(cfg config.Config) (Source, error)
+
+// FixedSource is a SourceFunc that always returns src.
+func FixedSource(src Source) SourceFunc {
+	return func(config.Config) (Source, error) { return src, nil }
 }
 
 // Stats counts what the client did.
@@ -189,11 +215,12 @@ type retryItem struct {
 
 // Client streams one simulated sensor to the ingest service.
 type Client struct {
-	cfg  config.Config
-	src  Source
-	opts Options
-	log  *slog.Logger
-	dial []grpc.DialOption
+	cfg   config.Config
+	src   Source
+	build SourceFunc
+	opts  Options
+	log   *slog.Logger
+	dial  []grpc.DialOption
 
 	interval atomic.Int64 // the loop's current tick interval, ns
 	wake     chan struct{}
@@ -211,11 +238,13 @@ type Client struct {
 	lastKick  time.Time
 }
 
-// New builds a client for cfg that simulates src. It fails (exit 1) when
-// the credentials cannot be loaded or src is incomplete.
-func New(cfg config.Config, src Source, opts Options) (*Client, error) {
-	if src.Truth == nil || src.Detector == nil {
-		return nil, fatalf(ExitFatal, "client: the source needs a truth and a detector")
+// New builds a client for cfg that simulates the source build makes for it.
+// It fails (exit 1) when the credentials cannot be loaded or the source
+// cannot be built or has no detector.
+func New(cfg config.Config, build SourceFunc, opts Options) (*Client, error) {
+	src, err := buildSource(build, cfg)
+	if err != nil {
+		return nil, err
 	}
 	opts.defaults()
 	if opts.HeartbeatEvery <= 0 {
@@ -230,6 +259,7 @@ func New(cfg config.Config, src Source, opts Options) (*Client, error) {
 	return &Client{
 		cfg:        cfg,
 		src:        src,
+		build:      build,
 		opts:       opts,
 		log:        opts.Logger,
 		dial:       dial,
@@ -238,6 +268,20 @@ func New(cfg config.Config, src Source, opts Options) (*Client, error) {
 		pending:    map[string]pendingReport{},
 		seenReason: map[string]bool{},
 	}, nil
+}
+
+func buildSource(build SourceFunc, cfg config.Config) (Source, error) {
+	if build == nil {
+		return Source{}, fatalf(ExitFatal, "client: no source")
+	}
+	src, err := build(cfg)
+	if err != nil {
+		return Source{}, &ExitError{Code: ExitFatal, Err: err}
+	}
+	if src.Detector == nil {
+		return Source{}, fatalf(ExitFatal, "client: the source needs a detector")
+	}
+	return src, nil
 }
 
 // Run connects and streams until ctx ends (nil) or a fatal error (an

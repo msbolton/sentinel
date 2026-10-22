@@ -1,0 +1,95 @@
+# Ship-borne ESM sensor on a patrol leg. The boresight and sector are
+# measured from the ship's bow (azimuthReference: PLATFORM), so the coverage
+# turns with the ship; the sensor sends its position as EmplacementState at
+# 1 Hz and again after every reconnect.
+#
+#   sensor-sim --kind esm --config examples/esm-mobile.yaml --addr localhost:6200
+#
+# The address and token come from flags or the environment (SENSOR_SIM_ADDR,
+# SENSOR_SIM_TOKEN or SENTINEL_INGEST_TOKEN), never from a file you commit.
+
+connection:
+  # Plaintext h2c, as the dev listener speaks. For TLS pass --tls (and --ca
+  # file) on the command line; it replaces this.
+  insecure: true
+
+sensor:
+  kind: esm
+  name: Patrol Ship ESM
+  lat: 36.200            # start of the ownship path
+  lon: -122.400
+  alt: 18
+  boresight: 0           # straight over the bow
+  width: 200             # 100 degrees either side of the bow
+  rangeKm: 100
+  minRangeKm: 1
+  mobility: MOBILE
+  azimuthReference: PLATFORM
+  rate: 1
+  pd: 0.85
+  sigmaM: 300
+  heartbeatInterval: 5s  # declared on the 1 Hz position reports; offline after three missed
+  # classification is left unset, so the server applies its floor.
+
+# The ship patrols this box, 12 knots, and loops back to the first point.
+ownship:
+  path: waypoints
+  speedKts: 12
+  waypoints:
+    - {lat: 36.200, lon: -122.400}
+    - {lat: 36.200, lon: -122.900}
+    - {lat: 36.450, lon: -122.900}
+    - {lat: 36.450, lon: -122.400}
+
+emitters:
+  - id: mob-search-1
+    displayName: Coastal surveillance radar
+    emitterType: RADAR_SEARCH
+    frequencyHz: 3.05e9
+    bandwidthHz: 5e6
+    priUs: 1500
+    pulseWidthUs: 2
+    modulation: PULSE
+    scanType: CIRCULAR
+    powerDbm: -58
+    affiliation: UNKNOWN
+    trackEnvironment: GROUND
+    start: {lat: 36.600, lon: -121.950}
+    motion:
+      type: static
+
+  - id: mob-nav-1
+    displayName: Fishing vessel navigation radar
+    emitterType: RADAR_SEARCH
+    frequencyHz: 9.41e9
+    bandwidthHz: 10e6
+    priUs: 1100
+    pulseWidthUs: 0.4
+    modulation: PULSE
+    scanType: CIRCULAR
+    powerDbm: -66
+    affiliation: NEUTRAL
+    trackEnvironment: SEA_SURFACE
+    start: {lat: 36.350, lon: -122.700}
+    motion:
+      type: random-walk
+      speedKts: 5
+
+  - id: mob-comms-1
+    displayName: Patrol aircraft datalink
+    emitterType: COMMS_DATALINK
+    frequencyHz: 1.09e9
+    bandwidthHz: 3e6
+    modulation: FHSS
+    scanType: FIXED
+    powerDbm: -72
+    affiliation: HOSTILE
+    trackEnvironment: AIR
+    start: {lat: 36.700, lon: -122.100}
+    motion:
+      type: waypoints
+      speedKts: 200
+      waypoints:
+        - {lat: 36.600, lon: -122.600}
+        - {lat: 36.300, lon: -123.000}
+        - {lat: 36.700, lon: -123.100}
