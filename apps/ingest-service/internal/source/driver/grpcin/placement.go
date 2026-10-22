@@ -48,6 +48,9 @@ type bearing struct {
 	Confidence     *float64  `json:"confidence,omitempty"`
 	Band           string    `json:"band,omitempty"`
 	ObservedAt     time.Time `json:"observedAt"`
+	// ReceivedAt is when the server took the detection: the time to live
+	// runs from it, whatever the sender's clock said.
+	ReceivedAt time.Time `json:"receivedAt"`
 }
 
 // isAirborne reports a target said to be in the air, whose direction meets
@@ -199,7 +202,8 @@ func sigmaOr(sent, stored *float64) float64 {
 
 // newBearing is o's direction as a bearing, with what the camera said of it.
 func newBearing(o *obs.Observation, az, el, sigAz, sigEl, length float64, reason string) *bearing {
-	b := &bearing{AzimuthDeg: az, ElevationDeg: el, SigmaAzDeg: sigAz, SigmaElDeg: sigEl, LengthM: length, Reason: reason, ObservedAt: o.SourceTimestamp}
+	b := &bearing{AzimuthDeg: az, ElevationDeg: el, SigmaAzDeg: sigAz, SigmaElDeg: sigEl, LengthM: length, Reason: reason,
+		ObservedAt: o.SourceTimestamp, ReceivedAt: o.ReceivedAt}
 	if b.ObservedAt.IsZero() {
 		b.ObservedAt = o.ReceivedAt
 	}

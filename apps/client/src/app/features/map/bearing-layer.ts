@@ -1,4 +1,4 @@
-import { SiteBearing, bearingEnd, bearingExpired } from '../../shared/models/emplacement.model';
+import { SiteBearing, bearingClockOf, bearingEnd, bearingExpired } from '../../shared/models/emplacement.model';
 import { BEARING_LINE_CONFIG } from './cesium-config';
 
 /** One camera site's bearing lines, ready to draw. */
@@ -20,13 +20,14 @@ export function bearingLabel(b: Pick<SiteBearing, 'classification' | 'confidence
 }
 
 /**
- * How opaque a bearing line is: fully, until the last fadeFraction of its ttl,
+ * How opaque a bearing line whose ttl runs from since (bearingClockOf) is:
+ * fully, until the last fadeFraction of its ttl,
  * then fading to minAlpha. Rounded to alphaStep, so a layer redrawing on a
  * timer redraws a line only when the fade has moved a visible step.
  */
-export function bearingAlpha(observedAt: string, ttlSec: number, nowMs: number): number {
+export function bearingAlpha(since: string, ttlSec: number, nowMs: number): number {
   const { fadeFraction, minAlpha, alphaStep } = BEARING_LINE_CONFIG;
-  const remainingMs = Date.parse(observedAt) + ttlSec * 1000 - nowMs;
+  const remainingMs = Date.parse(since) + ttlSec * 1000 - nowMs;
   const window = ttlSec * 1000 * fadeFraction;
   const a = window > 0 ? remainingMs / window : 1;
   const stepped = Math.round(a / alphaStep) * alphaStep;
@@ -51,7 +52,7 @@ export class BearingLayer {
     for (const site of sites) {
       if (site.feedId && hidden.has(site.feedId)) continue;
       site.bearings.forEach((b, index) => {
-        if (bearingExpired(b.observedAt, site.ttlSec, nowMs)) return;
+        if (bearingExpired(bearingClockOf(b), site.ttlSec, nowMs)) return;
         const id = `bearing:${site.siteEntityId}:${b.trackId ?? index}`;
         if (wanted.has(id)) return; // a repeated track id: the first wins
         wanted.add(id);
@@ -84,7 +85,7 @@ export class BearingLayer {
   private build(id: string, site: BearingSite, b: SiteBearing, nowMs: number): void {
     const { lat, lon } = site.origin;
     const alt = site.origin.alt ?? this.groundAt(lat, lon);
-    const alpha = bearingAlpha(b.observedAt, site.ttlSec, nowMs);
+    const alpha = bearingAlpha(bearingClockOf(b), site.ttlSec, nowMs);
     const key = JSON.stringify([lat, lon, alt, site.color, b, alpha]);
     const existing = this.drawn.get(id);
     if (existing?.key === key) return;

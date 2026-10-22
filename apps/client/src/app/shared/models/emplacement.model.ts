@@ -215,8 +215,10 @@ export interface SiteBearing {
   classification?: string;
   confidence?: number;
   band?: string;
-  /** RFC3339. */
+  /** RFC3339: the sender's time of the detection, for display. */
   observedAt: string;
+  /** RFC3339: when the server took it; its time to live runs from this. Absent from older servers. */
+  receivedAt?: string;
 }
 
 /** What the server uses when a camera feed sets no bearingTtlSec. */
@@ -232,7 +234,12 @@ export function bearingTtlOf(entity: FieldsCarrier): number {
   return Number.isFinite(ttl) && ttl > 0 ? ttl : DEFAULT_BEARING_TTL_SEC;
 }
 
-/** Whether a bearing observed at observedAt has outlived ttlSec by nowMs. An unreadable time is expired. */
+/** The time a bearing's ttl runs from: the server's receipt, else (an older server) the sender's observedAt. */
+export function bearingClockOf(b: Pick<SiteBearing, 'observedAt' | 'receivedAt'>): string {
+  return typeof b.receivedAt === 'string' && !Number.isNaN(Date.parse(b.receivedAt)) ? b.receivedAt : b.observedAt;
+}
+
+/** Whether a bearing whose ttl runs from the given time has outlived ttlSec by nowMs. An unreadable time is expired. */
 export function bearingExpired(observedAt: string, ttlSec: number, nowMs: number): boolean {
   const t = Date.parse(observedAt);
   return Number.isNaN(t) || nowMs >= t + ttlSec * 1000;
@@ -249,7 +256,7 @@ function asBearing(x: unknown): SiteBearing | null {
 /**
  * The live bearings a camera site entity carries (platformData.generic.fields
  * "bearings", a JSON array), judged at nowMs, the server's clock. A bearing
- * past observedAt + bearingTtlSec is dropped here, since a site need not
+ * past receivedAt (else observedAt) + bearingTtlSec is dropped here, since a site need not
  * republish at the moment one expires. Empty for an entity with none, bad
  * JSON, or entries that are not bearings.
  */
@@ -267,7 +274,7 @@ export function bearingsOf(entity: FieldsCarrier, nowMs: number): SiteBearing[] 
   const out: SiteBearing[] = [];
   for (const x of list) {
     const b = asBearing(x);
-    if (b && !bearingExpired(b.observedAt, ttlSec, nowMs)) out.push(b);
+    if (b && !bearingExpired(bearingClockOf(b), ttlSec, nowMs)) out.push(b);
   }
   return out;
 }

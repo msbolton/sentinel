@@ -60,6 +60,16 @@ describe('bearingAlpha', () => {
   });
 });
 
+describe('bearing fade from receipt', () => {
+  it('fades and expires a line from receivedAt when the bearing has one', () => {
+    const { layer, live } = rig();
+    const late = bearing({ observedAt: new Date(T0 - 30_000).toISOString(), receivedAt: new Date(T0 - 1_000).toISOString() });
+    layer.sync([site({ bearings: [late] })], new Set(), T0);
+    expect(live.has('bearing:site-1:t1')).toBe(true);
+    expect(live.get('bearing:site-1:t1').polyline.material.color.a).toBe(1);
+  });
+});
+
 describe('BearingLayer', () => {
   it('adds one dashed polyline per bearing from the origin to the far end, with the site colour and an id to pick by', () => {
     const { layer, live } = rig();

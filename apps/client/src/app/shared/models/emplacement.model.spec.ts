@@ -1,6 +1,6 @@
 import {
   draftOf, emplacementIdOf, inputOf, newDraft, Emplacement, coverageSummary,
-  bearingsOf, bearingEnd, formatZulu, heartbeatBadgeOf, livenessOf, rowHeartbeatOf, siteHeartbeatOf, sitesSummaryOf,
+  bearingsOf, bearingClockOf, bearingEnd, formatZulu, heartbeatBadgeOf, livenessOf, rowHeartbeatOf, siteHeartbeatOf, sitesSummaryOf,
 } from './emplacement.model';
 
 const stored: Emplacement = {
@@ -119,6 +119,17 @@ describe('bearings', () => {
     const list = [b('2026-10-20T14:09:49Z'), b('2026-10-20T14:09:50Z', { trackId: 'edge' }), b('2026-10-20T14:09:55Z', { trackId: 'fresh' })];
     const ids = bearingsOf(site({ bearings: JSON.stringify(list), bearingTtlSec: '10' }), NOW).map((x) => x.trackId);
     expect(ids).toEqual(['fresh']); // observedAt + ttl <= now is expired
+  });
+
+  it('expires a bearing from the server receipt, not the sender stamp, when it has one', () => {
+    const late = b('2026-10-20T14:09:30Z', { trackId: 'late', receivedAt: '2026-10-20T14:09:58Z' });
+    const gone = b('2026-10-20T14:09:59Z', { trackId: 'gone', receivedAt: '2026-10-20T14:09:49Z' });
+    const legacy = b('2026-10-20T14:09:55Z', { trackId: 'legacy' });
+    const ids = bearingsOf(site({ bearings: JSON.stringify([late, gone, legacy]), bearingTtlSec: '10' }), NOW).map((x) => x.trackId);
+    expect(ids).toEqual(['late', 'legacy']);
+    expect(bearingClockOf(late)).toBe('2026-10-20T14:09:58Z');
+    expect(bearingClockOf(legacy)).toBe('2026-10-20T14:09:55Z');
+    expect(bearingClockOf({ observedAt: '2026-10-20T14:09:55Z', receivedAt: 'nope' })).toBe('2026-10-20T14:09:55Z');
   });
 
   it('uses the default ttl when none is given or it is not a number', () => {

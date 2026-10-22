@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/sentinel/ingest-service/internal/emplacement"
 	"github.com/sentinel/ingest-service/internal/ingesttoken"
@@ -349,4 +350,42 @@ func TestBearingAboveSiteClassificationIsWithheld(t *testing.T) {
 	if n := len(r.sink.emitted()) - len(sitesOf(r, "cam")); n != 0 {
 		t.Errorf("%d observations emitted for bearings", n)
 	}
+}
+
+// I3: a bearing lives its ttl from when the server took it, so a camera
+// whose clock (or video pipeline) runs behind does not lose its lines.
+func TestBearingExpiryRunsFromReceipt(t *testing.T) {
+	d, clk := bearingDriver(t, nil)
+	now := clk.now()
+	d.addBearing("cam", bearing{TrackID: "late", ObservedAt: now.Add(-30 * time.Second), ReceivedAt: now})
+	if got := d.activeBearings("cam", now.Add(9*time.Second)); len(got) != 1 {
+		t.Fatalf("9 s after receipt: %d bearings, want 1 (observed 30 s before it)", len(got))
+	}
+	if got := d.activeBearings("cam", now.Add(10*time.Second+time.Millisecond)); len(got) != 0 {
+		t.Errorf("past the ttl from receipt: %d bearings, want 0", len(got))
+	}
+	// A bearing made from a detection carries its receipt time on the wire.
+	o := dirObs(90, 5)
+	o.SourceTimestamp = o.ReceivedAt.Add(-20 * time.Second)
+	b := newBearing(o, 90, 5, 0.5, 0.5, 1000, reasonAirTarget)
+	if !b.ReceivedAt.Equal(o.ReceivedAt) || !b.ObservedAt.Equal(o.SourceTimestamp) {
+		t.Errorf("bearing received %v observed %v, want %v and %v", b.ReceivedAt, b.ObservedAt, o.ReceivedAt, o.SourceTimestamp)
+	}
+	raw, _ := json.Marshal(b)
+	var m map[string]any
+	_ = json.Unmarshal(raw, &m)
+	if _, ok := m["receivedAt"]; !ok {
+		t.Errorf("bearing JSON %s has no receivedAt", raw)
+	}
+}
+
+// I3, through a report: a detection stamped 30 s late still draws a line.
+func TestLateStampedBearingIsPublished(t *testing.T) {
+	r, clk, st := cameraRig(t, nil)
+	mustOK(t, send(t, st, heartbeat("cam", 60)))
+	rep := airBearing("d1", "c-late", 90)
+	rep.GetObservation().SourceTimestamp = timestamppb.New(clk.now().Add(-30 * time.Second))
+	mustOK(t, send(t, st, rep))
+	clk.advance(time.Second)
+	waitFor(t, func() bool { return sitesWithBearings(t, r, 1) == 1 })
 }

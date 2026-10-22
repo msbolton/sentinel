@@ -24,9 +24,9 @@ const (
 // heldBearing is a bearing as a site keeps it.
 type heldBearing struct {
 	b bearing
-	// base is what its time to live runs from: its ObservedAt, but never
-	// after the server took it, so a sender's fast clock cannot keep a line
-	// up past the ttl.
+	// base is what its time to live runs from: when the server took it
+	// (ReceivedAt), so a sender's clock, fast or slow, neither keeps a line
+	// up past the ttl nor drops it on arrival.
 	base time.Time
 	// seq orders bearings observed at the same instant: the later taken first.
 	seq uint64
@@ -49,10 +49,10 @@ type siteBearings struct {
 // the bearing under its reason.
 func (d *Driver) addBearing(emplacementID string, b bearing) {
 	now := d.now().UTC()
-	base := b.ObservedAt
-	if base.IsZero() || base.After(now) {
-		base = now
+	if b.ReceivedAt.IsZero() || b.ReceivedAt.After(now) {
+		b.ReceivedAt = now
 	}
+	base := b.ReceivedAt
 	d.bearingsMu.Lock()
 	d.bearingSeq++
 	seq := d.bearingSeq
@@ -116,7 +116,7 @@ func (d *Driver) pruneBearings(s *siteBearings, now time.Time) []heldBearing {
 }
 
 // activeBearings are the emplacement's unexpired bearings at now (expired
-// once ObservedAt + ttl is before now), newest first, at most
+// once ReceivedAt + ttl is before now), newest first, at most
 // maxBearingsPerSite.
 func (d *Driver) activeBearings(emplacementID string, now time.Time) []bearing {
 	d.bearingsMu.Lock()
