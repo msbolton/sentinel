@@ -257,8 +257,8 @@ db-seed: ## Seed database with sample entities, a geofence rule, and locations
 # ----------------------------------------------------------------------------
 
 # Everything the chart renders must validate (kubeconform skips the CRDs it has no schema for), with
-# the defaults, the dev overlay, the prod overlay alone and with the local (k3d) one over it, the
-# optional parts switched on, the data tier alone, the apps
+# the defaults, the dev overlay, the prod overlay alone and with the local (k3d) or the demo one over
+# it, the optional parts switched on, the data tier alone, the apps
 # against an external database and the NetworkPolicies and backups switched off. The pod specs of the
 # hardened templates (the gateway, the services, the web client, both ingest Deployments, the schema
 # and topics Jobs, the data tier, the backups and the sensor simulators) must each render
@@ -270,6 +270,7 @@ CHART_SET := --set ingestService.serviceToken=lint --set global.host=$(CHART_HOS
 DEV_VALUES := k8s/overlays/dev/values.yaml
 PROD_VALUES := k8s/overlays/prod/values.yaml
 LOCAL_VALUES := k8s/overlays/local/values.yaml
+DEMO_VALUES := k8s/overlays/demo/values.yaml
 RESTRICTED := --show-only templates/api-gateway-deployment.yaml --show-only templates/services.yaml --show-only templates/web.yaml \
 	--show-only templates/ingest-service-deployment.yaml --show-only templates/ingest-listener-deployment.yaml --show-only templates/db-schema-job.yaml \
 	--show-only templates/postgresql.yaml --show-only templates/kafka.yaml --show-only templates/kafka-topics-job.yaml --show-only templates/opensearch.yaml \
@@ -336,6 +337,7 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics 
 	$(call chart_validate,-f $(DEV_VALUES))
 	$(call chart_validate,-f $(PROD_VALUES))
 	$(call chart_validate,-f $(PROD_VALUES) -f $(LOCAL_VALUES))
+	$(call chart_validate,-f $(PROD_VALUES) -f $(DEMO_VALUES))
 	$(call chart_validate,--set geoserver.enabled=true --set ingestService.serviceMonitor.enabled=true)
 	$(call chart_validate,$(APPS_OPTIONAL))
 	$(call chart_validate,$(DATA_TIER_ONLY))
@@ -409,6 +411,15 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics 
 	printf '%s\n' "$$geo" | grep -A1 'name: DEMO_GEOIP_DB$$' | grep -qF 'value: "/var/lib/geoip/GeoLite2-City.mmdb"' || { echo "chart-lint: DEMO_GEOIP_DB is not /var/lib/geoip/GeoLite2-City.mmdb"; exit 1; }; \
 	printf '%s\n' "$$geo" | grep -A2 'mountPath: /var/lib/geoip$$' | grep -q 'readOnly: true' || { echo "chart-lint: the gateway does not mount /var/lib/geoip read-only"; exit 1; }; \
 	! helm template sentinel $(CHART) $(CHART_SET) --set apiGateway.demo.enabled=true --set apiGateway.demo.tokenSecret=t --set apiGateway.extraEnv.DEMO_ENABLED=true >/dev/null 2>&1 || { echo "chart-lint: apiGateway.extraEnv may set DEMO_ENABLED"; exit 1; }
+	@# The demo overlay over the prod one: the live feeds on at install beside the prod reserved ports, the
+	@# simulators and the gateway on the Secrets scripts/demo-bootstrap.sh creates, GeoIP from sentinel-geoip.
+	@ov="$$(helm template sentinel $(CHART) $(CHART_SET) -f $(PROD_VALUES) -f $(DEMO_VALUES))" || { echo "chart-lint: the demo overlay does not render"; exit 1; }; \
+	test "$$(printf '%s\n' "$$ov" | grep -A1 'name: FEEDS_BOOTSTRAP_ENABLED$$' | grep -cF 'value: "opensky,aisstream,intelsky,celestrak"')" = 2 || { echo "chart-lint: the demo overlay does not enable the live feeds in both ingest Deployments"; exit 1; }; \
+	test "$$(printf '%s\n' "$$ov" | grep -c 'name: INGEST_RESERVED_PORTS$$')" = 2 || { echo "chart-lint: the demo overlay drops the prod overlay's INGEST_RESERVED_PORTS"; exit 1; }; \
+	test "$$(printf '%s\n' "$$ov" | grep -A3 'name: SENSOR_SIM_TOKEN$$' | grep -c 'name: sentinel-demo-sim-token$$')" = 3 || { echo "chart-lint: the demo simulators do not read sentinel-demo-sim-token"; exit 1; }; \
+	printf '%s\n' "$$ov" | grep -A3 'name: DEMO_INGEST_TOKEN$$' | grep -q 'name: sentinel-demo-visitors-token$$' || { echo "chart-lint: the demo gateway does not read sentinel-demo-visitors-token"; exit 1; }; \
+	test "$$(printf '%s\n' "$$ov" | grep -c 'name: sentinel-geoip$$')" = 2 || { echo "chart-lint: the demo GeoIP download does not read sentinel-geoip"; exit 1; }; \
+	printf '%s\n' "$$ov" | grep -A1 'name: DEMO_GEOIP_DB$$' | grep -qF 'value: "/var/lib/geoip/GeoLite2-City.mmdb"' || { echo "chart-lint: the demo overlay has no DEMO_GEOIP_DB"; exit 1; }
 
 # ----------------------------------------------------------------------------
 # Deployment (docs/deployment.md)

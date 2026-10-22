@@ -8,6 +8,8 @@ This runbook takes one Linux machine to a running Sentinel at `https://<host>`. 
 
 `make images-push` builds and pushes the images, and `make deploy` installs or upgrades the release. Each step links to `docs/infrastructure.md`, which describes every part of the chart in detail. A [local variant on k3d](#local-cluster-on-k3d) at the end runs the same steps on a laptop.
 
+The public demo at sentinel.msbolton.dev is this install plus an overlay, a bootstrap script and a few changed steps: `docs/demo.md`.
+
 The local path is what has been run end to end. Several parts of the production path have not yet run on a real node; [Open risks](#open-risks-not-yet-exercised-on-a-real-node) lists them with what to check for each, so check them on the first install.
 
 ## What you need
