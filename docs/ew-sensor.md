@@ -2,7 +2,7 @@
 
 `ew-sensor` is a command-line simulator of an electronic-support (ESM) sensor. It sits at an emplacement, watches a set of moving RF emitters (search and fire-control radars, SATCOM terminals, datalinks, jammers) and sends each detection to Sentinel as a direction-finding fix with an error ellipse, over the gRPC ingest contract. It is the quickest way to put exercise-grade signals intelligence on the map without a real sensor, and a worked example for anyone writing a sender of their own. This page covers what it does, how to set it up and run it, its flags and configuration file, how it behaves when the connection or the server misbehaves, and what you should see in Sentinel.
 
-It lives in `apps/ew-sensor` (its own Go module, no CGO). The ingest contract it speaks, the rejection reasons and the connection settings are in `docs/feeds.md` (gRPC connections); how a report is bound to an emplacement and how a mobile emplacement reports its position are in `docs/emplacements.md` ("Reporting over gRPC").
+It lives in `adapters/ew-sensor` (its own Go module, no CGO). The ingest contract it speaks, the rejection reasons and the connection settings are in `docs/feeds.md` (gRPC connections); how a report is bound to an emplacement and how a mobile emplacement reports its position are in `docs/emplacements.md` ("Reporting over gRPC").
 
 ## What it does
 
@@ -84,13 +84,13 @@ To run from source, from the repository root:
 
 ```
 export EW_SENSOR_TOKEN=si_...
-(cd apps/ew-sensor && go run ./cmd/ew-sensor --addr localhost:6200 --insecure \
+(cd adapters/ew-sensor && go run ./cmd/ew-sensor --addr localhost:6200 --insecure \
   --config examples/coastal-esm.yaml)
 ```
 
 Add `--verbose` to log every report as JSON as it is sent, and each ack.
 
-Or `nx build ew-sensor` for a binary in `dist/apps/ew-sensor/`. Without a `--config` file you must give `--lat` and `--lon` (and `--name` if you do not want `ew-sensor`); the examples carry them in the YAML.
+Or `nx build ew-sensor` for a binary in `dist/adapters/ew-sensor/`. Without a `--config` file you must give `--lat` and `--lon` (and `--name` if you do not want `ew-sensor`); the examples carry them in the YAML.
 
 ## Flags and configuration
 

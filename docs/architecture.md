@@ -267,6 +267,7 @@ Partitioning by key keeps one object's reports and one entity's events in order.
 ```
 sentinel/
 ├── apps/                      one directory per deployable (below)
+├── adapters/                  sender programs that speak to Sentinel from outside: ew-sensor, sensor-sim (not deployed)
 ├── libs/
 │   ├── common-go/             shared Go module
 │   │   ├── classification/    level order, Rank, Min, Intersect
@@ -297,7 +298,7 @@ sentinel/
 ├── docker-compose.yml         full stack
 ├── docker-compose.infra.yml   data stores and Keycloak only
 ├── Makefile                   proto, build, dev, test, db-schema, docker, images, chart-lint, deploy targets
-├── nx.json, package.json      Nx workspace; every app and lib is an Nx project
+├── nx.json, package.json      Nx workspace; every app, adapter and lib is an Nx project
 └── secrets/                   gitignored; TAK and listener certificates and ingest.env, supplied to ingest
 ```
 
@@ -314,6 +315,8 @@ sentinel/
 | `alert-service` | Go | rules, geofences, alerts |
 | `analytics-service` | Go | baselines, detectors, findings |
 | `client` | Angular 19 | CesiumJS map and management UI |
+
+`adapters/` holds the programs that send data to Sentinel from outside rather than serve it: `ew-sensor` (a simulated ESM sensor) and `sensor-sim` (a simulated radar and camera). Each is its own Go module and Nx project, with a `Dockerfile` for Compose but no image in the Helm chart. See `docs/ew-sensor.md` and `docs/sensor-sim.md`.
 
 #### The common Go service layout
 

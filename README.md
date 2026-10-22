@@ -91,6 +91,9 @@ sentinel/
 │   ├── alert-service/        # Alerting engine (:3005)
 │   ├── ingest-service/       # Go data ingest (:4000)
 │   └── analytics-service/    # Go behavioural analysis (:5000)
+├── adapters/
+│   ├── ew-sensor/            # Simulated ESM sensor, a gRPC sender (not deployed)
+│   └── sensor-sim/           # Simulated radar and camera, a gRPC sender (not deployed)
 ├── libs/
 │   ├── common-go/            # Shared Go: config, Kafka, health, auth headers, models
 │   └── proto-gen/            # Protobuf generated code (TS for the client, Go, Python)

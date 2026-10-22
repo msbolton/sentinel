@@ -1,21 +1,21 @@
 {
   "name": "sensor-sim",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "apps/sensor-sim",
+  "sourceRoot": "adapters/sensor-sim",
   "projectType": "application",
   "targets": {
     "build": {
       "executor": "nx:run-commands",
-      "outputs": ["{workspaceRoot}/dist/apps/sensor-sim"],
+      "outputs": ["{workspaceRoot}/dist/adapters/sensor-sim"],
       "options": {
-        "commands": ["cd apps/sensor-sim && CGO_ENABLED=0 go build -o ../../dist/apps/sensor-sim/sensor-sim ./cmd/sensor-sim"],
+        "commands": ["cd adapters/sensor-sim && CGO_ENABLED=0 go build -o ../../dist/adapters/sensor-sim/sensor-sim ./cmd/sensor-sim"],
         "cwd": "{workspaceRoot}"
       }
     },
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "commands": ["cd apps/sensor-sim && go test -v -race ./..."],
+        "commands": ["cd adapters/sensor-sim && go test -v -race ./..."],
         "cwd": "{workspaceRoot}"
       }
     }

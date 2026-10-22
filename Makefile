@@ -4,6 +4,10 @@ SHELL := /bin/bash
 
 # Go services
 GO_SERVICES := api-gateway ingest-service entity-service track-service search-service link-analysis-service alert-service analytics-service ew-sensor sensor-sim
+# Go programs that live in adapters/ (everything else in GO_SERVICES is in
+# apps/). SVC_DIR expands, inside a recipe loop over $$svc, to the folder.
+ADAPTERS := ew-sensor sensor-sim
+SVC_DIR = $$([[ " $(ADAPTERS) " == *" $$svc "* ]] && echo adapters || echo apps)
 
 # Container images (the names the Helm chart pulls as sentinel/<name>). The
 # ew-sensor and sensor-sim simulators are not deployed, so they are not
@@ -65,7 +69,7 @@ install: ## Install all dependencies
 	npm install
 	@for svc in $(GO_SERVICES); do \
 		echo "Tidying $$svc..."; \
-		cd apps/$$svc && go mod tidy && cd ../..; \
+		cd $(SVC_DIR)/$$svc && go mod tidy && cd ../..; \
 	done
 	cd libs/common-go && go mod tidy
 
@@ -423,7 +427,7 @@ backup-now: ## Run the release's backup CronJob now as a Job, wait for it (BACKU
 clean: ## Clean all build artifacts
 	rm -rf dist/ node_modules/.cache
 	@for svc in $(GO_SERVICES); do \
-		cd apps/$$svc && go clean && cd ../..; \
+		cd $(SVC_DIR)/$$svc && go clean && cd ../..; \
 	done
 	cd libs/common-go && go clean
 	find . -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true

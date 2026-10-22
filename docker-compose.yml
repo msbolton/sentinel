@@ -890,14 +890,14 @@ services:
     image: sentinel/ew-sensor:dev
     build:
       context: .
-      dockerfile: ./apps/ew-sensor/Dockerfile
+      dockerfile: ./adapters/ew-sensor/Dockerfile
     network_mode: host
     env_file:
       - path: ./secrets/ew-sensor.env
         required: false
 
   # Simulated radar and EO/IR camera (sensor-sim): one-shot CLIs, one sensor
-  # each, that watch the shared scenario in apps/sensor-sim/examples (traffic
+  # each, that watch the shared scenario in adapters/sensor-sim/examples (traffic
   # and drones around Keswick) from Latrigg and stream their detections to a
   # `grpc` connection with sender-managed emplacements. Not started by `up`;
   # run either or both with
@@ -916,7 +916,7 @@ services:
     image: sentinel/sensor-sim:dev
     build:
       context: .
-      dockerfile: ./apps/sensor-sim/Dockerfile
+      dockerfile: ./adapters/sensor-sim/Dockerfile
     network_mode: host
     env_file:
       - path: ./secrets/sensor-sim.env
@@ -930,7 +930,7 @@ services:
     image: sentinel/sensor-sim:dev
     build:
       context: .
-      dockerfile: ./apps/sensor-sim/Dockerfile
+      dockerfile: ./adapters/sensor-sim/Dockerfile
     network_mode: host
     env_file:
       - path: ./secrets/sensor-sim.env

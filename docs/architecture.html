@@ -278,6 +278,7 @@ findings at HIGH, or confirmed ──▶ alerts.events (alert id = finding id) �
 </section><section><h2 id="repository-layout">Repository layout</h2>
 <pre class="tree"><code>sentinel/
 ├── apps/                      one directory per deployable (below)
+├── adapters/                  sender programs that speak to Sentinel from outside: ew-sensor, sensor-sim (not deployed)
 ├── libs/
 │   ├── common-go/             shared Go module
 │   │   ├── classification/    level order, Rank, Min, Intersect
@@ -306,10 +307,11 @@ findings at HIGH, or confirmed ──▶ alerts.events (alert id = finding id) �
 ├── docker-compose.yml         full stack
 ├── docker-compose.infra.yml   data stores and Keycloak only
 ├── Makefile                   proto, build, dev, test, db-schema, docker, images, chart-lint, deploy targets
-├── nx.json, package.json      Nx workspace; every app and lib is an Nx project
+├── nx.json, package.json      Nx workspace; every app, adapter and lib is an Nx project
 └── secrets/                   gitignored; TAK and listener certificates and ingest.env, supplied to ingest</code></pre>
 <h3 id="apps">apps/</h3>
 <div class="table-wrap"><table><thead><tr><th>Directory</th><th>Stack</th><th>Notes</th></tr></thead><tbody><tr><td><code>api-gateway</code></td><td>Go</td><td>the only public API</td></tr><tr><td><code>ingest-service</code></td><td>Go</td><td>feeds and connections; scales horizontally</td></tr><tr><td><code>entity-service</code></td><td>Go</td><td>observation store and fusion</td></tr><tr><td><code>track-service</code></td><td>Go</td><td>history and timeline</td></tr><tr><td><code>search-service</code></td><td>Go</td><td>OpenSearch front</td></tr><tr><td><code>link-analysis-service</code></td><td>Go</td><td>relationship graph</td></tr><tr><td><code>alert-service</code></td><td>Go</td><td>rules, geofences, alerts</td></tr><tr><td><code>analytics-service</code></td><td>Go</td><td>baselines, detectors, findings</td></tr><tr><td><code>client</code></td><td>Angular 19</td><td>CesiumJS map and management UI</td></tr></tbody></table></div>
+<p><code>adapters/</code> holds the programs that send data to Sentinel from outside rather than serve it: <code>ew-sensor</code> (a simulated ESM sensor) and <code>sensor-sim</code> (a simulated radar and camera). Each is its own Go module and Nx project, with a <code>Dockerfile</code> for Compose but no image in the Helm chart. See <code>docs/ew-sensor.md</code> and <code>docs/sensor-sim.md</code>.</p>
 <h4 id="the-common-go-service-layout">The common Go service layout</h4>
 <p>Every Go service has the same shape:</p>
 <pre class="tree"><code>&lt;service&gt;/
