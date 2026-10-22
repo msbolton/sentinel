@@ -3,6 +3,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { Router, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
+import { EMPTY } from 'rxjs';
 import { routes } from './app.routes';
 import { AuthService } from './core/services/auth.service';
 
@@ -45,7 +46,7 @@ describe('routes', () => {
         provideRouter(routes),
         provideHttpClient(),
         provideHttpClientTesting(),
-        { provide: AuthService, useValue: { isAuthenticated: () => true, getUserRoles: () => ['sentinel-viewer'] } },
+        { provide: AuthService, useValue: { isAuthenticated: () => true, getUserRoles: () => ['sentinel-viewer'], isGuest: () => false, sessionLost$: EMPTY } },
       ],
     });
 
@@ -60,7 +61,7 @@ describe('routes', () => {
         provideRouter(routes),
         provideHttpClient(),
         provideHttpClientTesting(),
-        { provide: AuthService, useValue: { isAuthenticated: () => true, getUserRoles: () => ['sentinel-viewer'], getClassificationLevel: () => 'UNCLASSIFIED' } },
+        { provide: AuthService, useValue: { isAuthenticated: () => true, getUserRoles: () => ['sentinel-viewer'], getClassificationLevel: () => 'UNCLASSIFIED', isGuest: () => false, sessionLost$: EMPTY } },
       ],
     });
     expect(routes.find((r) => r.path === 'emplacements')).toEqual({ path: 'emplacements', redirectTo: 'map' });
