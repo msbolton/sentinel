@@ -271,23 +271,29 @@ decoded tiles push the pod past its limit.
 
 {{/*
 A Go memory limit: set when given, else 80% of limit (a Kubernetes quantity
-in Ki, Mi, Gi or Ti), in MiB; empty with neither. Any other form of limit is
-an error that asks for terrain.goMemLimit.
+in Ki, Mi, Gi or Ti, whole or fractional, such as 1.5Gi), rounded down to
+whole MiB; empty with neither. Any other form of limit, or one whose 80% is
+under 1 MiB, is an error that asks for terrain.goMemLimit.
 */}}
 {{- define "sentinel.goMemLimit" -}}
 {{- if .set -}}
 {{- .set -}}
 {{- else if .limit -}}
 {{- $l := toString .limit -}}
-{{- $mib := 0 -}}
-{{- if hasSuffix "Ti" $l -}}{{- $mib = mul (trimSuffix "Ti" $l | int64) 1048576 -}}
-{{- else if hasSuffix "Gi" $l -}}{{- $mib = mul (trimSuffix "Gi" $l | int64) 1024 -}}
-{{- else if hasSuffix "Mi" $l -}}{{- $mib = trimSuffix "Mi" $l | int64 -}}
-{{- else if hasSuffix "Ki" $l -}}{{- $mib = div (trimSuffix "Ki" $l | int64) 1024 -}}
+{{- $n := "" -}}
+{{- $perMiB := 0.0 -}}
+{{- if hasSuffix "Ti" $l -}}{{- $n = trimSuffix "Ti" $l -}}{{- $perMiB = 1048576.0 -}}
+{{- else if hasSuffix "Gi" $l -}}{{- $n = trimSuffix "Gi" $l -}}{{- $perMiB = 1024.0 -}}
+{{- else if hasSuffix "Mi" $l -}}{{- $n = trimSuffix "Mi" $l -}}{{- $perMiB = 1.0 -}}
+{{- else if hasSuffix "Ki" $l -}}{{- $n = trimSuffix "Ki" $l -}}{{- $perMiB = 0.0009765625 -}}
 {{- else -}}
 {{- fail (printf "ingestService.terrain.goMemLimit: cannot work out 80%% of the memory limit %q; set goMemLimit (for example 800MiB)" $l) -}}
 {{- end -}}
-{{- printf "%dMiB" (div (mul $mib 80) 100) -}}
+{{- $mib := floor (divf (mulf (float64 $n) $perMiB 80) 100) | int64 -}}
+{{- if lt $mib 1 -}}
+{{- fail (printf "ingestService.terrain.goMemLimit: 80%% of the memory limit %q is under 1 MiB; set goMemLimit (for example 800MiB) or a larger limit" $l) -}}
+{{- end -}}
+{{- printf "%dMiB" $mib -}}
 {{- end -}}
 {{- end }}
 

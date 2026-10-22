@@ -376,6 +376,9 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics 
 		mem="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestService.terrain.goMemLimit=700MiB --show-only templates/$$tpl-deployment.yaml)"; \
 		printf '%s\n' "$$mem" | grep -A1 'name: GOMEMLIMIT$$' | grep -q 'value: "700MiB"' || { echo "chart-lint: $$tpl ignores ingestService.terrain.goMemLimit"; exit 1; }; \
 	done
+	@# GOMEMLIMIT is 80% of a fractional limit too (1.5Gi is 1536 MiB), never "0MiB".
+	@frac="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestService.resources.limits.memory=1.5Gi --show-only templates/ingest-service-deployment.yaml)"; \
+	printf '%s\n' "$$frac" | grep -A1 'name: GOMEMLIMIT$$' | grep -q 'value: "1228MiB"' || { echo "chart-lint: ingest-service's GOMEMLIMIT is not 80% of a 1.5Gi limit (1228MiB)"; exit 1; }
 
 # ----------------------------------------------------------------------------
 # Deployment (docs/deployment.md)
