@@ -112,24 +112,7 @@ func (s *service) place(ctx context.Context, o *obs.Observation, e emplacement.E
 	defer cancel()
 	terr := s.d.terrain
 
-	// The origin's altitude: as given, else the ground under the site plus
-	// the mounting height.
-	why := ""
-	if !org.hasAlt {
-		switch {
-		case e.HeightAboveGroundM == nil:
-			why = reasonNoOriginAltitude
-		case terr == nil:
-			why = reasonTerrainUnavail
-		default:
-			g, err := terr.HeightHAE(tctx, org.at.Lat, org.at.Lon)
-			if err != nil || !finite(g) {
-				why = reasonTerrainUnavail
-			} else {
-				org.at.Alt, org.hasAlt = g+*e.HeightAboveGroundM, true
-			}
-		}
-	}
+	org, why := s.resolveOriginAlt(tctx, e, org)
 
 	// An air target is somewhere along the line, short of where it meets
 	// the ground, so it is never placed on the ground.
@@ -180,6 +163,28 @@ func (s *service) place(ctx context.Context, o *obs.Observation, e emplacement.E
 	return nil, "", org
 }
 
+// resolveOriginAlt gives org an altitude when it has none: the terrain under
+// it plus e's mounting height. It returns org unchanged with the reason it
+// could not: reasonNoOriginAltitude with no mounting height, or
+// reasonTerrainUnavail when the terrain is off or does not answer within ctx.
+func (s *service) resolveOriginAlt(ctx context.Context, e emplacement.Emplacement, org origin) (origin, string) {
+	if org.hasAlt {
+		return org, ""
+	}
+	if e.HeightAboveGroundM == nil {
+		return org, reasonNoOriginAltitude
+	}
+	if s.d.terrain == nil {
+		return org, reasonTerrainUnavail
+	}
+	g, err := s.d.terrain.HeightHAE(ctx, org.at.Lat, org.at.Lon)
+	if err != nil || !finite(g) {
+		return org, reasonTerrainUnavail
+	}
+	org.at.Alt, org.hasAlt = g+*e.HeightAboveGroundM, true
+	return org, ""
+}
+
 // sigmaOr is the measurement's sigma, else the emplacement's, else the
 // default.
 func sigmaOr(sent, stored *float64) float64 {
@@ -208,15 +213,41 @@ func newBearing(o *obs.Observation, az, el, sigAz, sigEl, length float64, reason
 	return b
 }
 
+// placeRangePolar converts o's range-polar measurement from org and applies
+// the radar terrain rules, all its terrain calls within one terrainWait. It
+// returns the origin used, for the coverage check, and a reject reason or "".
+//
+// An origin with no altitude is resolved as a camera's is: the terrain under
+// it plus the emplacement's mounting height. A radar with a mounting height
+// whose origin the terrain cannot give is refused (no_origin_altitude),
+// never measured from 0 m. One with neither an altitude nor a mounting
+// height keeps the old conversion from 0 m, and its air targets get no
+// height above ground.
+func (s *service) placeRangePolar(ctx context.Context, o *obs.Observation, e emplacement.Emplacement, org origin) (origin, string) {
+	tctx, cancel := context.WithTimeout(ctx, s.d.terrainWait)
+	defer cancel()
+	org, why := s.resolveOriginAlt(tctx, e, org)
+	if why == reasonTerrainUnavail {
+		return org, reasonNoOriginAltitude
+	}
+	if why := convert(o, e, org); why != "" {
+		return org, why
+	}
+	s.applyRadarTerrain(tctx, o, org.hasAlt)
+	return org, ""
+}
+
 // applyRadarTerrain clamps ground targets and sets Radar.HeightAboveGroundM for air ones.
 //
-// o has been placed from its range-polar measurement. The height above
+// o has been placed from its range-polar measurement, from an origin whose
+// altitude was known (originKnown) or taken as 0 m. The height above
 // ground is the service's own figure: whatever the sender put there is
 // cleared first, and set again only for an air target the terrain answered
-// for. A ground target is put on the ground. When the terrain cannot answer
-// (off, unavailable, or slower than terrainWait) the measured altitude is
-// kept and terrainClampSkipped counts it.
-func (s *service) applyRadarTerrain(ctx context.Context, o *obs.Observation) {
+// for, measured from a known origin. A ground target is put on the ground.
+// When the terrain cannot answer (off, unavailable, or slower than
+// terrainWait), or an air target's origin altitude was unknown, the
+// measured altitude is kept and terrainClampSkipped counts it.
+func (s *service) applyRadarTerrain(ctx context.Context, o *obs.Observation, originKnown bool) {
 	if o.Radar == nil {
 		return
 	}
@@ -225,7 +256,7 @@ func (s *service) applyRadarTerrain(ctx context.Context, o *obs.Observation) {
 	if (!air && !isGroundTarget(o)) || !o.HasPosition || o.Altitude == nil {
 		return
 	}
-	if s.d.terrain == nil {
+	if s.d.terrain == nil || (air && !originKnown) {
 		s.d.terrainClampSkipped.Add(1)
 		return
 	}

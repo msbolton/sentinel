@@ -282,10 +282,10 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 					return s.reject(ack, why), nil
 				}
 			} else {
-				if why := convert(o, e, org); why != "" {
+				var why string
+				if org, why = s.placeRangePolar(ctx, o, e, org); why != "" {
 					return s.reject(ack, why), nil
 				}
-				s.applyRadarTerrain(ctx, o)
 			}
 		}
 		if s.d.cfg.EnforceCoverage && o.HasPosition {

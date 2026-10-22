@@ -594,3 +594,108 @@ func TestDirectionOnlyAirTargetFromBelowGroundIsMaxRange(t *testing.T) {
 		}
 	}
 }
+
+// hagRadar is a fixed radar at site mounted 10 m above the ground, with no
+// altitude: its origin is the terrain under it plus the mounting height.
+func hagRadar() emplacement.Emplacement {
+	e := emp("radar", "grpc-1", "FIXED", "RADAR", "UNCLASSIFIED")
+	e.Altitude, e.HeightAboveGroundM = nil, ptr(10.0)
+	return e
+}
+
+// C2: a radar with only a mounting height measures from the terrain under
+// it plus that height, never from 0 m.
+func TestRadarMountingHeightOnlyOrigin(t *testing.T) {
+	r, st := terrainRig(t, nil, hagRadar(), plateau(), nil)
+	org := geo.LLA{Lat: site.Lat, Lon: site.Lon, Alt: plateauM + 10}
+
+	// With an elevation: placed along it from the mast's top.
+	rep := polarReport("drone", 90, 2000, ptr(3.0))
+	rep.GetObservation().EntityType = sentinelv1.EntityType_ENTITY_TYPE_DRONE
+	rep.GetObservation().Platform = &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Radar{Radar: &sentinelv1.RadarDetail{}}}
+	if ack := send(t, st, rep); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
+		t.Fatal(ack)
+	}
+	o := lastEmitted(t, r)
+	want := geo.AERToLLA(org, 90, 3, 2000)
+	if o.Altitude == nil || math.Abs(*o.Altitude-want.Alt) > 1e-6 || math.Abs(o.Latitude-want.Lat) > 1e-9 || math.Abs(o.Longitude-want.Lon) > 1e-9 {
+		t.Errorf("placed at %v,%v alt %v, want %v,%v alt %v", o.Latitude, o.Longitude, deref(o.Altitude), want.Lat, want.Lon, want.Alt)
+	}
+	if o.Radar == nil || o.Radar.HeightAboveGroundM == nil || math.Abs(*o.Radar.HeightAboveGroundM-(want.Alt-plateauM)) > 1e-6 {
+		t.Errorf("height above ground %v, want %v", deref(o.Radar.HeightAboveGroundM), want.Alt-plateauM)
+	}
+
+	// Altitude only: solved from the mast's top, not from 0 m.
+	rep = radarReport("alt-only", plateauM+120, &sentinelv1.RadarDetail{})
+	rep.GetObservation().EntityType = sentinelv1.EntityType_ENTITY_TYPE_DRONE
+	if ack := send(t, st, rep); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
+		t.Fatal(ack)
+	}
+	o = lastEmitted(t, r)
+	want, _, ok := geo.AERToLLAAtAltitude(org, 90, 2000, plateauM+120)
+	if !ok {
+		t.Fatal("no solution")
+	}
+	if math.Abs(o.Latitude-want.Lat) > 1e-9 || math.Abs(o.Longitude-want.Lon) > 1e-9 {
+		_, rng := groundRangeFromSite(geo.LLA{Lat: o.Latitude, Lon: o.Longitude, Alt: want.Alt})
+		_, wantRng := groundRangeFromSite(want)
+		t.Errorf("altitude-only placed %.1f m out, want %.1f m", rng, wantRng)
+	}
+	if o.Radar.HeightAboveGroundM == nil || math.Abs(*o.Radar.HeightAboveGroundM-120) > 1 {
+		t.Errorf("altitude-only height above ground %v, want about 120", deref(o.Radar.HeightAboveGroundM))
+	}
+}
+
+// C2: when the terrain cannot give a mounting-height radar's origin, the
+// report is refused rather than measured from 0 m.
+func TestRadarMountingHeightOnlyTerrainUnavailableRejected(t *testing.T) {
+	for name, terr := range map[string]driver.Terrain{"off": nil, "unavailable": unavailableTerrain{}, "stalled": blockingTerrain{}} {
+		r, st := terrainRig(t, nil, hagRadar(), terr, func(d *Driver) { d.terrainWait = 100 * time.Millisecond })
+		rep := polarReport("drone", 90, 2000, ptr(3.0))
+		rep.GetObservation().EntityType = sentinelv1.EntityType_ENTITY_TYPE_DRONE
+		if ack := send(t, st, rep); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_REJECTED || ack.GetReason() != "no_origin_altitude" {
+			t.Errorf("%s: %v, want REJECTED no_origin_altitude", name, ack)
+		}
+		if n := len(r.sink.emitted()); n != 0 {
+			t.Errorf("%s: %d observations emitted", name, n)
+		}
+	}
+}
+
+// C2: a radar with neither an altitude nor a mounting height keeps the old
+// conversion (from 0 m), but its air targets get no height above ground.
+func TestRadarWithoutOriginAltitudeGetsNoHeightAboveGround(t *testing.T) {
+	e := emp("radar", "grpc-1", "FIXED", "RADAR", "UNCLASSIFIED")
+	e.Altitude = nil
+	r, st := terrainRig(t, nil, e, plateau(), nil)
+	rep := polarReport("drone", 90, 2000, ptr(3.0))
+	rep.GetObservation().EntityType = sentinelv1.EntityType_ENTITY_TYPE_DRONE
+	rep.GetObservation().Platform = &sentinelv1.PlatformDetail{Detail: &sentinelv1.PlatformDetail_Radar{Radar: &sentinelv1.RadarDetail{}}}
+	if ack := send(t, st, rep); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
+		t.Fatal(ack)
+	}
+	o := lastEmitted(t, r)
+	want := geo.AERToLLA(geo.LLA{Lat: site.Lat, Lon: site.Lon}, 90, 3, 2000)
+	if o.Altitude == nil || *o.Altitude != want.Alt {
+		t.Errorf("altitude %v, want the unchanged conversion's %v", o.Altitude, want.Alt)
+	}
+	if o.Radar == nil || o.Radar.HeightAboveGroundM != nil {
+		t.Errorf("height above ground %v, want none from an unknown origin altitude", deref(o.Radar.HeightAboveGroundM))
+	}
+	if n := r.d.Health().Detail["terrainClampSkipped"]; n != int64(1) {
+		t.Errorf("terrainClampSkipped %v, want 1", n)
+	}
+	// A ground target is still put on the ground.
+	send(t, st, radarReport("vehicle", 30, &sentinelv1.RadarDetail{Classification: sentinelv1.RadarClass_RADAR_CLASS_VEHICLE}))
+	if o := lastEmitted(t, r); o.Altitude == nil || math.Abs(*o.Altitude-plateauM) > 1e-6 {
+		t.Errorf("vehicle altitude %v, want the plateau", o.Altitude)
+	}
+}
+
+// deref is *p for messages, or nil.
+func deref(p *float64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
