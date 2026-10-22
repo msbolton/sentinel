@@ -44,7 +44,7 @@ These need your accounts or a payment, so nothing here does them for you. Do the
      --from-file=account-id=<(printf %s "$id") --from-file=license-key=<(printf %s "$key"); unset id key
    ```
 
-   The GeoLite2 licence asks for attribution where the data is used: "This product includes GeoLite2 data created by MaxMind, available from https://www.maxmind.com".
+   The GeoLite2 licence asks for attribution where the data is used: "This product includes GeoLite2 data created by MaxMind, available from https://www.maxmind.com". The welcome card every guest sees carries it ("Approximate locations use GeoLite2 data created by MaxMind, available from https://www.maxmind.com").
 4. **Map keys.** `/config.json` hands the Cesium ion token and the Google Maps key to every visitor, and every visitor's tiles bill to your accounts. Create new ones for the demo:
    - a Cesium ion token whose allowed URLs are `https://sentinel.msbolton.dev`;
    - a Google Maps key with an HTTP-referrer restriction on `https://sentinel.msbolton.dev/*`, restricted to the Maps JavaScript and Map Tiles APIs, with a budget alert on the billing account;
@@ -205,7 +205,7 @@ A guest is a Keycloak account `guest-<8 hex>` with `sentinel-viewer`, `classific
 
 They can:
 - see the map with the live aircraft, vessels and satellites, and the simulated sensors' detections, all at UNCLASSIFIED;
-- select entities, search, open the panels a viewer has, and fly to the sensors or to the other visitors from the welcome card;
+- select entities, search, open the panels a viewer has, and fly to the sensors nearest them (the sites within 200 km of one another count as one group) or to the other visitors from the welcome card;
 - see their own site at full precision, and every other visitor's site snapped to the centre of a 0.1° cell (about 10 km).
 
 They cannot:
@@ -214,7 +214,13 @@ They cannot:
 - open Connections, the link graph or the admin settings;
 - see anything above UNCLASSIFIED.
 
-A visitor's precise position never leaves their browser: the server stores, logs and publishes the blurred one only. When the last tab closes, the site goes offline after 3 missed heartbeats (30 s) and is deleted 5 minutes later. At 25 guests, new visitors get "Demo full". The session route allows 5 starts per client address in 10 minutes.
+A visitor's precise position never leaves their browser: the browser snaps its fix to the centre of a 0.1° cell before sending it (the gateway snaps again, which changes nothing), and the server stores, logs and publishes only that. The visitor's own dot is drawn at the precise fix, in their browser only. A visitor who denies the location, or leaves the prompt unanswered for 10 s, is placed from their IP address; a fix that still arrives later moves them. A guest may report a position twice at once, then once every 5 s.
+
+A guest's session survives a reload, a phone evicting the tab and a second tab: the browser keeps the guest's refresh token and session details in localStorage (a guest's only, never a signed-in user's) and picks them up again. A browser that was a guest and has no session left goes back to `#/demo` for a new one, never to the login form.
+
+Slots go to people actually exploring. When the last tab closes, the site goes offline after 3 missed heartbeats (30 s), and 5 minutes later (`DEMO_OFFLINE_REMOVE_AFTER`) the site is deleted and the guest ended, freeing its slot; a guest whose browser never opens the map's stream is ended after 2 minutes. At 25 guests, new visitors get "Demo full". One client address (an IPv6 address counts by its /64) holds at most 2 guests at once, and a third gets "Your network already has demo sessions open — try again in a moment". The session route allows 5 starts per client address in 10 minutes.
+
+The status's `up` counts only live entities: the simulators' exercise traffic never stops, so it does not count, and the button shows offline when every live feed has gone quiet for 5 minutes.
 
 ## The shared polling area
 
@@ -222,8 +228,9 @@ OpenSky and aisstream poll one area: the gateway merges every connected viewport
 
 ## Known limits
 
-- **GeoIP at every gateway start.** The initContainer downloads the database each time a gateway pod starts, and MaxMind limits downloads per account per day. A crash-looping gateway can use them up. The download fails open: the gateway starts without the IP fallback, and visitors who deny the browser's location get no site until the next start that succeeds.
-- **One gateway replica.** Guests, presence and the polling area live in its memory. A restart ends every guest session (the client offers a fresh one) and shows `up:false` until the startup cleanup is done.
+- **GeoIP at every gateway start.** The initContainer downloads the database each time a gateway pod starts, and MaxMind limits downloads per account per day. A crash-looping gateway can use them up. The download gives up within about 2 minutes (60 s an attempt, 2 retries) and fails open: the gateway starts without the IP fallback, and visitors who deny the browser's location get no site until the next start that succeeds.
+- **One gateway replica.** Guests, presence and the polling area live in its memory. A restart ends every guest session (a guest's stream is closed as "session ended" and the client offers a fresh one) and shows `up:false` until the startup cleanup is done.
+- **Away too long.** A visitor who leaves the tab in the background for more than 5 minutes (a phone may suspend it and close its stream) comes back to "Your demo session has ended" and starts a new one.
 - **Headroom.** The prod requests plus the simulators and the GeoIP download leave little of a 4 vCPU node, and a 16 GB, 8 vCPU plan is the target. Check `kubectl top pods -n sentinel` after a day of real traffic (`docs/deployment.md`, Open risks).
 - **Client addresses.** The session rate limit and the GeoIP fallback use the rightmost `X-Forwarded-For` entry, which is the client only if Traefik keeps the source address (`docs/deployment.md`, Open risks, Client IPs through servicelb). Check it on the first install, or every visitor shares one rate-limit bucket and is placed at the node's location.
 

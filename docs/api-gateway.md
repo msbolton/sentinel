@@ -46,14 +46,14 @@ Listens on port **3000** (`PORT`).
 | `DEMO_ENABLED` | `false` | Turn on the public demo (see Public demo). Off, none of its routes or background work exist and every other `DEMO_*` variable is ignored. On, it needs `DEMO_INGEST_ADDR` and `DEMO_INGEST_TOKEN` and refuses `AUTH_DEV_BYPASS=true`, since guests log in with real tokens |
 | `DEMO_MAX_GUESTS` | `25` | Concurrent guests; must be greater than 0 |
 | `DEMO_GUEST_TTL` | `60m` | A guest account's lifetime (Go duration); must be greater than 0 |
-| `DEMO_OFFLINE_REMOVE_AFTER` | `5m` | How long a visitor site outlives its guest's last WebSocket; must be greater than 0 |
+| `DEMO_OFFLINE_REMOVE_AFTER` | `5m` | How long a visitor site, and the guest itself, outlives the guest's last WebSocket: then the site is removed and the guest ended, freeing its slot; must be greater than 0 |
 | `DEMO_STATUS_ORIGIN` | `https://msbolton.dev` | The only browser origin allowed to read `GET /api/v1/demo/status` |
 | `DEMO_INGEST_ADDR` | | `host:port` of the ingest service's gRPC listener for the `demo-visitors` connection |
 | `DEMO_INGEST_TOKEN` | | That connection's ingest token (`si_…`); never logged |
 | `DEMO_INGEST_INSECURE` | `true` | Plaintext gRPC (in-cluster, the same as the simulators); `false` uses TLS with the system roots |
 | `DEMO_VISITORS_FEED_ID` | `demo-visitors` | The visitors connection's id, handed to the browser so it can pick out visitor sites |
 | `DEMO_GEOIP_DB` | | MaxMind City database for placing visitors who deny browser location. Empty disables the IP fallback; a path that cannot be opened is logged and the fallback stays off |
-| `DEMO_SESSION_RATE` | `5/10m` | Session starts allowed per client address, `<n>/<duration>` with n greater than 0 |
+| `DEMO_SESSION_RATE` | `5/10m` | Session starts allowed per client address (an IPv6 address counts by its /64), `<n>/<duration>` with n greater than 0 |
 | `DB_HOST` … or `DATABASE_URL` | | PostgreSQL for the locations table |
 
 Startup checks (all environments): `MAIL_TLS` must be `starttls`, `tls`, `none` or empty. Under `APP_ENV=production` the gateway also exits when `KEYCLOAK_SERVICE_CLIENT_SECRET` is empty or `sentinel-service-secret-dev`, or when `MAIL_TLS=none` is combined with a `MAIL_PASSWORD`, and it logs a warning for every `*_SERVICE_URL` that still points at localhost. The mailer dials with a 10 s timeout and gives each message 30 s end to end; it rejects CR or LF in addresses and RFC 2047-encodes the subject.
@@ -135,15 +135,17 @@ Answers are cached per aircraft and range (a minute for today, ten minutes for r
 
 ### Public demo
 
-Only with `DEMO_ENABLED=true`. A visitor gets a throwaway Keycloak account, `guest-<8 hex>` with `sentinel-viewer`, `classification-u` and `sentinel-guest`, that lives `DEMO_GUEST_TTL`; at most `DEMO_MAX_GUESTS` exist at once. A guest who shares a position gets a visitor site, emplacement `guest-<id>` on the `demo-visitors` gRPC connection, snapped to the centre of a 0.1° cell. It heartbeats while the guest has the entity stream open and is removed `DEMO_OFFLINE_REMOVE_AFTER` after the last socket closes. Expired guests are swept every 30 s: account deleted, sockets closed, site removed.
+Only with `DEMO_ENABLED=true`. A visitor gets a throwaway Keycloak account, `guest-<8 hex>` with `sentinel-viewer`, `classification-u` and `sentinel-guest`, that lives `DEMO_GUEST_TTL`; at most `DEMO_MAX_GUESTS` exist at once. A guest who shares a position gets a visitor site, emplacement `guest-<id>` on the `demo-visitors` gRPC connection, snapped to the centre of a 0.1° cell. It heartbeats while the guest has the entity stream open and is removed `DEMO_OFFLINE_REMOVE_AFTER` after the last socket closes; a guest who comes back within their time after that has the site put back where it was. The browser blurs its fix before it sends it, and the gateway blurs again (which changes nothing), so a precise position never reaches the server.
+
+A guest holds its slot only while someone explores with it. Every 30 s the gateway ends (account deleted, sockets closed, site removed, slot freed) each guest that is past `DEMO_GUEST_TTL`, has had no entity-stream socket for `DEMO_OFFLINE_REMOVE_AFTER`, or never opened one within 2 minutes of being granted. One client address (an IPv6 /64) holds at most 2 live guests. The entity stream closes a `sentinel-guest` user the gateway does not know as live (ended, or left by a previous process with a token still valid) at once with 1008, so the browser shows "session ended".
 
 Guests and sites are tracked in the gateway's memory, so the demo assumes a single gateway replica. At startup the gateway deletes every `sentinel-guest` account and `guest-*` site it does not know, left by a previous process; while Keycloak or the ingest service is unreachable it retries with backoff (1 s doubling to 30 s), and until both have succeeded the session route answers 503 and the status reports `up: false`.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/v1/demo/session` | none, `DEMO_SESSION_RATE` per client address (rightmost `X-Forwarded-For` entry) | 200 `{accessToken, refreshToken, expiresIn, guestId, expiresAt, visitorsFeedId}`; 503 `{"error":"full"}` at the cap; 503 with `Retry-After` while the startup cleanup is still running; 429 over the rate; 502 when Keycloak fails |
-| GET | `/api/v1/demo/status` | none; CORS `DEMO_STATUS_ORIGIN` only | `{"up","exploring","full"}`: `up` when an entity event passed through within 5 minutes, `exploring` the guests with the entity stream open, `full` at the guest cap. Cached for 5 s |
-| POST | `/api/v1/demo/position` | a live guest | Body `{lat, lon}` or `{"denied": true}` (placed from the client address through `DEMO_GEOIP_DB`). Places the guest's site at the blurred point; answers `{lat?, lon?, source: "browser" \| "ip" \| "none", emplacementId?}`. 403 for anyone else or an ended session |
+| POST | `/api/v1/demo/session` | none, `DEMO_SESSION_RATE` per client address (rightmost `X-Forwarded-For` entry; IPv6 by /64) | 200 `{accessToken, refreshToken, expiresIn, guestId, expiresAt, visitorsFeedId}`; 503 `{"error":"full"}` at the cap; 503 with `Retry-After` while the startup cleanup is still running; 429 over the rate; 429 `{"error":"busy","message":…}` when the address already holds 2 live guests; 502 when Keycloak fails |
+| GET | `/api/v1/demo/status` | none; CORS `DEMO_STATUS_ORIGIN` only | `{"up","exploring","full"}`: `up` when a live entity event (created, updated, position or restored, of an entity that is not an exercise, so not the sensor simulators) passed through within 5 minutes, `exploring` the guests with the entity stream open, `full` at the guest cap. Cached for 5 s |
+| POST | `/api/v1/demo/position` | a live guest | Body `{lat, lon}` or `{"denied": true}` (placed from the client address through `DEMO_GEOIP_DB`). Places the guest's site at the blurred point; answers `{lat?, lon?, source: "browser" \| "ip" \| "none", emplacementId?}` with the blurred point. Two reports at once, then one per 5 s per guest (429 beyond). 403 for anyone else or an ended session |
 
 ## WebSocket
 
