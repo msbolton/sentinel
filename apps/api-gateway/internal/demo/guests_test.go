@@ -38,12 +38,14 @@ type fakeKeycloak struct {
 	// still live when the call was made.
 	createCtxLive []bool
 	grantCtxLive  []bool
-	grantErr    error
+	grantErr      error
 	// deleteErrs counts down: while positive, DeleteUser fails and decrements it.
 	deleteErrs int
 	// deleteCtxLive records, per DeleteUser call, whether its context was
 	// still live and had a deadline when the call was made.
 	deleteCtxLive []bool
+	// listErr fails UsersWithRole.
+	listErr error
 }
 
 type createdGuest struct {
@@ -90,6 +92,9 @@ func (f *fakeKeycloak) DeleteUser(ctx context.Context, userID string) error {
 func (f *fakeKeycloak) UsersWithRole(_ context.Context, role string) ([]registration.GuestUser, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	return append([]registration.GuestUser(nil), f.withRole[role]...), nil
 }
 
@@ -530,7 +535,9 @@ func TestReconcileDeletesLeftoverGuests(t *testing.T) {
 		{ID: "old-1", Username: "guest-00000001"},
 		{ID: "old-2", Username: "guest-00000002"},
 	}
-	rig.guests.Reconcile(context.Background())
+	if err := rig.guests.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
 	if got := rig.kc.deletedIDs(); strings.Join(got, ",") != "old-1,old-2" {
 		t.Fatalf("deleted %v, want [old-1 old-2]", got)
 	}
@@ -546,8 +553,35 @@ func TestReconcileSparesRegisteredGuests(t *testing.T) {
 		{ID: live.ID, Username: live.Username},
 		{ID: "old-1", Username: "guest-00000001"},
 	}
-	rig.guests.Reconcile(context.Background())
+	if err := rig.guests.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
 	if got := rig.kc.deletedIDs(); len(got) != 1 || got[0] != "old-1" {
 		t.Fatalf("deleted %v, want [old-1]", got)
+	}
+}
+
+func TestReconcileReportsFailuresSoItCanBeRetried(t *testing.T) {
+	rig := newGuestRig(t, 25)
+	rig.kc.listErr = errors.New("keycloak starting")
+	if err := rig.guests.Reconcile(context.Background()); err == nil {
+		t.Fatal("a failed listing must be reported")
+	}
+
+	rig.kc.listErr = nil
+	rig.kc.withRole[auth.RoleGuest] = []registration.GuestUser{
+		{ID: "old-1", Username: "guest-00000001"},
+		{ID: "old-2", Username: "guest-00000002"},
+	}
+	rig.kc.deleteErrs = 1
+	if err := rig.guests.Reconcile(context.Background()); err == nil {
+		t.Fatal("a failed delete must be reported")
+	}
+	rig.kc.withRole[auth.RoleGuest] = []registration.GuestUser{{ID: "old-1", Username: "guest-00000001"}}
+	if err := rig.guests.Reconcile(context.Background()); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if got := rig.kc.deletedIDs(); strings.Join(got, ",") != "old-1,old-2" {
+		t.Fatalf("deleted %v, want old-1 and old-2", got)
 	}
 }

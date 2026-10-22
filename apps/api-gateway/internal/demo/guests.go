@@ -278,19 +278,22 @@ func (g *Guests) Sweep(ctx context.Context) {
 // Call it only at startup, before the session route is served: a guest whose
 // Start is still in flight is not registered yet and would be deleted, and
 // with more than one gateway replica each would delete the others' guests.
-func (g *Guests) Reconcile(ctx context.Context) {
+// It returns an error when the listing or any delete failed, so the caller
+// can try again; a retry only deletes what is still left.
+func (g *Guests) Reconcile(ctx context.Context) error {
 	users, err := g.kc.UsersWithRole(ctx, auth.RoleGuest)
 	if err != nil {
 		g.logger.Error("failed to list leftover demo guests", zap.Error(err))
-		return
+		return fmt.Errorf("list leftover demo guests: %w", err)
 	}
-	deleted := 0
+	deleted, failed := 0, 0
 	for _, u := range users {
 		if g.registered(u.ID) {
 			continue
 		}
 		if err := g.kc.DeleteUser(ctx, u.ID); err != nil {
 			g.logger.Error("failed to delete leftover demo guest", zap.String("userId", u.ID), zap.Error(err))
+			failed++
 			continue
 		}
 		deleted++
@@ -298,6 +301,10 @@ func (g *Guests) Reconcile(ctx context.Context) {
 	if deleted > 0 {
 		g.logger.Info("deleted leftover demo guests", zap.Int("count", deleted))
 	}
+	if failed > 0 {
+		return fmt.Errorf("%d leftover demo guests could not be deleted", failed)
+	}
+	return nil
 }
 
 func (g *Guests) registered(userID string) bool {

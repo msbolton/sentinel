@@ -587,11 +587,13 @@ func (v *Visitors) removeSite(ctx context.Context, api ingestv1.IngestServiceCli
 
 // Reconcile removes every guest-* site on the connection that this process
 // does not track, such as those a previous gateway process left. Call it at
-// startup, before guests are served.
-func (v *Visitors) Reconcile(ctx context.Context) {
+// startup, before guests are served. It returns an error when the listing
+// or any removal failed, or the client is not running, so the caller can try
+// again.
+func (v *Visitors) Reconcile(ctx context.Context) error {
 	api := v.client()
 	if api == nil {
-		return
+		return errVisitorsNotRunning
 	}
 	var resp *ingestv1.ListEmplacementsResponse
 	err := v.call(ctx, func(ctx context.Context) error {
@@ -601,9 +603,9 @@ func (v *Visitors) Reconcile(ctx context.Context) {
 	})
 	if err != nil {
 		v.logger.Error("failed to list leftover demo visitor sites", zap.Error(err))
-		return
+		return fmt.Errorf("list leftover demo visitor sites: %w", err)
 	}
-	removed := 0
+	removed, failed := 0, 0
 	for _, e := range resp.GetEmplacements() {
 		name := strings.TrimSpace(e.GetName())
 		if len(name) <= len(visitorNamePrefix) || !strings.EqualFold(name[:len(visitorNamePrefix)], visitorNamePrefix) {
@@ -618,6 +620,7 @@ func (v *Visitors) Reconcile(ctx context.Context) {
 		})
 		if err != nil && status.Code(err) != codes.NotFound {
 			v.logger.Warn("failed to remove a leftover demo visitor site", zap.String("emplacementId", e.GetId()), zap.Error(err))
+			failed++
 			continue
 		}
 		removed++
@@ -625,6 +628,10 @@ func (v *Visitors) Reconcile(ctx context.Context) {
 	if removed > 0 {
 		v.logger.Info("removed leftover demo visitor sites", zap.Int("count", removed))
 	}
+	if failed > 0 {
+		return fmt.Errorf("%d leftover demo visitor sites could not be removed", failed)
+	}
+	return nil
 }
 
 func (v *Visitors) tracked(guestID string) bool {

@@ -43,6 +43,17 @@ Listens on port **3000** (`PORT`).
 | `ENTITY_SERVICE_URL`, `TRACK_SERVICE_URL`, `SEARCH_SERVICE_URL`, `LINK_ANALYSIS_SERVICE_URL`, `ALERT_SERVICE_URL`, `INGEST_SERVICE_URL` | `http://localhost:300x` | Upstreams |
 | `INGEST_SERVICE_TOKEN` | | Shared secret presented to the ingest management API as `X-Sentinel-Service-Token` on every proxied feed request and area push; required when the ingest service runs in production |
 | `INTELSKY_BASE_URL` | `https://intelsky.org` | Where flight paths come from |
+| `DEMO_ENABLED` | `false` | Turn on the public demo (see Public demo). Off, none of its routes or background work exist and every other `DEMO_*` variable is ignored. On, it needs `DEMO_INGEST_ADDR` and `DEMO_INGEST_TOKEN` and refuses `AUTH_DEV_BYPASS=true`, since guests log in with real tokens |
+| `DEMO_MAX_GUESTS` | `25` | Concurrent guests; must be greater than 0 |
+| `DEMO_GUEST_TTL` | `60m` | A guest account's lifetime (Go duration); must be greater than 0 |
+| `DEMO_OFFLINE_REMOVE_AFTER` | `5m` | How long a visitor site outlives its guest's last WebSocket; must be greater than 0 |
+| `DEMO_STATUS_ORIGIN` | `https://msbolton.dev` | The only browser origin allowed to read `GET /api/v1/demo/status` |
+| `DEMO_INGEST_ADDR` | | `host:port` of the ingest service's gRPC listener for the `demo-visitors` connection |
+| `DEMO_INGEST_TOKEN` | | That connection's ingest token (`si_…`); never logged |
+| `DEMO_INGEST_INSECURE` | `true` | Plaintext gRPC (in-cluster, the same as the simulators); `false` uses TLS with the system roots |
+| `DEMO_VISITORS_FEED_ID` | `demo-visitors` | The visitors connection's id, handed to the browser so it can pick out visitor sites |
+| `DEMO_GEOIP_DB` | | MaxMind City database for placing visitors who deny browser location. Empty disables the IP fallback; a path that cannot be opened is logged and the fallback stays off |
+| `DEMO_SESSION_RATE` | `5/10m` | Session starts allowed per client address, `<n>/<duration>` with n greater than 0 |
 | `DB_HOST` … or `DATABASE_URL` | | PostgreSQL for the locations table |
 
 Startup checks (all environments): `MAIL_TLS` must be `starttls`, `tls`, `none` or empty. Under `APP_ENV=production` the gateway also exits when `KEYCLOAK_SERVICE_CLIENT_SECRET` is empty or `sentinel-service-secret-dev`, or when `MAIL_TLS=none` is combined with a `MAIL_PASSWORD`, and it logs a warning for every `*_SERVICE_URL` that still points at localhost. The mailer dials with a 10 s timeout and gives each message 30 s end to end; it rejects CR or LF in addresses and RFC 2047-encodes the subject.
@@ -122,6 +133,18 @@ Answers are cached per aircraft and range (a minute for today, ten minutes for r
 | GET | `/api/v1/auth/users` | `sentinel-admin` | Enabled users (service accounts excluded) with roles and highest clearance |
 | PUT | `/api/v1/auth/users/:userId/classification` | `sentinel-admin` | Body `{ classificationLevel }` in `classification-u`, `classification-c`, `classification-s`, `classification-ts` |
 
+### Public demo
+
+Only with `DEMO_ENABLED=true`. A visitor gets a throwaway Keycloak account, `guest-<8 hex>` with `sentinel-viewer`, `classification-u` and `sentinel-guest`, that lives `DEMO_GUEST_TTL`; at most `DEMO_MAX_GUESTS` exist at once. A guest who shares a position gets a visitor site, emplacement `guest-<id>` on the `demo-visitors` gRPC connection, snapped to the centre of a 0.1° cell. It heartbeats while the guest has the entity stream open and is removed `DEMO_OFFLINE_REMOVE_AFTER` after the last socket closes. Expired guests are swept every 30 s: account deleted, sockets closed, site removed.
+
+Guests and sites are tracked in the gateway's memory, so the demo assumes a single gateway replica. At startup the gateway deletes every `sentinel-guest` account and `guest-*` site it does not know, left by a previous process; while Keycloak or the ingest service is unreachable it retries with backoff (1 s doubling to 30 s), and until both have succeeded the session route answers 503 and the status reports `up: false`.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/v1/demo/session` | none, `DEMO_SESSION_RATE` per client address (rightmost `X-Forwarded-For` entry) | 200 `{accessToken, refreshToken, expiresIn, guestId, expiresAt, visitorsFeedId}`; 503 `{"error":"full"}` at the cap; 503 with `Retry-After` while the startup cleanup is still running; 429 over the rate; 502 when Keycloak fails |
+| GET | `/api/v1/demo/status` | none; CORS `DEMO_STATUS_ORIGIN` only | `{"up","exploring","full"}`: `up` when an entity event passed through within 5 minutes, `exploring` the guests with the entity stream open, `full` at the guest cap. Cached for 5 s |
+| POST | `/api/v1/demo/position` | a live guest | Body `{lat, lon}` or `{"denied": true}` (placed from the client address through `DEMO_GEOIP_DB`). Places the guest's site at the blurred point; answers `{lat?, lon?, source: "browser" \| "ip" \| "none", emplacementId?}`. 403 for anyone else or an ended session |
+
 ## WebSocket
 
 Endpoint: `GET /ws/entities`, same auth as REST. Browsers cannot set headers on a WebSocket, so the client passes the token as `?token=`. The Angular `WebSocketService` connects to `ws(s)://{host}/ws/entities`, reconnects with exponential backoff (1 s doubling to 10 s plus jitter) and replays its last viewport and entity subscriptions after every connect.
@@ -172,7 +195,7 @@ Failed pushes retry with a 1 s doubling to 30 s backoff. `GET /api/v1/feeds/{id}
 
 Tokens are RS256 JWTs validated against `{KEYCLOAK_URL}/realms/{realm}/protocol/openid-connect/certs`. The JWKS is fetched lazily on first use and cached, so the gateway starts before Keycloak is reachable. Checks: signature, `exp` (30 s leeway), `iss` in `KEYCLOAK_ISSUERS`, `aud` equal to `KEYCLOAK_AUDIENCE`, non-empty `sub`.
 
-The authenticated user carries realm roles plus the `sentinel-api` client roles, and a clearance level. Clearance comes from the `classification_level` claim when present, otherwise from the highest `classification-*` realm role (`classification-ts` → TOP_SECRET, `-s` → SECRET, `-c` → CONFIDENTIAL, `-u` → UNCLASSIFIED). Roles are checked by name as Keycloak issues them: `sentinel-admin`, `sentinel-analyst`, `sentinel-operator`, `sentinel-viewer`.
+The authenticated user carries realm roles plus the `sentinel-api` client roles, and a clearance level. Clearance comes from the `classification_level` claim when present, otherwise from the highest `classification-*` realm role (`classification-ts` → TOP_SECRET, `-s` → SECRET, `-c` → CONFIDENTIAL, `-u` → UNCLASSIFIED). Roles are checked by name as Keycloak issues them: `sentinel-admin`, `sentinel-analyst`, `sentinel-operator`, `sentinel-viewer`, and `sentinel-guest`, the read-only throwaway public-demo guest (always alongside `sentinel-viewer`), which is also refused API-key management (POST and DELETE `/api/v1/auth/api-keys`, 403).
 
 ### Export for GIS consumers and API keys
 
@@ -216,6 +239,7 @@ Every response carries `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY
 ```
 apps/api-gateway/
 ├── cmd/server/main.go            # Bootstrap, wiring, graceful shutdown
+├── cmd/server/demo.go            # Public demo wiring: presence, startup reconcile, sweep, routes
 ├── internal/
 │   ├── config/                   # Environment configuration
 │   ├── auth/                     # JWKS verifier, RequireAuth/RequireRoles/RequireClassification, audit log, security headers
@@ -224,6 +248,7 @@ apps/api-gateway/
 │   ├── locations/                # pgx store + handler for sentinel.locations
 │   ├── flightpath/               # IntelSky flight paths: cached, rate-budgeted proxy for /api/v1/aircraft/{hex}/path
 │   ├── registration/             # Keycloak Admin client, SMTP mailer, rate limiter, /auth handler
+│   ├── demo/                     # Public demo: guest registry, visitor sites over gRPC, blur, GeoIP, status
 │   └── stream/                   # WebSocket hub, client, batcher, Kafka bridge, viewport aggregation and feed area sync
 ├── Dockerfile
 └── project.json

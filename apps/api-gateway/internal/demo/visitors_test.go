@@ -504,10 +504,44 @@ func TestReconcileRemovesLeftoverGuestSites(t *testing.T) {
 	addr, _ := serveFake(t, f, "127.0.0.1:0")
 	v := startVisitors(t, testVisitorOptions(addr), nil)
 
-	v.Reconcile(context.Background())
+	if err := v.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
 	got := f.removed()
 	if len(got) != 2 || !((got[0] == "e1" && got[1] == "e2") || (got[0] == "e2" && got[1] == "e1")) {
 		t.Fatalf("removes = %v, want e1 and e2", got)
+	}
+}
+
+func TestVisitorReconcileReportsFailuresSoItCanBeRetried(t *testing.T) {
+	if err := NewVisitors(testVisitorOptions("127.0.0.1:1"), zaptest.NewLogger(t)).Reconcile(context.Background()); err == nil {
+		t.Fatal("Reconcile before Start must fail")
+	}
+
+	// Nothing listening: the listing times out.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	opts := testVisitorOptions(addr)
+	opts.RPCTimeout = 200 * time.Millisecond
+	if err := startVisitors(t, opts, nil).Reconcile(context.Background()); err == nil {
+		t.Fatal("an unreachable ingest service must be reported")
+	}
+
+	// A removal that fails.
+	f := newFakeIngest()
+	f.put(&sentinelv1.Emplacement{Id: "e1", Name: "guest-1"})
+	f.removeErrs = []error{status.Error(codes.Internal, "boom")}
+	addr, _ = serveFake(t, f, "127.0.0.1:0")
+	v := startVisitors(t, testVisitorOptions(addr), nil)
+	if err := v.Reconcile(context.Background()); err == nil {
+		t.Fatal("a failed removal must be reported")
+	}
+	if err := v.Reconcile(context.Background()); err != nil {
+		t.Fatalf("retry: %v", err)
 	}
 }
 
