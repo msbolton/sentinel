@@ -124,12 +124,17 @@ func unassigned(f registry.Feed, reason string) registry.Feed {
 // render is f as the caller who made r may see it: the decoder error texts in
 // its status are left out unless the caller's clearance reaches the feed's
 // classification, and the emplacements in it are those the caller may see
-// (visibleEmplacements). Every route that returns a feed or its status renders
+// (visibleEmplacements). A demo guest sees neither the configuration nor the
+// secret references. Every route that returns a feed or its status renders
 // through here.
 func (h *Handler) render(r *http.Request, f registry.Feed) feedDTO {
 	cleared := clearedFor(r, f)
 	dto := toFeedDTO(f, h.catalog, cleared)
 	dto.Status.Detail = visibleEmplacements(dto.Status.Detail, callerRank(r), cleared)
+	if isGuest(r) {
+		dto.Config = json.RawMessage("{}")
+		dto.SecretRefs = map[string]string{} // not nil: it would read as null
+	}
 	return dto
 }
 

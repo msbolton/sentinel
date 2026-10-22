@@ -73,6 +73,13 @@ func isOperator(r *http.Request) bool {
 	return hasAny(middleware.UserRoles(r.Context()), operatorRoles)
 }
 
+// isGuest reports whether the caller is a demo guest, an anonymous visitor
+// signed in as a throwaway user. A guest may look at connections but not at
+// how they are configured.
+func isGuest(r *http.Request) bool {
+	return hasAny(middleware.UserRoles(r.Context()), []string{"sentinel-guest"})
+}
+
 func isMutation(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
