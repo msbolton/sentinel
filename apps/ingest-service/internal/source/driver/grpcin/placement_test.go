@@ -699,3 +699,35 @@ func deref(p *float64) any {
 	}
 	return *p
 }
+
+// M3: under enforceCoverage a bearing is held to the coverage's azimuth and
+// elevation, as a placed detection is.
+func TestBearingHeldToCoverage(t *testing.T) {
+	e := camera(ptr(plateauM + 12))
+	e.BoresightDeg = 270
+	e.Coverage = emplacement.Coverage{MaxRangeM: 5000, AzimuthWidthDeg: 60, ElevationMaxDeg: ptr(20.0)}
+	drone := func(id string, az, el float64) *ingestv1.Report {
+		rep := dirReport(id, az, ptr(el))
+		rep.GetObservation().EntityType = sentinelv1.EntityType_ENTITY_TYPE_DRONE
+		return rep
+	}
+	r, st := terrainRig(t, map[string]any{"enforceCoverage": true}, e, plateau(), nil)
+	if ack := send(t, st, drone("behind", 90, 5)); ack.GetReason() != "outside_coverage" {
+		t.Errorf("behind: %v, want outside_coverage", ack)
+	}
+	if ack := send(t, st, drone("too high", 270, 30)); ack.GetReason() != "outside_coverage" {
+		t.Errorf("too high: %v, want outside_coverage", ack)
+	}
+	if ack := send(t, st, drone("ahead", 280, 5)); ack.GetStatus() != ingestv1.AckStatus_ACK_STATUS_OK {
+		t.Errorf("ahead: %v, want OK", ack)
+	}
+	if got := r.d.activeBearings("cam", time.Now()); len(got) != 1 || got[0].AzimuthDeg != 280 {
+		t.Errorf("bearings %+v, want only the one ahead", got)
+	}
+	// Without enforceCoverage, any direction is kept.
+	r, st = terrainRig(t, nil, e, plateau(), nil)
+	mustOK(t, send(t, st, drone("behind", 90, 5)))
+	if got := r.d.activeBearings("cam", time.Now()); len(got) != 1 {
+		t.Errorf("bearings %+v, want 1", got)
+	}
+}

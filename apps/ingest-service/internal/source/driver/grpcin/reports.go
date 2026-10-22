@@ -269,6 +269,11 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 				b, why, org = s.place(ctx, o, e, org)
 				switch {
 				case b != nil:
+					// A bearing has no range, but its direction is held to
+					// the coverage as a position is.
+					if s.d.cfg.EnforceCoverage && !directionInCoverage(e, org, b.AzimuthDeg, b.ElevationDeg) {
+						return s.reject(ack, "outside_coverage"), nil
+					}
 					// The site entity is published at the site's level (the
 					// feed's floor and the emplacement's): a report marked
 					// above it must not put its bearing there.

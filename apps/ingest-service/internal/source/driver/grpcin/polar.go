@@ -166,6 +166,17 @@ func inCoverage(e emplacement.Emplacement, org origin, target geo.LLA) bool {
 	if rng < c.MinRangeM || (c.MaxRangeM > 0 && rng > c.MaxRangeM) {
 		return false
 	}
+	return directionInCoverage(e, org, az, el)
+}
+
+// directionInCoverage reports whether a true azimuth and an elevation from
+// org lie in e's coverage: within half its azimuth width of the boresight,
+// and within its elevations. Range is not looked at (a bearing has none).
+func directionInCoverage(e emplacement.Emplacement, org origin, az, el float64) bool {
+	c := e.Coverage
+	if c.Empty() {
+		return true
+	}
 	if c.AzimuthWidthDeg > 0 && c.AzimuthWidthDeg < 360 {
 		bore, ok := trueAzimuth(e.BoresightDeg, e.AzimuthReference, org.heading)
 		if !ok {
