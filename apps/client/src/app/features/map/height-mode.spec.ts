@@ -55,6 +55,11 @@ describe('heightModeOf', () => {
     expect(heightModeOf(e, true)).toEqual({ kind: 'relative', heightM: 15 });
   });
 
+  it('draws a negative radar height above ground (a noisy low drone) on the ground, not below it', () => {
+    const e = entity({ platformData: { radar: { heightAboveGroundM: -7.5 } } });
+    expect(heightModeOf(e, true)).toEqual({ kind: 'relative', heightM: 0 });
+  });
+
   it('keeps a radar height of zero relative', () => {
     const e = entity({ platformData: { radar: { heightAboveGroundM: 0 } } });
     expect(heightModeOf(e, true)).toEqual({ kind: 'relative', heightM: 0 });
