@@ -25,7 +25,7 @@ func NewTerrainCollector(stats func() terrain.Stats) prometheus.Collector {
 		hits:      desc("terrain_hits_total", "Terrain height lookups answered from the decoded tiles in memory."),
 		misses:    desc("terrain_misses_total", "Terrain height lookups that needed a tile read from disk or downloaded."),
 		downloads: desc("terrain_downloads_total", "Terrain tile downloads completed."),
-		failures:  desc("terrain_failures_total", "Terrain tile fetches or decodes that failed."),
+		failures:  desc("terrain_failures_total", "Terrain tile loads, and tile-list fetches, that failed."),
 		cacheSize: desc("terrain_cache_bytes", "Size of the terrain tiles in the cache folder."),
 	}
 }

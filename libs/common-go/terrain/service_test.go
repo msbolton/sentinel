@@ -723,3 +723,176 @@ func TestPreloadWaitsOnOldFetch(t *testing.T) {
 		t.Errorf("tile fetched %d times, want 1", n)
 	}
 }
+
+// I4: tiles another process writes into the cache folder (terrain-preload
+// run into a live pod, or a second service on the same folder) are used by
+// a service that is already running, without downloading them again.
+func TestPreloadIntoRunningServiceIsUsed(t *testing.T) {
+	tt := testTile{south: 38, west: -78}
+	ts := newTileServer(t, tt)
+	dir := t.TempDir()
+	running := newTestService(t, ts, func(c *Config) { c.CacheDir = dir })
+	height(t, running, 0.5, -30.5) // up and serving, its folder still empty
+
+	preload := newTestService(t, ts, func(c *Config) { c.CacheDir = dir })
+	if n, err := preload.Preload(context.Background(), 38, -78, 39, -77); n != 1 || err != nil {
+		t.Fatalf("Preload = %d, %v; want 1, nil", n, err)
+	}
+	ts.setStatus(tt.key(), http.StatusInternalServerError) // the source is gone now
+
+	near(t, "from the preloaded file", height(t, running, 38.5, -77.5), planeMSL(38.5, -77.5)+GeoidHeight(38.5, -77.5), 1e-3)
+	if n := ts.tileRequests(tt.key()); n != 1 {
+		t.Errorf("tile fetched %d times, want 1 (by the preload only)", n)
+	}
+	if st := running.Stats(); st.CacheBytes == 0 || st.Downloads != 0 {
+		t.Errorf("running service stats = %+v, want the adopted file counted and no download", st)
+	}
+}
+
+// I6: a tile list that cannot be fetched is a failure, so a replica with no
+// route to the source shows failures rising and no downloads.
+func TestFailedTileListCountsAsFailure(t *testing.T) {
+	ts := newTileServer(t)
+	ts.setStatus(tileListName, http.StatusServiceUnavailable)
+	s := newTestService(t, ts, nil)
+	if _, err := s.HeightHAE(context.Background(), 0.5, -30.5); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if st := s.Stats(); st.Failures != 1 || st.Downloads != 0 {
+		t.Errorf("stats = %+v, want 1 failure and no downloads", st)
+	}
+}
+
+// I5: at most MaxDownloads tiles download at once (default 2): each holds
+// a whole tile in memory while it decodes.
+func TestConcurrentDownloadsCapped(t *testing.T) {
+	tiles := []testTile{{south: 38, west: -78}, {south: 39, west: -78}, {south: 40, west: -78}}
+	ts := newTileServer(t, tiles...)
+	s := newTestService(t, ts, nil)
+	if s.cfg.MaxDownloads != 2 {
+		t.Fatalf("default MaxDownloads = %d, want 2", s.cfg.MaxDownloads)
+	}
+	height(t, s, 0.5, -30.5)
+	var releases []func()
+	for _, tt := range tiles {
+		releases = append(releases, ts.hold(t, tt.key()))
+	}
+	errs := make(chan error, len(tiles))
+	for _, tt := range tiles {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := s.HeightHAE(ctx, float64(tt.south)+0.5, float64(tt.west)+0.5)
+			errs <- err
+		}()
+	}
+	time.Sleep(300 * time.Millisecond)
+	if n := ts.allTileRequests(); n != 2 {
+		t.Errorf("%d tile downloads under way, want 2", n)
+	}
+	for _, r := range releases {
+		r()
+	}
+	for range tiles {
+		if err := <-errs; err != nil {
+			t.Errorf("HeightHAE: %v", err)
+		}
+	}
+	if n := ts.allTileRequests(); n != 3 {
+		t.Errorf("%d tile requests, want 3", n)
+	}
+}
+
+// I5: MemTiles bounds the decoded tiles kept in memory.
+func TestMemTilesConfigurable(t *testing.T) {
+	a, b := testTile{south: 38, west: -78}, testTile{south: 39, west: -78}
+	ts := newTileServer(t, a, b)
+	s := newTestService(t, ts, func(c *Config) { c.MemTiles = 1 })
+	height(t, s, 38.5, -77.5)
+	height(t, s, 39.5, -77.5)
+	height(t, s, 38.5, -77.5)
+	if st := s.Stats(); st.Misses != 3 {
+		t.Errorf("stats = %+v, want 3 misses with one tile in memory", st)
+	}
+}
+
+// readOnlyDir makes dir unwritable until the test ends.
+func readOnlyDir(t *testing.T, dir string) (restore func()) {
+	t.Helper()
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := os.CreateTemp(dir, "probe"); err == nil {
+		f.Close()
+		_ = os.Remove(f.Name())
+		_ = os.Chmod(dir, 0o755)
+		t.Skip("running with rights that ignore directory permissions")
+	}
+	restore = func() { _ = os.Chmod(dir, 0o755) }
+	t.Cleanup(restore)
+	return restore
+}
+
+// M7: a failed cache write does not stop the service reading the tiles
+// already in the folder, and writing is tried again after a backoff.
+func TestUnwritableCacheKeepsReadingAndRetries(t *testing.T) {
+	a, b, c := testTile{south: 38, west: -78}, testTile{south: 39, west: -78}, testTile{south: 40, west: -78}
+	ts := newTileServer(t, a, b, c)
+	dir := t.TempDir()
+	seed := newTestService(t, ts, func(cfg *Config) { cfg.CacheDir = dir })
+	if n, err := seed.Preload(context.Background(), 38, -78, 39, -77); n != 1 || err != nil {
+		t.Fatalf("Preload = %d, %v", n, err)
+	}
+	restore := readOnlyDir(t, dir)
+	s := newTestService(t, ts, func(cfg *Config) { cfg.CacheDir = dir; cfg.MemTiles = 1 })
+	height(t, s, 39.5, -77.5) // b downloads; its write fails
+	height(t, s, 38.5, -77.5) // a, from the folder
+	height(t, s, 39.5, -77.5) // b again: evicted from memory, not on disk
+	height(t, s, 38.5, -77.5) // a again, from the folder
+	if n := ts.tileRequests(a.key()); n != 1 {
+		t.Errorf("a fetched %d times, want 1 (the seed's): the folder's copy must still be read", n)
+	}
+	if n := ts.tileRequests(b.key()); n != 2 {
+		t.Errorf("b fetched %d times, want 2 (it could not be cached)", n)
+	}
+
+	// Within the backoff no write is tried; after it, one is, and it works.
+	restore()
+	height(t, s, 40.5, -77.5)
+	if _, err := os.Stat(filepath.Join(dir, c.key()+".tif")); err == nil {
+		t.Errorf("c written within the backoff")
+	}
+	s.mu.Lock()
+	delete(s.loading, tileID{lat: 40, lon: -78})
+	s.mem = newMemLRU(1)
+	s.mu.Unlock()
+	s.now = func() time.Time { return time.Now().Add(writeRetry + time.Second) }
+	height(t, s, 40.5, -77.5)
+	if _, err := os.Stat(filepath.Join(dir, c.key()+".tif")); err != nil {
+		t.Errorf("c not written after the backoff: %v", err)
+	}
+}
+
+// M8: a caller joining a fetch waits at most until the fetch is JoinWindow
+// old, whatever its own budget: a flight holds a sender's stream for one
+// window in all.
+func TestJoinerWaitCappedAtWindow(t *testing.T) {
+	tt := testTile{south: 38, west: -78}
+	ts := newTileServer(t, tt)
+	s := newTestService(t, ts, func(c *Config) { c.JoinWindow = 500 * time.Millisecond })
+	height(t, s, 0.5, -30.5)
+	ts.hold(t, tt.key())
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := s.HeightHAE(ctx, 38.5, -77.5); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("starter: err = %v, want ErrUnavailable", err)
+	}
+	time.Sleep(350 * time.Millisecond) // the fetch is about 400 ms old
+	jctx, jcancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer jcancel()
+	start := time.Now()
+	_, err := s.HeightHAE(jctx, 38.5, -77.5)
+	if took := time.Since(start); !errors.Is(err, ErrUnavailable) || took > 300*time.Millisecond {
+		t.Errorf("joiner: %v after %v, want ErrUnavailable within about 100 ms (when the fetch is 500 ms old)", err, took)
+	}
+}

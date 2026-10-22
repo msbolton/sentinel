@@ -95,27 +95,24 @@ func (s *Service) loadIndex() (map[tileID]struct{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	ok := s.diskOK
-	s.mu.Unlock()
-	if ok {
+	if s.canWrite() {
 		if err := writeAtomic(path, b); err != nil {
 			s.markUnwritable(err)
+		} else {
+			s.markWritable()
 		}
 	}
 	return idx, nil
 }
 
 // loadTile produces a decoded tile: from the disk cache if it is there and
-// decodes, otherwise downloaded. A cached file that fails to decode is
-// deleted and fetched again, once. A download that fails to decode is an
-// error and is not kept.
+// decodes, otherwise downloaded. The cache folder is read even while it
+// cannot be written, and a file another process put there (terrain-preload)
+// is taken up. A cached file that fails to decode is deleted and fetched
+// again, once. A download that fails to decode is an error and is not kept.
+// At most MaxDownloads tiles download and decode at once.
 func (s *Service) loadTile(id tileID) (*raster, error) {
-	s.mu.Lock()
-	_, cached := s.disk[id]
-	cached = cached && s.diskOK
-	s.mu.Unlock()
-	if cached {
+	if s.onDisk(id) {
 		r, err := s.decodeCached(id)
 		if err == nil {
 			s.touch(id)
@@ -126,6 +123,8 @@ func (s *Service) loadTile(id tileID) (*raster, error) {
 		s.removeTile(id)
 	}
 
+	s.downloads <- struct{}{}
+	defer func() { <-s.downloads }()
 	data, err := s.fetch(tileURLPath(id), maxTileBytes)
 	if err != nil {
 		return nil, err
@@ -134,7 +133,7 @@ func (s *Service) loadTile(id tileID) (*raster, error) {
 	if err != nil {
 		return nil, fmt.Errorf("terrain: %s: %w", id.key(), err)
 	}
-	s.downloads.Add(1)
+	s.downloaded.Add(1)
 	s.storeTile(id, data)
 	return r, nil
 }

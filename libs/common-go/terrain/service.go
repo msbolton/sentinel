@@ -22,6 +22,10 @@ var ErrUnavailable = errors.New("terrain unavailable")
 // failureTTL is how long a failed fetch is remembered before trying again.
 const failureTTL = 30 * time.Second
 
+// writeRetry is how long after a failed cache write the folder is written
+// to again. It is read all along.
+const writeRetry = 5 * time.Minute
+
 // Config sets up a Service backed by Copernicus GLO-30.
 type Config struct {
 	SourceURL     string        // default "https://copernicus-dem-30m.s3.amazonaws.com"
@@ -37,14 +41,20 @@ type Config struct {
 	// per lookup.
 	JoinWindow time.Duration
 	MemTiles   int // decoded tiles kept in memory, default 4
-	HTTPClient *http.Client
-	Logger     *zap.Logger
+	// MaxDownloads is how many tiles download and decode at once (default
+	// 2). Each holds its whole file and its decoded raster meanwhile, about
+	// 100 MB for a full-size tile.
+	MaxDownloads int
+	HTTPClient   *http.Client
+	Logger       *zap.Logger
 }
 
 // Stats counts the service's work. Hits and Misses count height lookups on
 // listed tiles answered from, or not from, the decoded tiles in memory.
-// Downloads and Failures count tile fetches; CacheBytes is the size of the
-// tiles in the cache directory.
+// Downloads counts tiles downloaded; Failures counts failed loads of a tile
+// and failed fetches of the tile list (so a service with no route to the
+// source shows failures, not silence). CacheBytes is the size of the tiles
+// in the cache directory.
 type Stats struct{ Hits, Misses, Downloads, Failures, CacheBytes int64 }
 
 // Service answers ground heights. It is safe for concurrent use.
@@ -55,14 +65,20 @@ type Service struct {
 	client *http.Client
 	now    func() time.Time
 
-	hits, misses, downloads, failures atomic.Int64
-	warnOnce                          sync.Once
+	hits, misses, downloaded, failures atomic.Int64
+	warnOnce                           sync.Once
+
+	// downloads holds a slot per tile download under way (MaxDownloads).
+	downloads chan struct{}
 
 	mu        sync.Mutex
 	mem       *memLRU
 	disk      map[tileID]*diskEntry
 	diskBytes int64
-	diskOK    bool
+	// diskOK is false after a cache write failed, until writeRetry has
+	// passed since unwritableAt; the folder is still read meanwhile.
+	diskOK       bool
+	unwritableAt time.Time
 
 	index        map[tileID]struct{}
 	indexLoading *flight[map[tileID]struct{}]
@@ -133,6 +149,9 @@ func New(cfg Config) (*Service, error) {
 	if cfg.MemTiles <= 0 {
 		cfg.MemTiles = 4
 	}
+	if cfg.MaxDownloads <= 0 {
+		cfg.MaxDownloads = 2
+	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{}
 	}
@@ -140,15 +159,16 @@ func New(cfg Config) (*Service, error) {
 		cfg.Logger = zap.NewNop()
 	}
 	s := &Service{
-		cfg:     cfg,
-		log:     cfg.Logger,
-		client:  cfg.HTTPClient,
-		now:     time.Now,
-		mem:     newMemLRU(cfg.MemTiles),
-		disk:    map[tileID]*diskEntry{},
-		diskOK:  true,
-		loading: map[tileID]*flight[*raster]{},
-		failed:  map[tileID]time.Time{},
+		cfg:       cfg,
+		log:       cfg.Logger,
+		client:    cfg.HTTPClient,
+		now:       time.Now,
+		mem:       newMemLRU(cfg.MemTiles),
+		downloads: make(chan struct{}, cfg.MaxDownloads),
+		disk:      map[tileID]*diskEntry{},
+		diskOK:    true,
+		loading:   map[tileID]*flight[*raster]{},
+		failed:    map[tileID]time.Time{},
 	}
 	s.openCacheDir()
 	return s, nil
@@ -266,7 +286,8 @@ func (s *Service) tileIndex(ctx context.Context, patient bool) (map[tileID]struc
 		s.mu.Unlock()
 		return nil, errStillLoading("the tile list", age)
 	}
-	if f == nil {
+	started := f == nil
+	if started {
 		f = newFlight[map[tileID]struct{}](s.now())
 		s.indexLoading = f
 		go func() {
@@ -275,6 +296,7 @@ func (s *Service) tileIndex(ctx context.Context, patient bool) (map[tileID]struc
 			s.indexLoading = nil
 			if err != nil {
 				s.indexFailed = s.now()
+				s.failures.Add(1)
 				s.log.Warn("terrain tile list unavailable", zap.Error(err))
 			} else {
 				s.index = idx
@@ -285,7 +307,10 @@ func (s *Service) tileIndex(ctx context.Context, patient bool) (map[tileID]struc
 		}()
 	}
 	s.mu.Unlock()
-	return f.wait(ctx)
+	if patient {
+		return f.wait(ctx)
+	}
+	return join(s, ctx, f, started, "the tile list")
 }
 
 // tile returns a decoded listed tile, sharing one load among all callers.
@@ -311,7 +336,32 @@ func (s *Service) tile(ctx context.Context, id tileID, patient bool) (*raster, e
 		return nil, errStillLoading(id.key(), age)
 	}
 	s.mu.Unlock()
-	return f.wait(ctx)
+	if patient {
+		return f.wait(ctx)
+	}
+	return join(s, ctx, f, started, id.key())
+}
+
+// join waits for a flight as a height lookup does: the caller that started
+// it within ctx, and one that joined it only until the flight is JoinWindow
+// old, so that however many lookups join one after another, a flight holds
+// a sender's stream for about one window in all.
+func join[T any](s *Service, ctx context.Context, f *flight[T], started bool, what string) (T, error) {
+	if started {
+		return f.wait(ctx)
+	}
+	left := f.started.Add(s.cfg.JoinWindow).Sub(s.now())
+	if left <= 0 {
+		var zero T
+		return zero, errStillLoading(what, s.now().Sub(f.started))
+	}
+	jctx, cancel := context.WithTimeout(ctx, left)
+	defer cancel()
+	v, err := f.wait(jctx)
+	if err != nil && ctx.Err() == nil && jctx.Err() != nil {
+		return v, errStillLoading(what, s.now().Sub(f.started))
+	}
+	return v, err
 }
 
 // startLoadLocked returns the load in flight for a tile, starting one if
@@ -342,15 +392,20 @@ func (s *Service) neighbourTile(ctx context.Context, id tileID) *raster {
 		s.mu.Unlock()
 		return nil
 	}
-	_, onDisk := s.disk[id]
-	onDisk = onDisk && s.diskOK
+	s.mu.Unlock()
+	onDisk := s.onDisk(id)
+	s.mu.Lock()
+	if r := s.memGetLocked(id); r != nil { // landed meanwhile
+		s.mu.Unlock()
+		return r
+	}
 	f, started := s.startLoadLocked(id)
 	closed := !started && f.closed(s.now(), s.cfg.JoinWindow)
 	s.mu.Unlock()
 	if !onDisk || closed {
 		return nil
 	}
-	r, err := f.wait(ctx)
+	r, err := join(s, ctx, f, started, id.key())
 	if err != nil {
 		return nil
 	}
@@ -393,11 +448,9 @@ func (s *Service) Preload(ctx context.Context, south, west, north, east float64)
 			continue
 		}
 		s.mu.Lock()
-		_, onDisk := s.disk[id]
 		inMem := s.mem.byID[id] != nil
-		onDisk = onDisk && s.diskOK
 		s.mu.Unlock()
-		if onDisk || inMem {
+		if inMem || s.onDisk(id) {
 			ready++
 			continue
 		}
@@ -421,7 +474,7 @@ func (s *Service) Stats() Stats {
 	st := Stats{
 		Hits:      s.hits.Load(),
 		Misses:    s.misses.Load(),
-		Downloads: s.downloads.Load(),
+		Downloads: s.downloaded.Load(),
 		Failures:  s.failures.Load(),
 	}
 	s.mu.Lock()

@@ -99,16 +99,55 @@ func (s *Service) openCacheDir() {
 	s.evictLocked(tileID{lat: 1000}) // no tile is exempt
 }
 
-// markUnwritable switches the service to serving from memory only, with one
-// warning for the life of the service.
+// markUnwritable stops writes to the cache folder for writeRetry, with one
+// warning for the life of the service. Tiles already in it are still read.
 func (s *Service) markUnwritable(err error) {
 	s.mu.Lock()
-	s.diskOK = false
+	s.diskOK, s.unwritableAt = false, s.now()
 	s.mu.Unlock()
 	s.warnOnce.Do(func() {
-		s.log.Warn("terrain cache directory not writable; serving tiles from memory only",
+		s.log.Warn("terrain cache directory not writable; keeping new tiles in memory only, and trying again every "+writeRetry.String(),
 			zap.String("dir", s.cfg.CacheDir), zap.Error(err))
 	})
+}
+
+// markWritable records a cache write that worked.
+func (s *Service) markWritable() {
+	s.mu.Lock()
+	s.diskOK = true
+	s.mu.Unlock()
+}
+
+// canWrite reports whether a cache write should be tried: the folder is
+// writable, or writeRetry has passed since a write failed.
+func (s *Service) canWrite() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.diskOK || s.now().Sub(s.unwritableAt) >= writeRetry
+}
+
+// onDisk reports whether the cache folder holds tile id. A file this
+// service did not write or see at start (another process put it there, as
+// terrain-preload does into a running service) is taken into the cache's
+// accounting. Callers hold no lock.
+func (s *Service) onDisk(id tileID) bool {
+	s.mu.Lock()
+	_, ok := s.disk[id]
+	s.mu.Unlock()
+	if ok {
+		return true
+	}
+	info, err := os.Stat(s.tilePath(id))
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.disk[id]; !ok {
+		s.disk[id] = &diskEntry{size: info.Size(), used: info.ModTime()}
+		s.diskBytes += info.Size()
+	}
+	return true
 }
 
 // writeAtomic writes data to path through path.part, so a crash never leaves
@@ -126,13 +165,15 @@ func writeAtomic(path string, data []byte) error {
 	return nil
 }
 
-// storeTile saves a downloaded tile in the disk cache, if there is one, and
-// evicts the least recently used tiles to keep under MaxCacheBytes.
+// storeTile saves a downloaded tile in the disk cache, unless a write failed
+// within writeRetry, and evicts the least recently used tiles to keep under
+// MaxCacheBytes.
 func (s *Service) storeTile(id tileID, data []byte) {
-	s.mu.Lock()
-	ok := s.diskOK
-	s.mu.Unlock()
-	if !ok {
+	if !s.canWrite() {
+		return
+	}
+	if err := os.MkdirAll(s.cfg.CacheDir, 0o755); err != nil {
+		s.markUnwritable(err)
 		return
 	}
 	if err := writeAtomic(s.tilePath(id), data); err != nil {
@@ -141,6 +182,7 @@ func (s *Service) storeTile(id tileID, data []byte) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.diskOK = true
 	if old, ok := s.disk[id]; ok {
 		s.diskBytes -= old.size
 	}
