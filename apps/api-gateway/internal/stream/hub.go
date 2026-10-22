@@ -36,7 +36,7 @@ type Hub struct {
 	// It is taken before mu and never held while mu is held by the caller.
 	presenceMu sync.Mutex
 
-	lastEventNanos atomic.Int64 // unix nanoseconds of the latest entity event; 0 = none yet
+	lastEventNanos atomic.Int64 // unix nanoseconds of the latest live (non-exercise) entity event; 0 = none yet
 }
 
 // NewHub creates an empty hub.
@@ -144,8 +144,9 @@ func (h *Hub) CloseUser(userID string) {
 	wg.Wait()
 }
 
-// LastEventAt returns when the latest entity event passed through the hub,
-// or the zero time if none has.
+// LastEventAt returns when the bridge last saw a live entity event, one that
+// is not an exercise, or the zero time if it has seen none. The sensor
+// simulators' exercise traffic never stops, so it does not count.
 func (h *Hub) LastEventAt() time.Time {
 	n := h.lastEventNanos.Load()
 	if n == 0 {
@@ -154,7 +155,7 @@ func (h *Hub) LastEventAt() time.Time {
 	return time.Unix(0, n)
 }
 
-// noteEvent records that an entity event just arrived.
+// noteEvent records that a live entity event just arrived.
 func (h *Hub) noteEvent() { h.lastEventNanos.Store(time.Now().UnixNano()) }
 
 // SetViewportListener registers a callback invoked whenever a client sends
@@ -208,7 +209,6 @@ func (h *Hub) BroadcastBatch(events []PositionedEvent) {
 	if len(events) == 0 {
 		return
 	}
-	h.noteEvent()
 	sent := 0
 	for _, c := range h.snapshot() {
 		matching := c.filter(events)

@@ -96,7 +96,9 @@ func (b *Bridge) Handle(topic string, value []byte) {
 			b.logger.Debug("bad entity event", zap.Error(err))
 			return
 		}
-		b.hub.noteEvent()
+		if liveEntity(&ev) != nil {
+			b.hub.noteEvent()
+		}
 		b.handleEntityEvent(&ev)
 	case kafka.TopicAlertEvents:
 		var ev sentinelv1.AlertEvent
@@ -115,6 +117,28 @@ func (b *Bridge) Handle(topic string, value []byte) {
 	default:
 		b.logger.Warn("unhandled topic", zap.String("topic", topic))
 	}
+}
+
+// liveEntity returns the entity an event carries when it is live traffic,
+// that is not an exercise (the sensor simulators), and nil otherwise. Events
+// without an entity (deletes, ageouts) are nil too: the entity service emits
+// those on its own as entities go quiet, so they prove no feed is delivering.
+func liveEntity(ev *sentinelv1.EntityEvent) *sentinelv1.Entity {
+	var en *sentinelv1.Entity
+	switch e := ev.Event.(type) {
+	case *sentinelv1.EntityEvent_Created:
+		en = e.Created.GetEntity()
+	case *sentinelv1.EntityEvent_Updated:
+		en = e.Updated.GetEntity()
+	case *sentinelv1.EntityEvent_Position:
+		en = e.Position.GetEntity()
+	case *sentinelv1.EntityEvent_Restored:
+		en = e.Restored.GetEntity()
+	}
+	if en == nil || en.Exercise {
+		return nil
+	}
+	return en
 }
 
 func (b *Bridge) handleEntityEvent(ev *sentinelv1.EntityEvent) {

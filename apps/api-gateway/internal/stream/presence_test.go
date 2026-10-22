@@ -236,22 +236,13 @@ func TestLastEventAtZeroBeforeAnyEvent(t *testing.T) {
 	}
 }
 
-func TestLastEventAtAdvancesOnBroadcast(t *testing.T) {
+func TestBroadcastDoesNotAdvanceLastEventAt(t *testing.T) {
+	// The bridge records live events as they arrive; a broadcast batch cannot
+	// tell an exercise entity from a live one, so it records nothing.
 	hub := NewHub(zap.NewNop())
-	before := time.Now()
 	hub.BroadcastBatch([]PositionedEvent{posEvent("e", 0, 0)})
-	got := hub.LastEventAt()
-	if got.IsZero() || got.Before(before) {
-		t.Fatalf("LastEventAt = %v, want >= %v", got, before)
-	}
-	hub.BroadcastBatch(nil)
-	if !hub.LastEventAt().Equal(got) {
-		t.Error("an empty batch must not advance LastEventAt")
-	}
-	time.Sleep(2 * time.Millisecond)
-	hub.BroadcastBatch([]PositionedEvent{posEvent("e", 0, 0)})
-	if !hub.LastEventAt().After(got) {
-		t.Error("second batch should advance LastEventAt")
+	if !hub.LastEventAt().IsZero() {
+		t.Errorf("LastEventAt = %v after a broadcast, want zero", hub.LastEventAt())
 	}
 }
 
@@ -270,6 +261,35 @@ func TestBridgeEntityEventAdvancesLastEventAt(t *testing.T) {
 		Event: &sentinelv1.EntityEvent_Updated{Updated: &sentinelv1.EntityUpdated{Entity: &sentinelv1.Entity{Id: "e3"}}}}))
 	if b.hub.LastEventAt().IsZero() {
 		t.Error("entity event did not advance LastEventAt")
+	}
+}
+
+// The sensor simulators are exercise traffic and never stop, so only a live
+// (non-exercise) entity proves a live feed is delivering.
+func TestBridgeExerciseEventsDoNotAdvanceLastEventAt(t *testing.T) {
+	b, _ := newTestBridge(t)
+	pos := &sentinelv1.Coordinate{Latitude: 54.6, Longitude: -3.1}
+	exercise := []*sentinelv1.EntityEvent{
+		{EntityId: "x1", Event: &sentinelv1.EntityEvent_Created{Created: &sentinelv1.EntityCreated{Entity: &sentinelv1.Entity{Id: "x1", Position: pos, Exercise: true}}}},
+		{EntityId: "x1", Event: &sentinelv1.EntityEvent_Updated{Updated: &sentinelv1.EntityUpdated{Entity: &sentinelv1.Entity{Id: "x1", Position: pos, Exercise: true}}}},
+		{EntityId: "x1", Event: &sentinelv1.EntityEvent_Position{Position: &sentinelv1.EntityPosition{Entity: &sentinelv1.Entity{Id: "x1", Position: pos, Exercise: true}}}},
+		{EntityId: "x1", Event: &sentinelv1.EntityEvent_Restored{Restored: &sentinelv1.EntityRestored{Entity: &sentinelv1.Entity{Id: "x1", Position: pos, Exercise: true}}}},
+		// Ageouts and deletes carry no exercise flag, and the entity service
+		// emits them on its own as entities go quiet: not live delivery.
+		{EntityId: "x1", Event: &sentinelv1.EntityEvent_Stale{Stale: &sentinelv1.EntityAgeout{}}},
+		{EntityId: "x1", Event: &sentinelv1.EntityEvent_Deleted{Deleted: &sentinelv1.EntityDeleted{}}},
+	}
+	for _, ev := range exercise {
+		b.Handle(kafka.TopicEntityEvents, protoBytes(t, ev))
+	}
+	if !b.hub.LastEventAt().IsZero() {
+		t.Fatalf("exercise and ageout events advanced LastEventAt to %v", b.hub.LastEventAt())
+	}
+	before := time.Now()
+	b.Handle(kafka.TopicEntityEvents, protoBytes(t, &sentinelv1.EntityEvent{EntityId: "a1",
+		Event: &sentinelv1.EntityEvent_Position{Position: &sentinelv1.EntityPosition{Entity: &sentinelv1.Entity{Id: "a1", Position: pos}}}}))
+	if got := b.hub.LastEventAt(); got.Before(before) {
+		t.Errorf("a live entity event left LastEventAt at %v", got)
 	}
 }
 
