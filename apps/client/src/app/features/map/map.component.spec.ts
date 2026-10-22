@@ -28,6 +28,7 @@ import {
 import { Feed } from '../../shared/models/feed.model';
 import { ELLIPSE_95 } from './uncertainty';
 import { sidcFor, symbolDataUrl } from './milstd2525';
+import { ENTITY_TYPE_BILLBOARD_SVGS, svgToDataUrl } from './cesium-config';
 import { BearingLayer } from './bearing-layer';
 
 function covFromEllipse(semiMajorM: number, semiMinorM: number, orientationDeg: number) {
@@ -481,6 +482,26 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     expect(sigCesium.billboard.color.blue).toBe(1);
     expect((component as any).trackTrails.get('sig-1').toArray()).toHaveLength(1);
     expect((component as any).trackTrails.get('drn-1').toArray()).toHaveLength(1);
+  });
+
+  it('turns a vehicle billboard with its heading, upright when it has none, and keeps 2525D symbols north-up', () => {
+    feedsSignal.set([{ id: 'ew-1', config: { military: false } } as unknown as Feed]);
+    fixture.detectChanges();
+
+    const vehicle = baseSignalEntity({ id: 'veh-1', entityType: EntityType.VEHICLE, heading: 90 });
+    const parked = baseSignalEntity({ id: 'veh-2', entityType: EntityType.VEHICLE });
+    (component as any).addOrUpdateCesiumEntity(vehicle);
+    (component as any).addOrUpdateCesiumEntity(parked);
+    const vehCesium = (component as any).entityMap.get('veh-1');
+    const parkedCesium = (component as any).entityMap.get('veh-2');
+    expect(vehCesium.billboard.rotation).toBeCloseTo(-Math.PI / 2, 6);
+    expect(parkedCesium.billboard.rotation).toBe(0);
+    expect(vehCesium.billboard.image).toBe(svgToDataUrl(ENTITY_TYPE_BILLBOARD_SVGS[EntityType.VEHICLE]));
+
+    feedsSignal.set([{ id: 'ew-1', config: { military: true } } as unknown as Feed]);
+    fixture.detectChanges();
+    expect(vehCesium.billboard.image).toBe(symbolDataUrl(sidcFor(vehicle)));
+    expect(vehCesium.billboard.rotation).toBe(0);
   });
 
   it('does not resync billboards or push trail points when feed polling returns unchanged military flags', () => {
