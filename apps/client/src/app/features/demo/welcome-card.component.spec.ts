@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { BehaviorSubject } from 'rxjs';
 import { WelcomeCardComponent } from './welcome-card.component';
-import { DemoBounds, DemoSession } from '../../core/services/demo.service';
+import { DemoBounds, DemoPosition, DemoSession } from '../../core/services/demo.service';
 import { DemoService } from '../../core/services/demo.service';
 import { AuthService, UserProfile } from '../../core/services/auth.service';
 import { EmplacementService } from '../../core/services/emplacement.service';
@@ -22,6 +22,7 @@ describe('WelcomeCardComponent', () => {
     welcomeDismissed: ReturnType<typeof signal<boolean>>;
     welcomeShown: ReturnType<typeof signal<boolean>>;
     focusBounds: ReturnType<typeof signal<DemoBounds | null>>;
+    ownPosition: ReturnType<typeof signal<DemoPosition | null>>;
   };
   let sites: ReturnType<typeof signal<Emplacement[]>>;
 
@@ -45,6 +46,7 @@ describe('WelcomeCardComponent', () => {
       welcomeDismissed: signal(false),
       welcomeShown: signal(false),
       focusBounds: signal<DemoBounds | null>(null),
+      ownPosition: signal<DemoPosition | null>(null),
     };
     sites = signal<Emplacement[]>(list);
     TestBed.configureTestingModule({
@@ -96,6 +98,23 @@ describe('WelcomeCardComponent', () => {
     expect(demo.focusBounds()).not.toBeNull();
     fixture.detectChanges();
     expect(demo.welcomeDismissed()).toBe(true);
+  });
+
+  it('Fly to the sensors flies to the cluster nearest the visitor', () => {
+    const sensors = [site('radar', 'sim', 54.6, -3.13), site('esm', 'sim', 36.6, -121.9), site('guest', 'visitors', 51.55, -0.15)];
+    sites.set(sensors);
+    demo.ownPosition.set({ lat: 37.77, lon: -122.42, source: 'browser' });
+    const fixture = render();
+    button(fixture.nativeElement, 'Fly to the sensors').click();
+    expect(demo.focusBounds()).toEqual(sensorBounds(sensors, 'visitors', { lat: 37.77, lon: -122.42 }));
+    expect(demo.focusBounds()!.north).toBeLessThan(40); // Monterey, not Keswick as well
+  });
+
+  it('credits MaxMind GeoLite2 for the approximate locations', () => {
+    const el = render().nativeElement as HTMLElement;
+    expect(el.textContent).toContain('GeoLite2 data created by MaxMind');
+    const link = Array.from(el.querySelectorAll('a')).find((a) => a.getAttribute('href') === 'https://www.maxmind.com');
+    expect(link).toBeDefined();
   });
 
   it('Show everyone exploring sets focusBounds to visitorBounds', () => {

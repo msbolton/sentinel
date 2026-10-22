@@ -40,6 +40,10 @@ import { trapTab } from './focus-trap';
             <button #explore type="button" class="btn btn-primary" (click)="dismiss()">Explore</button>
           </div>
           <a class="back" [href]="portfolioUrl">Back to msbolton.dev</a>
+          <p class="attribution">
+            Approximate locations use GeoLite2 data created by MaxMind, available from
+            <a href="https://www.maxmind.com" target="_blank" rel="noopener noreferrer">https://www.maxmind.com</a>.
+          </p>
         </div>
       </div>
     }
@@ -83,6 +87,20 @@ import { trapTab } from './focus-trap';
         vertical-align: baseline;
       }
 
+      /* GeoLite2's licence asks for this credit where its data is used. */
+      .attribution {
+        margin: 12px 0 0;
+        font-size: 0.7rem;
+        line-height: 1.4;
+        color: var(--text-muted);
+      }
+
+      .attribution a {
+        color: inherit;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
       /* The same violets the map draws visitors in. */
       .swatch.others {
         background: #8b5cf6;
@@ -107,7 +125,10 @@ export class WelcomeCardComponent {
   protected readonly visible = computed(() => this.guest() && !this.demo.sessionEnded() && !this.demo.welcomeDismissed());
 
   private readonly visitorsFeedId = computed(() => this.demo.session()?.visitorsFeedId);
-  protected readonly sensors = computed(() => sensorBounds(this.emplacements.emplacements(), this.visitorsFeedId()));
+  /** The sensor cluster nearest the visitor; the example sites are continents apart. */
+  protected readonly sensors = computed(() =>
+    sensorBounds(this.emplacements.emplacements(), this.visitorsFeedId(), this.demo.ownPosition()),
+  );
   protected readonly visitors = computed(() => visitorBounds(this.emplacements.emplacements(), this.visitorsFeedId()));
 
   constructor() {
