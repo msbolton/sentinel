@@ -239,6 +239,82 @@ describe('AuthService', () => {
       expect(service.isGuest()).toBe(true);
     });
 
+    it('an unreadable token is not kept: getToken stays null and the user stays signed out', () => {
+      expect(() =>
+        service.adoptTokens({ accessToken: 'not-a-jwt', refreshToken: 'r', expiresIn: 300 }),
+      ).toThrow();
+      expect(service.getToken()).toBeNull();
+      expect(service.isAuthenticated()).toBe(false);
+    });
+
+    describe('init finishing after a guest session was adopted', () => {
+      let warnSpy: jest.SpyInstance;
+      let errorSpy: jest.SpyInstance;
+      const wasProduction = environment.production;
+
+      beforeEach(() => {
+        warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+        errorSpy = jest.spyOn(console, 'error').mockImplementation();
+      });
+      afterEach(() => {
+        environment.production = wasProduction;
+        warnSpy.mockRestore();
+        errorSpy.mockRestore();
+      });
+
+      const guestTokens = () => ({
+        accessToken: tokenWith(['sentinel-viewer', 'sentinel-guest']),
+        refreshToken: 'r',
+        expiresIn: 300,
+      });
+
+      it('keeps the guest when Keycloak answers not-authenticated after adoptTokens', async () => {
+        let answer!: (v: boolean) => void;
+        mockKeycloakInit.mockReset().mockReturnValue(new Promise<boolean>((r) => (answer = r)));
+        const initDone = service.init();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        service.adoptTokens(guestTokens());
+        answer(false);
+        await initDone;
+
+        expect(service.isAuthenticated()).toBe(true);
+        expect(service.isGuest()).toBe(true);
+        expect(service.getToken()).toBe(guestTokens().accessToken);
+      });
+
+      it('keeps the guest when Keycloak init fails (production) after adoptTokens', async () => {
+        environment.production = true;
+        let fail!: (e: Error) => void;
+        mockKeycloakInit.mockReset().mockReturnValue(new Promise<boolean>((_, r) => (fail = r)));
+        const initDone = service.init();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        service.adoptTokens(guestTokens());
+        fail(new Error('down'));
+        await initDone;
+
+        expect(service.isAuthenticated()).toBe(true);
+        expect(service.isGuest()).toBe(true);
+        expect(service.initError$.value).toBeNull();
+      });
+
+      it('ready resolves when init finishes, even when it fails', async () => {
+        environment.production = true;
+        mockKeycloakInit.mockReset().mockRejectedValue(new Error('down'));
+        let ready = false;
+        void service.ready.then(() => (ready = true));
+        await Promise.resolve();
+        expect(ready).toBe(false);
+
+        await service.init();
+        await service.ready;
+        expect(ready).toBe(true);
+      });
+    });
+
     it('a failed refresh emits sessionLost$ and signs out', async () => {
       jest.useFakeTimers();
       const warnSpy = jest.spyOn(console, 'warn').mockImplementation();

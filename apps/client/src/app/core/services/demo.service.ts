@@ -88,6 +88,9 @@ export class DemoService {
       });
       this.session.set({ guestId: res.guestId, expiresAt: res.expiresAt, visitorsFeedId: res.visitorsFeedId });
       this.sessionEnded.set(false);
+      // The stream opened before this token existed (or was stopped when the
+      // last guest ended); give it the new token without waiting out a backoff.
+      this.ws.reconnectNow();
       return 'ok';
     } catch (err) {
       if (err instanceof HttpErrorResponse && err.status === 503) {

@@ -39,7 +39,24 @@ export class AuthService implements OnDestroy {
   /** Set when sign-in is unavailable because Keycloak could not be initialised (production only). */
   readonly initError$ = new BehaviorSubject<string | null>(null);
 
+  private markReady!: () => void;
+
+  /**
+   * Resolves once init() has finished (whatever its outcome). Anything that
+   * decides what to do from the signed-in state, such as the /demo entry,
+   * waits for it so it never reads the state before Keycloak has answered.
+   */
+  readonly ready: Promise<void> = new Promise<void>((resolve) => (this.markReady = resolve));
+
   async init(): Promise<boolean> {
+    try {
+      return await this.initKeycloak();
+    } finally {
+      this.markReady();
+    }
+  }
+
+  private async initKeycloak(): Promise<boolean> {
     try {
       const KeycloakModule = await import('keycloak-js').catch(() => null);
 
@@ -57,6 +74,12 @@ export class AuthService implements OnDestroy {
       const authenticated = await this.keycloak.init({
         pkceMethod: 'S256',
       });
+
+      if (this.directToken) {
+        // A direct session (a demo guest) was adopted while Keycloak was still
+        // answering; it must not be reset by this result.
+        return this.isAuthenticated();
+      }
 
       this.authenticatedSubject.next(authenticated);
 
@@ -90,6 +113,10 @@ export class AuthService implements OnDestroy {
    * error on the login page.
    */
   private handleInitFailure(reason: string, error?: unknown): boolean {
+    if (this.directToken) {
+      console.warn(`[Auth] ${reason}; keeping the direct session`, error ?? '');
+      return this.isAuthenticated();
+    }
     if (environment.production) {
       console.error(`[Auth] ${reason}; sign-in is unavailable`, error ?? '');
       this.authenticatedSubject.next(false);
@@ -153,10 +180,10 @@ export class AuthService implements OnDestroy {
 
   /** Keeps the tokens in memory and derives the user profile from the access token. */
   private applyTokenResponse(accessToken: string, refreshToken: string, fallbackUsername: string): void {
+    // Parse first: a token that cannot be read must not become the current one.
+    const parsed = this.parseJwt(accessToken);
     this.directToken = accessToken;
     this.directRefreshToken = refreshToken;
-
-    const parsed = this.parseJwt(accessToken);
     this.userProfileSubject.next({
       username: parsed.preferred_username ?? fallbackUsername,
       email: parsed.email,

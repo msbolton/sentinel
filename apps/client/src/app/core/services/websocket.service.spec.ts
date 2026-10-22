@@ -287,6 +287,64 @@ describe('WebSocketService', () => {
     });
   });
 
+  describe('reconnectNow', () => {
+    beforeEach(() => jest.useFakeTimers());
+
+    it('cancels a pending backoff and opens a socket with the current token at once', () => {
+      token = null;
+      service.connect();
+      latestSocket().simulateServerClose(); // unauthenticated socket refused; backoff pending
+      expect(MockWebSocket.instances.length).toBe(1);
+
+      token = 'guest-token';
+      service.reconnectNow();
+
+      expect(MockWebSocket.instances.length).toBe(2);
+      expect(latestSocket().url).toMatch(/\?token=guest-token$/);
+      jest.advanceTimersByTime(60_000);
+      expect(MockWebSocket.instances.length).toBe(2); // the cancelled timer did not open a third
+    });
+
+    it('replaces a live unauthenticated socket and ignores its late close', () => {
+      token = null;
+      service.connect();
+      const first = latestSocket();
+      first.simulateOpen();
+
+      token = 'guest-token';
+      service.reconnectNow();
+      first.simulateServerClose();
+      jest.advanceTimersByTime(60_000);
+
+      expect(MockWebSocket.instances.length).toBe(2);
+      expect(latestSocket().url).toMatch(/token=guest-token$/);
+    });
+
+    it('opens a socket again after a guest was ended with 1008', () => {
+      guest = true;
+      service.connect();
+      latestSocket().simulateOpen();
+      latestSocket().simulateCloseWithCode(1008);
+      expect(MockWebSocket.instances.length).toBe(1);
+
+      service.reconnectNow();
+
+      expect(MockWebSocket.instances.length).toBe(2);
+    });
+
+    it('resets the backoff', () => {
+      service.connect();
+      for (let i = 0; i < 4; i++) {
+        latestSocket().simulateServerClose();
+        jest.advanceTimersByTime(11_000);
+      }
+      service.reconnectNow();
+      latestSocket().simulateServerClose();
+      jest.advanceTimersByTime(1_300);
+      expect(MockWebSocket.instances.length).toBe(7); // 1 + 4 retries + reconnectNow + first-backoff retry
+    });
+  });
+
   it('keeps reconnecting after a 1008 close for a signed-in user who is not a guest', () => {
     jest.useFakeTimers();
     service.connect();

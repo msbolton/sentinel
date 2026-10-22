@@ -3,6 +3,7 @@ import { Router } from '@angular/router';
 import { AuthService } from '../../core/services/auth.service';
 import { DemoService } from '../../core/services/demo.service';
 
+const GENERIC_MESSAGE = 'Something went wrong starting the demo — try again in a moment.';
 const FULL_MESSAGE = 'The demo is full right now — try again in a few minutes.';
 
 /**
@@ -62,7 +63,10 @@ export class DemoStartComponent implements OnInit {
   /** Why the visitor is still here; null while starting. */
   protected readonly message = signal<string | null>(null);
 
-  ngOnInit(): void {
+  async ngOnInit(): Promise<void> {
+    // Keycloak may still be restoring a session; deciding before it answers
+    // could start a guest for someone who is already signed in.
+    await this.auth.ready;
     // A guest whose session ended still holds dead tokens, so it starts over.
     const keepSession = this.auth.isAuthenticated() && !(this.auth.isGuest() && this.demo.sessionEnded());
     if (keepSession) {
@@ -80,7 +84,7 @@ export class DemoStartComponent implements OnInit {
     } else if (result === 'full') {
       this.message.set(FULL_MESSAGE);
     } else {
-      this.message.set(this.demo.errorMessage() ?? 'Something went wrong starting the demo — try again in a moment.');
+      this.message.set(this.demo.errorMessage() ?? GENERIC_MESSAGE);
     }
   }
 

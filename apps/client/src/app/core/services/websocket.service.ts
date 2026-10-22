@@ -84,6 +84,17 @@ export class WebSocketService implements OnDestroy {
   }
 
   /**
+   * Drops any socket or pending backoff and opens a fresh one at once, with
+   * the current token. For when the token just changed (a demo guest signed
+   * in) or the stream was stopped for a guest whose session ended.
+   */
+  reconnectNow(): void {
+    this.disconnect();
+    this.reconnectAttempt = 0;
+    this.connect();
+  }
+
+  /**
    * Current time on the server's clock, in ms. Entity timestamps come from
    * the server, so extrapolation must measure elapsed time against it rather
    * than a possibly skewed local clock.

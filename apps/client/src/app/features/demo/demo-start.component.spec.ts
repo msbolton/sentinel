@@ -14,7 +14,7 @@ describe('DemoStartComponent', () => {
     sessionEnded: ReturnType<typeof signal<boolean>>;
     errorMessage: ReturnType<typeof signal<string | null>>;
   };
-  let auth: { isAuthenticated: jest.Mock; isGuest: jest.Mock };
+  let auth: { isAuthenticated: jest.Mock; isGuest: jest.Mock; ready: Promise<void> };
 
   async function setup(): Promise<void> {
     demo = {
@@ -22,7 +22,11 @@ describe('DemoStartComponent', () => {
       sessionEnded: signal(false),
       errorMessage: signal<string | null>(null),
     };
-    auth = { isAuthenticated: jest.fn().mockReturnValue(false), isGuest: jest.fn().mockReturnValue(false) };
+    auth = {
+      isAuthenticated: jest.fn().mockReturnValue(false),
+      isGuest: jest.fn().mockReturnValue(false),
+      ready: Promise.resolve(),
+    };
     await TestBed.configureTestingModule({
       imports: [DemoStartComponent],
       providers: [
@@ -35,10 +39,16 @@ describe('DemoStartComponent', () => {
     navigate = jest.spyOn(router, 'navigateByUrl').mockResolvedValue(true);
   }
 
+  /** ngOnInit awaits auth.ready, which whenStable does not track without zone.js. */
+  const settle = async () => {
+    await fixture.whenStable();
+    await new Promise((r) => setTimeout(r));
+  };
+
   async function render(): Promise<HTMLElement> {
     fixture = TestBed.createComponent(DemoStartComponent);
     fixture.detectChanges();
-    await fixture.whenStable();
+    await settle();
     fixture.detectChanges();
     return fixture.nativeElement as HTMLElement;
   }
@@ -67,8 +77,25 @@ describe('DemoStartComponent', () => {
 
     demo.startSession.mockResolvedValue('ok');
     (el.querySelector('button.retry') as HTMLButtonElement).click();
-    await fixture.whenStable();
+    await settle();
     expect(demo.startSession).toHaveBeenCalledTimes(2);
+    expect(navigate).toHaveBeenCalledWith('/map', expect.anything());
+  });
+
+  it('waits for auth init before deciding, so a restored real session is not replaced', async () => {
+    let finishInit!: () => void;
+    auth.ready = new Promise<void>((r) => (finishInit = r));
+    fixture = TestBed.createComponent(DemoStartComponent);
+    fixture.detectChanges();
+    await Promise.resolve();
+    expect(demo.startSession).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+
+    auth.isAuthenticated.mockReturnValue(true); // Keycloak restored a real user
+    finishInit();
+    await settle();
+
+    expect(demo.startSession).not.toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledWith('/map', expect.anything());
   });
 

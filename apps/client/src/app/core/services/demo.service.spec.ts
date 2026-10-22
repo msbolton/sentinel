@@ -21,17 +21,19 @@ describe('DemoService', () => {
   let sessionLost: Subject<void>;
   let guestEnded: Subject<void>;
   let auth: { adoptTokens: jest.Mock; sessionLost$: Subject<void> };
+  let ws: { guestSessionEnded$: Subject<void>; reconnectNow: jest.Mock };
 
   beforeEach(() => {
     sessionLost = new Subject<void>();
     guestEnded = new Subject<void>();
+    ws = { guestSessionEnded$: guestEnded, reconnectNow: jest.fn() };
     auth = { adoptTokens: jest.fn(), sessionLost$: sessionLost };
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: AuthService, useValue: auth },
-        { provide: WebSocketService, useValue: { guestSessionEnded$: guestEnded } },
+        { provide: WebSocketService, useValue: ws },
       ],
     });
     service = TestBed.inject(DemoService);
@@ -58,6 +60,7 @@ describe('DemoService', () => {
       visitorsFeedId: 'feed-visitors',
     });
     expect(service.sessionEnded()).toBe(false);
+    expect(ws.reconnectNow).toHaveBeenCalledTimes(1);
   });
 
   it('startSession returns full on 503 {error:"full"}', async () => {
@@ -66,6 +69,7 @@ describe('DemoService', () => {
 
     await expect(result).resolves.toBe('full');
     expect(auth.adoptTokens).not.toHaveBeenCalled();
+    expect(ws.reconnectNow).not.toHaveBeenCalled();
     expect(service.session()).toBeNull();
   });
 
@@ -189,5 +193,82 @@ describe('DemoService', () => {
     expect(service.focusBounds()).toBeNull();
     expect(service.ownEmplacementId()).toBeNull();
     expect(service.ownPosition()).toBeNull();
+  });
+});
+
+describe('DemoService with the real auth and entity stream', () => {
+  const guestToken = [
+    btoa(JSON.stringify({ alg: 'RS256' })),
+    btoa(JSON.stringify({ preferred_username: 'guest-1a2b3c4d', realm_access: { roles: ['sentinel-guest'] } })),
+    'sig',
+  ].join('.');
+  const originalWebSocket = (globalThis as any).WebSocket;
+  let sockets: Array<{ url: string; onclose: ((e: CloseEvent) => void) | null; onopen: (() => void) | null }>;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    sockets = [];
+    (globalThis as any).WebSocket = class {
+      static readonly OPEN = 1;
+      readyState = 0;
+      onopen: (() => void) | null = null;
+      onclose: ((e: CloseEvent) => void) | null = null;
+      constructor(public url: string) {
+        sockets.push(this);
+      }
+      close(): void {}
+      send(): void {}
+    };
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+  });
+  afterEach(() => {
+    TestBed.inject(WebSocketService).disconnect();
+    TestBed.inject(AuthService).ngOnDestroy();
+    (globalThis as any).WebSocket = originalWebSocket;
+    jest.useRealTimers();
+  });
+
+  async function startGuest(): Promise<void> {
+    const http = TestBed.inject(HttpTestingController);
+    const result = TestBed.inject(DemoService).startSession();
+    http.expectOne('/api/v1/demo/session').flush({
+      accessToken: guestToken,
+      refreshToken: 'rt',
+      expiresIn: 300,
+      guestId: '1a2b3c4d',
+      expiresAt: '2026-10-22T12:00:00Z',
+      visitorsFeedId: 'feed',
+    });
+    await expect(result).resolves.toBe('ok');
+  }
+
+  it('opens the entity stream with the guest token right after startSession, past a pending backoff', async () => {
+    const ws = TestBed.inject(WebSocketService);
+    ws.connect(); // the app connects before any token exists
+    sockets[0].onclose?.({ code: 1006, reason: '' } as CloseEvent); // refused; backoff pending
+    expect(sockets.length).toBe(1);
+    expect(sockets[0].url).not.toContain('token=');
+
+    await startGuest();
+
+    expect(sockets.length).toBe(2);
+    expect(sockets[1].url).toMatch(/\?token=/);
+    expect(decodeURIComponent(sockets[1].url.split('token=')[1])).toBe(guestToken);
+  });
+
+  it('opens the stream again for a new session after the gateway ended the guest with 1008', async () => {
+    const ws = TestBed.inject(WebSocketService);
+    await startGuest();
+    expect(sockets.length).toBe(1);
+    sockets[0].onclose?.({ code: 1008, reason: 'expired' } as CloseEvent);
+    jest.advanceTimersByTime(60_000);
+    expect(sockets.length).toBe(1); // stopped, no reconnect loop
+    expect(TestBed.inject(DemoService).sessionEnded()).toBe(true);
+
+    await startGuest();
+
+    expect(sockets.length).toBe(2);
+    expect(TestBed.inject(DemoService).sessionEnded()).toBe(false);
+    expect(ws).toBeTruthy();
   });
 });
