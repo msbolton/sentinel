@@ -4,6 +4,15 @@ import { signal } from '@angular/core';
 import { DemoStartComponent } from './demo-start.component';
 import { DemoService } from '../../core/services/demo.service';
 import { AuthService } from '../../core/services/auth.service';
+import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { saveGuestSession } from '../../core/services/guest-session-store';
+
+const mockKeycloakInit = jest.fn();
+jest.mock('keycloak-js', () => ({
+  __esModule: true,
+  default: jest.fn().mockImplementation(() => ({ init: mockKeycloakInit })),
+}));
 
 describe('DemoStartComponent', () => {
   let fixture: ComponentFixture<DemoStartComponent>;
@@ -151,5 +160,71 @@ describe('DemoStartComponent', () => {
     await render();
     expect(demo.startSession).not.toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledWith('/map', expect.anything());
+  });
+});
+
+describe('DemoStartComponent with the stored guest session (a reload, a second tab)', () => {
+  const guestJwt = [
+    btoa(JSON.stringify({ alg: 'RS256' })),
+    btoa(JSON.stringify({ preferred_username: 'guest-1a2b3c4d', realm_access: { roles: ['sentinel-viewer', 'sentinel-guest'] } })),
+    'sig',
+  ].join('.');
+  let originalFetch: typeof fetch | undefined;
+  let navigate: jest.SpyInstance;
+  let warnSpy: jest.SpyInstance;
+
+  beforeEach(async () => {
+    localStorage.clear();
+    saveGuestSession({
+      refreshToken: 'stored',
+      guestId: '1a2b3c4d',
+      expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+      visitorsFeedId: 'visitors',
+    });
+    mockKeycloakInit.mockReset().mockResolvedValue(false);
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = jest.fn();
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+    await TestBed.configureTestingModule({
+      imports: [DemoStartComponent],
+      providers: [provideRouter([]), provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    navigate = jest.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+  });
+  afterEach(() => {
+    TestBed.inject(AuthService).ngOnDestroy();
+    localStorage.clear();
+    warnSpy.mockRestore();
+    if (originalFetch) globalThis.fetch = originalFetch;
+    else delete (globalThis as any).fetch;
+  });
+
+  async function open(): Promise<void> {
+    void TestBed.inject(AuthService).init(); // as the app shell does
+    const fixture = TestBed.createComponent(DemoStartComponent);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r));
+  }
+
+  it('carries on as the stored guest instead of starting another', async () => {
+    (globalThis.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ access_token: guestJwt, refresh_token: 'next', expires_in: 300 }),
+    } as Response);
+
+    await open();
+
+    TestBed.inject(HttpTestingController).expectNone('/api/v1/demo/session');
+    expect(navigate).toHaveBeenCalledWith('/map', expect.anything());
+    expect(TestBed.inject(DemoService).session()).toEqual(expect.objectContaining({ guestId: '1a2b3c4d', visitorsFeedId: 'visitors' }));
+  });
+
+  it('starts a new guest when the stored one can no longer be resumed', async () => {
+    (globalThis.fetch as jest.Mock).mockResolvedValue({ ok: false, json: () => Promise.resolve({}) } as Response);
+
+    await open();
+
+    TestBed.inject(HttpTestingController).expectOne('/api/v1/demo/session');
   });
 });

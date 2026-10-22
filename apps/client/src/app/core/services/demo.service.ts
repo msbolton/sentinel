@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import { AuthService } from './auth.service';
 import { WebSocketService } from './websocket.service';
 import { blurPosition } from '../../shared/blur';
+import { clearGuestSession, loadGuestSession, saveGuestSession } from './guest-session-store';
 
 /** What the gateway tells a new guest, minus the tokens (AuthService holds those). */
 export interface DemoSession {
@@ -44,11 +45,13 @@ interface PositionResponse {
 
 const STARTING_MESSAGE = 'The demo is starting up — try again in a moment.';
 const GENERIC_MESSAGE = 'Something went wrong starting the demo — try again in a moment.';
+const BUSY_MESSAGE = 'Your network already has demo sessions open — try again in a moment.';
 
 /**
  * The public-demo visitor: signs them in as a guest through the gateway and
- * places their (blurred) emplacement. Holds nothing durable; the
- * tokens live in AuthService and a reload starts a new session.
+ * places their (blurred) emplacement. The tokens live in AuthService; the
+ * session's details are stored beside the guest's refresh token (see
+ * guest-session-store.ts), so a reload or a second tab takes them up again.
  */
 @Injectable({ providedIn: 'root' })
 export class DemoService {
@@ -79,10 +82,21 @@ export class DemoService {
     const ended = () => {
       if (this.session() !== null) {
         this.sessionEnded.set(true);
+        clearGuestSession();
       }
     };
     this.auth.sessionLost$.subscribe(ended);
     this.ws.guestSessionEnded$.subscribe(ended);
+    // A guest AuthService resumed from storage (a reload, a second tab): take up its session.
+    this.auth.userProfile$.subscribe(() => this.takeUpStoredSession());
+  }
+
+  private takeUpStoredSession(): void {
+    if (this.session() !== null || !this.auth.isGuest()) return;
+    const stored = loadGuestSession();
+    if (!stored?.guestId || !stored.expiresAt) return;
+    this.session.set({ guestId: stored.guestId, expiresAt: stored.expiresAt, visitorsFeedId: stored.visitorsFeedId ?? '' });
+    this.ownEmplacementId.set(stored.ownEmplacementId ?? null);
   }
 
   async startSession(): Promise<StartResult> {
@@ -95,6 +109,7 @@ export class DemoService {
         expiresIn: res.expiresIn,
       });
       this.session.set({ guestId: res.guestId, expiresAt: res.expiresAt, visitorsFeedId: res.visitorsFeedId });
+      saveGuestSession({ guestId: res.guestId, expiresAt: res.expiresAt, visitorsFeedId: res.visitorsFeedId });
       this.sessionEnded.set(false);
       // A new session starts from scratch: nothing of the last guest's welcome, place or view carries over.
       this.welcomeDismissed.set(false);
@@ -107,6 +122,10 @@ export class DemoService {
       this.ws.reconnectNow();
       return 'ok';
     } catch (err) {
+      if (err instanceof HttpErrorResponse && err.status === 429) {
+        this.errorMessage.set(BUSY_MESSAGE);
+        return 'error';
+      }
       if (err instanceof HttpErrorResponse && err.status === 503) {
         if (err.error?.error === 'full') {
           return 'full';
@@ -137,6 +156,7 @@ export class DemoService {
         p === 'denied' ? { lat: res.lat, lon: res.lon, source: res.source } : { lat: p.lat, lon: p.lon, source: 'browser' };
       this.ownPosition.set(position);
       this.ownEmplacementId.set(res.emplacementId ?? null);
+      if (res.emplacementId) saveGuestSession({ ownEmplacementId: res.emplacementId });
       return position;
     } catch {
       return null;

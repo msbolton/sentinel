@@ -3,6 +3,7 @@
 import { TestBed } from '@angular/core/testing';
 import { AuthService } from './auth.service';
 import { environment } from '../../../environments/environment';
+import { loadGuestSession, saveGuestSession, wasDemoVisitor } from './guest-session-store';
 
 const mockKeycloakInit = jest.fn();
 jest.mock('keycloak-js', () => ({
@@ -347,6 +348,144 @@ describe('AuthService', () => {
       expect(lost).not.toHaveBeenCalled();
       expect(service.isGuest()).toBe(true);
       expect(service.getToken()).toBe(next);
+    });
+  });
+  describe('a guest session kept across reloads and tabs', () => {
+    const jwt = (roles: string[], username = 'guest-1a2b3c4d') =>
+      [btoa(JSON.stringify({ alg: 'RS256' })), btoa(JSON.stringify({ preferred_username: username, realm_access: { roles } })), 'sig'].join('.');
+    const guestJwt = jwt(['sentinel-viewer', 'sentinel-guest']);
+    const later = () => new Date(Date.now() + 30 * 60_000).toISOString();
+    const tokenAnswer = (access: string, refresh: string) =>
+      ({ ok: true, json: () => Promise.resolve({ access_token: access, refresh_token: refresh, expires_in: 300 }) }) as Response;
+
+    let originalFetch: typeof fetch | undefined;
+    let warnSpy: jest.SpyInstance;
+    let errorSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      localStorage.clear();
+      originalFetch = globalThis.fetch;
+      globalThis.fetch = jest.fn();
+      mockKeycloakInit.mockReset().mockResolvedValue(false); // Keycloak: no session of its own
+      warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      errorSpy = jest.spyOn(console, 'error').mockImplementation();
+    });
+    afterEach(() => {
+      service.ngOnDestroy();
+      jest.useRealTimers();
+      localStorage.clear();
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+      if (originalFetch) globalThis.fetch = originalFetch;
+      else delete (globalThis as any).fetch;
+    });
+
+    const refreshBody = () => String(((globalThis.fetch as jest.Mock).mock.calls.at(-1)![1] as RequestInit).body);
+
+    it("adoptTokens stores a guest's refresh token, and only a guest's", async () => {
+      service.adoptTokens({ accessToken: guestJwt, refreshToken: 'r1', expiresIn: 300 });
+      expect(loadGuestSession()).toEqual({ refreshToken: 'r1' });
+      expect(wasDemoVisitor()).toBe(true);
+
+      localStorage.clear();
+      const other = new AuthService();
+      (globalThis.fetch as jest.Mock).mockResolvedValue(tokenAnswer(jwt(['sentinel-operator'], 'operator'), 'real-refresh'));
+      await other.loginWithCredentials('operator', 'pw');
+      other.adoptTokens({ accessToken: jwt(['sentinel-viewer'], 'viewer'), refreshToken: 'viewer-refresh', expiresIn: 300 });
+      expect(localStorage.length).toBe(0);
+      other.ngOnDestroy();
+    });
+
+    it("a guest's refresh stores the new refresh token", async () => {
+      jest.useFakeTimers();
+      (globalThis.fetch as jest.Mock).mockResolvedValue(tokenAnswer(guestJwt, 'r2'));
+      service.adoptTokens({ accessToken: guestJwt, refreshToken: 'r1', expiresIn: 300 });
+      await jest.advanceTimersByTimeAsync(300_000);
+      expect(loadGuestSession()?.refreshToken).toBe('r2');
+    });
+
+    it('init resumes a stored guest when Keycloak has no session (a reload)', async () => {
+      saveGuestSession({ refreshToken: 'stored', guestId: '1a2b3c4d', expiresAt: later(), visitorsFeedId: 'visitors' });
+      (globalThis.fetch as jest.Mock).mockResolvedValue(tokenAnswer(guestJwt, 'fresh'));
+
+      await expect(service.init()).resolves.toBe(true);
+
+      expect(refreshBody()).toContain('grant_type=refresh_token');
+      expect(refreshBody()).toContain('refresh_token=stored');
+      expect(service.isAuthenticated()).toBe(true);
+      expect(service.isGuest()).toBe(true);
+      expect(service.getToken()).toBe(guestJwt);
+      expect(loadGuestSession()).toEqual(expect.objectContaining({ refreshToken: 'fresh', guestId: '1a2b3c4d' }));
+    });
+
+    it('a second tab picks up the guest the first tab started', async () => {
+      (globalThis.fetch as jest.Mock).mockResolvedValue(tokenAnswer(guestJwt, 'tab2'));
+      const firstTab = new AuthService();
+      firstTab.adoptTokens({ accessToken: guestJwt, refreshToken: 'tab1', expiresIn: 300 });
+      saveGuestSession({ guestId: '1a2b3c4d', expiresAt: later(), visitorsFeedId: 'visitors' }); // DemoService's part
+
+      await service.init();
+
+      expect(refreshBody()).toContain('refresh_token=tab1');
+      expect(service.isGuest()).toBe(true);
+      firstTab.ngOnDestroy();
+    });
+
+    it('a stored session past its expiry is cleared without asking Keycloak', async () => {
+      saveGuestSession({ refreshToken: 'stored', guestId: 'g', expiresAt: new Date(Date.now() - 1000).toISOString() });
+
+      await service.init();
+
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(service.isAuthenticated()).toBe(false);
+      expect(loadGuestSession()).toBeNull();
+      expect(wasDemoVisitor()).toBe(true); // the guards still send this browser to /demo
+    });
+
+    it('a refresh that fails on resume clears the stored session and stays signed out', async () => {
+      saveGuestSession({ refreshToken: 'revoked', guestId: 'g', expiresAt: later() });
+      (globalThis.fetch as jest.Mock).mockResolvedValue({ ok: false, json: () => Promise.resolve({}) } as Response);
+
+      await expect(service.init()).resolves.toBe(false);
+
+      expect(service.isAuthenticated()).toBe(false);
+      expect(service.getToken()).toBeNull();
+      expect(loadGuestSession()).toBeNull();
+    });
+
+    it('a resumed token that is not a guest is refused and cleared', async () => {
+      saveGuestSession({ refreshToken: 'stored', guestId: 'g', expiresAt: later() });
+      (globalThis.fetch as jest.Mock).mockResolvedValue(tokenAnswer(jwt(['sentinel-admin'], 'admin'), 'x'));
+
+      await service.init();
+
+      expect(service.isAuthenticated()).toBe(false);
+      expect(loadGuestSession()).toBeNull();
+    });
+
+    it('Keycloak reporting a real user drops any stored guest', async () => {
+      saveGuestSession({ refreshToken: 'stored', guestId: 'g', expiresAt: later() });
+      mockKeycloakInit.mockReset().mockResolvedValue(true);
+
+      await service.init();
+
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(loadGuestSession()).toBeNull();
+      expect(wasDemoVisitor()).toBe(false);
+    });
+
+    it('a lost session clears the stored one; logout forgets the visitor too', async () => {
+      jest.useFakeTimers();
+      (globalThis.fetch as jest.Mock).mockResolvedValue({ ok: false, json: () => Promise.resolve({}) } as Response);
+      service.adoptTokens({ accessToken: guestJwt, refreshToken: 'r1', expiresIn: 300 });
+      await jest.advanceTimersByTimeAsync(300_000);
+      expect(loadGuestSession()).toBeNull();
+      expect(wasDemoVisitor()).toBe(true);
+
+      service.adoptTokens({ accessToken: guestJwt, refreshToken: 'r2', expiresIn: 300 });
+      await service.logout();
+      expect(loadGuestSession()).toBeNull();
+      expect(wasDemoVisitor()).toBe(false);
     });
   });
 });

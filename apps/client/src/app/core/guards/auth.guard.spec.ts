@@ -123,3 +123,49 @@ describe('roleGuard', () => {
     expect(router.navigate).toHaveBeenCalledWith(['/map']);
   });
 });
+
+describe('guards for a browser that was a demo guest', () => {
+  let authService: { isAuthenticated: jest.Mock; getUserRoles: jest.Mock; ready: Promise<void> };
+  let router: { navigate: jest.Mock };
+  let finishInit: () => void;
+
+  beforeEach(() => {
+    localStorage.setItem('sentinel-demo-visitor', '1');
+    authService = {
+      isAuthenticated: jest.fn().mockReturnValue(false),
+      getUserRoles: jest.fn().mockReturnValue(['sentinel-viewer', 'sentinel-guest']),
+      ready: new Promise<void>((r) => (finishInit = r)),
+    };
+    router = { navigate: jest.fn() };
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: AuthService, useValue: authService },
+        { provide: Router, useValue: router },
+      ],
+    });
+  });
+  afterEach(() => localStorage.clear());
+
+  const run = (guard: ReturnType<typeof roleGuard>, url: string) =>
+    TestBed.runInInjectionContext(() => guard({} as ActivatedRouteSnapshot, { url } as RouterStateSnapshot)) as Promise<boolean>;
+
+  it('waits for the stored guest session to resume, then lets it in (a reload)', async () => {
+    const result = run(authGuard, '/map');
+    authService.isAuthenticated.mockReturnValue(true);
+    finishInit();
+    await expect(result).resolves.toBe(true);
+    expect(router.navigate).not.toHaveBeenCalled();
+  });
+
+  it('sends a former guest with no session left to /demo, not /login', async () => {
+    finishInit();
+    await expect(run(authGuard, '/map')).resolves.toBe(false);
+    expect(router.navigate).toHaveBeenCalledWith(['/demo']);
+  });
+
+  it('roleGuard does the same', async () => {
+    finishInit();
+    await expect(run(roleGuard('sentinel-analyst'), '/link-graph')).resolves.toBe(false);
+    expect(router.navigate).toHaveBeenCalledWith(['/demo']);
+  });
+});

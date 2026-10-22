@@ -1,10 +1,11 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { Subject } from 'rxjs';
+import { BehaviorSubject, Subject } from 'rxjs';
 import { DemoService } from './demo.service';
 import { AuthService } from './auth.service';
 import { WebSocketService } from './websocket.service';
+import { loadGuestSession, saveGuestSession } from './guest-session-store';
 
 const sessionBody = {
   accessToken: 'at',
@@ -20,14 +21,15 @@ describe('DemoService', () => {
   let http: HttpTestingController;
   let sessionLost: Subject<void>;
   let guestEnded: Subject<void>;
-  let auth: { adoptTokens: jest.Mock; sessionLost$: Subject<void> };
+  let auth: { adoptTokens: jest.Mock; sessionLost$: Subject<void>; userProfile$: BehaviorSubject<unknown>; isGuest: jest.Mock };
   let ws: { guestSessionEnded$: Subject<void>; reconnectNow: jest.Mock };
 
   beforeEach(() => {
     sessionLost = new Subject<void>();
     guestEnded = new Subject<void>();
     ws = { guestSessionEnded$: guestEnded, reconnectNow: jest.fn() };
-    auth = { adoptTokens: jest.fn(), sessionLost$: sessionLost };
+    localStorage.clear();
+    auth = { adoptTokens: jest.fn(), sessionLost$: sessionLost, userProfile$: new BehaviorSubject<unknown>(null), isGuest: jest.fn().mockReturnValue(false) };
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
@@ -39,7 +41,10 @@ describe('DemoService', () => {
     service = TestBed.inject(DemoService);
     http = TestBed.inject(HttpTestingController);
   });
-  afterEach(() => http.verify());
+  afterEach(() => {
+    http.verify();
+    localStorage.clear();
+  });
 
   async function start(): Promise<'ok' | 'full' | 'error'> {
     const result = service.startSession();
@@ -89,7 +94,15 @@ describe('DemoService', () => {
     expect(service.errorMessage()).toBe('The demo is starting up — try again in a moment.');
   });
 
-  it.each([429, 500, 0])('startSession returns error with a generic message on status %s', async (status) => {
+  it('startSession returns error with a try-again-in-a-moment message on 429 (too many sessions from this network)', async () => {
+    const result = start();
+    http.expectOne('/api/v1/demo/session').flush({ error: 'busy' }, { status: 429, statusText: 'Too Many Requests' });
+
+    await expect(result).resolves.toBe('error');
+    expect(service.errorMessage()).toBe('Your network already has demo sessions open — try again in a moment.');
+  });
+
+  it.each([500, 0])('startSession returns error with a generic message on status %s', async (status) => {
     const result = start();
     const req = http.expectOne('/api/v1/demo/session');
     if (status === 0) {
@@ -166,6 +179,50 @@ describe('DemoService', () => {
 
       await expect(result).resolves.toBeNull();
       expect(service.ownPosition()).toBeNull();
+    });
+  });
+
+  describe('the stored guest session (reloads and other tabs)', () => {
+    it('startSession stores what the demo needs to pick up again', async () => {
+      const result = start();
+      http.expectOne('/api/v1/demo/session').flush(sessionBody);
+      await result;
+      expect(loadGuestSession()).toEqual(
+        expect.objectContaining({ guestId: '1a2b3c4d', expiresAt: '2026-10-22T12:00:00Z', visitorsFeedId: 'feed-visitors' }),
+      );
+    });
+
+    it('takes up the stored session once the user is a (resumed) guest', () => {
+      saveGuestSession({ refreshToken: 'r', guestId: '1a2b3c4d', expiresAt: '2026-10-22T12:00:00Z', visitorsFeedId: 'feed-visitors', ownEmplacementId: 'emp-1' });
+      expect(service.session()).toBeNull();
+
+      auth.isGuest.mockReturnValue(true);
+      auth.userProfile$.next({ username: 'guest-1a2b3c4d' });
+
+      expect(service.session()).toEqual({ guestId: '1a2b3c4d', expiresAt: '2026-10-22T12:00:00Z', visitorsFeedId: 'feed-visitors' });
+      expect(service.ownEmplacementId()).toBe('emp-1');
+    });
+
+    it('ignores a stored session for someone who is not a guest', () => {
+      saveGuestSession({ refreshToken: 'r', guestId: 'g', expiresAt: 'x', visitorsFeedId: 'v' });
+      auth.userProfile$.next({ username: 'analyst' });
+      expect(service.session()).toBeNull();
+    });
+
+    it('reportPosition stores the own site id', async () => {
+      const result = service.reportPosition('denied');
+      http.expectOne('/api/v1/demo/position').flush({ lat: 51.55, lon: -0.15, source: 'ip', emplacementId: 'emp-9' });
+      await result;
+      expect(loadGuestSession()?.ownEmplacementId).toBe('emp-9');
+    });
+
+    it('an ended session clears the stored one', async () => {
+      const result = start();
+      http.expectOne('/api/v1/demo/session').flush(sessionBody);
+      await result;
+      expect(loadGuestSession()).not.toBeNull();
+      guestEnded.next();
+      expect(loadGuestSession()).toBeNull();
     });
   });
 

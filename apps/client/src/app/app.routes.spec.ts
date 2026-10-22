@@ -46,7 +46,7 @@ describe('routes', () => {
         provideRouter(routes),
         provideHttpClient(),
         provideHttpClientTesting(),
-        { provide: AuthService, useValue: { isAuthenticated: () => true, getUserRoles: () => ['sentinel-viewer'], isGuest: () => false, sessionLost$: EMPTY } },
+        { provide: AuthService, useValue: { isAuthenticated: () => true, getUserRoles: () => ['sentinel-viewer'], isGuest: () => false, sessionLost$: EMPTY, userProfile$: EMPTY } },
       ],
     });
 
@@ -61,7 +61,7 @@ describe('routes', () => {
         provideRouter(routes),
         provideHttpClient(),
         provideHttpClientTesting(),
-        { provide: AuthService, useValue: { isAuthenticated: () => true, getUserRoles: () => ['sentinel-viewer'], getClassificationLevel: () => 'UNCLASSIFIED', isGuest: () => false, sessionLost$: EMPTY } },
+        { provide: AuthService, useValue: { isAuthenticated: () => true, getUserRoles: () => ['sentinel-viewer'], getClassificationLevel: () => 'UNCLASSIFIED', isGuest: () => false, sessionLost$: EMPTY, userProfile$: EMPTY } },
       ],
     });
     expect(routes.find((r) => r.path === 'emplacements')).toEqual({ path: 'emplacements', redirectTo: 'map' });
