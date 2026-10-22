@@ -269,7 +269,14 @@ func (s *service) observation(ctx context.Context, a authed, from string, r *ing
 				b, why, org = s.place(ctx, o, e, org)
 				switch {
 				case b != nil:
-					s.d.addBearing(e.ID, *b)
+					// The site entity is published at the site's level (the
+					// feed's floor and the emplacement's): a report marked
+					// above it must not put its bearing there.
+					if max(classification.Rank(s.d.floor), content) > max(classification.Rank(s.d.floor), classification.Rank(e.Classification)) {
+						s.d.countBearing(reasonAboveSiteClassification)
+					} else {
+						s.d.addBearing(e.ID, *b)
+					}
 					return s.accepted(ctx, ack, e.ID, o.ReceivedAt), nil
 				case why != "":
 					return s.reject(ack, why), nil

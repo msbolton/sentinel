@@ -18,6 +18,11 @@ const (
 	reasonNoOriginAltitude = "no_origin_altitude"
 )
 
+// reasonAboveSiteClassification counts a bearing withheld from its site: the
+// report was marked above the site's level, and the site entity is published
+// at the site's level. The report is still accepted.
+const reasonAboveSiteClassification = "above_site_classification"
+
 // defaultDirectionSigmaDeg is the pointing error assumed on an axis when
 // neither the measurement nor the emplacement gives one.
 const defaultDirectionSigmaDeg = 0.5

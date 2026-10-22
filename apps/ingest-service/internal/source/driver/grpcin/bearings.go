@@ -71,9 +71,14 @@ func (d *Driver) addBearing(emplacementID string, b bearing) {
 	}
 	d.pruneBearings(s, now)
 	d.bearingsMu.Unlock()
+	d.countBearing(b.Reason)
+}
 
+// countBearing counts a bearing under reason in detail.bearings: the reason
+// it was recorded for, or why it was withheld.
+func (d *Driver) countBearing(reason string) {
 	d.bearingCountMu.Lock()
-	d.bearingCounts[b.Reason]++
+	d.bearingCounts[reason]++
 	d.bearingCountMu.Unlock()
 }
 

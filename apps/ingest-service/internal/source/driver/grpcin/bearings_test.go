@@ -320,3 +320,33 @@ func TestHealthBearingsByReason(t *testing.T) {
 		t.Errorf("reportsOk %v, want 3", n)
 	}
 }
+
+// C1: a bearing from a report marked above its site's level never reaches
+// the site, which is published at the site's own level; it is counted.
+func TestBearingAboveSiteClassificationIsWithheld(t *testing.T) {
+	r, _, clk, st := liveRig(t, nil, ingesttoken.Token{Classification: "SECRET"}, rowsOf(camera(ptr(plateauM+12))))
+	mustOK(t, send(t, st, heartbeat("cam", 60)))
+	secret := airBearing("d1", "c-secret", 90)
+	secret.GetObservation().Classification = sentinelv1.Classification_CLASSIFICATION_SECRET
+	mustOK(t, send(t, st, secret))
+	mustOK(t, send(t, st, airBearing("d2", "c-open", 45)))
+	clk.advance(time.Second)
+	waitFor(t, func() bool { return sitesWithBearings(t, r, 1)+sitesWithBearings(t, r, 2) >= 1 })
+	for _, o := range sitesOf(r, "cam") {
+		for _, b := range bearingsOf(t, o) {
+			if b.TrackID == "c-secret" {
+				t.Fatalf("site published at %q carries the SECRET report's bearing %+v", o.Classification, b)
+			}
+		}
+	}
+	if got := r.d.activeBearings("cam", clk.now()); len(got) != 1 || got[0].TrackID != "c-open" {
+		t.Errorf("held bearings %+v, want only c-open", got)
+	}
+	got := r.d.Health().Detail["bearings"].(map[string]int64)
+	if got[reasonAboveSiteClassification] != 1 || got[reasonAirTarget] != 1 {
+		t.Errorf("bearings = %v, want above_site_classification 1 and air_target 1", got)
+	}
+	if n := len(r.sink.emitted()) - len(sitesOf(r, "cam")); n != 0 {
+		t.Errorf("%d observations emitted for bearings", n)
+	}
+}
