@@ -98,17 +98,17 @@ func (f *fakeKeycloak) server(t *testing.T) *httptest.Server {
 		}
 	}
 	mux.HandleFunc("POST /admin/realms/sentinel/users", auth(func(w http.ResponseWriter, r *http.Request) {
+		rawBody, _ := io.ReadAll(r.Body)
 		var u keycloakUser
-		_ = json.NewDecoder(r.Body).Decode(&u)
+		_ = json.Unmarshal(rawBody, &u)
 		if f.conflict {
 			w.WriteHeader(409)
 			writeJSON(w, map[string]string{"errorMessage": "User exists with same username"})
 			return
 		}
 		if len(u.Attributes["sentinelGuestCreatedAt"]) == 1 {
-			var raw map[string]interface{}
-			b, _ := json.Marshal(u)
-			_ = json.Unmarshal(b, &raw)
+			var raw map[string]interface{} // the request as sent, every field kept
+			_ = json.Unmarshal(rawBody, &raw)
 			f.mu.Lock()
 			f.guestSeq++
 			u.ID = "guest-" + strconv.Itoa(f.guestSeq)
@@ -493,8 +493,16 @@ func TestCreateGuestUserCreatesEnabledUserWithRoles(t *testing.T) {
 	if body["enabled"] != true || body["username"] != "guest-abc" {
 		t.Errorf("body = %v", body)
 	}
-	if ra, present := body["requiredActions"]; present && len(ra.([]interface{})) != 0 {
-		t.Errorf("requiredActions = %v, want none", ra)
+	if ra, present := body["requiredActions"].([]interface{}); !present || len(ra) != 0 {
+		t.Errorf("requiredActions = %v, want an empty list", body["requiredActions"])
+	}
+	creds, _ := body["credentials"].([]interface{})
+	if len(creds) != 1 {
+		t.Fatalf("credentials = %v, want exactly one", body["credentials"])
+	}
+	cred, _ := creds[0].(map[string]interface{})
+	if cred["type"] != "password" || cred["value"] != "guest-pass" || cred["temporary"] != false {
+		t.Errorf("credential = %v, want a permanent password of the given value", cred)
 	}
 	attrs := body["attributes"].(map[string]interface{})
 	if got := attrs["sentinelGuestCreatedAt"].([]interface{})[0]; got != "2026-10-22T12:00:00Z" {
