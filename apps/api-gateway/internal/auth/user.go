@@ -11,6 +11,9 @@ const (
 	RoleAnalyst  = "sentinel-analyst"
 	RoleOperator = "sentinel-operator"
 	RoleViewer   = "sentinel-viewer"
+	// RoleGuest marks a throwaway public-demo user: read-only, and kept off
+	// the routes that would let it leave anything behind (see server.Policy.Deny).
+	RoleGuest = "sentinel-guest"
 )
 
 // User is the authenticated principal attached to a request.

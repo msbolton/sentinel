@@ -72,6 +72,10 @@
         "description": "Read-only access to entities and map"
       },
       {
+        "name": "sentinel-guest",
+        "description": "Public demo guest: read-only, throwaway"
+      },
+      {
         "name": "sentinel-operator",
         "description": "Operator with entity management and alert acknowledgment"
       },

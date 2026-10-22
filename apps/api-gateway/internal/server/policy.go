@@ -13,6 +13,9 @@ type Policy struct {
 	Method string
 	Prefix string
 	Roles  []string
+	// Deny lists roles that are refused with 403 even when Roles would admit
+	// them. It is checked first.
+	Deny []string
 	// Classification, when set, is the minimum clearance required.
 	Classification string
 }
@@ -39,11 +42,16 @@ var (
 	operatorOrAdmin        = []string{auth.RoleOperator, auth.RoleAdmin}
 	operatorAnalystOrAdmin = []string{auth.RoleOperator, auth.RoleAnalyst, auth.RoleAdmin}
 	adminOnly              = []string{auth.RoleAdmin}
+	// guestOnly names the public-demo guest, for routes that guest must not reach.
+	guestOnly = []string{auth.RoleGuest}
 )
 
 // DefaultPolicies reproduces the role rules of the NestJS controllers using the
 // role names Keycloak actually issues. Order matters: specific prefixes first.
 var DefaultPolicies = []Policy{
+	// Demo guests are throwaway users: they may not mint or revoke API keys.
+	{Method: http.MethodPost, Prefix: "/api/v1/auth/api-keys", Deny: guestOnly},
+	{Method: http.MethodDelete, Prefix: "/api/v1/auth/api-keys", Deny: guestOnly},
 	// Entity ageout configuration (operational tuning)
 	{Method: http.MethodPut, Prefix: "/api/v1/entities/ageout-config", Roles: operatorOrAdmin},
 	{Method: http.MethodDelete, Prefix: "/api/v1/entities/ageout-config", Roles: operatorOrAdmin},
@@ -92,7 +100,11 @@ func EnforcePolicies(policies []Policy, mw *auth.Middleware) func(http.Handler) 
 				if p.Classification != "" {
 					h = mw.RequireClassification(p.Classification)(h)
 				}
-				mw.RequireRoles(p.Roles...)(h).ServeHTTP(w, r)
+				h = mw.RequireRoles(p.Roles...)(h)
+				if len(p.Deny) > 0 {
+					h = mw.DenyRoles("Not available in the demo", p.Deny...)(h)
+				}
+				h.ServeHTTP(w, r)
 				return
 			}
 			next.ServeHTTP(w, r)

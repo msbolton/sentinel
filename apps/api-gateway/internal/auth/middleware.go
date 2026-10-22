@@ -131,6 +131,25 @@ func (m *Middleware) RequireRoles(roles ...string) func(http.Handler) http.Handl
 	}
 }
 
+// DenyRoles refuses the request with 403 when the user holds any of the roles.
+func (m *Middleware) DenyRoles(message string, roles ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, ok := UserFrom(r.Context())
+			if !ok {
+				httputil.Error(w, http.StatusForbidden, "No authenticated user found")
+				return
+			}
+			if len(roles) > 0 && user.HasAnyRole(roles...) {
+				m.audit.RoleDenied(r, user, roles)
+				httputil.Error(w, http.StatusForbidden, message)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // RequireClassification allows the request through when the user's clearance
 // is at or above the given level.
 func (m *Middleware) RequireClassification(level string) func(http.Handler) http.Handler {
