@@ -26,6 +26,11 @@ const guestClientID = "sentinel-web"
 // guestRoles are the realm roles every guest gets: read-only, unclassified.
 var guestRoles = []string{auth.RoleViewer, "classification-u", auth.RoleGuest}
 
+// startTimeout bounds the create-then-login sequence. It runs detached from
+// the request: a visitor who hangs up mid-create must not leave an account
+// behind that the registry never learned about.
+const startTimeout = 30 * time.Second
+
 // cleanupTimeout bounds the detached Keycloak call that removes a guest whose
 // login failed after its account was made.
 const cleanupTimeout = 10 * time.Second
@@ -90,7 +95,7 @@ type Guests struct {
 	logger  *zap.Logger
 
 	mu       sync.Mutex
-	byUser   map[string]Guest
+	byUser   map[string]*guestEntry
 	starting int // slots reserved by Start calls still talking to Keycloak
 }
 
@@ -110,8 +115,16 @@ func NewGuests(kc Keycloak, opts GuestOptions, logger *zap.Logger) *Guests {
 		sockets: opts.Sockets,
 		now:     opts.Now,
 		logger:  logger,
-		byUser:  map[string]Guest{},
+		byUser:  map[string]*guestEntry{},
 	}
+}
+
+// guestEntry is a registered guest. ending is set by Sweep, under the lock and
+// before any I/O, so that from then on Lookup refuses the guest; it stays
+// registered (holding its slot) until its Keycloak account is gone.
+type guestEntry struct {
+	Guest
+	ending bool
 }
 
 // Count is the number of guest slots in use, including ones whose Start is
@@ -122,19 +135,32 @@ func (g *Guests) Count() int {
 	return len(g.byUser) + g.starting
 }
 
-// Lookup returns the guest whose Keycloak user id is userID.
+// Lookup returns the live guest whose Keycloak user id is userID. A guest past
+// its expiry, or one Sweep has begun ending, is not live, even while it is
+// still registered.
 func (g *Guests) Lookup(userID string) (Guest, bool) {
+	now := g.now()
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	guest, ok := g.byUser[userID]
-	return guest, ok
+	e, ok := g.byUser[userID]
+	if !ok || e.ending || !now.Before(e.ExpiresAt) {
+		return Guest{}, false
+	}
+	return e.Guest, true
 }
 
 // Start creates a guest account in Keycloak, logs it in and registers it. It
 // returns ErrFull at the cap without calling Keycloak. The slot is reserved
 // before Keycloak is called, so concurrent calls cannot overshoot the cap, and
-// released again on any failure.
+// released again on any failure. Once begun, the Keycloak calls run on a
+// context detached from ctx, so a cancelled request cannot interrupt them
+// half-way and orphan an account.
 func (g *Guests) Start(ctx context.Context) (Session, error) {
+	if err := ctx.Err(); err != nil {
+		return Session{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), startTimeout)
+	defer cancel()
 	if !g.reserve() {
 		return Session{}, ErrFull
 	}
@@ -173,7 +199,7 @@ func (g *Guests) Start(ctx context.Context) (Session, error) {
 	guest := Guest{UserID: userID, GuestID: guestID, Username: username, ExpiresAt: g.now().Add(g.ttl)}
 	g.mu.Lock()
 	g.starting--
-	g.byUser[userID] = guest
+	g.byUser[userID] = &guestEntry{Guest: guest}
 	g.mu.Unlock()
 	registered = true
 
@@ -204,18 +230,21 @@ func (g *Guests) release() {
 }
 
 // Sweep ends every guest past its TTL: it deletes the Keycloak account, closes
-// the guest's sockets and removes its site. A guest whose Keycloak delete fails
-// stays registered, holding its slot, and is retried on the next sweep; dropping
-// it would orphan an account that can still refresh its tokens. Its sockets and
-// site go at once either way, since its time is up. One failure never stops the
-// sweep of the others.
+// the guest's sockets and removes its site. Each guest is first marked ending,
+// under the lock, so no position report can be accepted for it once its site
+// is removed. A guest whose Keycloak delete fails stays registered and ending,
+// holding its slot, and is retried on the next sweep; dropping it would orphan
+// an account that can still refresh its tokens. Its sockets and site go at
+// once either way, since its time is up. One failure never stops the sweep of
+// the others.
 func (g *Guests) Sweep(ctx context.Context) {
 	now := g.now()
 	var expired []Guest
 	g.mu.Lock()
-	for _, guest := range g.byUser {
-		if !now.Before(guest.ExpiresAt) {
-			expired = append(expired, guest)
+	for _, e := range g.byUser {
+		if e.ending || !now.Before(e.ExpiresAt) {
+			e.ending = true
+			expired = append(expired, e.Guest)
 		}
 	}
 	g.mu.Unlock()
@@ -246,7 +275,9 @@ func (g *Guests) Sweep(ctx context.Context) {
 
 // Reconcile deletes every Keycloak account holding the guest role that this
 // registry does not know, such as those left by a previous gateway process.
-// Call it at startup, before the session route is served.
+// Call it only at startup, before the session route is served: a guest whose
+// Start is still in flight is not registered yet and would be deleted, and
+// with more than one gateway replica each would delete the others' guests.
 func (g *Guests) Reconcile(ctx context.Context) {
 	users, err := g.kc.UsersWithRole(ctx, auth.RoleGuest)
 	if err != nil {
@@ -255,7 +286,7 @@ func (g *Guests) Reconcile(ctx context.Context) {
 	}
 	deleted := 0
 	for _, u := range users {
-		if _, live := g.Lookup(u.ID); live {
+		if g.registered(u.ID) {
 			continue
 		}
 		if err := g.kc.DeleteUser(ctx, u.ID); err != nil {
@@ -267,6 +298,13 @@ func (g *Guests) Reconcile(ctx context.Context) {
 	if deleted > 0 {
 		g.logger.Info("deleted leftover demo guests", zap.Int("count", deleted))
 	}
+}
+
+func (g *Guests) registered(userID string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	_, ok := g.byUser[userID]
+	return ok
 }
 
 // newCredentials returns a guest id of 8 lowercase hex characters and a

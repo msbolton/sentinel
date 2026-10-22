@@ -32,6 +32,12 @@ type fakeKeycloak struct {
 
 	createDelay time.Duration
 	createErr   error
+	// onCreate runs at the start of CreateGuestUser, outside the lock.
+	onCreate func()
+	// createCtxLive and grantCtxLive record whether each call's context was
+	// still live when the call was made.
+	createCtxLive []bool
+	grantCtxLive  []bool
 	grantErr    error
 	// deleteErrs counts down: while positive, DeleteUser fails and decrements it.
 	deleteErrs int
@@ -49,12 +55,16 @@ func newFakeKeycloak() *fakeKeycloak {
 	return &fakeKeycloak{withRole: map[string][]registration.GuestUser{}}
 }
 
-func (f *fakeKeycloak) CreateGuestUser(_ context.Context, username, password string, roles []string) (string, error) {
+func (f *fakeKeycloak) CreateGuestUser(ctx context.Context, username, password string, roles []string) (string, error) {
+	if f.onCreate != nil {
+		f.onCreate()
+	}
 	if f.createDelay > 0 {
 		time.Sleep(f.createDelay)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.createCtxLive = append(f.createCtxLive, ctx.Err() == nil)
 	if f.createErr != nil {
 		return "", f.createErr
 	}
@@ -83,9 +93,10 @@ func (f *fakeKeycloak) UsersWithRole(_ context.Context, role string) ([]registra
 	return append([]registration.GuestUser(nil), f.withRole[role]...), nil
 }
 
-func (f *fakeKeycloak) PasswordGrant(_ context.Context, clientID, username, password string) (registration.TokenResponse, error) {
+func (f *fakeKeycloak) PasswordGrant(ctx context.Context, clientID, username, password string) (registration.TokenResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.grantCtxLive = append(f.grantCtxLive, ctx.Err() == nil)
 	if f.grantErr != nil {
 		return registration.TokenResponse{}, f.grantErr
 	}
@@ -113,7 +124,11 @@ type fakeSites struct {
 	mu       sync.Mutex
 	placed   []placement
 	removed  []string
+	ops      []string // "place:<id>" / "remove:<id>", in the order they took effect
 	placeErr error
+	// beforePlace runs at the start of Place, outside the lock, standing in
+	// for whatever else happens while a Place is in flight.
+	beforePlace func()
 }
 
 type placement struct {
@@ -122,12 +137,16 @@ type placement struct {
 }
 
 func (s *fakeSites) Place(_ context.Context, guestID string, lat, lon float64) (string, error) {
+	if s.beforePlace != nil {
+		s.beforePlace()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.placeErr != nil {
 		return "", s.placeErr
 	}
 	s.placed = append(s.placed, placement{guestID, lat, lon})
+	s.ops = append(s.ops, "place:"+guestID)
 	return "emp-" + guestID, nil
 }
 
@@ -135,6 +154,13 @@ func (s *fakeSites) Remove(_ context.Context, guestID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.removed = append(s.removed, guestID)
+	s.ops = append(s.ops, "remove:"+guestID)
+}
+
+func (s *fakeSites) opLog() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.ops...)
 }
 
 func (s *fakeSites) placements() []placement {
@@ -346,10 +372,11 @@ func TestStartDeletesUserWhenGrantFails(t *testing.T) {
 	rig := newGuestRig(t, 1)
 	rig.kc.grantErr = errors.New("login failed")
 
-	// The request is already gone by the time the grant fails; the fake
-	// Keycloak ignores that for create and grant, but cleanup must not.
+	// The visitor hangs up while the account is being made; the grant then
+	// fails, and cleanup must still run on a live context.
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	defer cancel()
+	rig.kc.onCreate = cancel
 	if _, err := rig.guests.Start(ctx); err == nil {
 		t.Fatal("Start succeeded although the password grant failed")
 	}
@@ -371,6 +398,57 @@ func TestStartDeletesUserWhenGrantFails(t *testing.T) {
 	}
 	if _, ok := rig.guests.Lookup(created[0].ID); ok {
 		t.Error("a guest whose grant failed is still registered")
+	}
+}
+
+func TestStartKeycloakCallsSurviveCancelledRequest(t *testing.T) {
+	rig := newGuestRig(t, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rig.kc.onCreate = cancel // the visitor hangs up mid-create
+
+	if _, err := rig.guests.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	rig.kc.mu.Lock()
+	create, grant := rig.kc.createCtxLive, rig.kc.grantCtxLive
+	rig.kc.mu.Unlock()
+	if len(create) != 1 || !create[0] || len(grant) != 1 || !grant[0] {
+		t.Fatalf("Keycloak calls saw the cancelled request context: create=%v grant=%v", create, grant)
+	}
+	userID := rig.kc.createdGuests()[0].ID
+	if _, ok := rig.guests.Lookup(userID); !ok {
+		t.Fatal("the account Keycloak made is not registered, so nothing would ever delete it")
+	}
+}
+
+func TestStartRefusesAlreadyCancelledRequest(t *testing.T) {
+	rig := newGuestRig(t, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := rig.guests.Start(ctx); err == nil {
+		t.Fatal("Start succeeded for a request that was already gone")
+	}
+	if n := len(rig.kc.createdGuests()); n != 0 {
+		t.Fatalf("Keycloak saw %d creates, want 0", n)
+	}
+	if rig.guests.Count() != 0 {
+		t.Fatalf("Count = %d, want 0", rig.guests.Count())
+	}
+}
+
+func TestLookupRefusesExpiredGuest(t *testing.T) {
+	rig := newGuestRig(t, 1)
+	if _, err := rig.guests.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	userID := rig.kc.createdGuests()[0].ID
+	rig.clock.Advance(60 * time.Minute)
+	if _, ok := rig.guests.Lookup(userID); ok {
+		t.Fatal("Lookup returned a guest at its expiry, before any Sweep")
+	}
+	if rig.guests.Count() != 1 {
+		t.Fatalf("Count = %d, want 1: the slot is held until Sweep deletes the account", rig.guests.Count())
 	}
 }
 

@@ -1,6 +1,7 @@
 package demo
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -130,6 +131,15 @@ func (h *Handler) handlePosition(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.Error("failed to place demo visitor", zap.String("guestId", guest.GuestID), zap.String("source", source), zap.Error(err))
 		httputil.Error(w, http.StatusBadGateway, "Could not place your site")
+		return
+	}
+	// Sweep may have ended the guest while Place was in flight, and its Remove
+	// may have landed before this Place did. Sweep marks a guest ending before
+	// it removes the site, so re-checking after Place catches every such
+	// interleaving; take the site down again rather than leave it resurrected.
+	if _, live := h.guests.Lookup(user.UserID); !live {
+		h.sites.Remove(context.WithoutCancel(r.Context()), guest.GuestID)
+		httputil.Error(w, http.StatusForbidden, "Demo session has ended")
 		return
 	}
 	httputil.JSON(w, http.StatusOK, positionResponse{Lat: &lat, Lon: &lon, Source: source, EmplacementID: empID})

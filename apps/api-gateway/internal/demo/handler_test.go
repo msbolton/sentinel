@@ -259,6 +259,68 @@ func TestPositionRefusesNonGuest(t *testing.T) {
 	}
 }
 
+func TestPositionRefusesExpiredGuestBeforeSweep(t *testing.T) {
+	rig := newHandlerRig(t, 25, nil, nil)
+	u, _ := rig.startGuest(t)
+	rig.clock.Advance(61 * time.Minute) // expired, but no Sweep has run
+
+	if rec := rig.postPosition(t, u, `{"lat":51.5074,"lon":-0.1278}`, ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if n := len(rig.sites.placements()); n != 0 {
+		t.Fatalf("Place called %d times, want 0", n)
+	}
+}
+
+func TestPositionRefusesEndingGuest(t *testing.T) {
+	rig := newHandlerRig(t, 25, nil, nil)
+	u, _ := rig.startGuest(t)
+	rig.kc.deleteErrs = 100 // Keycloak keeps refusing the delete
+
+	rig.clock.Advance(61 * time.Minute)
+	rig.guests.Sweep(context.Background())
+	if rig.guests.Count() != 1 {
+		t.Fatalf("Count = %d, want 1: the undeleted guest keeps its slot", rig.guests.Count())
+	}
+	// Even with the clock back inside the TTL, the ending mark alone refuses it.
+	rig.clock.Advance(-61 * time.Minute)
+	if rec := rig.postPosition(t, u, `{"lat":51.5074,"lon":-0.1278}`, ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if n := len(rig.sites.placements()); n != 0 {
+		t.Fatalf("Place called %d times, want 0", n)
+	}
+	// And the next sweep still retries the delete.
+	rig.kc.mu.Lock()
+	rig.kc.deleteErrs = 0
+	rig.kc.mu.Unlock()
+	rig.guests.Sweep(context.Background())
+	if rig.guests.Count() != 0 {
+		t.Fatalf("Count = %d after the retry, want 0", rig.guests.Count())
+	}
+}
+
+func TestPositionDuringSweepDoesNotResurrectSite(t *testing.T) {
+	rig := newHandlerRig(t, 25, nil, nil)
+	u, s := rig.startGuest(t)
+	// While this Place is in flight the guest expires and is swept; the
+	// sweep's Remove lands before the Place does.
+	rig.sites.beforePlace = func() {
+		rig.sites.beforePlace = nil
+		rig.clock.Advance(61 * time.Minute)
+		rig.guests.Sweep(context.Background())
+	}
+
+	rec := rig.postPosition(t, u, `{"lat":51.5074,"lon":-0.1278}`, "")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	ops := rig.sites.opLog()
+	if len(ops) == 0 || ops[len(ops)-1] != "remove:"+s.GuestID {
+		t.Fatalf("site ops = %v, want the last to be remove:%s", ops, s.GuestID)
+	}
+}
+
 func TestPositionRejectsBadBodies(t *testing.T) {
 	rig := newHandlerRig(t, 25, fakeLocator{"10.0.0.1": {1, 1}}, nil)
 	u, _ := rig.startGuest(t)
@@ -329,7 +391,7 @@ func TestPositionNeverLogsPrecise(t *testing.T) {
 	rig.postPosition(t, u, `{"lat":51.5074,"lon":-0.1278}`, "")
 	rig.postPosition(t, u, `{"lat":51.5074,"lon":-0.1278,"x":`, "")
 
-	if rig.logs.Len() == 0 {
+	if rig.logs.FilterMessage("failed to place demo visitor").Len() == 0 {
 		t.Fatal("expected the failed Place to be logged; the check below would be vacuous")
 	}
 	for _, e := range rig.logs.All() {
