@@ -236,8 +236,8 @@ func undoFloatPredictor(line []byte, out []float32) {
 }
 
 // georeference fills in where pixel centres lie, honouring the raster type:
-// with PixelIsArea (the default, and what Copernicus uses) the tiepoint is a
-// pixel's corner; with PixelIsPoint it is the pixel's centre.
+// with PixelIsArea (the GeoTIFF default) the tiepoint is a pixel's corner;
+// with PixelIsPoint (what Copernicus tiles declare) it is the pixel's centre.
 func (t *tiffReader) georeference(ras *raster) error {
 	if _, ok := t.tags[tagModelPixelScale]; !ok {
 		if _, ok := t.tags[tagModelTransformation]; ok {
