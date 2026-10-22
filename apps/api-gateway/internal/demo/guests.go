@@ -19,6 +19,10 @@ import (
 // ErrFull is returned by Start when the guest cap is reached.
 var ErrFull = errors.New("demo: guest limit reached")
 
+// ErrAddressBusy is returned by Start when the visitor's address already has
+// PerAddress live guests.
+var ErrAddressBusy = errors.New("demo: this address has as many guests as it may")
+
 // guestClientID is the public client a guest's tokens are issued for, the same
 // one the web app logs in with.
 const guestClientID = "sentinel-web"
@@ -56,12 +60,23 @@ type SocketCloser interface {
 }
 
 // GuestOptions configures a Guests registry. Sites and Sockets may be nil.
+// A zero OfflineAfter, ConnectWithin or PerAddress turns that rule off.
 type GuestOptions struct {
-	Max     int
-	TTL     time.Duration
-	Sites   VisitorSites
-	Sockets SocketCloser
-	Now     func() time.Time
+	Max int
+	TTL time.Duration
+	// OfflineAfter ends a guest that has had no socket open this long
+	// (DEMO_OFFLINE_REMOVE_AFTER), so its slot goes back to the pool while
+	// its time is not yet up.
+	OfflineAfter time.Duration
+	// ConnectWithin ends a guest that never opens a socket this long after
+	// it was granted.
+	ConnectWithin time.Duration
+	// PerAddress caps the live guests one visitor address (see AddressKey)
+	// may hold at once.
+	PerAddress int
+	Sites      VisitorSites
+	Sockets    SocketCloser
+	Now        func() time.Time
 }
 
 // Guest is a live throwaway account.
@@ -86,17 +101,21 @@ type Session struct {
 // Guests is the in-memory registry of live demo guests, keyed by Keycloak
 // user id. It is safe for concurrent use.
 type Guests struct {
-	kc      Keycloak
-	max     int
-	ttl     time.Duration
-	sites   VisitorSites
-	sockets SocketCloser
-	now     func() time.Time
-	logger  *zap.Logger
+	kc            Keycloak
+	max           int
+	ttl           time.Duration
+	offlineAfter  time.Duration
+	connectWithin time.Duration
+	perAddress    int
+	sites         VisitorSites
+	sockets       SocketCloser
+	now           func() time.Time
+	logger        *zap.Logger
 
-	mu       sync.Mutex
-	byUser   map[string]*guestEntry
-	starting int // slots reserved by Start calls still talking to Keycloak
+	mu         sync.Mutex
+	byUser     map[string]*guestEntry
+	starting   int            // slots reserved by Start calls still talking to Keycloak
+	startingAt map[string]int // the same, per address key
 }
 
 // NewGuests creates an empty registry.
@@ -108,14 +127,18 @@ func NewGuests(kc Keycloak, opts GuestOptions, logger *zap.Logger) *Guests {
 		logger = zap.NewNop()
 	}
 	return &Guests{
-		kc:      kc,
-		max:     opts.Max,
-		ttl:     opts.TTL,
-		sites:   opts.Sites,
-		sockets: opts.Sockets,
-		now:     opts.Now,
-		logger:  logger,
-		byUser:  map[string]*guestEntry{},
+		kc:            kc,
+		max:           opts.Max,
+		ttl:           opts.TTL,
+		offlineAfter:  opts.OfflineAfter,
+		connectWithin: opts.ConnectWithin,
+		perAddress:    opts.PerAddress,
+		sites:         opts.Sites,
+		sockets:       opts.Sockets,
+		now:           opts.Now,
+		logger:        logger,
+		byUser:        map[string]*guestEntry{},
+		startingAt:    map[string]int{},
 	}
 }
 
@@ -125,6 +148,29 @@ func NewGuests(kc Keycloak, opts GuestOptions, logger *zap.Logger) *Guests {
 type guestEntry struct {
 	Guest
 	ending bool
+	addr   string // the address key it was started from
+	// online is whether the guest has a socket open; connected whether it
+	// ever had one; since is when it was granted or last went offline.
+	online    bool
+	connected bool
+	since     time.Time
+}
+
+// endReason says why Sweep should end e now, or "" when it should not.
+func (g *Guests) endReason(e *guestEntry, now time.Time) string {
+	switch {
+	case e.ending:
+		return "retry"
+	case !now.Before(e.ExpiresAt):
+		return "expired"
+	case e.online:
+		return ""
+	case e.connected && g.offlineAfter > 0 && now.Sub(e.since) >= g.offlineAfter:
+		return "left"
+	case !e.connected && g.connectWithin > 0 && now.Sub(e.since) >= g.connectWithin:
+		return "never connected"
+	}
+	return ""
 }
 
 // Count is the number of guest slots in use, including ones whose Start is
@@ -149,25 +195,50 @@ func (g *Guests) Lookup(userID string) (Guest, bool) {
 	return e.Guest, true
 }
 
-// Start creates a guest account in Keycloak, logs it in and registers it. It
-// returns ErrFull at the cap without calling Keycloak. The slot is reserved
+// SetOnline records that the guest whose Keycloak user id is userID opened
+// its first socket (online) or closed its last one, and returns the guest if
+// it is live. The entity-stream presence listener calls it, so it does no
+// I/O: a guest offline for OfflineAfter is ended by the next Sweep.
+func (g *Guests) SetOnline(userID string, online bool) (Guest, bool) {
+	now := g.now()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	e, ok := g.byUser[userID]
+	if !ok {
+		return Guest{}, false
+	}
+	if online {
+		e.online, e.connected = true, true
+	} else if e.online {
+		e.online, e.since = false, now
+	}
+	if e.ending || !now.Before(e.ExpiresAt) {
+		return Guest{}, false
+	}
+	return e.Guest, true
+}
+
+// Start creates a guest account in Keycloak, logs it in and registers it,
+// counting it against addr (an AddressKey). It returns ErrFull at the cap and
+// ErrAddressBusy when addr already holds PerAddress guests, both without
+// calling Keycloak. The slot is reserved
 // before Keycloak is called, so concurrent calls cannot overshoot the cap, and
 // released again on any failure. Once begun, the Keycloak calls run on a
 // context detached from ctx, so a cancelled request cannot interrupt them
 // half-way and orphan an account.
-func (g *Guests) Start(ctx context.Context) (Session, error) {
+func (g *Guests) Start(ctx context.Context, addr string) (Session, error) {
 	if err := ctx.Err(); err != nil {
 		return Session{}, err
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), startTimeout)
 	defer cancel()
-	if !g.reserve() {
-		return Session{}, ErrFull
+	if err := g.reserve(addr); err != nil {
+		return Session{}, err
 	}
 	registered := false
 	defer func() {
 		if !registered {
-			g.release()
+			g.release(addr)
 		}
 	}()
 
@@ -196,10 +267,11 @@ func (g *Guests) Start(ctx context.Context) (Session, error) {
 		return Session{}, fmt.Errorf("guest login: %w", err)
 	}
 
-	guest := Guest{UserID: userID, GuestID: guestID, Username: username, ExpiresAt: g.now().Add(g.ttl)}
+	now := g.now()
+	guest := Guest{UserID: userID, GuestID: guestID, Username: username, ExpiresAt: now.Add(g.ttl)}
 	g.mu.Lock()
-	g.starting--
-	g.byUser[userID] = &guestEntry{Guest: guest}
+	g.unreserveLocked(addr)
+	g.byUser[userID] = &guestEntry{Guest: guest, addr: addr, since: now}
 	g.mu.Unlock()
 	registered = true
 
@@ -213,23 +285,44 @@ func (g *Guests) Start(ctx context.Context) (Session, error) {
 	}, nil
 }
 
-func (g *Guests) reserve() bool {
+func (g *Guests) reserve(addr string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if len(g.byUser)+g.starting >= g.max {
-		return false
+		return ErrFull
+	}
+	if g.perAddress > 0 {
+		n := g.startingAt[addr]
+		for _, e := range g.byUser {
+			if e.addr == addr {
+				n++
+			}
+		}
+		if n >= g.perAddress {
+			return ErrAddressBusy
+		}
 	}
 	g.starting++
-	return true
+	g.startingAt[addr]++
+	return nil
 }
 
-func (g *Guests) release() {
+func (g *Guests) release(addr string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.starting--
+	g.unreserveLocked(addr)
 }
 
-// Sweep ends every guest past its TTL: it deletes the Keycloak account, closes
+func (g *Guests) unreserveLocked(addr string) {
+	g.starting--
+	if g.startingAt[addr]--; g.startingAt[addr] <= 0 {
+		delete(g.startingAt, addr)
+	}
+}
+
+// Sweep ends every guest past its TTL, every guest that has had no socket for
+// OfflineAfter and every guest that never opened one within ConnectWithin of
+// being granted: it deletes the Keycloak account, closes
 // the guest's sockets and removes its site. Each guest is first marked ending,
 // under the lock, so no position report can be accepted for it once its site
 // is removed. A guest whose Keycloak delete fails stays registered and ending,
@@ -240,18 +333,20 @@ func (g *Guests) release() {
 func (g *Guests) Sweep(ctx context.Context) {
 	now := g.now()
 	var expired []Guest
+	var reasons []string
 	g.mu.Lock()
 	for _, e := range g.byUser {
-		if e.ending || !now.Before(e.ExpiresAt) {
+		if why := g.endReason(e, now); why != "" {
 			e.ending = true
 			expired = append(expired, e.Guest)
+			reasons = append(reasons, why)
 		}
 	}
 	g.mu.Unlock()
 
 	// No lock is held below: CloseUser fires the presence listener, which
 	// calls Lookup.
-	for _, guest := range expired {
+	for i, guest := range expired {
 		if ctx.Err() != nil {
 			return
 		}
@@ -269,7 +364,7 @@ func (g *Guests) Sweep(ctx context.Context) {
 		g.mu.Lock()
 		delete(g.byUser, guest.UserID)
 		g.mu.Unlock()
-		g.logger.Info("demo guest expired", zap.String("guestId", guest.GuestID), zap.String("userId", guest.UserID))
+		g.logger.Info("demo guest ended", zap.String("guestId", guest.GuestID), zap.String("userId", guest.UserID), zap.String("reason", reasons[i]))
 	}
 }
 

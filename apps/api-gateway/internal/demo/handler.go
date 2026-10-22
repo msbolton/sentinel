@@ -59,15 +59,24 @@ func (h *Handler) RegisterProtectedRoutes(mux *http.ServeMux) {
 }
 
 func (h *Handler) handleSession(w http.ResponseWriter, r *http.Request) {
-	// The limiter is keyed on the rightmost X-Forwarded-For entry; its own
-	// Middleware would trust the leftmost, which the client controls.
-	if h.limiter != nil && !h.limiter.Allow(ClientIP(r)) {
+	// The limits are keyed on the rightmost X-Forwarded-For entry (the
+	// limiter's own Middleware would trust the leftmost, which the client
+	// controls), and an IPv6 address by its /64.
+	addr := AddressKey(ClientIP(r))
+	if h.limiter != nil && !h.limiter.Allow(addr) {
 		httputil.Error(w, http.StatusTooManyRequests, "Too many demo sessions from this address")
 		return
 	}
-	s, err := h.guests.Start(r.Context())
+	s, err := h.guests.Start(r.Context(), addr)
 	if errors.Is(err, ErrFull) {
 		httputil.JSON(w, http.StatusServiceUnavailable, map[string]string{"error": "full"})
+		return
+	}
+	if errors.Is(err, ErrAddressBusy) {
+		httputil.JSON(w, http.StatusTooManyRequests, map[string]string{
+			"error":   "busy",
+			"message": "Your network already has demo sessions open; try again in a moment",
+		})
 		return
 	}
 	if err != nil {

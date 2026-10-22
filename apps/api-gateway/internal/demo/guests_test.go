@@ -225,7 +225,7 @@ type guestRig struct {
 	guests  *Guests
 }
 
-func newGuestRig(t *testing.T, max int) *guestRig {
+func newGuestRig(t *testing.T, max int, configure ...func(*GuestOptions)) *guestRig {
 	t.Helper()
 	core, logs := observer.New(zapcore.DebugLevel)
 	r := &guestRig{
@@ -235,13 +235,17 @@ func newGuestRig(t *testing.T, max int) *guestRig {
 		clock:   &clock{t: time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)},
 		logs:    logs,
 	}
-	r.guests = NewGuests(r.kc, GuestOptions{
+	opts := GuestOptions{
 		Max:     max,
 		TTL:     60 * time.Minute,
 		Sites:   r.sites,
 		Sockets: r.sockets,
 		Now:     r.clock.Now,
-	}, zap.New(core))
+	}
+	for _, c := range configure {
+		c(&opts)
+	}
+	r.guests = NewGuests(r.kc, opts, zap.New(core))
 	return r
 }
 
@@ -249,7 +253,7 @@ var usernamePattern = regexp.MustCompile(`^guest-[0-9a-f]{8}$`)
 
 func TestStartCreatesGuestAndReturnsTokens(t *testing.T) {
 	rig := newGuestRig(t, 25)
-	s, err := rig.guests.Start(context.Background())
+	s, err := rig.guests.Start(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -310,11 +314,11 @@ func TestStartCreatesGuestAndReturnsTokens(t *testing.T) {
 func TestStartRefusesAtCap(t *testing.T) {
 	rig := newGuestRig(t, 2)
 	for i := 0; i < 2; i++ {
-		if _, err := rig.guests.Start(context.Background()); err != nil {
+		if _, err := rig.guests.Start(context.Background(), ""); err != nil {
 			t.Fatalf("Start %d: %v", i, err)
 		}
 	}
-	if _, err := rig.guests.Start(context.Background()); !errors.Is(err, ErrFull) {
+	if _, err := rig.guests.Start(context.Background(), ""); !errors.Is(err, ErrFull) {
 		t.Fatalf("third Start err = %v, want ErrFull", err)
 	}
 	if n := len(rig.kc.createdGuests()); n != 2 {
@@ -333,7 +337,7 @@ func TestStartCapIsRaceFree(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := rig.guests.Start(context.Background())
+			_, err := rig.guests.Start(context.Background(), "")
 			switch {
 			case err == nil:
 				ok.Add(1)
@@ -359,7 +363,7 @@ func TestStartCapIsRaceFree(t *testing.T) {
 func TestStartReleasesSlotWhenCreateFails(t *testing.T) {
 	rig := newGuestRig(t, 1)
 	rig.kc.createErr = errors.New("keycloak down")
-	if _, err := rig.guests.Start(context.Background()); err == nil || errors.Is(err, ErrFull) {
+	if _, err := rig.guests.Start(context.Background(), ""); err == nil || errors.Is(err, ErrFull) {
 		t.Fatalf("Start err = %v, want the create error", err)
 	}
 	if rig.guests.Count() != 0 {
@@ -368,7 +372,7 @@ func TestStartReleasesSlotWhenCreateFails(t *testing.T) {
 	rig.kc.mu.Lock()
 	rig.kc.createErr = nil
 	rig.kc.mu.Unlock()
-	if _, err := rig.guests.Start(context.Background()); err != nil {
+	if _, err := rig.guests.Start(context.Background(), ""); err != nil {
 		t.Fatalf("Start after the failure: %v", err)
 	}
 }
@@ -382,7 +386,7 @@ func TestStartDeletesUserWhenGrantFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rig.kc.onCreate = cancel
-	if _, err := rig.guests.Start(ctx); err == nil {
+	if _, err := rig.guests.Start(ctx, ""); err == nil {
 		t.Fatal("Start succeeded although the password grant failed")
 	}
 	created := rig.kc.createdGuests()
@@ -412,7 +416,7 @@ func TestStartKeycloakCallsSurviveCancelledRequest(t *testing.T) {
 	defer cancel()
 	rig.kc.onCreate = cancel // the visitor hangs up mid-create
 
-	if _, err := rig.guests.Start(ctx); err != nil {
+	if _, err := rig.guests.Start(ctx, ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	rig.kc.mu.Lock()
@@ -431,7 +435,7 @@ func TestStartRefusesAlreadyCancelledRequest(t *testing.T) {
 	rig := newGuestRig(t, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := rig.guests.Start(ctx); err == nil {
+	if _, err := rig.guests.Start(ctx, ""); err == nil {
 		t.Fatal("Start succeeded for a request that was already gone")
 	}
 	if n := len(rig.kc.createdGuests()); n != 0 {
@@ -444,7 +448,7 @@ func TestStartRefusesAlreadyCancelledRequest(t *testing.T) {
 
 func TestLookupRefusesExpiredGuest(t *testing.T) {
 	rig := newGuestRig(t, 1)
-	if _, err := rig.guests.Start(context.Background()); err != nil {
+	if _, err := rig.guests.Start(context.Background(), ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	userID := rig.kc.createdGuests()[0].ID
@@ -459,7 +463,7 @@ func TestLookupRefusesExpiredGuest(t *testing.T) {
 
 func TestSweepFreesTheSlot(t *testing.T) {
 	rig := newGuestRig(t, 1)
-	s, err := rig.guests.Start(context.Background())
+	s, err := rig.guests.Start(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -490,7 +494,7 @@ func TestSweepFreesTheSlot(t *testing.T) {
 	if _, ok := rig.guests.Lookup(userID); ok {
 		t.Error("swept guest is still registered")
 	}
-	if _, err := rig.guests.Start(context.Background()); err != nil {
+	if _, err := rig.guests.Start(context.Background(), ""); err != nil {
 		t.Fatalf("Start after Sweep: %v", err)
 	}
 }
@@ -498,7 +502,7 @@ func TestSweepFreesTheSlot(t *testing.T) {
 func TestSweepRetriesFailedDelete(t *testing.T) {
 	rig := newGuestRig(t, 2)
 	for i := 0; i < 2; i++ {
-		if _, err := rig.guests.Start(context.Background()); err != nil {
+		if _, err := rig.guests.Start(context.Background(), ""); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
 	}
@@ -545,7 +549,7 @@ func TestReconcileDeletesLeftoverGuests(t *testing.T) {
 
 func TestReconcileSparesRegisteredGuests(t *testing.T) {
 	rig := newGuestRig(t, 25)
-	if _, err := rig.guests.Start(context.Background()); err != nil {
+	if _, err := rig.guests.Start(context.Background(), ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	live := rig.kc.createdGuests()[0]

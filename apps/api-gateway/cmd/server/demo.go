@@ -25,6 +25,12 @@ const (
 	// demoRetryMin and demoRetryMax bound the startup reconcile backoff.
 	demoRetryMin = time.Second
 	demoRetryMax = 30 * time.Second
+	// demoConnectWithin ends a guest that never opens the entity stream
+	// this long after it was granted (a bot, or a tab closed at once).
+	demoConnectWithin = 2 * time.Minute
+	// demoGuestsPerAddress caps the live guests one visitor address (an
+	// IPv6 /64) holds, so no single visitor can fill the demo.
+	demoGuestsPerAddress = 2
 )
 
 // demoHub is the part of the entity-stream hub the demo uses.
@@ -89,13 +95,10 @@ func startPublicDemo(cfg config.DemoConfig, kc demo.Keycloak, hub demoHub, logge
 		return nil, err
 	}
 
-	d.guests = demo.NewGuests(kc, demo.GuestOptions{
-		Max:     cfg.MaxGuests,
-		TTL:     cfg.GuestTTL,
-		Sites:   d.visitors,
-		Sockets: hub,
-	}, logger)
-	hub.SetPresenceListener(presenceListener(d.guests.Lookup, d.visitors))
+	opts := demoGuestOptions(cfg)
+	opts.Sites, opts.Sockets = d.visitors, hub
+	d.guests = demo.NewGuests(kc, opts, logger)
+	hub.SetPresenceListener(presenceListener(d.guests.SetOnline, d.visitors))
 
 	d.handler = demo.NewHandler(d.guests, d.visitors, loc, cfg.VisitorsFeedID, registration.NewIPLimiter(n, window), logger)
 	d.status = demo.NewStatusHandler(demoStatus{hub: hub, guests: d.guests.Count, ready: &d.ready}, cfg.MaxGuests, cfg.StatusOrigin, time.Now)
@@ -113,6 +116,20 @@ func startPublicDemo(cfg config.DemoConfig, kc demo.Keycloak, hub demoHub, logge
 		d.sweep(ctx)
 	}()
 	return d, nil
+}
+
+// demoGuestOptions are the registry's limits: a guest holds its slot for its
+// TTL only while someone explores with it. One that has had no socket for
+// DEMO_OFFLINE_REMOVE_AFTER (when its site goes too) or never opened one is
+// ended early, and one address holds at most demoGuestsPerAddress.
+func demoGuestOptions(cfg config.DemoConfig) demo.GuestOptions {
+	return demo.GuestOptions{
+		Max:           cfg.MaxGuests,
+		TTL:           cfg.GuestTTL,
+		OfflineAfter:  cfg.OfflineRemoveAfter,
+		ConnectWithin: demoConnectWithin,
+		PerAddress:    demoGuestsPerAddress,
+	}
 }
 
 // reconcile clears what a previous process left (guest accounts in
@@ -187,13 +204,14 @@ type presenceSites interface {
 	Offline(guestID string)
 }
 
-// presenceListener turns entity-stream presence into visitor-site presence.
-// Only live guests count; anyone else is ignored. The hub calls it with every
-// connect and disconnect serialised, so it does no I/O: a map lookup and a
-// non-blocking signal.
-func presenceListener(lookup func(userID string) (demo.Guest, bool), sites presenceSites) func(userID string, online bool) {
+// presenceListener turns entity-stream presence into guest and visitor-site
+// presence: setOnline tells the registry (which ends a guest that stays away)
+// and returns the guest if it is live; anyone else is ignored. The hub calls
+// it with every connect and disconnect serialised, so it does no I/O: a map
+// update and a non-blocking signal.
+func presenceListener(setOnline func(userID string, online bool) (demo.Guest, bool), sites presenceSites) func(userID string, online bool) {
 	return func(userID string, online bool) {
-		g, ok := lookup(userID)
+		g, ok := setOnline(userID, online)
 		if !ok {
 			return
 		}

@@ -3,6 +3,7 @@ package demo
 import (
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 )
 
@@ -33,4 +34,24 @@ func lastNonEmpty(lines []string) string {
 		}
 	}
 	return ""
+}
+
+// AddressKey is what per-address demo limits count by: an IPv4 address as
+// is, and an IPv6 one by its /64, since one household or phone is handed a
+// whole /64 and can pick any address in it. Anything that is not an address
+// is its own key.
+func AddressKey(ip string) string {
+	addr, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap().WithZone("")
+	if addr.Is4() {
+		return addr.String()
+	}
+	p, err := addr.Prefix(64)
+	if err != nil {
+		return ip
+	}
+	return p.String()
 }

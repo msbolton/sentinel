@@ -29,9 +29,9 @@ type handlerRig struct {
 	mux *http.ServeMux
 }
 
-func newHandlerRig(t *testing.T, max int, loc Locator, limiter *registration.IPLimiter) *handlerRig {
+func newHandlerRig(t *testing.T, max int, loc Locator, limiter *registration.IPLimiter, configure ...func(*GuestOptions)) *handlerRig {
 	t.Helper()
-	g := newGuestRig(t, max)
+	g := newGuestRig(t, max, configure...)
 	if loc == nil {
 		loc = NopLocator{}
 	}
@@ -58,13 +58,17 @@ func (r *handlerRig) postSession(t *testing.T, xff string) *httptest.ResponseRec
 // gateway's auth middleware would attach for it.
 func (r *handlerRig) startGuest(t *testing.T) (*auth.User, Session) {
 	t.Helper()
-	s, err := r.guests.Start(context.Background())
+	s, err := r.guests.Start(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	created := r.kc.createdGuests()
-	c := created[len(created)-1]
-	return &auth.User{UserID: c.ID, Username: c.Username, Roles: []string{auth.RoleViewer, auth.RoleGuest}}, s
+	return guestUser(created[len(created)-1]), s
+}
+
+// guestUser is the principal the auth middleware attaches for a guest.
+func guestUser(c createdGuest) *auth.User {
+	return &auth.User{UserID: c.ID, Username: c.Username, Roles: []string{auth.RoleViewer, auth.RoleGuest}}
 }
 
 func (r *handlerRig) postPosition(t *testing.T, u *auth.User, body, xff string) *httptest.ResponseRecorder {
@@ -399,5 +403,18 @@ func TestPositionNeverLogsPrecise(t *testing.T) {
 		if strings.Contains(line, "51.5074") || strings.Contains(line, "0.1278") {
 			t.Errorf("log entry leaks the precise position: %s", line)
 		}
+	}
+}
+
+func TestSessionRateLimitKeysIPv6By64(t *testing.T) {
+	rig := newHandlerRig(t, 25, nil, registration.NewIPLimiter(2, 10*time.Minute))
+	// A new address in the same /64 each time is still one visitor.
+	for i, ip := range []string{"2001:db8:1:2::1", "2001:db8:1:2::2"} {
+		if rec := rig.postSession(t, ip); rec.Code != http.StatusOK {
+			t.Fatalf("request %d: status %d, want 200", i+1, rec.Code)
+		}
+	}
+	if rec := rig.postSession(t, "2001:db8:1:2::3"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("3rd request from one /64: status %d, want 429", rec.Code)
 	}
 }

@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -12,6 +14,7 @@ import (
 
 	"go.uber.org/zap/zaptest"
 
+	"github.com/sentinel/api-gateway/internal/config"
 	"github.com/sentinel/api-gateway/internal/demo"
 )
 
@@ -34,12 +37,14 @@ func (f *fakePresenceSites) Offline(id string) {
 
 func TestPresenceListenerTranslatesGuestsAndIgnoresOthers(t *testing.T) {
 	guests := map[string]demo.Guest{"kc-user-1": {UserID: "kc-user-1", GuestID: "ab12cd34"}}
-	lookup := func(userID string) (demo.Guest, bool) {
+	var seen []string
+	setOnline := func(userID string, online bool) (demo.Guest, bool) {
+		seen = append(seen, fmt.Sprintf("%s:%v", userID, online))
 		g, ok := guests[userID]
 		return g, ok
 	}
 	sites := &fakePresenceSites{}
-	listen := presenceListener(lookup, sites)
+	listen := presenceListener(setOnline, sites)
 
 	listen("kc-user-1", true)
 	listen("analyst-7", true)
@@ -49,6 +54,27 @@ func TestPresenceListenerTranslatesGuestsAndIgnoresOthers(t *testing.T) {
 	want := []string{"on:ab12cd34", "off:ab12cd34"}
 	if len(sites.events) != len(want) || sites.events[0] != want[0] || sites.events[1] != want[1] {
 		t.Fatalf("events = %v, want %v", sites.events, want)
+	}
+	// The registry hears every transition, so it can end a guest that left.
+	if got := strings.Join(seen, ","); got != "kc-user-1:true,analyst-7:true,analyst-7:false,kc-user-1:false" {
+		t.Fatalf("registry saw %s", got)
+	}
+}
+
+func TestDemoGuestOptionsFreeSlotsOfVisitorsWhoLeft(t *testing.T) {
+	cfg := config.DemoConfig{MaxGuests: 25, GuestTTL: time.Hour, OfflineRemoveAfter: 5 * time.Minute}
+	o := demoGuestOptions(cfg)
+	if o.Max != 25 || o.TTL != time.Hour {
+		t.Errorf("Max/TTL = %d/%v, want 25/1h", o.Max, o.TTL)
+	}
+	if o.OfflineAfter != 5*time.Minute {
+		t.Errorf("OfflineAfter = %v, want DEMO_OFFLINE_REMOVE_AFTER (5m)", o.OfflineAfter)
+	}
+	if o.ConnectWithin != 2*time.Minute {
+		t.Errorf("ConnectWithin = %v, want 2m", o.ConnectWithin)
+	}
+	if o.PerAddress != 2 {
+		t.Errorf("PerAddress = %d, want 2", o.PerAddress)
 	}
 }
 
