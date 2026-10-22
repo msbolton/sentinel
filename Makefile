@@ -410,6 +410,7 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics 
 	printf '%s\n' "$$geo" | sed -n '/^      initContainers:$$/,/^      containers:$$/p' | grep -q -- '- name: geoip$$' || { echo "chart-lint: the gateway has no geoip initContainer"; exit 1; }; \
 	printf '%s\n' "$$geo" | grep -A1 'name: DEMO_GEOIP_DB$$' | grep -qF 'value: "/var/lib/geoip/GeoLite2-City.mmdb"' || { echo "chart-lint: DEMO_GEOIP_DB is not /var/lib/geoip/GeoLite2-City.mmdb"; exit 1; }; \
 	printf '%s\n' "$$geo" | grep -A2 'mountPath: /var/lib/geoip$$' | grep -q 'readOnly: true' || { echo "chart-lint: the gateway does not mount /var/lib/geoip read-only"; exit 1; }; \
+	printf '%s\n' "$$geo" | grep -F -- '--connect-timeout 10 --max-time 60 --retry 2 --retry-max-time 120' >/dev/null || { echo "chart-lint: the GeoIP download is not bounded to about 2 minutes (--connect-timeout 10 --max-time 60 --retry 2 --retry-max-time 120)"; exit 1; }; \
 	! helm template sentinel $(CHART) $(CHART_SET) --set apiGateway.demo.enabled=true --set apiGateway.demo.tokenSecret=t --set apiGateway.extraEnv.DEMO_ENABLED=true >/dev/null 2>&1 || { echo "chart-lint: apiGateway.extraEnv may set DEMO_ENABLED"; exit 1; }
 	@# The demo overlay over the prod one: the live feeds on at install beside the prod reserved ports, the
 	@# simulators and the gateway on the Secrets scripts/demo-bootstrap.sh creates, GeoIP from sentinel-geoip.

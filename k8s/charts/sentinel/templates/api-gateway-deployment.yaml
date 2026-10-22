@@ -62,7 +62,9 @@ spec:
         # start (apiGateway.demo.geoip). It fails open: on any error it warns
         # and exits 0 with no file, and the gateway starts without the
         # fallback. The credentials reach curl on stdin, as its config, so they
-        # are in no argument list and no log line.
+        # are in no argument list and no log line. curl gives up within about
+        # two minutes (60 s an attempt, 2 retries, 120 s in all), so a slow
+        # MaxMind holds the gateway's start no longer than that.
         - name: geoip
           image: {{ $demo.geoip.image | quote }}
           imagePullPolicy: IfNotPresent
@@ -79,7 +81,7 @@ spec:
               rm -rf "$work" && mkdir -p "$work" || warn "cannot write /geoip"
               [ -n "${GEOIP_ACCOUNT_ID:-}" ] && [ -n "${GEOIP_LICENSE_KEY:-}" ] || warn "no MaxMind account-id or license-key in the Secret"
               printf 'user = "%s:%s"\n' "$GEOIP_ACCOUNT_ID" "$GEOIP_LICENSE_KEY" |
-                curl -q -sS -f -L --proto-redir =https --connect-timeout 20 --max-time 300 --retry 3 --retry-delay 5 \
+                curl -q -sS -f -L --proto-redir =https --connect-timeout 10 --max-time 60 --retry 2 --retry-max-time 120 --retry-delay 5 \
                   -K - -o "$work/db.tar.gz" "$GEOIP_URL" || warn "the ${GEOIP_EDITION} download failed"
               tar -xzf "$work/db.tar.gz" -C "$work" || warn "the ${GEOIP_EDITION} archive does not extract"
               for f in "$work"/*/"${GEOIP_EDITION}.mmdb" "$work/${GEOIP_EDITION}.mmdb"; do
