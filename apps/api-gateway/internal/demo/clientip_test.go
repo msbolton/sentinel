@@ -39,3 +39,24 @@ func TestClientIPRemoteAddrWithoutPort(t *testing.T) {
 		t.Fatalf("ClientIP = %q, want 9.9.9.9", got)
 	}
 }
+
+func TestClientIPUsesLastForwardedHeaderLine(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "10.0.0.1:4000"
+	// A client-sent line first, then the line the proxy appended.
+	r.Header.Add("X-Forwarded-For", "1.1.1.1, 2.2.2.2")
+	r.Header.Add("X-Forwarded-For", "3.3.3.3, 4.4.4.4")
+	if got := ClientIP(r); got != "4.4.4.4" {
+		t.Fatalf("ClientIP = %q, want 4.4.4.4", got)
+	}
+}
+
+func TestClientIPSkipsEmptyTrailingHeaderLine(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "10.0.0.1:4000"
+	r.Header.Add("X-Forwarded-For", "1.1.1.1, 4.4.4.4")
+	r.Header.Add("X-Forwarded-For", "  ")
+	if got := ClientIP(r); got != "4.4.4.4" {
+		t.Fatalf("ClientIP = %q, want 4.4.4.4", got)
+	}
+}

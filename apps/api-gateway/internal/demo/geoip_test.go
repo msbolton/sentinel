@@ -14,7 +14,12 @@ import (
 // to a point in London and returns its path.
 func buildGeoFixture(t *testing.T) string {
 	t.Helper()
-	w, err := mmdbwriter.New(mmdbwriter.Options{DatabaseType: "GeoLite2-City", RecordSize: 28})
+	return buildGeoFixtureWith(t, mmdbwriter.Options{DatabaseType: "GeoLite2-City", RecordSize: 28})
+}
+
+func buildGeoFixtureWith(t *testing.T, opts mmdbwriter.Options) string {
+	t.Helper()
+	w, err := mmdbwriter.New(opts)
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -58,6 +63,25 @@ func TestMaxMindLocatesFixtureIP(t *testing.T) {
 	lat, lon, ok := loc.Locate("81.2.69.160")
 	if !ok {
 		t.Fatal("expected ok=true")
+	}
+	if lat != 51.5142 || lon != -0.0931 {
+		t.Errorf("got (%v, %v), want (51.5142, -0.0931)", lat, lon)
+	}
+}
+
+func TestMaxMindLocatesIPv4MappedIPv6(t *testing.T) {
+	// Without IPv4 aliasing the ::ffff:0:0/96 subtree is empty, so only an
+	// unmapped lookup can find the record.
+	loc, err := OpenMaxMind(buildGeoFixtureWith(t, mmdbwriter.Options{
+		DatabaseType: "GeoLite2-City", RecordSize: 28, DisableIPv4Aliasing: true,
+	}))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = loc.Close() })
+	lat, lon, ok := loc.Locate("::ffff:81.2.69.160")
+	if !ok {
+		t.Fatal("expected ok=true for an IPv4-mapped IPv6 address")
 	}
 	if lat != 51.5142 || lon != -0.0931 {
 		t.Errorf("got (%v, %v), want (51.5142, -0.0931)", lat, lon)

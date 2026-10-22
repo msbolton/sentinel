@@ -52,6 +52,9 @@ func (m *MaxMindLocator) Locate(ip string) (float64, float64, bool) {
 	if err != nil {
 		return 0, 0, false
 	}
+	// A dual-stack listener reports IPv4 visitors as ::ffff:a.b.c.d; look
+	// them up as plain IPv4 so a database without 4-in-6 aliasing finds them.
+	addr = addr.Unmap()
 	var rec geoRecord
 	if err := m.db.Lookup(addr).Decode(&rec); err != nil {
 		return 0, 0, false
