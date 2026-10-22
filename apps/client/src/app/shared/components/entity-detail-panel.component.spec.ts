@@ -179,14 +179,14 @@ describe('EntityDetailPanelComponent', () => {
     expect(r['Callsign']).toBe('HAWK');
     expect(r['Contributing feeds']).toBeUndefined();
 
-    fixture.componentRef.setInput('entity', makeEntity({ identities: [{ type: 'COT_UID', value: 'U-2' }] }));
+    fixture.componentRef.setInput('entity', makeEntity({ id: 'e2', identities: [{ type: 'COT_UID', value: 'U-2' }] }));
     fixture.detectChanges();
     open('origin');
     r = rows();
     expect(r['TAK uid']).toBe('U-2');
     expect(r['Callsign']).toBe('ALPHA 1');
 
-    fixture.componentRef.setInput('entity', makeEntity({ identities: [{ type: 'ICAO24', value: 'abc123' }] }));
+    fixture.componentRef.setInput('entity', makeEntity({ id: 'e3', identities: [{ type: 'ICAO24', value: 'abc123' }] }));
     fixture.detectChanges();
     open('origin');
     r = rows();
@@ -838,5 +838,70 @@ describe('EntityDetailPanelComponent', () => {
     fixture.detectChanges();
     expect(rows()['Heartbeat']).toBe('offline since 14:02Z · every 5 s');
     expect(el.querySelector('.origin-section .field-link')).toBeNull();
+  });
+
+  describe('when newer data for the shown entity arrives', () => {
+    const site = (heartbeatAgoSec: number, id = 'site-1') =>
+      makeEntity({
+        id,
+        entityType: EntityType.SENSOR,
+        feedId: 'grpc-1',
+        identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }],
+        lastSeenAt: secondsAgo(heartbeatAgoSec),
+        platformData: { generic: { fields: { heartbeat: 'online', heartbeatIntervalSec: '5', lastHeartbeatAt: secondsAgo(heartbeatAgoSec) } } },
+      });
+    beforeEach(() => {
+      analytics.getBaseline.mockClear();
+      analytics.getEntityFindings.mockClear();
+    });
+    const isOpen = (section: string) =>
+      el.querySelector(`.section-toggle[data-section="${section}"]`)?.getAttribute('aria-expanded') === 'true';
+
+    it('moves a site from offline to online when a fresh heartbeat arrives for the same id', () => {
+      fixture.componentRef.setInput('entity', site(60));
+      fixture.detectChanges();
+      open('origin');
+      httpMock.expectOne('/api/v1/feeds').flush([]);
+      fixture.detectChanges();
+      expect(rows()['Heartbeat']).toMatch(/^offline since/);
+
+      fixture.componentRef.setInput('entity', site(2));
+      fixture.detectChanges();
+
+      expect(rows()['Heartbeat']).toBe('online · every 5 s');
+    });
+
+    it('keeps the sections the operator opened and does not ask for the behaviour again', () => {
+      fixture.componentRef.setInput('entity', site(2));
+      fixture.detectChanges();
+      httpMock.match('/api/v1/feeds').forEach((r) => r.flush([]));
+      open('origin');
+      expect(isOpen('origin')).toBe(true);
+      expect(analytics.getBaseline).toHaveBeenCalledTimes(1);
+      expect(analytics.getEntityFindings).toHaveBeenCalledTimes(1);
+
+      fixture.componentRef.setInput('entity', site(1));
+      fixture.detectChanges();
+
+      expect(isOpen('origin')).toBe(true);
+      expect(analytics.getBaseline).toHaveBeenCalledTimes(1);
+      expect(analytics.getEntityFindings).toHaveBeenCalledTimes(1);
+    });
+
+    it('still resets the sections and asks again when a different entity is shown', () => {
+      fixture.componentRef.setInput('entity', site(2));
+      fixture.detectChanges();
+      httpMock.match('/api/v1/feeds').forEach((r) => r.flush([]));
+      open('origin');
+      expect(isOpen('origin')).toBe(true);
+
+      fixture.componentRef.setInput('entity', site(2, 'site-2'));
+      fixture.detectChanges();
+
+      expect(isOpen('origin')).toBe(false);
+      expect(analytics.getBaseline).toHaveBeenCalledTimes(2);
+      expect(analytics.getBaseline).toHaveBeenLastCalledWith('site-2');
+      expect(analytics.getEntityFindings).toHaveBeenCalledTimes(2);
+    });
   });
 });

@@ -861,6 +861,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
             ? { ...event.entity, affiliation: prev.affiliation }
             : event.entity;
         this.addOrUpdateCesiumEntity(merged);
+        // The detail panel shows the selection, not the stream: hand it the newer copy.
+        if (untracked(() => this.selectedEntity())?.id === merged.id) this.selectedEntity.set(merged);
         break;
       }
       case 'deleted':

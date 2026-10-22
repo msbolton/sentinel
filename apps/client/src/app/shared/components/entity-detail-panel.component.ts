@@ -1633,6 +1633,8 @@ export class EntityDetailPanelComponent {
   private readonly now = signal(Date.now());
 
   entity = input<Entity | null>(null);
+  /** Changes only when another entity is shown, not when the shown one is updated. */
+  private readonly entityId = computed(() => this.entity()?.id);
   close = output<void>();
   flyTo = output<Entity>();
 
@@ -1640,18 +1642,21 @@ export class EntityDetailPanelComponent {
     const tick = setInterval(() => this.now.set(Date.now()), 1000);
     this.destroyRef.onDestroy(() => clearInterval(tick));
 
+    // These two follow which entity is shown, not its every update: the map
+    // hands the panel a newer copy of the selection with each fix.
     effect(() => {
-      const e = this.entity();
+      this.entityId();
       // A satellite's platform section holds the orbit toggles, a vessel's its
       // voyage, a signal emitter's its RF parameters, and a military aircraft's
       // its flight path: open them.
+      const e = untracked(() => this.entity());
       const pd = e?.platformData;
       this.expandedSections.set({ ...DEFAULT_SECTIONS, platformDetails: !!(pd?.tle || pd?.ais || pd?.rf || pd?.radar || pd?.eoir || (pd?.adsb && e?.source === EntitySource.INTELSKY)) });
     });
     // Behaviour: the baseline and open findings of the shown entity. A
     // request counter drops answers for an entity that is no longer shown.
     effect(() => {
-      const id = this.entity()?.id;
+      const id = this.entityId();
       const request = ++this.behaviourRequest;
       this.baseline.set(undefined);
       this.findings.set([]);

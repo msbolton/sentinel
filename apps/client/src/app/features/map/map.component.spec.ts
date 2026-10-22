@@ -346,6 +346,56 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     expect(TestBed.inject(Router).navigateByUrl).not.toHaveBeenCalled();
   });
 
+  describe('keeping the selection live', () => {
+    const update = (entity: Entity) =>
+      (component as any).handleEntityEvent({ type: 'updated', entity, timestamp: '2026-10-20T12:00:05Z' });
+
+    it('replaces the selected entity with the newer copy from the stream', () => {
+      const old = baseSignalEntity({ id: 'ac-1', entityType: EntityType.AIRCRAFT, position: { latitude: 50, longitude: -1 }, lastSeenAt: '2026-10-20T12:00:00Z' } as Partial<Entity>);
+      const newer = baseSignalEntity({ id: 'ac-1', entityType: EntityType.AIRCRAFT, position: { latitude: 50.1, longitude: -1 }, lastSeenAt: '2026-10-20T12:00:05Z' } as Partial<Entity>);
+      component.selectedEntity.set(old);
+
+      update(newer);
+
+      expect(component.selectedEntity()).toBe(newer);
+    });
+
+    it("replaces a selected site's entity, which the emplacement layer draws", () => {
+      const site = (lastHeartbeatAt: string) =>
+        baseSignalEntity({
+          id: 'site-1',
+          entityType: EntityType.SENSOR,
+          identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }],
+          platformData: { generic: { fields: { heartbeat: 'online', lastHeartbeatAt } } },
+        } as Partial<Entity>);
+      (component as any).loadedEmplacementIds = new Set(['emp-1']);
+      const old = site('2026-10-20T12:00:00Z');
+      const newer = site('2026-10-20T12:00:05Z');
+      (component as any).emplacementEntities.set('site-1', old);
+      component.selectedEntity.set(old);
+
+      update(newer);
+
+      expect((component as any).emplacementEntities.get('site-1')).toBe(newer);
+      expect(component.selectedEntity()).toBe(newer);
+    });
+
+    it('leaves the selection alone when another entity updates', () => {
+      const selected = baseSignalEntity({ id: 'ac-1', entityType: EntityType.AIRCRAFT });
+      component.selectedEntity.set(selected);
+
+      update(baseSignalEntity({ id: 'ac-2', entityType: EntityType.AIRCRAFT }));
+
+      expect(component.selectedEntity()).toBe(selected);
+    });
+
+    it('selects nothing when nothing was selected', () => {
+      update(baseSignalEntity({ id: 'ac-2', entityType: EntityType.AIRCRAFT }));
+
+      expect(component.selectedEntity()).toBeNull();
+    });
+  });
+
   it('draws a Cesium ellipse from gateway-shaped positionCovariance (pnPn/pnPe/pePe) for SIGNAL only and clears it when covariance clears', () => {
     // Wire payload matching api-gateway internal/stream/bridge.go output
     const wireEntity: Entity = JSON.parse(
