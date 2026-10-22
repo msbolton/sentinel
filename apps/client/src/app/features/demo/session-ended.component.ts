@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, ElementRef, Injector, afterNextRender, effect, inject, viewChild } from '@angular/core';
 import { Router } from '@angular/router';
 import { DemoService } from '../../core/services/demo.service';
+import { trapTab } from './focus-trap';
 import { DEMO_CARD_STYLES, PORTFOLIO_URL } from './demo-card.styles';
 
 /** Shown over the app when the guest's session has ended; its button starts a fresh one. */
@@ -11,7 +12,7 @@ import { DEMO_CARD_STYLES, PORTFOLIO_URL } from './demo-card.styles';
   template: `
     @if (demo.sessionEnded()) {
       <div class="scrim">
-        <div class="card" role="dialog" aria-modal="true" aria-labelledby="session-ended-title" aria-describedby="session-ended-body">
+        <div #dialog class="card" role="dialog" aria-modal="true" aria-labelledby="session-ended-title" aria-describedby="session-ended-body" (keydown)="onKeydown($event)">
           <h2 id="session-ended-title">Your demo session has ended</h2>
           <p id="session-ended-body">Demo sessions are short, so everyone gets a turn. Start a new session to keep exploring.</p>
           <div class="actions">
@@ -28,6 +29,7 @@ export class SessionEndedComponent {
   protected readonly demo = inject(DemoService);
   private readonly router = inject(Router);
   private readonly injector = inject(Injector);
+  private readonly dialog = viewChild<ElementRef<HTMLElement>>('dialog');
   private readonly restart = viewChild<ElementRef<HTMLButtonElement>>('restart');
   protected readonly portfolioUrl = PORTFOLIO_URL;
 
@@ -38,6 +40,11 @@ export class SessionEndedComponent {
         afterNextRender(() => this.restart()?.nativeElement.focus(), { injector: this.injector });
       }
     });
+  }
+
+  /** Keeps Tab inside the card while it is open. */
+  protected onKeydown(event: KeyboardEvent): void {
+    trapTab(event, this.dialog()?.nativeElement);
   }
 
   protected restartSession(): void {

@@ -50,4 +50,24 @@ describe('SessionEndedComponent', () => {
     fixture.detectChanges();
     expect(document.activeElement).toBe(fixture.nativeElement.querySelector('button'));
   });
+
+  it('traps Tab inside the card', () => {
+    const fixture = render();
+    ended.set(true);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const button = el.querySelector('button') as HTMLElement;
+    const link = el.querySelector('a') as HTMLElement;
+    const tab = (shiftKey: boolean) => {
+      const e = new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true, cancelable: true });
+      el.querySelector('[role="dialog"]')!.dispatchEvent(e);
+      return e;
+    };
+
+    link.focus();
+    expect(tab(false).defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(button);
+    expect(tab(true).defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(link);
+  });
 });

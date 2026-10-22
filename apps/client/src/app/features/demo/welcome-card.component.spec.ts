@@ -122,6 +122,31 @@ describe('WelcomeCardComponent', () => {
     expect(demo.welcomeDismissed()).toBe(true);
   });
 
+  it('traps Tab: from the last control it wraps to the first, and Shift+Tab from the first wraps to the last', () => {
+    const fixture = render();
+    const el = fixture.nativeElement as HTMLElement;
+    const controls = Array.from(el.querySelectorAll<HTMLElement>('button:not([disabled]), a[href]'));
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    expect(last.tagName).toBe('A');
+    const tab = (shiftKey: boolean) => {
+      const e = new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true, cancelable: true });
+      dialog(el)!.dispatchEvent(e);
+      return e;
+    };
+
+    last.focus();
+    expect(tab(false).defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(first);
+
+    expect(tab(true).defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(last);
+
+    // In the middle the browser's own order is left alone.
+    controls[1].focus();
+    expect(tab(false).defaultPrevented).toBe(false);
+  });
+
   it('links back to the portfolio and covers each point of the brief', () => {
     const el = render().nativeElement as HTMLElement;
     const link = el.querySelector('a') as HTMLAnchorElement;

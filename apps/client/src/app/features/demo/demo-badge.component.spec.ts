@@ -44,4 +44,24 @@ describe('DemoBadgeComponent', () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.textContent).not.toContain('Demo');
   });
+
+  it('collapsed rail: renders the compact dot-only variant, keeping the words for screen readers', () => {
+    guest = true;
+    const fixture = TestBed.createComponent(DemoBadgeComponent);
+    fixture.componentRef.setInput('compact', true);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const pill = el.querySelector('.badge-demo') as HTMLElement;
+    expect(pill.classList.contains('compact')).toBe(true);
+    expect(el.querySelector('.dot')).not.toBeNull();
+    // The visible label is hidden but still read out.
+    const label = Array.from(el.querySelectorAll('span')).find((s) => s.textContent === 'Demo') as HTMLElement;
+    expect(label.classList.contains('sr-only')).toBe(true);
+    expect(pill.getAttribute('title')).toContain('read-only demo');
+
+    fixture.componentRef.setInput('compact', false);
+    fixture.detectChanges();
+    expect(pill.classList.contains('compact')).toBe(false);
+    expect(label.classList.contains('sr-only')).toBe(false);
+  });
 });

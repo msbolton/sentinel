@@ -37,7 +37,7 @@ import { SessionEndedComponent } from './features/demo/session-ended.component';
         </div>
         <!-- Only a demo guest sees this; it sits under the brand so it shows whether the rail is open or not. -->
         @if (isGuest()) {
-          <app-demo-badge class="demo-badge"></app-demo-badge>
+          <app-demo-badge class="demo-badge" [compact]="!rail.expanded()"></app-demo-badge>
         }
 
         <div class="sidebar-nav">

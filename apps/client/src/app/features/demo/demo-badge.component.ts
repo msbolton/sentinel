@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, input } from '@angular/core';
 import { AuthService } from '../../core/services/auth.service';
 import { guestSignal } from './guest-signal';
 
@@ -9,9 +9,9 @@ import { guestSignal } from './guest-signal';
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (guest()) {
-      <span class="badge-demo" title="A read-only demo of Sentinel. Nothing here can be changed.">
+      <span class="badge-demo" [class.compact]="compact()" title="A read-only demo of Sentinel. Nothing here can be changed.">
         <span class="dot" aria-hidden="true"></span>
-        <span>Demo</span><span class="sr-only"> mode: read-only</span>
+        <span [class.sr-only]="compact()">Demo</span><span class="sr-only"> mode: read-only</span>
       </span>
     }
   `,
@@ -39,6 +39,25 @@ import { guestSignal } from './guest-signal';
         white-space: nowrap;
       }
 
+      /*
+       * Width budget: the expanded rail's content is 208 - 16 padding - 1 border = 191px and the
+       * pill is about 64px (6 dot + 6 gap + 4 x 7.6 text + 20 padding + 2 border). The collapsed
+       * rail's content is 56 - 16 - 1 = 39px, so there the pill shrinks to a 24px dot-only circle.
+       */
+      .badge-demo.compact {
+        box-sizing: border-box;
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        justify-content: center;
+        gap: 0;
+      }
+
+      .badge-demo.compact .dot {
+        width: 8px;
+        height: 8px;
+      }
+
       .dot {
         width: 6px;
         height: 6px;
@@ -58,5 +77,7 @@ import { guestSignal } from './guest-signal';
   ],
 })
 export class DemoBadgeComponent {
+  /** True in the collapsed rail: the pill becomes a dot, its text kept for screen readers. */
+  readonly compact = input(false);
   protected readonly guest = guestSignal(inject(AuthService));
 }

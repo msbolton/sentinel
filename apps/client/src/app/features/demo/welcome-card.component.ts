@@ -5,6 +5,7 @@ import { EmplacementService } from '../../core/services/emplacement.service';
 import { DEMO_CARD_STYLES, PORTFOLIO_URL } from './demo-card.styles';
 import { sensorBounds, visitorBounds } from './demo-bounds';
 import { guestSignal } from './guest-signal';
+import { trapTab } from './focus-trap';
 
 /**
  * The first thing a demo visitor reads: what they are looking at and where to
@@ -143,20 +144,6 @@ export class WelcomeCardComponent {
 
   /** Keeps Tab inside the card while it is open. */
   protected onKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'Tab') return;
-    const root = this.dialog()?.nativeElement;
-    if (!root) return;
-    const items = Array.from(root.querySelectorAll<HTMLElement>('button:not([disabled]), a[href]'));
-    if (items.length === 0) return;
-    const first = items[0];
-    const last = items[items.length - 1];
-    const active = document.activeElement;
-    if (event.shiftKey && active === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && active === last) {
-      event.preventDefault();
-      first.focus();
-    }
+    trapTab(event, this.dialog()?.nativeElement);
   }
 }
