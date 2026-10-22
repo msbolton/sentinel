@@ -183,7 +183,11 @@ message RadarDetail {
   RadarClass classification = 6;
   optional double classification_confidence = 7; // 0..1
   string radar_track_id = 8;
-  optional double height_above_ground_m = 9; // server-computed; a sender's value is overwritten
+  // Height of the target above the terrain under it, metres. Set by
+  // Sentinel only, for an air target placed from a range polar measurement
+  // while terrain answers and the radar's own altitude is known; a value a
+  // sender puts here is always dropped.
+  optional double height_above_ground_m = 9;
 }
 
 // EoIrBand is the spectral band of an electro-optical / infrared camera.

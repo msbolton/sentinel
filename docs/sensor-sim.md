@@ -170,6 +170,8 @@ Flags override the configuration file, which overrides the defaults. Most YAML k
 - a `FIXED` emplacement of sensor type `RADAR` or `EO_IR`, with the configured name;
 - the site position, with the resolved altitude (the terrain plus the mast height when you gave `--height-above-ground`);
 - the mast height itself, as `height_above_ground_m`;
+
+  The simulator resolves the altitude itself, as metres above the WGS84 ellipsoid, because it already has the terrain. A real sensor's adapter that knows only its mast height, or whose altitude is above mean sea level (most GPS receivers and survey data give that), should send `height_above_ground_m` and leave the altitude out: the server then puts the sensor at the terrain under it plus the mast, for a radar as for a camera (`docs/emplacements.md`). An altitude above mean sea level sent as is would be off by the geoid height, tens of metres, which moves a camera's ground placements by hundreds of metres;
 - the boresight (true north);
 - the coverage: minimum and maximum range, azimuth width and elevation limits. A camera always declares its window, defaults included; a radar declares only the limits it was given.
 

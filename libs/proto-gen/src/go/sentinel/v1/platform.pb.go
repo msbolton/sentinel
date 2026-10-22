@@ -1316,9 +1316,13 @@ type RadarDetail struct {
 	Classification           RadarClass             `protobuf:"varint,6,opt,name=classification,proto3,enum=sentinel.v1.RadarClass" json:"classification,omitempty"`
 	ClassificationConfidence *float64               `protobuf:"fixed64,7,opt,name=classification_confidence,json=classificationConfidence,proto3,oneof" json:"classification_confidence,omitempty"` // 0..1
 	RadarTrackId             string                 `protobuf:"bytes,8,opt,name=radar_track_id,json=radarTrackId,proto3" json:"radar_track_id,omitempty"`
-	HeightAboveGroundM       *float64               `protobuf:"fixed64,9,opt,name=height_above_ground_m,json=heightAboveGroundM,proto3,oneof" json:"height_above_ground_m,omitempty"` // server-computed; a sender's value is overwritten
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// Height of the target above the terrain under it, metres. Set by
+	// Sentinel only, for an air target placed from a range polar measurement
+	// while terrain answers and the radar's own altitude is known; a value a
+	// sender puts here is always dropped.
+	HeightAboveGroundM *float64 `protobuf:"fixed64,9,opt,name=height_above_ground_m,json=heightAboveGroundM,proto3,oneof" json:"height_above_ground_m,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *RadarDetail) Reset() {

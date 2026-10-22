@@ -236,7 +236,9 @@ export interface PolarSigma {
  * PolarMeasurement is a measurement relative to an emplacement. An
  * observation that carries one and no position has its position derived by
  * the ingest service from the emplacement's location. elevation_deg unset
- * means the target is at the observation's altitude, else the emplacement's.
+ * means the target is at the observation's altitude, else the origin's: the
+ * emplacement's altitude, else the terrain under it plus
+ * height_above_ground_m.
  * direction_only marks a camera-style report: range_m is ignored,
  * elevation_deg is required, and the target is placed on terrain.
  */
@@ -260,6 +262,10 @@ export interface Emplacement {
   description: string;
   mobility: Mobility;
   sensorType: SensorType;
+  /**
+   * position.altitude_meters is the sensor's height above the WGS84
+   * ellipsoid, not mean sea level: see height_above_ground_m.
+   */
   position?: Coordinate | undefined;
   boresightDeg: number;
   azimuthReference: AzimuthReference;
@@ -274,8 +280,14 @@ export interface Emplacement {
     | string
     | undefined;
   /**
-   * Height of the sensor above the ground, metres. Used for the origin
-   * altitude only when the position has no altitude.
+   * Height of the sensor above the ground, metres (a mast, a roof). Used
+   * only when the position has no altitude: the sensor is then at the
+   * terrain height under it plus this, for a range measurement (radar) as
+   * for a direction-only one (camera). A position's altitude_meters is read
+   * as metres above the WGS84 ellipsoid; a sensor whose altitude is above
+   * mean sea level, or of unknown datum, should send this and no altitude,
+   * since an origin tens of metres off moves a camera's ground placements
+   * by hundreds of metres.
    */
   heightAboveGroundM?: number | undefined;
 }

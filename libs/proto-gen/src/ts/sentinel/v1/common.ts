@@ -713,8 +713,11 @@ export interface Coordinate {
   /** Longitude in decimal degrees (WGS84). */
   longitude: number;
   /**
-   * Altitude above mean sea level in meters. Unset when the source reports
-   * no altitude; a present zero means sea level.
+   * Altitude in meters. Sentinel takes it as height above the WGS84
+   * ellipsoid and applies no geoid correction (docs/emplacements.md, "Known
+   * differences"), so an altitude above mean sea level is off by the local
+   * geoid height, tens of metres. Unset when the source reports no altitude;
+   * a present zero is an altitude of 0 m.
    */
   altitudeMeters?:
     | number

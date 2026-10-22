@@ -371,7 +371,12 @@ export interface RadarDetail {
   /** 0..1 */
   classificationConfidence?: number | undefined;
   radarTrackId: string;
-  /** server-computed; a sender's value is overwritten */
+  /**
+   * Height of the target above the terrain under it, metres. Set by
+   * Sentinel only, for an air target placed from a range polar measurement
+   * while terrain answers and the radar's own altitude is known; a value a
+   * sender puts here is always dropped.
+   */
   heightAboveGroundM?: number | undefined;
 }
 
