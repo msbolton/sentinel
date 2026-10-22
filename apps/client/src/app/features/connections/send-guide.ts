@@ -113,25 +113,31 @@ export function grpcurlCommand(t: GrpcTarget): string {
   ].join(' ');
 }
 
-/**
- * The EW sensor simulator's command line for this connection. The CLI needs an emplacement
- * position, so the line names the bundled example config, which resolves in the image
- * (WORKDIR /app) and from adapters/ew-sensor; the flags override what it sets.
- */
-export function ewSensorCommand(t: GrpcTarget): string {
-  const security = !t.tls ? '--insecure' : t.requireClientCert ? '--tls --ca ca.pem --cert client.pem --key client-key.pem' : '--tls --ca ca.pem';
-  return `ew-sensor --addr ${shellQuote(grpcEndpoint(t))} --token "$SENTINEL_INGEST_TOKEN" ${security} --config examples/coastal-esm.yaml`;
+/** The kinds of sensor sensor-sim simulates, one per process. */
+export type SensorSimKind = 'esm' | 'radar' | 'eoir';
+
+/** The bundled example each kind's command line loads (relative to the image's WORKDIR /app). */
+const SENSOR_SIM_EXAMPLES: Record<SensorSimKind, string> = {
+  esm: 'examples/esm-coastal.yaml',
+  radar: 'examples/radar.yaml',
+  eoir: 'examples/camera.yaml',
+};
+
+/** sensor-sim's transport flags for this connection: plaintext, TLS, or TLS with a client certificate. */
+function sensorSimSecurity(t: GrpcTarget): string {
+  if (!t.tls) return '--insecure';
+  return t.requireClientCert ? '--tls --ca ca.pem --cert client.pem --key client-key.pem' : '--tls --ca ca.pem';
 }
 
 /**
- * The radar or camera simulator's command line for this connection: sensor-sim runs one sensor
- * per process, so each kind gets its own line. Its connection flags are ew-sensor's; the bundled
- * example config names the emplacement the simulated sensor reports as.
+ * The sensor simulator's command line for this connection: sensor-sim runs one sensor per
+ * process (an ESM sensor, a radar or an EO/IR camera), so each kind gets its own line. The
+ * bundled example config, which resolves in the image (WORKDIR /app) and from
+ * simulators/sensor-sim, names the emplacement the simulated sensor reports as; the flags
+ * override what it sets.
  */
-export function sensorSimCommand(t: GrpcTarget, kind: 'radar' | 'eoir'): string {
-  const security = !t.tls ? '--insecure' : t.requireClientCert ? '--tls --ca ca.pem --cert client.pem --key client-key.pem' : '--tls --ca ca.pem';
-  const config = kind === 'radar' ? 'examples/radar.yaml' : 'examples/camera.yaml';
-  return `sensor-sim --kind ${kind} --addr ${shellQuote(grpcEndpoint(t))} --token "$SENTINEL_INGEST_TOKEN" ${security} --config ${config}`;
+export function sensorSimCommand(t: GrpcTarget, kind: SensorSimKind): string {
+  return `sensor-sim --kind ${kind} --addr ${shellQuote(grpcEndpoint(t))} --token "$SENTINEL_INGEST_TOKEN" ${sensorSimSecurity(t)} --config ${SENSOR_SIM_EXAMPLES[kind]}`;
 }
 
 /**

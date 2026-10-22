@@ -6,7 +6,6 @@ import {
   PROTO_FILES,
   SendTarget,
   endpointLabel,
-  ewSensorCommand,
   sensorSimCommand,
   goSnippet,
   grpcTarget,
@@ -224,13 +223,24 @@ describe('send guide', () => {
       expect(tlsOnly).not.toContain('-plaintext');
     });
 
-    it('builds the ew-sensor command line', () => {
-      expect(ewSensorCommand({ host: 'listener.example', port: 6200, tls: false, requireClientCert: false, allow: [] }))
-        .toBe('ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure --config examples/coastal-esm.yaml');
-      expect(ewSensorCommand({ host: '', port: 6200, tls: true, requireClientCert: false, allow: [] }))
-        .toBe('ew-sensor --addr listener:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem --config examples/coastal-esm.yaml');
-      expect(ewSensorCommand({ host: 'listener.example', port: 6200, tls: true, requireClientCert: true, allow: [] }))
-        .toBe('ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem --cert client.pem --key client-key.pem --config examples/coastal-esm.yaml');
+    it('builds the sensor-sim esm command line', () => {
+      expect(sensorSimCommand({ host: 'listener.example', port: 6200, tls: false, requireClientCert: false, allow: [] }, 'esm'))
+        .toBe('sensor-sim --kind esm --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure --config examples/esm-coastal.yaml');
+      expect(sensorSimCommand({ host: '', port: 6200, tls: true, requireClientCert: false, allow: [] }, 'esm'))
+        .toBe('sensor-sim --kind esm --addr listener:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem --config examples/esm-coastal.yaml');
+      expect(sensorSimCommand({ host: 'listener.example', port: 6200, tls: true, requireClientCert: true, allow: [] }, 'esm'))
+        .toBe('sensor-sim --kind esm --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --tls --ca ca.pem --cert client.pem --key client-key.pem --config examples/esm-coastal.yaml');
+    });
+
+    it('gives every kind the same security flags', () => {
+      for (const tls of [false, true]) {
+        for (const requireClientCert of [false, true]) {
+          const t = { host: 'listener.example', port: 6200, tls, requireClientCert, allow: [] };
+          const flags = (cmd: string) => cmd.slice(cmd.indexOf('"$SENTINEL_INGEST_TOKEN"'), cmd.indexOf(' --config'));
+          expect(flags(sensorSimCommand(t, 'radar'))).toBe(flags(sensorSimCommand(t, 'esm')));
+          expect(flags(sensorSimCommand(t, 'eoir'))).toBe(flags(sensorSimCommand(t, 'esm')));
+        }
+      }
     });
 
     it('builds the sensor-sim command line for each kind', () => {
@@ -250,7 +260,7 @@ describe('send guide', () => {
       const v6 = { host: '::1', port: 6200, tls: false, requireClientCert: false, allow: [] };
       expect(grpcurlCommand(v6)).toContain(` ${shellQuote('[::1]:6200')} `);
       expect(grpcurlCommand(v6)).toContain(`'[::1]:6200'`);
-      expect(ewSensorCommand(v6)).toContain(`--addr '[::1]:6200' `);
+      expect(sensorSimCommand(v6, 'esm')).toContain(`--addr '[::1]:6200' `);
       // a host that is not a plain name cannot start a second command
       expect(grpcurlCommand({ ...v6, host: 'x; id' })).toContain(`'x; id:6200'`);
     });

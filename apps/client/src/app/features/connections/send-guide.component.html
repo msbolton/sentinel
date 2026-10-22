@@ -31,7 +31,7 @@
       }
     </p>
     <p class="muted note">Save them as <code>proto/sentinel/ingest/v1/ingest_service.proto</code> and under <code>proto/sentinel/v1/</code>: grpcurl reads them from <code>proto/</code>.</p>
-    @if (ewSensor(); as cmd) {
+    @if (esmSim(); as cmd) {
       <ng-container [ngTemplateOutlet]="snippet" [ngTemplateOutletContext]="{ $implicit: cmd }" />
     }
     <p class="muted note sensor-note">

@@ -87,7 +87,7 @@ describe('SendGuideComponent', () => {
     const grpcFeed = (config: Record<string, unknown> = { port: 6200 }) =>
       makeFeed({ driver: 'grpc', config, detail: { listen: { protocol: 'grpc', host: 'listener.example', port: 6200 } } });
 
-    it('shows the endpoint, the token header, the grpcurl and ew-sensor commands and the protos', () => {
+    it('shows the endpoint, the token header, the grpcurl and sensor-sim commands and the protos', () => {
       render(grpcFeed());
       const section = el.querySelector('section.send-guide')!;
       expect(text(section.querySelector('h4'))).toContain('listener.example:6200');
@@ -95,7 +95,7 @@ describe('SendGuideComponent', () => {
       expect(text(section)).toContain('Issue one under Tokens below.');
       expect(blocks()).toEqual([
         'grpcurl -plaintext -import-path proto -proto sentinel/ingest/v1/ingest_service.proto -H "authorization: Bearer $SENTINEL_INGEST_TOKEN" listener.example:6200 sentinel.ingest.v1.IngestService/GetSession',
-        'ew-sensor --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure --config examples/coastal-esm.yaml',
+        'sensor-sim --kind esm --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure --config examples/esm-coastal.yaml',
         'sensor-sim --kind radar --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure --config examples/radar.yaml',
         'sensor-sim --kind eoir --addr listener.example:6200 --token "$SENTINEL_INGEST_TOKEN" --insecure --config examples/camera.yaml',
       ]);
@@ -130,7 +130,7 @@ describe('SendGuideComponent', () => {
     it('is not rendered for a tcp listen connection', () => {
       render(makeFeed({ driver: 'tcp', config: { mode: 'listen', port: 6000 }, detail: listening('tcp', 6000) }));
       expect(el.textContent).not.toContain('authorization: Bearer');
-      expect(blocks().some((b) => b.includes('grpcurl') || b.includes('ew-sensor'))).toBe(false);
+      expect(blocks().some((b) => b.includes('grpcurl') || b.includes('sensor-sim'))).toBe(false);
     });
 
     it('explains radar and EO/IR detail and direction-only detections', () => {
