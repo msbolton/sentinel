@@ -28,9 +28,17 @@ type Config struct {
 	CacheDir      string        // required for New
 	MaxCacheBytes int64         // default 2 GiB
 	FetchTimeout  time.Duration // default 300s
-	MemTiles      int           // decoded tiles kept in memory, default 4
-	HTTPClient    *http.Client
-	Logger        *zap.Logger
+	// JoinWindow is how long a fetch already under way, for a tile or the
+	// tile list, takes on more waiting callers (default 2s). A height
+	// lookup that finds an older fetch fails at once with ErrUnavailable
+	// rather than waiting on it, and the fetch carries on to FetchTimeout.
+	// Set it to the callers' own wait, so a hung fetch holds a caller that
+	// looks up heights one at a time for about one window, not one wait
+	// per lookup.
+	JoinWindow time.Duration
+	MemTiles   int // decoded tiles kept in memory, default 4
+	HTTPClient *http.Client
+	Logger     *zap.Logger
 }
 
 // Stats counts the service's work. Hits and Misses count height lookups on
@@ -67,12 +75,28 @@ type Service struct {
 // flight is one piece of work that concurrent callers share. Its result
 // fields are written before done is closed and read only after.
 type flight[T any] struct {
-	done chan struct{}
-	val  T
-	err  error
+	done    chan struct{}
+	started time.Time
+	val     T
+	err     error
 }
 
-func newFlight[T any]() *flight[T] { return &flight[T]{done: make(chan struct{})} }
+func newFlight[T any](now time.Time) *flight[T] {
+	return &flight[T]{done: make(chan struct{}), started: now}
+}
+
+// closed reports whether a caller who did not start f should not wait on
+// it: f has been running for the join window or longer. A caller that
+// started f, or one that must have the result (Preload), is never turned
+// away.
+func (f *flight[T]) closed(now time.Time, window time.Duration) bool {
+	return now.Sub(f.started) >= window
+}
+
+// errStillLoading is what a caller turned away from an old flight gets.
+func errStillLoading(what string, age time.Duration) error {
+	return fmt.Errorf("terrain: %s still loading after %v; not waiting for it", what, age.Round(time.Millisecond))
+}
 
 // wait blocks until the flight lands or ctx ends. The work carries on
 // either way.
@@ -102,6 +126,9 @@ func New(cfg Config) (*Service, error) {
 	}
 	if cfg.FetchTimeout <= 0 {
 		cfg.FetchTimeout = 300 * time.Second
+	}
+	if cfg.JoinWindow <= 0 {
+		cfg.JoinWindow = 2 * time.Second
 	}
 	if cfg.MemTiles <= 0 {
 		cfg.MemTiles = 4
@@ -138,7 +165,10 @@ func unavailable(err error) error { return fmt.Errorf("%w: %w", ErrUnavailable, 
 // HeightHAE returns the ground height in metres above the WGS84 ellipsoid.
 // Sea, meaning any tile GLO-30 does not list outside a known gap, is 0 m
 // above mean sea level. Waiting for a tile honours ctx; a download the
-// caller gives up on carries on and is cached for the next call.
+// caller gives up on carries on and is cached for the next call. A caller
+// joins a download another caller started only within Config.JoinWindow of
+// its start; after that it gets ErrUnavailable at once until the download
+// lands.
 func (s *Service) HeightHAE(ctx context.Context, lat, lon float64) (float64, error) {
 	if math.IsNaN(lat) || math.IsNaN(lon) || math.IsInf(lon, 0) || lat < -90 || lat > 90 {
 		return 0, fmt.Errorf("terrain: no height for position (%g, %g)", lat, lon)
@@ -156,7 +186,7 @@ func (s *Service) HeightHAE(ctx context.Context, lat, lon float64) (float64, err
 		return MSLToHAE(lat, lon, s.interpolate(ctx, id, r, lat, lon)), nil
 	}
 
-	idx, err := s.tileIndex(ctx)
+	idx, err := s.tileIndex(ctx, false)
 	if err != nil {
 		return 0, unavailable(err)
 	}
@@ -168,7 +198,7 @@ func (s *Service) HeightHAE(ctx context.Context, lat, lon float64) (float64, err
 	}
 
 	s.misses.Add(1)
-	r, err = s.tile(ctx, id)
+	r, err = s.tile(ctx, id, false)
 	if err != nil {
 		return 0, unavailable(err)
 	}
@@ -191,7 +221,7 @@ func (s *Service) interpolate(ctx context.Context, id tileID, r *raster, lat, lo
 			return v
 		}
 		var v *raster
-		if idx, err := s.tileIndex(ctx); err == nil {
+		if idx, err := s.tileIndex(ctx, false); err == nil {
 			if _, listed := idx[nid]; !listed {
 				if !inKnownGap(nid) {
 					v = seaRaster(nid)
@@ -216,8 +246,10 @@ func (s *Service) memGetLocked(id tileID) *raster {
 	return r
 }
 
-// tileIndex returns the set of listed tiles, loading it once.
-func (s *Service) tileIndex(ctx context.Context) (map[tileID]struct{}, error) {
+// tileIndex returns the set of listed tiles, loading it once. Unless patient,
+// a caller does not wait on a load that has been running for the join
+// window or longer (see Config.JoinWindow).
+func (s *Service) tileIndex(ctx context.Context, patient bool) (map[tileID]struct{}, error) {
 	s.mu.Lock()
 	if s.index != nil {
 		idx := s.index
@@ -229,8 +261,13 @@ func (s *Service) tileIndex(ctx context.Context) (map[tileID]struct{}, error) {
 		return nil, errors.New("terrain: tile list fetch failed recently")
 	}
 	f := s.indexLoading
+	if f != nil && !patient && f.closed(s.now(), s.cfg.JoinWindow) {
+		age := s.now().Sub(f.started)
+		s.mu.Unlock()
+		return nil, errStillLoading("the tile list", age)
+	}
 	if f == nil {
-		f = newFlight[map[tileID]struct{}]()
+		f = newFlight[map[tileID]struct{}](s.now())
 		s.indexLoading = f
 		go func() {
 			idx, err := s.loadIndex()
@@ -252,7 +289,9 @@ func (s *Service) tileIndex(ctx context.Context) (map[tileID]struct{}, error) {
 }
 
 // tile returns a decoded listed tile, sharing one load among all callers.
-func (s *Service) tile(ctx context.Context, id tileID) (*raster, error) {
+// Unless patient, a caller does not wait on a load that has been running
+// for the join window or longer (see Config.JoinWindow).
+func (s *Service) tile(ctx context.Context, id tileID, patient bool) (*raster, error) {
 	s.mu.Lock()
 	if r := s.memGetLocked(id); r != nil { // landed since the caller looked
 		s.mu.Unlock()
@@ -265,21 +304,27 @@ func (s *Service) tile(ctx context.Context, id tileID) (*raster, error) {
 		}
 		delete(s.failed, id)
 	}
-	f := s.startLoadLocked(id)
+	f, started := s.startLoadLocked(id)
+	if !started && !patient && f.closed(s.now(), s.cfg.JoinWindow) {
+		age := s.now().Sub(f.started)
+		s.mu.Unlock()
+		return nil, errStillLoading(id.key(), age)
+	}
 	s.mu.Unlock()
 	return f.wait(ctx)
 }
 
 // startLoadLocked returns the load in flight for a tile, starting one if
-// there is none. The caller holds s.mu.
-func (s *Service) startLoadLocked(id tileID) *flight[*raster] {
-	f := s.loading[id]
+// there is none, and whether it started it. The caller holds s.mu.
+func (s *Service) startLoadLocked(id tileID) (f *flight[*raster], started bool) {
+	f = s.loading[id]
 	if f == nil {
-		f = newFlight[*raster]()
+		f = newFlight[*raster](s.now())
 		s.loading[id] = f
 		go s.runLoad(id, f)
+		started = true
 	}
-	return f
+	return f, started
 }
 
 // neighbourTile returns a listed neighbouring tile without waiting on the
@@ -299,9 +344,10 @@ func (s *Service) neighbourTile(ctx context.Context, id tileID) *raster {
 	}
 	_, onDisk := s.disk[id]
 	onDisk = onDisk && s.diskOK
-	f := s.startLoadLocked(id)
+	f, started := s.startLoadLocked(id)
+	closed := !started && f.closed(s.now(), s.cfg.JoinWindow)
 	s.mu.Unlock()
-	if !onDisk {
+	if !onDisk || closed {
 		return nil
 	}
 	r, err := f.wait(ctx)
@@ -329,13 +375,14 @@ func (s *Service) runLoad(id tileID, f *flight[*raster]) {
 
 // Preload makes sure every listed tile in a box is cached, downloading what
 // is missing, and returns how many listed tiles the box holds that are now
-// ready. Sea and known gaps are not counted. It waits within ctx; downloads
-// still running when ctx ends carry on.
+// ready. Sea and known gaps are not counted. It waits within ctx, on
+// downloads of any age (the join window does not apply); downloads still
+// running when ctx ends carry on.
 func (s *Service) Preload(ctx context.Context, south, west, north, east float64) (int, error) {
 	if s.static != nil {
 		return 0, nil
 	}
-	idx, err := s.tileIndex(ctx)
+	idx, err := s.tileIndex(ctx, true)
 	if err != nil {
 		return 0, unavailable(err)
 	}
@@ -354,7 +401,7 @@ func (s *Service) Preload(ctx context.Context, south, west, north, east float64)
 			ready++
 			continue
 		}
-		if _, err := s.tile(ctx, id); err != nil {
+		if _, err := s.tile(ctx, id, true); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", id.key(), err))
 			if ctx.Err() != nil {
 				break

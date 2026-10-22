@@ -562,3 +562,164 @@ func TestHeightRejectsBadPositions(t *testing.T) {
 		}
 	}
 }
+
+// sequentialWaits makes n HeightHAE calls one after another, as one sender's
+// stream does, each with its own 2 s budget, and returns how long each took
+// and what it returned.
+func sequentialWaits(s *Service, n int, lat, lon float64) ([]time.Duration, []error) {
+	took := make([]time.Duration, n)
+	errs := make([]error, n)
+	for i := range n {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		start := time.Now()
+		_, errs[i] = s.HeightHAE(ctx, lat, lon)
+		took[i] = time.Since(start)
+		cancel()
+	}
+	return took, errs
+}
+
+// waitForHeight polls until the height arrives or 10 s pass.
+func waitForHeight(t *testing.T, s *Service, lat, lon float64) float64 {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		h, err := s.HeightHAE(ctx, lat, lon)
+		cancel()
+		if err == nil {
+			return h
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no height after the fetch was released: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A fetch that hangs holds up one sender for one join window, not one wait
+// per detection: once the fetch is older than the window, callers give up
+// at once while it carries on, and its result serves the next call.
+func TestHungFetchHoldsCallersForOneJoinWindow(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		held string
+	}{
+		{"tile", testTile{south: 38, west: -78}.key()},
+		{"tile list", tileListName},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tt := testTile{south: 38, west: -78}
+			ts := newTileServer(t, tt)
+			s := newTestService(t, ts, nil) // JoinWindow left at its default
+			if s.cfg.JoinWindow != 2*time.Second {
+				t.Fatalf("default JoinWindow = %v, want 2s", s.cfg.JoinWindow)
+			}
+			if c.held != tileListName {
+				height(t, s, 0.5, -30.5) // loads the tile list
+			}
+			release := ts.hold(t, c.held)
+
+			start := time.Now()
+			took, errs := sequentialWaits(s, 10, 38.5, -77.5)
+			total := time.Since(start)
+			for i, err := range errs {
+				if !errors.Is(err, ErrUnavailable) {
+					t.Errorf("call %d: err = %v, want ErrUnavailable", i, err)
+				}
+			}
+			if took[0] < s.cfg.JoinWindow-100*time.Millisecond {
+				t.Errorf("first call gave up after %v; it should wait out its window (%v)", took[0], s.cfg.JoinWindow)
+			}
+			for i, d := range took[1:] {
+				if d > 50*time.Millisecond {
+					t.Errorf("call %d waited %v on a fetch older than the join window; want an immediate ErrUnavailable", i+1, d)
+				}
+			}
+			if limit := s.cfg.JoinWindow + time.Second; total > limit {
+				t.Errorf("10 calls took %v, want under %v (per call: %v)", total, limit, took)
+			}
+
+			// The fetch carried on; once it lands, the next call gets the value.
+			release()
+			near(t, "after the fetch lands", waitForHeight(t, s, 38.5, -77.5), planeMSL(38.5, -77.5)+GeoidHeight(38.5, -77.5), 1e-3)
+			if n := ts.tileRequests(tt.key()); n != 1 {
+				t.Errorf("tile fetched %d times, want 1", n)
+			}
+			if n := ts.count("/" + tileListName); n != 1 {
+				t.Errorf("tile list fetched %d times, want 1", n)
+			}
+		})
+	}
+}
+
+// A caller that arrives while the fetch is still young joins it and gets the
+// value when it lands, even after the one that started it gave up.
+func TestCallerJoiningWithinWindowGetsValue(t *testing.T) {
+	tt := testTile{south: 38, west: -78}
+	ts := newTileServer(t, tt)
+	s := newTestService(t, ts, func(c *Config) { c.JoinWindow = time.Second })
+	height(t, s, 0.5, -30.5)
+	release := ts.hold(t, tt.key())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := s.HeightHAE(ctx, 38.5, -77.5); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("starter: err = %v, want ErrUnavailable", err)
+	}
+	time.Sleep(300 * time.Millisecond) // the fetch is 350 ms old: inside the window
+	got := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		h, err := s.HeightHAE(ctx, 38.5, -77.5)
+		if err == nil && math.Abs(h-(planeMSL(38.5, -77.5)+GeoidHeight(38.5, -77.5))) > 1e-3 {
+			err = errors.New("wrong height")
+		}
+		got <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+	release()
+	if err := <-got; err != nil {
+		t.Errorf("joiner: %v", err)
+	}
+	if n := ts.tileRequests(tt.key()); n != 1 {
+		t.Errorf("tile fetched %d times, want 1", n)
+	}
+}
+
+// The caller that starts a fetch waits on its own context, not the window:
+// sensor-sim's start-up lookup gives a cold 48 MB tile minutes.
+func TestStarterWaitsOnItsOwnContext(t *testing.T) {
+	tt := testTile{south: 38, west: -78}
+	ts := newTileServer(t, tt)
+	s := newTestService(t, ts, func(c *Config) { c.JoinWindow = 100 * time.Millisecond })
+	height(t, s, 0.5, -30.5)
+	release := ts.hold(t, tt.key())
+	time.AfterFunc(400*time.Millisecond, release)
+	near(t, "starter", height(t, s, 38.5, -77.5), planeMSL(38.5, -77.5)+GeoidHeight(38.5, -77.5), 1e-3)
+}
+
+// Preload waits for the download it needs however long it has been running.
+func TestPreloadWaitsOnOldFetch(t *testing.T) {
+	tt := testTile{south: 38, west: -78}
+	ts := newTileServer(t, tt)
+	s := newTestService(t, ts, func(c *Config) { c.JoinWindow = 100 * time.Millisecond })
+	height(t, s, 0.5, -30.5)
+	release := ts.hold(t, tt.key())
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := s.HeightHAE(ctx, 38.5, -77.5); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	time.Sleep(200 * time.Millisecond) // the fetch is now older than the window
+	time.AfterFunc(200*time.Millisecond, release)
+	pctx, pcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pcancel()
+	if n, err := s.Preload(pctx, 38, -78, 39, -77); n != 1 || err != nil {
+		t.Errorf("Preload = %d, %v; want 1, nil", n, err)
+	}
+	if n := ts.tileRequests(tt.key()); n != 1 {
+		t.Errorf("tile fetched %d times, want 1", n)
+	}
+}

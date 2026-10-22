@@ -160,7 +160,10 @@ func main() {
 			CacheDir:      cfg.TerrainCacheDir,
 			MaxCacheBytes: int64(cfg.TerrainCacheMaxMB) << 20,
 			FetchTimeout:  cfg.TerrainFetchTimeout,
-			Logger:        logger.Named("terrain"),
+			// A detection waits TerrainWait; a fetch older than that turns
+			// callers away, so a hung fetch stalls a stream about once.
+			JoinWindow: cfg.TerrainWait,
+			Logger:     logger.Named("terrain"),
 		})
 		if err != nil {
 			logger.Fatal("failed to start the terrain service", zap.Error(err))

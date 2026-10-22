@@ -249,11 +249,12 @@ type tileServer struct {
 	*httptest.Server
 
 	mu       sync.Mutex
-	tiles    map[string][]byte // key → GeoTIFF bytes
-	listed   []string          // keys in tileList.txt; tiles' keys by default
-	status   map[string]int    // key (or tileListName) → forced HTTP status
-	delay    time.Duration     // applied to tile requests
-	requests map[string]int    // URL path → count
+	tiles    map[string][]byte        // key → GeoTIFF bytes
+	listed   []string                 // keys in tileList.txt; tiles' keys by default
+	status   map[string]int           // key (or tileListName) → forced HTTP status
+	delay    time.Duration            // applied to tile requests
+	holds    map[string]chan struct{} // key (or tileListName) → closed to let held requests through
+	requests map[string]int           // URL path → count
 }
 
 // newTileServer serves the given tiles, all of them listed.
@@ -312,6 +313,47 @@ func (ts *tileServer) setDelay(d time.Duration) {
 	ts.delay = d
 }
 
+// hold makes requests for a tile key, or tileListName, hang until the
+// returned release is called (or the client gives up). Release is idempotent
+// and also runs at cleanup, so a hung request never outlives the test.
+func (ts *tileServer) hold(t testing.TB, key string) (release func()) {
+	t.Helper()
+	ch := make(chan struct{})
+	ts.mu.Lock()
+	if ts.holds == nil {
+		ts.holds = map[string]chan struct{}{}
+	}
+	ts.holds[key] = ch
+	ts.mu.Unlock()
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			ts.mu.Lock()
+			delete(ts.holds, key)
+			ts.mu.Unlock()
+			close(ch)
+		})
+	}
+	t.Cleanup(release)
+	return release
+}
+
+// wait blocks while key is held. The caller does not hold ts.mu.
+func (ts *tileServer) wait(r *http.Request, key string) bool {
+	ts.mu.Lock()
+	ch := ts.holds[key]
+	ts.mu.Unlock()
+	if ch == nil {
+		return true
+	}
+	select {
+	case <-ch:
+		return true
+	case <-r.Context().Done():
+		return false
+	}
+}
+
 func (ts *tileServer) tileBytes(key string) []byte {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -327,6 +369,11 @@ func (ts *tileServer) serve(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, http.StatusText(code), code)
 			return
 		}
+		ts.mu.Unlock()
+		if !ts.wait(r, tileListName) {
+			return
+		}
+		ts.mu.Lock()
 		body := strings.Join(ts.listed, "\r\n") + "\r\n" // the real list uses CRLF
 		ts.mu.Unlock()
 		_, _ = w.Write([]byte(body))
@@ -344,6 +391,9 @@ func (ts *tileServer) serve(w http.ResponseWriter, r *http.Request) {
 	delay := ts.delay
 	ts.mu.Unlock()
 
+	if !ts.wait(r, key) {
+		return
+	}
 	if delay > 0 {
 		select {
 		case <-time.After(delay):
