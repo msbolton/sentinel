@@ -3,11 +3,17 @@
 # A591 and round Derwentwater, the walker on Cat Bells and both drones,
 # except where the fells hide them.
 #
-#   sensor-sim --kind radar --addr localhost:6200 --insecure --config examples/radar.yaml
+#   sensor-sim --kind radar --addr localhost:6200 --config examples/radar.yaml
 #
-# The address, token and transport come from the command line or the
-# environment (SENSOR_SIM_ADDR, SENSOR_SIM_TOKEN or SENTINEL_INGEST_TOKEN);
-# keep the token out of this file.
+# The address and token come from the command line or the environment
+# (SENSOR_SIM_ADDR, SENSOR_SIM_TOKEN or SENTINEL_INGEST_TOKEN); keep the
+# token out of this file.
+connection:
+  # Plaintext h2c, which is what the dev listener speaks, so the Compose
+  # service starts with no transport flag. The token then travels in clear.
+  # For TLS pass --tls (and --ca file) on the command line; it replaces this.
+  insecure: true
+
 sensor:
   kind: radar
   # The emplacement name: unique across Sentinel, so the camera has its own.

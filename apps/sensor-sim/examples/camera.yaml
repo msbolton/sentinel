@@ -5,11 +5,17 @@
 # where the line of sight meets the ground, and draws a bearing line for a
 # target in the air.
 #
-#   sensor-sim --kind eoir --addr localhost:6200 --insecure --config examples/camera.yaml
+#   sensor-sim --kind eoir --addr localhost:6200 --config examples/camera.yaml
 #
-# The address, token and transport come from the command line or the
-# environment (SENSOR_SIM_ADDR, SENSOR_SIM_TOKEN or SENTINEL_INGEST_TOKEN);
-# keep the token out of this file.
+# The address and token come from the command line or the environment
+# (SENSOR_SIM_ADDR, SENSOR_SIM_TOKEN or SENTINEL_INGEST_TOKEN); keep the
+# token out of this file.
+connection:
+  # Plaintext h2c, which is what the dev listener speaks, so the Compose
+  # service starts with no transport flag. The token then travels in clear.
+  # For TLS pass --tls (and --ca file) on the command line; it replaces this.
+  insecure: true
+
 sensor:
   kind: eoir
   name: Latrigg camera

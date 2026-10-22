@@ -75,16 +75,18 @@ You need the stack running with the listener replica (the `inbound` profile), wh
 
 ## Run it
 
-With Compose, the `sim` profile has a service for each sensor. Each runs the CLI in a container on the host's network with the bundled example, and keeps its terrain tiles in the `sentinel-terrain-cache` volume. Pass the address and the transport on the `run` line, in two terminals:
+With Compose, the `sim` profile has a service for each sensor. Each runs the CLI in a container on the host's network with the bundled example, and keeps its terrain tiles in the `sentinel-terrain-cache` volume. Pass the address on the `run` line, in two terminals:
 
 ```
 docker compose -p sentinel --profile inbound --profile sim run --rm radar-sim \
-  --addr localhost:6201 --insecure
+  --addr localhost:6201
 docker compose -p sentinel --profile inbound --profile sim run --rm eoir-sim \
-  --addr localhost:6201 --insecure
+  --addr localhost:6201
 ```
 
-Each service is `sensor-sim --kind radar --config examples/radar.yaml` (or `--kind eoir --config examples/camera.yaml`) with `--terrain-cache /var/cache/sentinel/terrain`. Flags on the `run` line are added after these, and a flag given twice takes its last value. `--insecure` is plaintext HTTP/2, which is what the listener speaks unless you enabled `tls` on the connection. For TLS, use `--tls --ca /ca.pem` and mount the CA file, for example with `-v "$PWD/secrets/ca.pem:/ca.pem:ro"`. Stop either with Ctrl-C.
+Each service is `sensor-sim --kind radar --config examples/radar.yaml` (or `--kind eoir --config examples/camera.yaml`) with `--terrain-cache /var/cache/sentinel/terrain`. Flags on the `run` line are added after these, and a flag given twice takes its last value.
+
+The examples choose plaintext HTTP/2 (`connection.insecure: true`), which is what the listener speaks unless you enabled `tls` on the connection, so no transport flag is needed. With `SENSOR_SIM_ADDR` in `secrets/sensor-sim.env` the services also start in the background, with no `run` line at all: `docker compose -p sentinel --profile inbound --profile sim up -d radar-sim eoir-sim`. For TLS, add `--tls --ca /ca.pem` to the `run` line, which replaces the examples' choice, and mount the CA file, for example with `-v "$PWD/secrets/ca.pem:/ca.pem:ro"`. Stop a `run` with Ctrl-C.
 
 The first run downloads the terrain tile before streaming and logs `looking up the ground height at the site`. Later runs, and the other sensor, find it in the cache.
 
@@ -93,6 +95,8 @@ The connection's send guide prints the same command for a binary on your path:
 ```
 sensor-sim --kind eoir --addr localhost:6201 --token "$SENTINEL_INGEST_TOKEN" --insecure --config examples/camera.yaml
 ```
+
+Its `--insecure` repeats the examples' choice; a guide for a TLS connection prints `--tls`, which replaces it.
 
 To run from source, from the repository root:
 
@@ -145,7 +149,7 @@ Flags override the configuration file, which overrides the defaults. Most YAML k
 - **A radar with terrain needs `--alt` or `--height-above-ground`.** Without either, the site would be at 0 m, below targets that stand on the real ground, and every elevation would be wrong. A radar without terrain may leave both unset: its targets then move over flat ground at 0 m, and so does its site.
 - **The elevation window must not be empty.** It is checked after the defaults are filled in, so `--elev-min 80` alone on a camera is refused (its default maximum is 75), as is `--elev-max -20` alone.
 
-**Precedence.** A flag set on the command line beats the environment, which beats the YAML, which beats the default. An explicit `--rate 1` beats a YAML `rate: 5`. The token is `--token`, then `SENSOR_SIM_TOKEN`, then `SENTINEL_INGEST_TOKEN`, then the YAML; the address is `--addr`, then `SENSOR_SIM_ADDR`, then the YAML. Keep the token out of YAML files: they are easy to commit by mistake.
+**Precedence.** A flag set on the command line beats the environment, which beats the YAML, which beats the default. An explicit `--rate 1` beats a YAML `rate: 5`. The token is `--token`, then `SENSOR_SIM_TOKEN`, then `SENTINEL_INGEST_TOKEN`, then the YAML; the address is `--addr`, then `SENSOR_SIM_ADDR`, then the YAML. A transport flag, `--insecure` or `--tls`, replaces the YAML's transport, so `--tls --ca ca.pem` works with the bundled examples although they set `insecure: true`; `--insecure` also drops the YAML's `ca`, `cert` and `key`. Keep the token out of YAML files: they are easy to commit by mistake.
 
 **YAML.** Unknown keys are an error. The top-level keys are:
 

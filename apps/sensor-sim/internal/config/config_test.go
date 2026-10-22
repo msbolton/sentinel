@@ -454,3 +454,29 @@ targets:
 		}
 	})
 }
+
+// The bundled examples are for the plaintext dev listener, so they choose
+// --insecure themselves (Compose's `up` passes no transport flag); a
+// transport on the command line still replaces their choice.
+func TestExamplesDefaultToInsecure(t *testing.T) {
+	for _, tc := range []struct{ kind, file string }{{"radar", "radar.yaml"}, {"eoir", "camera.yaml"}} {
+		t.Run(tc.file, func(t *testing.T) {
+			base := []string{"--kind", tc.kind, "--addr", "localhost:6200", "--token", "si_exampletoken",
+				"--config", filepath.Join("..", "..", "examples", tc.file)}
+			c, err := Load(base, nil)
+			if err != nil {
+				t.Fatalf("with no transport flag: %v", err)
+			}
+			if !c.Connection.Insecure || c.Connection.TLS {
+				t.Errorf("connection %v, want insecure from the example", c.Connection)
+			}
+			c, err = Load(append(base, "--tls", "--ca", "x"), nil)
+			if err != nil {
+				t.Fatalf("--tls --ca x: %v", err)
+			}
+			if c.Connection.Insecure || !c.Connection.TLS || c.Connection.CA != "x" {
+				t.Errorf("--tls --ca x: connection %v, want TLS with CA x and not insecure", c.Connection)
+			}
+		})
+	}
+}

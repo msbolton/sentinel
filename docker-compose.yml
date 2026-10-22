@@ -901,14 +901,16 @@ services:
   # and drones around Keswick) from Latrigg and stream their detections to a
   # `grpc` connection with sender-managed emplacements. Not started by `up`;
   # run either or both with
-  #   docker compose -p sentinel --profile inbound --profile sim run --rm radar-sim --addr localhost:<port> --insecure
-  #   docker compose -p sentinel --profile inbound --profile sim run --rm eoir-sim --addr localhost:<port> --insecure
+  #   docker compose -p sentinel --profile inbound --profile sim run --rm radar-sim --addr localhost:<port>
+  #   docker compose -p sentinel --profile inbound --profile sim run --rm eoir-sim --addr localhost:<port>
   # (see docs/sensor-sim.md). Host networking for the reason given at
   # ew-sensor. Optional secrets/sensor-sim.env (gitignored) holds
   # SENSOR_SIM_TOKEN=si_... and, if you like, SENSOR_SIM_ADDR=localhost:<port>.
   # Both keep their Copernicus terrain tiles in the terrain-cache volume, so a
   # tile is downloaded once. Flags after the service name are added to the
-  # command; the transport (--insecure or --tls) is left to the run line.
+  # command. The examples are plaintext (connection.insecure), as the dev
+  # listener is, so with SENSOR_SIM_ADDR set `up -d radar-sim eoir-sim` works
+  # too; for TLS add `--tls --ca <file>` to the run line, which replaces it.
   radar-sim:
     profiles: ["sim"]
     image: sentinel/sensor-sim:dev
