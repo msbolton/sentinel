@@ -400,6 +400,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       const own = this.demo.ownPosition();
       untracked(() => this.ngZone.runOutsideAngular(() => { if (own) this.updateUserLocationMarker(own.lon, own.lat); }));
     });
+    // ...and asks where they are only once the welcome card is on screen, so the
+    // browser's permission prompt follows the explanation (see initUserLocation).
+    effect(() => {
+      if (this.demo.welcomeShown() && this.awaitingWelcome) {
+        this.awaitingWelcome = false;
+        untracked(() => this.startGuestLocation());
+      }
+    });
     effect(() => {
       this.demo.focusBounds();
       untracked(() => this.ngZone.runOutsideAngular(() => this.flyToDemoFocus()));
@@ -2294,10 +2302,17 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     });
   }
 
+  /** A guest's location waits for the welcome card; set by initUserLocation, cleared when it starts. */
+  private awaitingWelcome = false;
+
   private initUserLocation(): void {
     if (!this.viewer || !this.Cesium) return;
     if (this.auth.isGuest()) {
-      this.startGuestLocation();
+      if (this.demo.welcomeShown()) {
+        this.startGuestLocation();
+      } else {
+        this.awaitingWelcome = true;
+      }
       return;
     }
 

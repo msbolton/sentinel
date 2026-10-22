@@ -61,7 +61,14 @@ export class DemoService {
   readonly ownPosition = signal<DemoPosition | null>(null);
   /** True once the guest was ended (expired, refresh failed or the gateway closed the stream). */
   readonly sessionEnded = signal(false);
+  /** The guest closed the welcome card; kept in memory, so it stays closed for this session only. */
   readonly welcomeDismissed = signal(false);
+  /**
+   * True once the welcome card has been on screen (or was dismissed). The map
+   * waits for it before asking for the visitor's location, so the browser's
+   * permission prompt arrives after the explanation, not before it.
+   */
+  readonly welcomeShown = signal(false);
   /** A box the map should show, e.g. around the visitor; null for no request. */
   readonly focusBounds = signal<DemoBounds | null>(null);
   /** Why the last startSession gave 'error'; null otherwise. */
@@ -88,6 +95,12 @@ export class DemoService {
       });
       this.session.set({ guestId: res.guestId, expiresAt: res.expiresAt, visitorsFeedId: res.visitorsFeedId });
       this.sessionEnded.set(false);
+      // A new session starts from scratch: nothing of the last guest's welcome, place or view carries over.
+      this.welcomeDismissed.set(false);
+      this.welcomeShown.set(false);
+      this.ownPosition.set(null);
+      this.ownEmplacementId.set(null);
+      this.focusBounds.set(null);
       // The stream opened before this token existed (or was stopped when the
       // last guest ended); give it the new token without waiting out a backoff.
       this.ws.reconnectNow();

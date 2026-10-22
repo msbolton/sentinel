@@ -99,6 +99,36 @@ describe('DemoStartComponent', () => {
     expect(navigate).toHaveBeenCalledWith('/map', expect.anything());
   });
 
+  it('stops waiting for auth init after 8 s and carries on as not signed in', async () => {
+    jest.useFakeTimers();
+    try {
+      auth.ready = new Promise<void>(() => undefined); // Keycloak init hangs
+      fixture = TestBed.createComponent(DemoStartComponent);
+      fixture.detectChanges();
+
+      await jest.advanceTimersByTimeAsync(7_999);
+      expect(demo.startSession).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(1);
+      expect(demo.startSession).toHaveBeenCalledTimes(1);
+      expect(navigate).toHaveBeenCalledWith('/map', expect.anything());
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('leaves no timer behind when auth init answers in time', async () => {
+    jest.useFakeTimers();
+    try {
+      fixture = TestBed.createComponent(DemoStartComponent);
+      fixture.detectChanges();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('reuses a signed-in guest session and goes straight to /map', async () => {
     auth.isAuthenticated.mockReturnValue(true);
     auth.isGuest.mockReturnValue(true);

@@ -1,9 +1,12 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, NgZone, OnInit, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { AuthService } from '../../core/services/auth.service';
 import { DemoService } from '../../core/services/demo.service';
 
 const GENERIC_MESSAGE = 'Something went wrong starting the demo — try again in a moment.';
+/** How long /demo waits for Keycloak to answer before it carries on as "not signed in". */
+export const AUTH_READY_TIMEOUT_MS = 8_000;
+
 const FULL_MESSAGE = 'The demo is full right now — try again in a few minutes.';
 
 /**
@@ -59,6 +62,7 @@ export class DemoStartComponent implements OnInit {
   private readonly auth = inject(AuthService);
   private readonly demo = inject(DemoService);
   private readonly router = inject(Router);
+  private readonly ngZone = inject(NgZone);
 
   /** Why the visitor is still here; null while starting. */
   protected readonly message = signal<string | null>(null);
@@ -66,7 +70,17 @@ export class DemoStartComponent implements OnInit {
   async ngOnInit(): Promise<void> {
     // Keycloak may still be restoring a session; deciding before it answers
     // could start a guest for someone who is already signed in.
-    await this.auth.ready;
+    // A hung init must not leave the visitor on this page forever.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Outside the zone: a pending timer is not "unstable" work, whatever the app's change detection.
+    const timedOut = new Promise<void>((resolve) =>
+      this.ngZone.runOutsideAngular(() => (timer = setTimeout(resolve, AUTH_READY_TIMEOUT_MS))),
+    );
+    try {
+      await Promise.race([this.auth.ready, timedOut]);
+    } finally {
+      clearTimeout(timer);
+    }
     // A guest whose session ended still holds dead tokens, so it starts over.
     const keepSession = this.auth.isAuthenticated() && !(this.auth.isGuest() && this.demo.sessionEnded());
     if (keepSession) {

@@ -15,12 +15,15 @@ import { LayersPillComponent } from './shared/components/layers-pill.component';
 import { UserMenuComponent } from './shared/components/user-menu.component';
 import { HasRoleDirective } from './shared/directives/has-role.directive';
 import { MapComponent } from './features/map/map.component';
+import { DemoBadgeComponent } from './features/demo/demo-badge.component';
+import { WelcomeCardComponent } from './features/demo/welcome-card.component';
+import { SessionEndedComponent } from './features/demo/session-ended.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, ThemePickerComponent, LayersPillComponent, UserMenuComponent, HasRoleDirective, IconComponent],
+  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, ThemePickerComponent, LayersPillComponent, UserMenuComponent, HasRoleDirective, IconComponent, DemoBadgeComponent, WelcomeCardComponent, SessionEndedComponent],
   template: `
     @if (isFullScreenRoute()) {
       <!-- Login page renders full-screen, no app shell -->
@@ -32,6 +35,10 @@ import { MapComponent } from './features/map/map.component';
           <img class="sidebar-logo" src="assets/brand/sentinel-icon-64.png" alt="" aria-hidden="true" width="28" height="28" />
           <span class="sidebar-wordmark">SENTINEL</span>
         </div>
+        <!-- Only a demo guest sees this; it sits under the brand so it shows whether the rail is open or not. -->
+        @if (isGuest()) {
+          <app-demo-badge class="demo-badge"></app-demo-badge>
+        }
 
         <div class="sidebar-nav">
           @for (group of navGroups; track group.label) {
@@ -134,6 +141,10 @@ import { MapComponent } from './features/map/map.component';
         </span>
         <span class="status-item font-mono">{{ currentTime() }}</span>
       </footer>
+
+      <!-- The public demo's cards: each shows only for a guest (or an ended guest session). -->
+      <app-welcome-card></app-welcome-card>
+      <app-session-ended></app-session-ended>
     }
   `,
   styles: [`
@@ -142,6 +153,12 @@ import { MapComponent } from './features/map/map.component';
       width: 100%;
       height: 100%;
       overflow: hidden;
+    }
+
+    .demo-badge {
+      display: flex;
+      justify-content: center;
+      flex-shrink: 0;
     }
 
     .main-content {
@@ -208,6 +225,7 @@ export class AppComponent implements OnInit, OnDestroy {
   openFindingCount = inject(AnalyticsService).openCount;
   userProfile = signal<UserProfile | null>(null);
   isAdmin = computed(() => this.userProfile()?.roles?.includes('sentinel-admin') ?? false);
+  isGuest = computed(() => this.userProfile()?.roles?.includes('sentinel-guest') ?? false);
   currentTime = signal<string>('');
   private readonly destroyRef = inject(DestroyRef);
   private readonly themeService = inject(ThemeService);
@@ -224,7 +242,7 @@ export class AppComponent implements OnInit, OnDestroy {
     // Track route type for layout switching
     const classifyRoute = (url: string) => {
       const path = url.replace(/\?.*$/, '');
-      this.isFullScreenRoute.set(['/login', '/register'].includes(path));
+      this.isFullScreenRoute.set(['/login', '/register', '/demo'].includes(path));
       this.isPageRoute.set(path.startsWith('/admin') || path.startsWith('/settings') || path.startsWith('/connections') || path.startsWith('/feeds'));
     };
     classifyRoute(this.router.url);

@@ -113,6 +113,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     ownEmplacementId: ReturnType<typeof signal<string | null>>;
     ownPosition: ReturnType<typeof signal<DemoPosition | null>>;
     focusBounds: ReturnType<typeof signal<DemoBounds | null>>;
+    welcomeShown: ReturnType<typeof signal<boolean>>;
     reportPosition: jest.Mock;
   };
 
@@ -126,6 +127,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       ownEmplacementId: signal<string | null>(null),
       ownPosition: signal<DemoPosition | null>(null),
       focusBounds: signal<DemoBounds | null>(null),
+      welcomeShown: signal(true),
       reportPosition: jest.fn(() => Promise.resolve(null)),
     };
 
@@ -823,6 +825,28 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       (component as any).initUserLocation();
       await Promise.resolve();
       expect(camera.flyTo).not.toHaveBeenCalled();
+    });
+
+    it('waits for the welcome card to be on screen before asking for the location, then asks once', () => {
+      demo.welcomeShown.set(false);
+      geolocation({ lat: 51.5, lon: -0.12 });
+
+      (component as any).initUserLocation();
+      fixture.detectChanges();
+      expect(navigator.geolocation.getCurrentPosition).not.toHaveBeenCalled();
+      expect(demo.reportPosition).not.toHaveBeenCalled();
+
+      demo.welcomeShown.set(true);
+      fixture.detectChanges();
+      expect(demo.reportPosition).toHaveBeenCalledTimes(1);
+      expect(demo.reportPosition).toHaveBeenCalledWith({ lat: 51.5, lon: -0.12 });
+
+      // The signal flipping again (a new session) does not ask a second time.
+      demo.welcomeShown.set(false);
+      fixture.detectChanges();
+      demo.welcomeShown.set(true);
+      fixture.detectChanges();
+      expect(demo.reportPosition).toHaveBeenCalledTimes(1);
     });
 
     it('never saves its camera', () => {

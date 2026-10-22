@@ -188,8 +188,27 @@ describe('DemoService', () => {
     });
   });
 
+  it('a new session forgets the last one: welcome card, position, site and focus', async () => {
+    service.welcomeDismissed.set(true);
+    service.welcomeShown.set(true);
+    service.ownPosition.set({ lat: 1, lon: 2, source: 'browser' });
+    service.ownEmplacementId.set('old-site');
+    service.focusBounds.set({ west: 1, south: 2, east: 3, north: 4 });
+
+    const result = start();
+    http.expectOne('/api/v1/demo/session').flush(sessionBody);
+    await result;
+
+    expect(service.welcomeDismissed()).toBe(false);
+    expect(service.welcomeShown()).toBe(false);
+    expect(service.ownPosition()).toBeNull();
+    expect(service.ownEmplacementId()).toBeNull();
+    expect(service.focusBounds()).toBeNull();
+  });
+
   it('starts with the welcome card undismissed and no focus bounds', () => {
     expect(service.welcomeDismissed()).toBe(false);
+    expect(service.welcomeShown()).toBe(false);
     expect(service.focusBounds()).toBeNull();
     expect(service.ownEmplacementId()).toBeNull();
     expect(service.ownPosition()).toBeNull();
