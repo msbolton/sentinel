@@ -2,7 +2,7 @@
 
 `sensor-sim` is a command-line simulator of a ground surveillance radar or a daylight/thermal (EO/IR) camera. It sits at a fixed site, watches a scenario of moving vehicles, people and drones over real terrain, and sends what it detects to Sentinel over the gRPC ingest contract. The radar reports range, bearing and elevation. The camera reports only a direction, and Sentinel works out where that direction meets the ground. It is the quickest way to see Sentinel's radar and camera handling without real sensors. It is also a worked example for anyone writing a polar-measurement sender. This page covers what it does, how to set it up and run it, its flags and configuration files, how it behaves when the connection or the server misbehaves, and what you should see in Sentinel.
 
-It lives in `adapters/sensor-sim`. It is its own Go module, built without CGO, and its gRPC client is a copy of `ew-sensor`'s (see `docs/ew-sensor.md`). The ingest contract, the rejection reasons and the connection settings are in `docs/feeds.md` (gRPC connections). How a polar report is bound to an emplacement and placed from it is in `docs/emplacements.md` ("Reporting over gRPC").
+It lives in `simulators/sensor-sim`. It is its own Go module, built without CGO, and its gRPC client is a copy of `ew-sensor`'s (see `docs/ew-sensor.md`). The ingest contract, the rejection reasons and the connection settings are in `docs/feeds.md` (gRPC connections). How a polar report is bound to an emplacement and placed from it is in `docs/emplacements.md` ("Reporting over gRPC").
 
 ## What it does
 
@@ -102,11 +102,11 @@ To run from source, from the repository root:
 
 ```
 export SENSOR_SIM_TOKEN=si_...
-(cd adapters/sensor-sim && go run ./cmd/sensor-sim --kind radar --addr localhost:6201 --insecure \
+(cd simulators/sensor-sim && go run ./cmd/sensor-sim --kind radar --addr localhost:6201 --insecure \
   --config examples/radar.yaml --terrain-cache ~/.cache/sentinel/terrain)
 ```
 
-The examples set `terrain.cacheDir` to the container's `/var/cache/sentinel/terrain`. Outside the container, pass `--terrain-cache` with a folder you can write to. If the folder cannot be written, the simulator warns and keeps tiles in memory only, and downloads them again on every run. `nx build sensor-sim` puts a binary in `dist/adapters/sensor-sim/`. Add `--verbose` to log every report as JSON as it is sent, and each ack.
+The examples set `terrain.cacheDir` to the container's `/var/cache/sentinel/terrain`. Outside the container, pass `--terrain-cache` with a folder you can write to. If the folder cannot be written, the simulator warns and keeps tiles in memory only, and downloads them again on every run. `nx build sensor-sim` puts a binary in `dist/simulators/sensor-sim/`. Add `--verbose` to log every report as JSON as it is sent, and each ack.
 
 ## Flags and configuration
 

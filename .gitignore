@@ -46,6 +46,7 @@ sentinel-local-ca.crt
 apps/*/vendor/
 apps/*/server
 adapters/*/vendor/
+simulators/*/vendor/
 
 # Python
 __pycache__/

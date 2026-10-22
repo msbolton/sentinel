@@ -4,10 +4,12 @@ SHELL := /bin/bash
 
 # Go services
 GO_SERVICES := api-gateway ingest-service entity-service track-service search-service link-analysis-service alert-service analytics-service ew-sensor sensor-sim
-# Go programs that live in adapters/ (everything else in GO_SERVICES is in
-# apps/). SVC_DIR expands, inside a recipe loop over $$svc, to the folder.
-ADAPTERS := ew-sensor sensor-sim
-SVC_DIR = $$([[ " $(ADAPTERS) " == *" $$svc "* ]] && echo adapters || echo apps)
+# Go programs that live in adapters/ or simulators/ (everything else in
+# GO_SERVICES is in apps/). SVC_DIR expands, inside a recipe loop over $$svc,
+# to the folder.
+ADAPTERS := ew-sensor
+SIMULATORS := sensor-sim
+SVC_DIR = $$(if [[ " $(ADAPTERS) " == *" $$svc "* ]]; then echo adapters; elif [[ " $(SIMULATORS) " == *" $$svc "* ]]; then echo simulators; else echo apps; fi)
 
 # Container images (the names the Helm chart pulls as sentinel/<name>). The
 # ew-sensor and sensor-sim simulators are not deployed, so they are not

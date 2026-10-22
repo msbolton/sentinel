@@ -2,8 +2,8 @@ FROM golang:1.24-alpine AS builder
 WORKDIR /build
 COPY libs/common-go/ ./libs/common-go/
 COPY libs/proto-gen/src/go/ ./libs/proto-gen/src/go/
-COPY adapters/sensor-sim/ ./adapters/sensor-sim/
-WORKDIR /build/adapters/sensor-sim
+COPY simulators/sensor-sim/ ./simulators/sensor-sim/
+WORKDIR /build/simulators/sensor-sim
 # No CGO: the binary is static and runs on any Linux base. -trimpath and -s -w
 # keep the image small.
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /sensor-sim ./cmd/sensor-sim
@@ -21,6 +21,6 @@ RUN addgroup -S -g 10001 sentinel && adduser -S -D -H -u 10001 -G sentinel senti
 WORKDIR /app
 COPY --from=builder /sensor-sim /app/sensor-sim
 # Run from /app so `--config examples/radar.yaml` resolves.
-COPY adapters/sensor-sim/examples/ /app/examples/
+COPY simulators/sensor-sim/examples/ /app/examples/
 USER 10001:10001
 ENTRYPOINT ["/app/sensor-sim"]
