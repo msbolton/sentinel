@@ -18,11 +18,15 @@ const (
 
 // Client is one websocket connection with its viewport and subscriptions.
 type Client struct {
-	ID   string
-	hub  *Hub
-	conn *websocket.Conn
-	send chan []byte
-	log  *zap.Logger
+	ID string
+	// UserID and Roles identify the authenticated user, fixed at upgrade.
+	// UserID is empty only if the connection somehow bypassed auth.
+	UserID string
+	Roles  []string
+	hub    *Hub
+	conn   *websocket.Conn
+	send   chan []byte
+	log    *zap.Logger
 
 	mu          sync.RWMutex
 	viewport    Bounds

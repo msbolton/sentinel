@@ -96,6 +96,7 @@ func (b *Bridge) Handle(topic string, value []byte) {
 			b.logger.Debug("bad entity event", zap.Error(err))
 			return
 		}
+		b.hub.noteEvent()
 		b.handleEntityEvent(&ev)
 	case kafka.TopicAlertEvents:
 		var ev sentinelv1.AlertEvent

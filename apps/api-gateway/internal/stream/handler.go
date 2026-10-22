@@ -65,6 +65,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	client := newClient(newClientID(), h.hub, conn, h.logger)
 	if u, ok := auth.UserFrom(r.Context()); ok {
 		client.clearance = auth.ClassificationRank(u.ClassificationLevel)
+		client.UserID = u.UserID
+		client.Roles = u.Roles
 	}
 	h.hub.register(client)
 	defer h.hub.unregister(client)
