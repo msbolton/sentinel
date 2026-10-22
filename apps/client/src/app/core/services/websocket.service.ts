@@ -1,5 +1,5 @@
 import { Injectable, OnDestroy, inject } from '@angular/core';
-import { BehaviorSubject, Observable, Subject } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, Subscription } from 'rxjs';
 import { EntityEvent } from '../../shared/models/entity.model';
 import { Alert } from '../../shared/models/alert.model';
 import { DensityGrid } from '../../shared/models/density.model';
@@ -25,6 +25,8 @@ const WS_PATH = '/ws/entities';
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 10000;
 const RECONNECT_JITTER_MS = 250;
+/** Close code the gateway uses when it ends an expired demo guest. */
+const CLOSE_POLICY_VIOLATION = 1008;
 
 /**
  * Real-time entity stream over a native WebSocket.
@@ -60,11 +62,24 @@ export class WebSocketService implements OnDestroy {
   /** Per-cell object counts a feed sends while views are too large to show the objects. */
   readonly density$: Observable<DensityGrid> = this.densitySubject.asObservable();
 
+  private readonly guestSessionEndedSubject = new Subject<void>();
+  /** The gateway ended this demo guest (closed the socket with 1008); the service stops reconnecting. */
+  readonly guestSessionEnded$: Observable<void> = this.guestSessionEndedSubject.asObservable();
+
+  /** Watches for a lost session while a socket is wanted (connect to disconnect). */
+  private sessionLostSub: Subscription | null = null;
+
   connect(): void {
     if (this.socket || this.reconnectTimer) {
       return; // Already connected or reconnecting
     }
     this.intentionalClose = false;
+    this.sessionLostSub ??= this.auth.sessionLost$.subscribe(() => {
+      // A guest whose session can no longer be refreshed has nothing to reconnect with.
+      if (this.auth.isGuest()) {
+        this.disconnect();
+      }
+    });
     this.open();
   }
 
@@ -94,6 +109,8 @@ export class WebSocketService implements OnDestroy {
 
   disconnect(): void {
     this.intentionalClose = true;
+    this.sessionLostSub?.unsubscribe();
+    this.sessionLostSub = null;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -142,6 +159,12 @@ export class WebSocketService implements OnDestroy {
         return;
       }
       console.log('[WS] Disconnected:', event?.reason || event?.code || 'connection closed');
+      if (event?.code === CLOSE_POLICY_VIOLATION && this.auth.isGuest()) {
+        // The gateway ended this guest; reconnecting would only be refused again.
+        this.disconnect();
+        this.guestSessionEndedSubject.next();
+        return;
+      }
       this.scheduleReconnect();
     };
   }

@@ -1,6 +1,6 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import { HttpInterceptorFn } from '@angular/common/http';
-import { BehaviorSubject, Observable } from 'rxjs';
+import { BehaviorSubject, Observable, Subject } from 'rxjs';
 import { environment } from '../../../environments/environment';
 
 export interface UserProfile {
@@ -26,6 +26,15 @@ export class AuthService implements OnDestroy {
 
   readonly isAuthenticated$: Observable<boolean> = this.authenticatedSubject.asObservable();
   readonly userProfile$: Observable<UserProfile | null> = this.userProfileSubject.asObservable();
+
+  private readonly sessionLostSubject = new Subject<void>();
+
+  /**
+   * Emitted when a direct-token session (password grant or guest) can no longer
+   * be refreshed. It fires before the session state is cleared, so a listener
+   * can still see who the user was (for example via isGuest()).
+   */
+  readonly sessionLost$: Observable<void> = this.sessionLostSubject.asObservable();
 
   /** Set when sign-in is unavailable because Keycloak could not be initialised (production only). */
   readonly initError$ = new BehaviorSubject<string | null>(null);
@@ -123,23 +132,37 @@ export class AuthService implements OnDestroy {
       }
 
       const tokenResponse = await response.json();
-      this.directToken = tokenResponse.access_token;
-      this.directRefreshToken = tokenResponse.refresh_token;
-
-      const parsed = this.parseJwt(tokenResponse.access_token);
-      this.userProfileSubject.next({
-        username: parsed.preferred_username ?? username,
-        email: parsed.email,
-        roles: parsed.realm_access?.roles ?? [],
-        classificationLevel: parsed.classification_level ?? 'UNCLASSIFIED',
-      });
-
+      this.applyTokenResponse(tokenResponse.access_token, tokenResponse.refresh_token, username);
       this.authenticatedSubject.next(true);
       this.setupDirectTokenRefresh(tokenResponse.expires_in);
       return { success: true };
     } catch {
       return { success: false, error: 'Unable to reach authentication server' };
     }
+  }
+
+  /**
+   * Adopts tokens issued by the gateway (a demo guest session) as a direct
+   * session: same in-memory tokens, profile and refresh as loginWithCredentials.
+   */
+  adoptTokens(t: { accessToken: string; refreshToken: string; expiresIn: number }): void {
+    this.applyTokenResponse(t.accessToken, t.refreshToken, 'unknown');
+    this.authenticatedSubject.next(true);
+    this.setupDirectTokenRefresh(t.expiresIn);
+  }
+
+  /** Keeps the tokens in memory and derives the user profile from the access token. */
+  private applyTokenResponse(accessToken: string, refreshToken: string, fallbackUsername: string): void {
+    this.directToken = accessToken;
+    this.directRefreshToken = refreshToken;
+
+    const parsed = this.parseJwt(accessToken);
+    this.userProfileSubject.next({
+      username: parsed.preferred_username ?? fallbackUsername,
+      email: parsed.email,
+      roles: parsed.realm_access?.roles ?? [],
+      classificationLevel: parsed.classification_level ?? 'UNCLASSIFIED',
+    });
   }
 
   private parseJwt(token: string): any {
@@ -179,18 +202,11 @@ export class AuthService implements OnDestroy {
       }
 
       const tokenResponse = await response.json();
-      this.directToken = tokenResponse.access_token;
-      this.directRefreshToken = tokenResponse.refresh_token;
-
-      const parsed = this.parseJwt(tokenResponse.access_token);
-      this.userProfileSubject.next({
-        username: parsed.preferred_username ?? 'unknown',
-        email: parsed.email,
-        roles: parsed.realm_access?.roles ?? [],
-        classificationLevel: parsed.classification_level ?? 'UNCLASSIFIED',
-      });
+      this.applyTokenResponse(tokenResponse.access_token, tokenResponse.refresh_token, 'unknown');
     } catch {
       console.warn('[Auth] Direct token refresh failed, session expired');
+      this.sessionLostSubject.next();
+      this.clearTimers();
       this.directToken = null;
       this.directRefreshToken = null;
       this.authenticatedSubject.next(false);
@@ -228,6 +244,11 @@ export class AuthService implements OnDestroy {
   hasAnyRole(...roles: string[]): boolean {
     const userRoles = this.getUserRoles();
     return roles.some((role) => userRoles.includes(role));
+  }
+
+  /** True for a demo visitor: a read-only guest session. */
+  isGuest(): boolean {
+    return this.hasAnyRole('sentinel-guest');
   }
 
   getClassificationLevel(): string {

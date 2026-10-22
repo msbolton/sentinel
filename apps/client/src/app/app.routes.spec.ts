@@ -7,6 +7,13 @@ import { routes } from './app.routes';
 import { AuthService } from './core/services/auth.service';
 
 describe('routes', () => {
+  it('serves /demo without a guard, so a signed-out visitor can start a guest session', () => {
+    const demo = routes.find((r) => r.path === 'demo');
+    expect(demo).toBeDefined();
+    expect(demo?.canActivate).toBeUndefined();
+    expect(demo?.loadComponent).toBeDefined();
+  });
+
   it('sends /feeds to /connections, which keeps the operator role guard', async () => {
     TestBed.configureTestingModule({
       providers: [

@@ -187,4 +187,90 @@ describe('AuthService', () => {
       expect(result.error).toBe('Unable to reach authentication server');
     });
   });
+  describe('guest sessions', () => {
+    const tokenWith = (roles: string[], username = 'guest-1a2b3c4d') =>
+      [
+        btoa(JSON.stringify({ alg: 'RS256' })),
+        btoa(JSON.stringify({ preferred_username: username, realm_access: { roles } })),
+        'signature',
+      ].join('.');
+
+    let originalFetch: typeof fetch | undefined;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+      globalThis.fetch = jest.fn();
+    });
+
+    afterEach(() => {
+      service.ngOnDestroy();
+      jest.useRealTimers();
+      if (originalFetch) {
+        globalThis.fetch = originalFetch;
+      } else {
+        delete (globalThis as any).fetch;
+      }
+    });
+
+    it('adoptTokens sets the profile from the token and marks authenticated', () => {
+      service.adoptTokens({
+        accessToken: tokenWith(['sentinel-viewer', 'sentinel-guest']),
+        refreshToken: 'r1',
+        expiresIn: 300,
+      });
+
+      let profile: any = null;
+      service.userProfile$.subscribe((p) => (profile = p));
+      expect(service.isAuthenticated()).toBe(true);
+      expect(profile.username).toBe('guest-1a2b3c4d');
+      expect(profile.roles).toEqual(['sentinel-viewer', 'sentinel-guest']);
+      expect(service.getToken()).toBe(tokenWith(['sentinel-viewer', 'sentinel-guest']));
+    });
+
+    it('isGuest is true only with sentinel-guest', () => {
+      expect(service.isGuest()).toBe(false);
+      service.adoptTokens({ accessToken: tokenWith(['sentinel-viewer']), refreshToken: 'r', expiresIn: 300 });
+      expect(service.isGuest()).toBe(false);
+      service.adoptTokens({
+        accessToken: tokenWith(['sentinel-viewer', 'sentinel-guest']),
+        refreshToken: 'r',
+        expiresIn: 300,
+      });
+      expect(service.isGuest()).toBe(true);
+    });
+
+    it('a failed refresh emits sessionLost$ and signs out', async () => {
+      jest.useFakeTimers();
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      (globalThis.fetch as jest.Mock).mockResolvedValue({ ok: false, json: () => Promise.resolve({}) } as Response);
+      const lost = jest.fn();
+      service.sessionLost$.subscribe(lost);
+      service.adoptTokens({ accessToken: tokenWith(['sentinel-guest']), refreshToken: 'r', expiresIn: 300 });
+
+      await jest.advanceTimersByTimeAsync(300_000);
+
+      expect(lost).toHaveBeenCalledTimes(1);
+      expect(service.isAuthenticated()).toBe(false);
+      expect(service.getToken()).toBeNull();
+      warnSpy.mockRestore();
+    });
+
+    it('a successful refresh keeps the session and does not emit sessionLost$', async () => {
+      jest.useFakeTimers();
+      const next = tokenWith(['sentinel-guest']);
+      (globalThis.fetch as jest.Mock).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ access_token: next, refresh_token: 'r2', expires_in: 300 }),
+      } as Response);
+      const lost = jest.fn();
+      service.sessionLost$.subscribe(lost);
+      service.adoptTokens({ accessToken: tokenWith(['sentinel-guest']), refreshToken: 'r', expiresIn: 300 });
+
+      await jest.advanceTimersByTimeAsync(300_000);
+
+      expect(lost).not.toHaveBeenCalled();
+      expect(service.isGuest()).toBe(true);
+      expect(service.getToken()).toBe(next);
+    });
+  });
 });

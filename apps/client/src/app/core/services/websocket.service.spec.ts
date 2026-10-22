@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { Subject } from 'rxjs';
 import { WebSocketService, ConnectionStatus } from './websocket.service';
 import { AuthService } from './auth.service';
 import { EntityEvent } from '../../shared/models/entity.model';
@@ -35,6 +36,11 @@ class MockWebSocket {
     this.onopen?.(new Event('open'));
   }
 
+  simulateCloseWithCode(code: number): void {
+    this.readyState = MockWebSocket.CLOSED;
+    this.onclose?.({ code, reason: 'policy violation' } as CloseEvent);
+  }
+
   simulateServerClose(): void {
     this.readyState = MockWebSocket.CLOSED;
     this.onclose?.({ code: 1006, reason: '' } as CloseEvent);
@@ -53,13 +59,22 @@ describe('WebSocketService', () => {
   let service: WebSocketService;
   const originalWebSocket = (globalThis as any).WebSocket;
   let token: string | null;
+  let guest: boolean;
+  let sessionLost: Subject<void>;
 
   beforeEach(() => {
     MockWebSocket.instances = [];
     token = 'test-token';
+    guest = false;
+    sessionLost = new Subject<void>();
     (globalThis as any).WebSocket = MockWebSocket;
     TestBed.configureTestingModule({
-      providers: [{ provide: AuthService, useValue: { getToken: () => token } }],
+      providers: [
+        {
+          provide: AuthService,
+          useValue: { getToken: () => token, isGuest: () => guest, sessionLost$: sessionLost.asObservable() },
+        },
+      ],
     });
     service = TestBed.inject(WebSocketService);
   });
@@ -228,6 +243,57 @@ describe('WebSocketService', () => {
     second.simulateOpen();
     expect(statuses[statuses.length - 1]).toBe('connected');
     expect(second.frames()[0]).toEqual({ type: 'viewport:update', data: { north: 5, south: 0, east: 5, west: 0 } });
+  });
+
+  describe('as a demo guest', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+      guest = true;
+    });
+
+    it('does not reconnect after the gateway closes the socket with 1008, and reports the session ended', () => {
+      const statuses: ConnectionStatus[] = [];
+      service.connectionStatus$.subscribe((s) => statuses.push(s));
+      const ended = jest.fn();
+      service.guestSessionEnded$.subscribe(ended);
+      service.connect();
+      latestSocket().simulateOpen();
+
+      latestSocket().simulateCloseWithCode(1008);
+      jest.advanceTimersByTime(60_000);
+
+      expect(MockWebSocket.instances.length).toBe(1);
+      expect(statuses[statuses.length - 1]).toBe('disconnected');
+      expect(ended).toHaveBeenCalledTimes(1);
+    });
+
+    it('still reconnects after an ordinary drop', () => {
+      service.connect();
+      latestSocket().simulateOpen();
+      latestSocket().simulateServerClose();
+      jest.advanceTimersByTime(2000);
+      expect(MockWebSocket.instances.length).toBe(2);
+    });
+
+    it('stops reconnecting when the session is lost', () => {
+      service.connect();
+      latestSocket().simulateOpen();
+      latestSocket().simulateServerClose(); // a reconnect is now pending
+
+      sessionLost.next();
+      jest.advanceTimersByTime(60_000);
+
+      expect(MockWebSocket.instances.length).toBe(1);
+    });
+  });
+
+  it('keeps reconnecting after a 1008 close for a signed-in user who is not a guest', () => {
+    jest.useFakeTimers();
+    service.connect();
+    latestSocket().simulateOpen();
+    latestSocket().simulateCloseWithCode(1008);
+    jest.advanceTimersByTime(2000);
+    expect(MockWebSocket.instances.length).toBe(2);
   });
 
   it('does not reconnect after an intentional disconnect', () => {
