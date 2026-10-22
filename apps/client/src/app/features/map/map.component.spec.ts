@@ -17,6 +17,8 @@ import { GeofenceService } from '../../core/services/geofence.service';
 import { FlightPathService } from '../../core/services/flight-path.service';
 import { EmplacementService } from '../../core/services/emplacement.service';
 import { FeedService } from '../../core/services/feed.service';
+import { AuthService } from '../../core/services/auth.service';
+import { DemoBounds, DemoPosition, DemoService } from '../../core/services/demo.service';
 import {
   Affiliation,
   Classification,
@@ -30,6 +32,7 @@ import { ELLIPSE_95 } from './uncertainty';
 import { sidcFor, symbolDataUrl } from './milstd2525';
 import { ENTITY_TYPE_BILLBOARD_SVGS, svgToDataUrl } from './cesium-config';
 import { BearingLayer } from './bearing-layer';
+import { locationDotDataUrl } from './location-dot';
 
 function covFromEllipse(semiMajorM: number, semiMinorM: number, orientationDeg: number) {
   const s1 = semiMajorM / ELLIPSE_95;
@@ -105,12 +108,28 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
   let fakeCesium: ReturnType<typeof makeFakeCesium>;
   let addedEntities: any[];
   let terrainOn: ReturnType<typeof signal<boolean>>;
+  let guest: boolean;
+  let demo: {
+    ownEmplacementId: ReturnType<typeof signal<string | null>>;
+    ownPosition: ReturnType<typeof signal<DemoPosition | null>>;
+    focusBounds: ReturnType<typeof signal<DemoBounds | null>>;
+    welcomeShown: ReturnType<typeof signal<boolean>>;
+    reportPosition: jest.Mock;
+  };
 
   beforeEach(() => {
     feedsSignal = signal<Feed[]>([]);
     fakeCesium = makeFakeCesium();
     addedEntities = [];
     terrainOn = signal(false);
+    guest = false;
+    demo = {
+      ownEmplacementId: signal<string | null>(null),
+      ownPosition: signal<DemoPosition | null>(null),
+      focusBounds: signal<DemoBounds | null>(null),
+      welcomeShown: signal(true),
+      reportPosition: jest.fn(() => Promise.resolve(null)),
+    };
 
     TestBed.configureTestingModule({
       imports: [MapComponent],
@@ -194,6 +213,8 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
             load: jest.fn(() => of([])),
           },
         },
+        { provide: AuthService, useValue: { isGuest: () => guest } },
+        { provide: DemoService, useValue: demo },
       ],
     });
 
@@ -741,6 +762,226 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       expect(line).toBeDefined();
       (component as any).removeCesiumEntity('sig-1');
       expect((component as any).viewer.entities.remove).toHaveBeenCalledWith(line);
+    });
+  });
+
+  describe('as a demo guest', () => {
+    let camera: { setView: jest.Mock; flyTo: jest.Mock; positionCartographic: any; heading: number; pitch: number };
+    const savedCamera = JSON.stringify({ lon: 1, lat: 2, alt: 3, heading: 0, pitch: 0 });
+
+    function geolocation(result: { lat: number; lon: number } | 'denied'): void {
+      Object.defineProperty(navigator, 'geolocation', {
+        configurable: true,
+        value: {
+          getCurrentPosition: jest.fn((ok: (p: any) => void, fail: (e: any) => void) =>
+            result === 'denied' ? fail({ code: 1 }) : ok({ coords: { latitude: result.lat, longitude: result.lon } }),
+          ),
+        },
+      });
+    }
+
+    function site(id: string, emplacementId: string): Entity {
+      return baseSignalEntity({ id, entityType: EntityType.SENSOR, identities: [{ type: 'EMPLACEMENT', value: emplacementId }] } as Partial<Entity>);
+    }
+
+    beforeEach(() => {
+      guest = true;
+      camera = { setView: jest.fn(), flyTo: jest.fn(), positionCartographic: { longitude: 0.1, latitude: 0.2, height: 9 }, heading: 0, pitch: 0 };
+      (component as any).viewer.camera = camera;
+      (fakeCesium as any).Math.toDegrees = (rad: number) => (rad * 180) / Math.PI;
+      (fakeCesium as any).Rectangle = { fromDegrees: jest.fn((west: number, south: number, east: number, north: number) => ({ west, south, east, north })) };
+      localStorage.setItem('sentinel-camera-position', savedCamera);
+    });
+
+    afterEach(() => {
+      delete (navigator as any).geolocation;
+      localStorage.clear();
+    });
+
+    it('opens at its own fix, not the saved camera, and reports that fix once', () => {
+      geolocation({ lat: 51.5, lon: -0.12 });
+
+      (component as any).initUserLocation();
+
+      expect(camera.setView).not.toHaveBeenCalled();
+      expect(demo.reportPosition).toHaveBeenCalledTimes(1);
+      expect(demo.reportPosition).toHaveBeenCalledWith({ lat: 51.5, lon: -0.12 });
+      expect(camera.flyTo).toHaveBeenCalledWith(expect.objectContaining({ destination: { lon: -0.12, lat: 51.5, alt: 50000 } }));
+      expect(localStorage.getItem('sentinel-has-geolocated')).toBeNull();
+    });
+
+    it("flies to the gateway's answer when the visitor declines, and stays put when there is none", async () => {
+      geolocation('denied');
+      demo.reportPosition.mockResolvedValueOnce({ lat: 48.85, lon: 2.35, source: 'ip' });
+
+      (component as any).initUserLocation();
+      await Promise.resolve();
+
+      expect(demo.reportPosition).toHaveBeenCalledWith('denied');
+      expect(camera.flyTo).toHaveBeenCalledWith(expect.objectContaining({ destination: { lon: 2.35, lat: 48.85, alt: 50000 } }));
+
+      camera.flyTo.mockClear();
+      demo.reportPosition.mockResolvedValueOnce(null);
+      (component as any).initUserLocation();
+      await Promise.resolve();
+      expect(camera.flyTo).not.toHaveBeenCalled();
+    });
+
+    it('asks for the location with a 10 s timeout, accepting a fix up to a minute old', () => {
+      geolocation({ lat: 51.5, lon: -0.12 });
+      (component as any).initUserLocation();
+      expect((navigator.geolocation.getCurrentPosition as jest.Mock).mock.calls[0][2]).toEqual({ timeout: 10_000, maximumAge: 60_000 });
+    });
+
+    it('falls back to the IP location when the prompt goes unanswered for 10 s, then refines if the browser answers later', async () => {
+      jest.useFakeTimers();
+      try {
+        let answer!: (p: any) => void;
+        Object.defineProperty(navigator, 'geolocation', {
+          configurable: true,
+          value: { getCurrentPosition: jest.fn((ok: (p: any) => void) => (answer = ok)) },
+        });
+        demo.reportPosition.mockResolvedValueOnce({ lat: 48.85, lon: 2.35, source: 'ip' });
+
+        (component as any).initUserLocation();
+        jest.advanceTimersByTime(9_999);
+        expect(demo.reportPosition).not.toHaveBeenCalled();
+        jest.advanceTimersByTime(1);
+        expect(demo.reportPosition).toHaveBeenCalledTimes(1);
+        expect(demo.reportPosition).toHaveBeenCalledWith('denied');
+
+        answer({ coords: { latitude: 51.5, longitude: -0.12 } });
+        expect(demo.reportPosition).toHaveBeenCalledTimes(2);
+        expect(demo.reportPosition).toHaveBeenLastCalledWith({ lat: 51.5, lon: -0.12 });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('a refusal after the fallback, or a timeout error, does not report twice', () => {
+      jest.useFakeTimers();
+      try {
+        let fail!: (e: any) => void;
+        Object.defineProperty(navigator, 'geolocation', {
+          configurable: true,
+          value: { getCurrentPosition: jest.fn((_ok: unknown, no: (e: any) => void) => (fail = no)) },
+        });
+        (component as any).initUserLocation();
+        jest.advanceTimersByTime(10_000);
+        fail({ code: 3 });
+        expect(demo.reportPosition).toHaveBeenCalledTimes(1);
+        expect(demo.reportPosition).toHaveBeenCalledWith('denied');
+        jest.advanceTimersByTime(60_000);
+        expect(demo.reportPosition).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('a quick refusal reports once, at once, with no fallback later', () => {
+      jest.useFakeTimers();
+      try {
+        geolocation('denied');
+        (component as any).initUserLocation();
+        expect(demo.reportPosition).toHaveBeenCalledTimes(1);
+        jest.advanceTimersByTime(20_000);
+        expect(demo.reportPosition).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('waits for the welcome card to be on screen before asking for the location, then asks once', () => {
+      demo.welcomeShown.set(false);
+      geolocation({ lat: 51.5, lon: -0.12 });
+
+      (component as any).initUserLocation();
+      fixture.detectChanges();
+      expect(navigator.geolocation.getCurrentPosition).not.toHaveBeenCalled();
+      expect(demo.reportPosition).not.toHaveBeenCalled();
+
+      demo.welcomeShown.set(true);
+      fixture.detectChanges();
+      expect(demo.reportPosition).toHaveBeenCalledTimes(1);
+      expect(demo.reportPosition).toHaveBeenCalledWith({ lat: 51.5, lon: -0.12 });
+
+      // The signal flipping again (a new session) does not ask a second time.
+      demo.welcomeShown.set(false);
+      fixture.detectChanges();
+      demo.welcomeShown.set(true);
+      fixture.detectChanges();
+      expect(demo.reportPosition).toHaveBeenCalledTimes(1);
+    });
+
+    it('never saves its camera', () => {
+      localStorage.clear();
+      (component as any).saveCameraPosition();
+      expect(localStorage.getItem('sentinel-camera-position')).toBeNull();
+    });
+
+    it('draws its own marker at ownPosition as a larger bright violet dot', () => {
+      demo.ownPosition.set({ lat: 51.5, lon: -0.12, source: 'browser' });
+      fixture.detectChanges();
+
+      const marker = addedEntities.find((e) => e.billboard?.image === locationDotDataUrl('#a78bfa'));
+      expect(marker).toBeDefined();
+      expect(marker.position).toEqual({ lon: -0.12, lat: 51.5, alt: 0 });
+      expect(marker.billboard.scale).toBeGreaterThan(0.7);
+      expect(addedEntities.some((e) => e.billboard?.image === locationDotDataUrl('#3b82f6'))).toBe(false);
+    });
+
+    it('leaves its own site out of the emplacement layer, also when its id arrives later', () => {
+      const layer = { sync: jest.fn(), destroy: jest.fn() };
+      (component as any).emplacementLayer = layer;
+      (TestBed.inject(EmplacementService).emplacements as any).set([
+        { id: 'own', active: true, feedId: 'visitors' },
+        { id: 'other', active: true, feedId: 'visitors' },
+      ]);
+      fixture.detectChanges();
+      expect(layer.sync.mock.calls.at(-1)[0].map((e: any) => e.id)).toEqual(['own', 'other']);
+
+      demo.ownEmplacementId.set('own');
+      fixture.detectChanges();
+      expect(layer.sync.mock.calls.at(-1)[0].map((e: any) => e.id)).toEqual(['other']);
+    });
+
+    it("skips its own site's entity on the stream, removing one drawn before its id arrived", () => {
+      const event = (entity: Entity) => (component as any).handleEntityEvent({ type: 'updated', entity, timestamp: '2026-10-20T12:00:05Z' });
+      const entityMap = (component as any).entityMap as Map<string, unknown>;
+      event(site('own-site', 'own'));
+      event(site('other-site', 'other'));
+      expect([...entityMap.keys()]).toEqual(['own-site', 'other-site']);
+
+      demo.ownEmplacementId.set('own');
+      fixture.detectChanges();
+      expect([...entityMap.keys()]).toEqual(['other-site']);
+
+      event(site('own-site', 'own'));
+      expect([...entityMap.keys()]).toEqual(['other-site']);
+      expect((component as any).emplacementEntities.has('own-site')).toBe(false);
+    });
+
+    it('flies to focusBounds when they are set, then clears them', () => {
+      demo.focusBounds.set({ west: 1, south: 2, east: 3, north: 4 });
+      fixture.detectChanges();
+
+      expect(camera.flyTo).toHaveBeenCalledWith(expect.objectContaining({ destination: { west: 1, south: 2, east: 3, north: 4 } }));
+      expect(demo.focusBounds()).toBeNull();
+    });
+
+    it('a non-guest keeps the saved camera, its blue dot and its own sites', () => {
+      guest = false;
+      geolocation({ lat: 51.5, lon: -0.12 });
+
+      (component as any).initUserLocation();
+
+      expect(camera.setView).toHaveBeenCalled();
+      expect(camera.flyTo).not.toHaveBeenCalled();
+      expect(demo.reportPosition).not.toHaveBeenCalled();
+      expect(addedEntities.some((e) => e.billboard?.image === locationDotDataUrl('#3b82f6'))).toBe(true);
+      localStorage.clear();
+      (component as any).saveCameraPosition();
+      expect(localStorage.getItem('sentinel-camera-position')).not.toBeNull();
     });
   });
 });

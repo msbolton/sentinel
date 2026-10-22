@@ -22,6 +22,12 @@ service IngestService {
   // (ignoring surrounding whitespace) against sender-managed emplacements on
   // this connection.
   rpc UpsertEmplacement(UpsertEmplacementRequest) returns (UpsertEmplacementResponse);
+  // RemoveEmplacement soft-deletes an emplacement this connection's senders
+  // made; refused unless the connection allows sender-managed ones. An id
+  // that is unknown, or names an emplacement bound elsewhere or made by
+  // someone other than a sender, is NotFound. It is idempotent: a second
+  // remove is NotFound, which a caller may ignore.
+  rpc RemoveEmplacement(RemoveEmplacementRequest) returns (RemoveEmplacementResponse);
   // StreamReports takes reports and answers each with an ack.
   rpc StreamReports(stream StreamReportsRequest) returns (stream StreamReportsResponse);
   // Publish takes a batch of reports and acks each, for simple senders.
@@ -53,6 +59,12 @@ message UpsertEmplacementRequest {
 message UpsertEmplacementResponse {
   sentinel.v1.Emplacement emplacement = 1;
 }
+
+message RemoveEmplacementRequest {
+  string id = 1;
+}
+
+message RemoveEmplacementResponse {}
 
 // Report is one thing a sender says: an observation, or a mobile
 // emplacement's own position. client_ref comes back on the ack.

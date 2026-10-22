@@ -77,6 +77,12 @@ export const routes: Routes = [
     redirectTo: 'connections',
   },
   {
+    // The public demo's entry: no guard, it signs the visitor in as a guest.
+    path: 'demo',
+    loadComponent: () =>
+      import('./features/demo/demo-start.component').then((m) => m.DemoStartComponent),
+  },
+  {
     path: 'login',
     loadComponent: () =>
       import('./features/login/login.component').then((m) => m.LoginComponent),

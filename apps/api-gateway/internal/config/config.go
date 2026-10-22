@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,6 +64,134 @@ type Config struct {
 
 	// IntelSkyBaseURL is where flight paths for military aircraft come from.
 	IntelSkyBaseURL string
+
+	// Demo is the public demo: throwaway guest sessions and visitor sites.
+	Demo DemoConfig
+}
+
+// DemoConfig configures the public demo. Nothing in it is read or checked
+// unless Enabled.
+type DemoConfig struct {
+	Enabled bool
+	// MaxGuests caps concurrent guests.
+	MaxGuests int
+	// GuestTTL is a guest account's lifetime.
+	GuestTTL time.Duration
+	// OfflineRemoveAfter is how long a visitor site outlives its guest's
+	// last socket.
+	OfflineRemoveAfter time.Duration
+	// StatusOrigin is the only browser origin allowed to read the status.
+	StatusOrigin string
+	// IngestAddr is the ingest service's grpc listener (host:port) of the
+	// demo visitors connection; IngestToken is that connection's token and
+	// is never logged.
+	IngestAddr     string
+	IngestToken    string
+	IngestInsecure bool
+	// VisitorsFeedID is the visitors connection's id, handed to the browser.
+	VisitorsFeedID string
+	// GeoIPDB is a MaxMind City database path; empty disables the IP fallback.
+	GeoIPDB string
+	// SessionRate limits session starts per client address, "<n>/<duration>".
+	SessionRate string
+
+	// errs are values Load could not parse, reported by Validate.
+	errs []error
+}
+
+// SessionLimit parses SessionRate.
+func (d DemoConfig) SessionLimit() (int, time.Duration, error) { return ParseRate(d.SessionRate) }
+
+// ParseRate parses a rate of the form "<n>/<duration>", such as "5/10m": n
+// events per duration. Both must be positive.
+func ParseRate(s string) (int, time.Duration, error) {
+	count, period, ok := strings.Cut(strings.TrimSpace(s), "/")
+	if !ok {
+		return 0, 0, fmt.Errorf("rate %q is not <n>/<duration>", s)
+	}
+	n, err := strconv.Atoi(count)
+	if err != nil || n <= 0 {
+		return 0, 0, fmt.Errorf("rate %q: count must be a positive integer", s)
+	}
+	window, err := time.ParseDuration(period)
+	if err != nil || window <= 0 {
+		return 0, 0, fmt.Errorf("rate %q: period must be a positive duration such as 10m", s)
+	}
+	return n, window, nil
+}
+
+func (d DemoConfig) validate(authDevBypass bool) error {
+	if !d.Enabled {
+		return nil
+	}
+	if len(d.errs) > 0 {
+		return errors.Join(d.errs...)
+	}
+	if authDevBypass {
+		return errors.New("DEMO_ENABLED needs real guest tokens and cannot run with AUTH_DEV_BYPASS=true")
+	}
+	if strings.TrimSpace(d.IngestAddr) == "" {
+		return errors.New("DEMO_ENABLED requires DEMO_INGEST_ADDR")
+	}
+	if d.IngestToken == "" {
+		return errors.New("DEMO_ENABLED requires DEMO_INGEST_TOKEN")
+	}
+	if d.MaxGuests <= 0 {
+		return fmt.Errorf("DEMO_MAX_GUESTS must be greater than 0, got %d", d.MaxGuests)
+	}
+	if d.GuestTTL <= 0 {
+		return fmt.Errorf("DEMO_GUEST_TTL must be greater than 0, got %v", d.GuestTTL)
+	}
+	if d.OfflineRemoveAfter <= 0 {
+		return fmt.Errorf("DEMO_OFFLINE_REMOVE_AFTER must be greater than 0, got %v", d.OfflineRemoveAfter)
+	}
+	if _, _, err := d.SessionLimit(); err != nil {
+		return fmt.Errorf("DEMO_SESSION_RATE: %w", err)
+	}
+	return nil
+}
+
+func loadDemo() DemoConfig {
+	var errs []error
+	intVar := func(key string, def int) int {
+		raw := strings.TrimSpace(os.Getenv(key))
+		if raw == "" {
+			return def
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s must be an integer, got %q", key, raw))
+			return def
+		}
+		return n
+	}
+	durationVar := func(key string, def time.Duration) time.Duration {
+		raw := strings.TrimSpace(os.Getenv(key))
+		if raw == "" {
+			return def
+		}
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s must be a duration such as 60m, got %q", key, raw))
+			return def
+		}
+		return d
+	}
+	d := DemoConfig{
+		Enabled:            commonCfg.EnvOrDefaultBool("DEMO_ENABLED", false),
+		MaxGuests:          intVar("DEMO_MAX_GUESTS", 25),
+		GuestTTL:           durationVar("DEMO_GUEST_TTL", 60*time.Minute),
+		OfflineRemoveAfter: durationVar("DEMO_OFFLINE_REMOVE_AFTER", 5*time.Minute),
+		StatusOrigin:       commonCfg.EnvOrDefault("DEMO_STATUS_ORIGIN", "https://msbolton.dev"),
+		IngestAddr:         strings.TrimSpace(commonCfg.EnvOrDefault("DEMO_INGEST_ADDR", "")),
+		IngestToken:        commonCfg.EnvOrDefault("DEMO_INGEST_TOKEN", ""),
+		IngestInsecure:     commonCfg.EnvOrDefaultBool("DEMO_INGEST_INSECURE", true),
+		VisitorsFeedID:     commonCfg.EnvOrDefault("DEMO_VISITORS_FEED_ID", "demo-visitors"),
+		GeoIPDB:            commonCfg.EnvOrDefault("DEMO_GEOIP_DB", ""),
+		SessionRate:        commonCfg.EnvOrDefault("DEMO_SESSION_RATE", "5/10m"),
+	}
+	d.errs = errs
+	return d
 }
 
 // IsProduction reports whether the gateway runs with production hardening.
@@ -78,6 +207,9 @@ func (c Config) Validate() error {
 	case "", "starttls", "tls", "none":
 	default:
 		return fmt.Errorf("MAIL_TLS must be starttls, tls or none, got %q", c.MailTLS)
+	}
+	if err := c.Demo.validate(c.AuthDevBypass); err != nil {
+		return err
 	}
 	if !c.IsProduction() {
 		return nil
@@ -184,6 +316,8 @@ func Load() Config {
 		IngestServiceURL:       commonCfg.EnvOrDefault("INGEST_SERVICE_URL", "http://localhost:4000"),
 		IngestServiceToken:     commonCfg.EnvOrDefault("INGEST_SERVICE_TOKEN", ""),
 		IntelSkyBaseURL:        commonCfg.EnvOrDefault("INTELSKY_BASE_URL", "https://intelsky.org"),
+
+		Demo: loadDemo(),
 	}
 }
 

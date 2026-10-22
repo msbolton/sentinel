@@ -11,6 +11,7 @@ import {
   NgZone,
   ChangeDetectionStrategy,
   untracked,
+  inject,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
@@ -72,6 +73,9 @@ import { BearingLayer, type BearingSite } from './bearing-layer';
 import { EmplacementService } from '../../core/services/emplacement.service';
 import { bearingTtlOf, bearingsOf, emplacementIdOf, rowHeartbeatOf, siteHeartbeatOf } from '../../shared/models/emplacement.model';
 import { FeedService } from '../../core/services/feed.service';
+import { AuthService } from '../../core/services/auth.service';
+import { DemoService } from '../../core/services/demo.service';
+import { isOwnSiteEntity, withoutOwnSite } from './guest-map';
 import { ellipseFromCovariance } from './uncertainty';
 import { drawsUncertainty, heightModeOf, type HeightMode } from './height-mode';
 import { EllipseOutlineLayer, drawnEllipseAxes } from './ellipse-outline';
@@ -164,6 +168,8 @@ interface LayerConfig {
   color: string;
 }
 
+/** How long a demo guest's location prompt may go unanswered before they are placed from their IP. */
+const GUEST_LOCATION_TIMEOUT_MS = 10_000;
 
 @Component({
   selector: 'app-map',
@@ -264,6 +270,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
    */
   private readonly militaryFeedIds: Signal<ReadonlySet<string>>;
 
+  private readonly auth = inject(AuthService);
+  /** The public-demo visitor's session; see guest-map.ts. Inert for anyone else. */
+  private readonly demo = inject(DemoService);
+
   constructor(
     private readonly ngZone: NgZone,
     private readonly router: Router,
@@ -362,6 +372,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.emplacements.draft();
       this.emplacements.showCoverage();
       this.layerVisibility.hidden();
+      this.demo.ownEmplacementId();
       untracked(() => {
         this.syncLoadedEmplacements();
         this.resyncEmplacements();
@@ -379,6 +390,29 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       this.emplacements.focus();
       untracked(() => this.ngZone.runOutsideAngular(() => this.flyToFocus()));
+    });
+
+    // A demo guest: their own site is drawn locally at ownPosition, so the
+    // server's blurred copy of it is dropped from the stream once its id is known.
+    effect(() => {
+      const ownId = this.demo.ownEmplacementId();
+      untracked(() => this.ngZone.runOutsideAngular(() => this.dropOwnSiteEntities(ownId)));
+    });
+    effect(() => {
+      const own = this.demo.ownPosition();
+      untracked(() => this.ngZone.runOutsideAngular(() => { if (own) this.updateUserLocationMarker(own.lon, own.lat); }));
+    });
+    // ...and asks where they are only once the welcome card is on screen, so the
+    // browser's permission prompt follows the explanation (see initUserLocation).
+    effect(() => {
+      if (this.demo.welcomeShown() && this.awaitingWelcome) {
+        this.awaitingWelcome = false;
+        untracked(() => this.startGuestLocation());
+      }
+    });
+    effect(() => {
+      this.demo.focusBounds();
+      untracked(() => this.ngZone.runOutsideAngular(() => this.flyToDemoFocus()));
     });
 
     // Turning terrain on or off changes which ellipses can have an outline and
@@ -507,6 +541,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.geofenceLayer.sync(this.geofences.zones(), this.geofences.selectedId(), (id) => this.geofenceAnchorPosition(id));
       this.resyncEmplacements();
       this.flyToFocus();
+      this.flyToDemoFocus();
 
       // Set dark atmosphere
       this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
@@ -879,6 +914,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   private addOrUpdateCesiumEntity(entity: Entity): void {
     if (!this.viewer || !this.Cesium) return;
+    // A demo guest's own site is drawn at its precise spot; skip the blurred copy.
+    if (isOwnSiteEntity(entity, this.demo.ownEmplacementId())) {
+      this.removeCesiumEntity(entity.id);
+      return;
+    }
     // A loaded emplacement's own SENSOR entity is drawn by the emplacement layer.
     if (emplacementDrawingOf(entity, this.loadedEmplacementIds)) {
       this.emplacementEntities.set(entity.id, entity);
@@ -1559,7 +1599,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
    * only bootstraps it until the entity is on the stream.
    */
   private resyncEmplacements(): void {
-    const list = sitesShown(this.emplacements.emplacements(), this.layerVisibility.hidden());
+    const list = withoutOwnSite(sitesShown(this.emplacements.emplacements(), this.layerVisibility.hidden()), this.demo.ownEmplacementId());
     const rows = new Map(list.map((e) => [e.id, e]));
     const selectedId = this.emplacements.selectedId();
     const draft = this.emplacements.draft();
@@ -1611,6 +1651,26 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (!focus || !this.viewer || !this.Cesium) return;
     this.emplacements.focus.set(null);
     this.viewer.camera.flyTo({ destination: this.Cesium.Cartesian3.fromDegrees(focus.lon, focus.lat, 60_000), duration: 1.2 });
+  }
+
+  /** A box the demo asked to show: fly there once, when the viewer is up. */
+  private flyToDemoFocus(): void {
+    const b = this.demo.focusBounds();
+    if (!b || !this.viewer || !this.Cesium) return;
+    this.demo.focusBounds.set(null);
+    this.viewer.camera.flyTo({ destination: this.Cesium.Rectangle.fromDegrees(b.west, b.south, b.east, b.north), duration: 1.5 });
+  }
+
+  /** Take down any entity drawn for the guest's own site before its id was known. */
+  private dropOwnSiteEntities(ownId: string | null): void {
+    if (ownId == null) return;
+    for (const [id, cesiumEntity] of [...this.entityMap]) {
+      const entity = cesiumEntity._sentinelEntity as Entity | undefined;
+      if (entity && isOwnSiteEntity(entity, ownId)) this.removeCesiumEntity(id);
+    }
+    for (const [id, entity] of [...this.emplacementEntities]) {
+      if (isOwnSiteEntity(entity, ownId)) this.removeCesiumEntity(id);
+    }
   }
 
   /** Redraw the geofence layer from the service's current state. */
@@ -2244,8 +2304,19 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     });
   }
 
+  /** A guest's location waits for the welcome card; set by initUserLocation, cleared when it starts. */
+  private awaitingWelcome = false;
+
   private initUserLocation(): void {
     if (!this.viewer || !this.Cesium) return;
+    if (this.auth.isGuest()) {
+      if (this.demo.welcomeShown()) {
+        this.startGuestLocation();
+      } else {
+        this.awaitingWelcome = true;
+      }
+      return;
+    }
 
     const Cesium = this.Cesium;
     const saved = localStorage.getItem('sentinel-camera-position');
@@ -2286,8 +2357,65 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     }
   }
 
+  /**
+   * A demo guest opens at their own location, never a saved camera (demo
+   * browsers are shared). Their fix goes to the gateway, which blurs it, and
+   * nowhere else; declined, the gateway places them from their IP address.
+   * Their marker follows DemoService.ownPosition (see the constructor).
+   */
+  private startGuestLocation(): void {
+    const flyTo = (lon: number, lat: number) => {
+      if (!this.viewer || this.viewer.isDestroyed()) return;
+      this.viewer.camera.flyTo({ destination: this.Cesium.Cartesian3.fromDegrees(lon, lat, 50000), duration: 2 });
+    };
+    const known = this.demo.ownPosition();
+    if (known) {
+      // Placed already this session (the map was opened again): no second report.
+      this.updateUserLocationMarker(known.lon, known.lat);
+      flyTo(known.lon, known.lat);
+      return;
+    }
+    const declined = () => {
+      void this.demo.reportPosition('denied').then((p) => { if (p) flyTo(p.lon, p.lat); });
+    };
+    if (!navigator.geolocation) {
+      declined();
+      return;
+    }
+    // An ignored permission prompt never answers (the API's timeout only
+    // starts once permission is given), so after GUEST_LOCATION_TIMEOUT_MS
+    // the visitor is placed from their IP. A fix that still arrives later
+    // refines that: it is reported in turn.
+    let answered = false;
+    let fellBack = false;
+    const fallback = setTimeout(() => {
+      if (!answered) {
+        fellBack = true;
+        declined();
+      }
+    }, GUEST_LOCATION_TIMEOUT_MS);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        answered = true;
+        clearTimeout(fallback);
+        const { latitude: lat, longitude: lon } = pos.coords;
+        void this.demo.reportPosition({ lat, lon });
+        flyTo(lon, lat);
+      },
+      () => {
+        if (answered) return;
+        answered = true;
+        clearTimeout(fallback);
+        if (!fellBack) declined();
+      },
+      { timeout: GUEST_LOCATION_TIMEOUT_MS, maximumAge: 60_000 },
+    );
+  }
+
   private saveCameraPosition(): void {
     if (!this.viewer || !this.Cesium) return;
+    // A guest's view is not kept: the next visitor on this browser starts at their own location.
+    if (this.auth.isGuest()) return;
 
     try {
       const pos = this.viewer.camera.positionCartographic;
@@ -2304,7 +2432,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   goToMyLocation(): void {
-    if (!this.viewer || !this.Cesium || !navigator.geolocation) return;
+    if (!this.viewer || !this.Cesium) return;
+    if (this.auth.isGuest()) {
+      // A guest's location is the one placed for their site; it is not re-read.
+      const own = this.demo.ownPosition();
+      if (own) this.viewer.camera.flyTo({ destination: this.Cesium.Cartesian3.fromDegrees(own.lon, own.lat, 50000), duration: 2 });
+      return;
+    }
+    if (!navigator.geolocation) return;
 
     const Cesium = this.Cesium;
     navigator.geolocation.getCurrentPosition(
@@ -2332,13 +2467,15 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (this.userLocationEntity) {
       this.userLocationEntity.position = position;
     } else {
-      const dataUrl = locationDotDataUrl('#3b82f6');
+      // A demo guest's own site: bright violet and larger, so it stands out from other visitors.
+      const guest = this.auth.isGuest();
+      const dataUrl = locationDotDataUrl(guest ? '#a78bfa' : '#3b82f6');
 
       this.userLocationEntity = this.viewer.entities.add({
         position,
         billboard: {
           image: dataUrl,
-          scale: 0.7,
+          scale: guest ? 1.0 : 0.7,
           heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
           verticalOrigin: Cesium.VerticalOrigin.CENTER,

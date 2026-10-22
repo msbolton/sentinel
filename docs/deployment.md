@@ -8,6 +8,8 @@ This runbook takes one Linux machine to a running Sentinel at `https://<host>`. 
 
 `make images-push` builds and pushes the images, and `make deploy` installs or upgrades the release. Each step links to `docs/infrastructure.md`, which describes every part of the chart in detail. A [local variant on k3d](#local-cluster-on-k3d) at the end runs the same steps on a laptop.
 
+The public demo at sentinel.msbolton.dev is this install plus an overlay, a bootstrap script and a few changed steps: `docs/demo.md`.
+
 The local path is what has been run end to end. Several parts of the production path have not yet run on a real node; [Open risks](#open-risks-not-yet-exercised-on-a-real-node) lists them with what to check for each, so check them on the first install.
 
 ## What you need
@@ -158,7 +160,7 @@ curl -sI http://sentinel.example.com/ | head -1      # HTTP/1.1 308 Permanent Re
 
 ## 3. Images
 
-**Build and push.** Log in to the registry, then build the nine images for amd64 and push them as `<registry>/sentinel/<name>:<tag>`. The tag defaults to the short hash of the checked-out commit. Commit first: uncommitted changes are built, but the tag does not name them.
+**Build and push.** Log in to the registry, then build the ten images for amd64 (sensor-sim runs only with the demo's `sensorSim.enabled`) and push them as `<registry>/sentinel/<name>:<tag>`. The tag defaults to the short hash of the checked-out commit. Commit first: uncommitted changes are built, but the tag does not name them.
 
 ```bash
 docker login registry.example.com
@@ -531,7 +533,7 @@ Everything else in this runbook ran on k3d. These parts did not, because they ne
 | `tls-san` and the kubeconfig | The certificate lacks the address you connect to | `kubectl get nodes` from the workstation, without `--insecure-skip-tls-verify` |
 | ufw beside k3s | k3s's service load balancer (servicelb) publishes 80 and 443 through iptables rules of its own, and flannel forwards pod traffic: ufw may block them, or fail to block NodePorts | From outside: `curl -sI http://<host>/` gives 308 and `https://` 200; `nc -vz <node> 30000-30010` and `nc -vz <node> 4010` are refused. On the node: pods reach each other (`kubectl -n sentinel get pods` all Ready after `ufw enable`) |
 | `/etc/rancher/k3s/registries.yaml` | Wrong host key or credentials: pulls fail | `kubectl -n sentinel get pods` shows no `ImagePullBackOff`; `sudo k3s crictl pull registry.example.com/sentinel/web:<tag>` on the node |
-| `make images-push` to a real registry | Push permissions, registry TLS, and slow amd64 builds under emulation on Apple silicon | Each of the nine pushes ends without error; `docker buildx imagetools inspect registry.example.com/sentinel/web:<tag>` lists `linux/amd64` |
+| `make images-push` to a real registry | Push permissions, registry TLS, and slow amd64 builds under emulation on Apple silicon | Each of the ten pushes ends without error; `docker buildx imagetools inspect registry.example.com/sentinel/web:<tag>` lists `linux/amd64` |
 | Client IPs through servicelb | `k8s/cluster/traefik-config.yaml` sets `externalTrafficPolicy: Local` so the gateway's registration rate limiter (keyed by the leftmost `X-Forwarded-For`) sees real client IPs. Whether k3s's servicelb keeps the source address on a real node is unverified; on k3d the gateway sees the Docker bridge address, so that run says nothing | From a machine outside the node: `curl -s -o /dev/null https://<host>/api/v1/entities` (401), then `kubectl -n sentinel logs deploy/<fullname>-api-gateway --tail=20 \| grep ACCESS_DENIED`: `"ip"` (the same address the limiter keys on) must be that machine's public IP, not the node's or a `10.42.x.x` address. (Traefik writes no access log by default; if you turned it on, its `ClientHost` shows the same.) If it is not, every visitor shares one rate-limit key: 5 registrations per 15 minutes for the whole site |
 | ACME HTTP-01 behind the redirect and the NetworkPolicies | Let's Encrypt is expected to follow the 308 to HTTPS and ignore Traefik's default certificate, and the `sentinel-acme-solver` policy is expected to admit Traefik to the solver; neither has been seen working | On `letsencrypt-staging` first: `kubectl -n sentinel get certificate` READY True within minutes; otherwise [Certificates do not arrive](#certificates-do-not-arrive) |
 | Sizing | The requests (3.2 CPU, 7.2 GiB) come from the values, not from a loaded system; busy feeds can need more CPU for ingest and entity-service, and more Kafka disk | `kubectl top pods -n sentinel` and `kubectl top node` after a day of real feeds; `df -h /var/lib/rancher`; raise requests or claims in the site file |
@@ -620,7 +622,7 @@ kubectl label namespace sentinel pod-security.kubernetes.io/enforce=privileged \
 # 4. Images: built for this machine, one at a time, then copied into the node
 make images-local
 for i in api-gateway entity-service track-service search-service link-analysis-service \
-         alert-service ingest-service analytics-service web; do
+         alert-service ingest-service analytics-service web sensor-sim; do
   k3d image import "sentinel/$i:$(git rev-parse --short HEAD)" -c sentinel
 done
 
@@ -637,7 +639,7 @@ make deploy REGISTRY=docker.io VALUES=k8s/overlays/local/values.yaml
 - The admin console works through the same port-forward.
 - `make backup-now` runs a backup.
 
-**Images after a change.** `make deploy` asks for every image under one tag, the new commit's. Either rebuild and import all nine, or rebuild only what changed and keep the others on the tag they were imported with:
+**Images after a change.** `make deploy` asks for every image under one tag, the new commit's. Either rebuild and import all ten, or rebuild only what changed and keep the others on the tag they were imported with:
 
 ```bash
 make images-local IMAGES=api-gateway

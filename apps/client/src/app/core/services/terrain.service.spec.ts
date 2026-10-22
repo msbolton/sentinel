@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { environment } from '../../../environments/environment';
 import { TerrainService } from './terrain.service';
+import * as liteMode from '../../features/map/lite-mode';
 
 const KEY = 'sentinel.map.terrain';
 
@@ -150,6 +151,47 @@ describe('TerrainService', () => {
     expect(svc.available()).toBe(true);
     expect(svc.terrainEnabled()).toBe(false);
     expect(Cesium.Terrain.fromWorldTerrain).not.toHaveBeenCalled();
+  });
+
+  describe('on a phone (startsLite)', () => {
+    beforeEach(() => jest.spyOn(liteMode, 'startsLite').mockReturnValue(true));
+
+    it('terrain defaults off with no saved choice, and loads nothing', async () => {
+      const svc = service();
+      const viewer = makeViewer();
+      const Cesium = makeFakeCesium();
+      await svc.init(viewer, Cesium);
+      expect(svc.available()).toBe(true);
+      expect(svc.terrainEnabled()).toBe(false);
+      expect(Cesium.Terrain.fromWorldTerrain).not.toHaveBeenCalled();
+      expect(localStorage.getItem(KEY)).toBeNull(); // a default is not a choice
+    });
+
+    it('a saved choice of on wins', async () => {
+      localStorage.setItem(KEY, 'true');
+      const svc = service();
+      await initLoaded(svc);
+      expect(svc.terrainEnabled()).toBe(true);
+    });
+
+    it('a saved choice of off still wins', async () => {
+      localStorage.setItem(KEY, 'false');
+      const svc = service();
+      await svc.init(makeViewer(), makeFakeCesium());
+      expect(svc.terrainEnabled()).toBe(false);
+    });
+
+    it('the user can still turn it on', async () => {
+      const svc = service();
+      const viewer = makeViewer();
+      const Cesium = makeFakeCesium();
+      await svc.init(viewer, Cesium);
+      const done = svc.toggle();
+      Cesium.terrains[0].succeed();
+      await done;
+      expect(svc.terrainEnabled()).toBe(true);
+      expect(localStorage.getItem(KEY)).toBe('true');
+    });
   });
 
   it('starts on when the saved choice is on', async () => {

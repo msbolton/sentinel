@@ -2,7 +2,10 @@ package stream
 
 import (
 	"sync"
+	"sync/atomic"
+	"time"
 
+	"github.com/coder/websocket"
 	"go.uber.org/zap"
 )
 
@@ -23,32 +26,137 @@ type Hub struct {
 	logger  *zap.Logger
 
 	viewportListener func() // called when the set of client viewports may have changed
+
+	// userSockets counts the open sockets per authenticated user; it is
+	// guarded by mu. Sockets without a UserID are not counted.
+	userSockets      map[string]int
+	presenceListener func(userID string, online bool)
+	// presenceMu serialises identified register/unregister so presence
+	// callbacks reach the listener in the order the transitions happened.
+	// It is taken before mu and never held while mu is held by the caller.
+	presenceMu sync.Mutex
+
+	lastEventNanos atomic.Int64 // unix nanoseconds of the latest live (non-exercise) entity event; 0 = none yet
 }
 
 // NewHub creates an empty hub.
 func NewHub(logger *zap.Logger) *Hub {
-	return &Hub{clients: map[*Client]struct{}{}, logger: logger}
+	return &Hub{clients: map[*Client]struct{}{}, userSockets: map[string]int{}, logger: logger}
 }
 
 func (h *Hub) register(c *Client) {
+	if c.UserID != "" {
+		h.presenceMu.Lock()
+		defer h.presenceMu.Unlock()
+	}
 	h.mu.Lock()
+	_, already := h.clients[c]
 	h.clients[c] = struct{}{}
 	n := len(h.clients)
+	first := false
+	if c.UserID != "" && !already {
+		h.userSockets[c.UserID]++
+		first = h.userSockets[c.UserID] == 1
+	}
+	fn := h.presenceListener
 	h.mu.Unlock()
 	h.logger.Info("ws client connected", zap.String("clientId", c.ID), zap.Int("clients", n))
+	if first && fn != nil {
+		fn(c.UserID, true)
+	}
 }
 
 func (h *Hub) unregister(c *Client) {
+	if c.UserID != "" {
+		h.presenceMu.Lock()
+		defer h.presenceMu.Unlock()
+	}
 	h.mu.Lock()
 	_, present := h.clients[c]
 	delete(h.clients, c)
 	n := len(h.clients)
+	last := false
+	if present && c.UserID != "" {
+		if h.userSockets[c.UserID] <= 1 {
+			delete(h.userSockets, c.UserID)
+			last = true
+		} else {
+			h.userSockets[c.UserID]--
+		}
+	}
+	fn := h.presenceListener
 	h.mu.Unlock()
 	if present {
 		h.logger.Info("ws client disconnected", zap.String("clientId", c.ID), zap.Int("clients", n))
 		h.viewportsChanged()
 	}
+	if last && fn != nil {
+		fn(c.UserID, false)
+	}
 }
+
+// SetPresenceListener registers a callback fired with online=true when a
+// user's first socket connects and online=false when their last one goes
+// away, however it ends. Calls are serialised and ordered per hub, made
+// outside the hub's state lock, but the callback must not block or call back
+// into register/unregister. Sockets without a user id never fire it.
+func (h *Hub) SetPresenceListener(fn func(userID string, online bool)) {
+	h.mu.Lock()
+	h.presenceListener = fn
+	h.mu.Unlock()
+}
+
+// UsersWithRole returns how many distinct connected users hold role.
+func (h *Hub) UsersWithRole(role string) int {
+	users := map[string]struct{}{}
+	for _, c := range h.snapshot() {
+		if c.UserID == "" {
+			continue
+		}
+		for _, r := range c.Roles {
+			if r == role {
+				users[c.UserID] = struct{}{}
+				break
+			}
+		}
+	}
+	return len(users)
+}
+
+// CloseUser closes every socket of userID. It is idempotent and a no-op for
+// an unknown or empty user; each socket's handler unregisters it as it ends,
+// which is what fires the offline presence event.
+func (h *Hub) CloseUser(userID string) {
+	if userID == "" {
+		return
+	}
+	var wg sync.WaitGroup
+	for _, c := range h.snapshot() {
+		if c.UserID != userID {
+			continue
+		}
+		wg.Add(1)
+		go func() { // the close handshake can block on a dead peer
+			defer wg.Done()
+			c.close(websocket.StatusPolicyViolation, "session ended")
+		}()
+	}
+	wg.Wait()
+}
+
+// LastEventAt returns when the bridge last saw a live entity event, one that
+// is not an exercise, or the zero time if it has seen none. The sensor
+// simulators' exercise traffic never stops, so it does not count.
+func (h *Hub) LastEventAt() time.Time {
+	n := h.lastEventNanos.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
+// noteEvent records that a live entity event just arrived.
+func (h *Hub) noteEvent() { h.lastEventNanos.Store(time.Now().UnixNano()) }
 
 // SetViewportListener registers a callback invoked whenever a client sends
 // a viewport or disconnects. The callback must not block.

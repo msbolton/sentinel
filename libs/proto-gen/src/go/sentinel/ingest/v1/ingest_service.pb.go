@@ -374,6 +374,86 @@ func (x *UpsertEmplacementResponse) GetEmplacement() *v1.Emplacement {
 	return nil
 }
 
+type RemoveEmplacementRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveEmplacementRequest) Reset() {
+	*x = RemoveEmplacementRequest{}
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveEmplacementRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveEmplacementRequest) ProtoMessage() {}
+
+func (x *RemoveEmplacementRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveEmplacementRequest.ProtoReflect.Descriptor instead.
+func (*RemoveEmplacementRequest) Descriptor() ([]byte, []int) {
+	return file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RemoveEmplacementRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+type RemoveEmplacementResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveEmplacementResponse) Reset() {
+	*x = RemoveEmplacementResponse{}
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveEmplacementResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveEmplacementResponse) ProtoMessage() {}
+
+func (x *RemoveEmplacementResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveEmplacementResponse.ProtoReflect.Descriptor instead.
+func (*RemoveEmplacementResponse) Descriptor() ([]byte, []int) {
+	return file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP(), []int{7}
+}
+
 // Report is one thing a sender says: an observation, or a mobile
 // emplacement's own position. client_ref comes back on the ack.
 // emplacement_id names the emplacement the report comes from (matched
@@ -397,7 +477,7 @@ type Report struct {
 
 func (x *Report) Reset() {
 	*x = Report{}
-	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[6]
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -409,7 +489,7 @@ func (x *Report) String() string {
 func (*Report) ProtoMessage() {}
 
 func (x *Report) ProtoReflect() protoreflect.Message {
-	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[6]
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -422,7 +502,7 @@ func (x *Report) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Report.ProtoReflect.Descriptor instead.
 func (*Report) Descriptor() ([]byte, []int) {
-	return file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP(), []int{6}
+	return file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Report) GetClientRef() string {
@@ -499,7 +579,7 @@ type Ack struct {
 
 func (x *Ack) Reset() {
 	*x = Ack{}
-	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[7]
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -511,7 +591,7 @@ func (x *Ack) String() string {
 func (*Ack) ProtoMessage() {}
 
 func (x *Ack) ProtoReflect() protoreflect.Message {
-	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[7]
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -524,7 +604,7 @@ func (x *Ack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ack.ProtoReflect.Descriptor instead.
 func (*Ack) Descriptor() ([]byte, []int) {
-	return file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP(), []int{7}
+	return file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Ack) GetClientRef() string {
@@ -564,7 +644,7 @@ type StreamReportsRequest struct {
 
 func (x *StreamReportsRequest) Reset() {
 	*x = StreamReportsRequest{}
-	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[8]
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -576,7 +656,7 @@ func (x *StreamReportsRequest) String() string {
 func (*StreamReportsRequest) ProtoMessage() {}
 
 func (x *StreamReportsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[8]
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -589,7 +669,7 @@ func (x *StreamReportsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamReportsRequest.ProtoReflect.Descriptor instead.
 func (*StreamReportsRequest) Descriptor() ([]byte, []int) {
-	return file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP(), []int{8}
+	return file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *StreamReportsRequest) GetReport() *Report {
@@ -608,7 +688,7 @@ type StreamReportsResponse struct {
 
 func (x *StreamReportsResponse) Reset() {
 	*x = StreamReportsResponse{}
-	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[9]
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -620,7 +700,7 @@ func (x *StreamReportsResponse) String() string {
 func (*StreamReportsResponse) ProtoMessage() {}
 
 func (x *StreamReportsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[9]
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -633,7 +713,7 @@ func (x *StreamReportsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamReportsResponse.ProtoReflect.Descriptor instead.
 func (*StreamReportsResponse) Descriptor() ([]byte, []int) {
-	return file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP(), []int{9}
+	return file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *StreamReportsResponse) GetAck() *Ack {
@@ -652,7 +732,7 @@ type PublishRequest struct {
 
 func (x *PublishRequest) Reset() {
 	*x = PublishRequest{}
-	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[10]
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -664,7 +744,7 @@ func (x *PublishRequest) String() string {
 func (*PublishRequest) ProtoMessage() {}
 
 func (x *PublishRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[10]
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -677,7 +757,7 @@ func (x *PublishRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishRequest.ProtoReflect.Descriptor instead.
 func (*PublishRequest) Descriptor() ([]byte, []int) {
-	return file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP(), []int{10}
+	return file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *PublishRequest) GetReports() []*Report {
@@ -696,7 +776,7 @@ type PublishResponse struct {
 
 func (x *PublishResponse) Reset() {
 	*x = PublishResponse{}
-	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[11]
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -708,7 +788,7 @@ func (x *PublishResponse) String() string {
 func (*PublishResponse) ProtoMessage() {}
 
 func (x *PublishResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[11]
+	mi := &file_sentinel_ingest_v1_ingest_service_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -721,7 +801,7 @@ func (x *PublishResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishResponse.ProtoReflect.Descriptor instead.
 func (*PublishResponse) Descriptor() ([]byte, []int) {
-	return file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP(), []int{11}
+	return file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *PublishResponse) GetAcks() []*Ack {
@@ -751,7 +831,10 @@ const file_sentinel_ingest_v1_ingest_service_proto_rawDesc = "" +
 	"\x18UpsertEmplacementRequest\x12:\n" +
 	"\vemplacement\x18\x01 \x01(\v2\x18.sentinel.v1.EmplacementR\vemplacement\"W\n" +
 	"\x19UpsertEmplacementResponse\x12:\n" +
-	"\vemplacement\x18\x01 \x01(\v2\x18.sentinel.v1.EmplacementR\vemplacement\"\xe2\x01\n" +
+	"\vemplacement\x18\x01 \x01(\v2\x18.sentinel.v1.EmplacementR\vemplacement\"*\n" +
+	"\x18RemoveEmplacementRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\x1b\n" +
+	"\x19RemoveEmplacementResponse\"\xe2\x01\n" +
 	"\x06Report\x12\x1d\n" +
 	"\n" +
 	"client_ref\x18\x01 \x01(\tR\tclientRef\x12<\n" +
@@ -777,12 +860,13 @@ const file_sentinel_ingest_v1_ingest_service_proto_rawDesc = "" +
 	"\x16ACK_STATUS_UNSPECIFIED\x10\x00\x12\x11\n" +
 	"\rACK_STATUS_OK\x10\x01\x12\x17\n" +
 	"\x13ACK_STATUS_REJECTED\x10\x02\x12\x1c\n" +
-	"\x18ACK_STATUS_DEAD_LETTERED\x10\x032\x8b\x04\n" +
+	"\x18ACK_STATUS_DEAD_LETTERED\x10\x032\xfd\x04\n" +
 	"\rIngestService\x12[\n" +
 	"\n" +
 	"GetSession\x12%.sentinel.ingest.v1.GetSessionRequest\x1a&.sentinel.ingest.v1.GetSessionResponse\x12m\n" +
 	"\x10ListEmplacements\x12+.sentinel.ingest.v1.ListEmplacementsRequest\x1a,.sentinel.ingest.v1.ListEmplacementsResponse\x12p\n" +
-	"\x11UpsertEmplacement\x12,.sentinel.ingest.v1.UpsertEmplacementRequest\x1a-.sentinel.ingest.v1.UpsertEmplacementResponse\x12h\n" +
+	"\x11UpsertEmplacement\x12,.sentinel.ingest.v1.UpsertEmplacementRequest\x1a-.sentinel.ingest.v1.UpsertEmplacementResponse\x12p\n" +
+	"\x11RemoveEmplacement\x12,.sentinel.ingest.v1.RemoveEmplacementRequest\x1a-.sentinel.ingest.v1.RemoveEmplacementResponse\x12h\n" +
 	"\rStreamReports\x12(.sentinel.ingest.v1.StreamReportsRequest\x1a).sentinel.ingest.v1.StreamReportsResponse(\x010\x01\x12R\n" +
 	"\aPublish\x12\".sentinel.ingest.v1.PublishRequest\x1a#.sentinel.ingest.v1.PublishResponseB;Z9github.com/sentinel/proto-gen/sentinel/ingest/v1;ingestv1b\x06proto3"
 
@@ -799,7 +883,7 @@ func file_sentinel_ingest_v1_ingest_service_proto_rawDescGZIP() []byte {
 }
 
 var file_sentinel_ingest_v1_ingest_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_sentinel_ingest_v1_ingest_service_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_sentinel_ingest_v1_ingest_service_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_sentinel_ingest_v1_ingest_service_proto_goTypes = []any{
 	(AckStatus)(0),                    // 0: sentinel.ingest.v1.AckStatus
 	(*GetSessionRequest)(nil),         // 1: sentinel.ingest.v1.GetSessionRequest
@@ -808,42 +892,46 @@ var file_sentinel_ingest_v1_ingest_service_proto_goTypes = []any{
 	(*ListEmplacementsResponse)(nil),  // 4: sentinel.ingest.v1.ListEmplacementsResponse
 	(*UpsertEmplacementRequest)(nil),  // 5: sentinel.ingest.v1.UpsertEmplacementRequest
 	(*UpsertEmplacementResponse)(nil), // 6: sentinel.ingest.v1.UpsertEmplacementResponse
-	(*Report)(nil),                    // 7: sentinel.ingest.v1.Report
-	(*Ack)(nil),                       // 8: sentinel.ingest.v1.Ack
-	(*StreamReportsRequest)(nil),      // 9: sentinel.ingest.v1.StreamReportsRequest
-	(*StreamReportsResponse)(nil),     // 10: sentinel.ingest.v1.StreamReportsResponse
-	(*PublishRequest)(nil),            // 11: sentinel.ingest.v1.PublishRequest
-	(*PublishResponse)(nil),           // 12: sentinel.ingest.v1.PublishResponse
-	(*v1.Emplacement)(nil),            // 13: sentinel.v1.Emplacement
-	(v1.Classification)(0),            // 14: sentinel.v1.Classification
-	(*v1.Observation)(nil),            // 15: sentinel.v1.Observation
-	(*v1.EmplacementState)(nil),       // 16: sentinel.v1.EmplacementState
+	(*RemoveEmplacementRequest)(nil),  // 7: sentinel.ingest.v1.RemoveEmplacementRequest
+	(*RemoveEmplacementResponse)(nil), // 8: sentinel.ingest.v1.RemoveEmplacementResponse
+	(*Report)(nil),                    // 9: sentinel.ingest.v1.Report
+	(*Ack)(nil),                       // 10: sentinel.ingest.v1.Ack
+	(*StreamReportsRequest)(nil),      // 11: sentinel.ingest.v1.StreamReportsRequest
+	(*StreamReportsResponse)(nil),     // 12: sentinel.ingest.v1.StreamReportsResponse
+	(*PublishRequest)(nil),            // 13: sentinel.ingest.v1.PublishRequest
+	(*PublishResponse)(nil),           // 14: sentinel.ingest.v1.PublishResponse
+	(*v1.Emplacement)(nil),            // 15: sentinel.v1.Emplacement
+	(v1.Classification)(0),            // 16: sentinel.v1.Classification
+	(*v1.Observation)(nil),            // 17: sentinel.v1.Observation
+	(*v1.EmplacementState)(nil),       // 18: sentinel.v1.EmplacementState
 }
 var file_sentinel_ingest_v1_ingest_service_proto_depIdxs = []int32{
-	13, // 0: sentinel.ingest.v1.GetSessionResponse.emplacements:type_name -> sentinel.v1.Emplacement
-	14, // 1: sentinel.ingest.v1.GetSessionResponse.classification_floor:type_name -> sentinel.v1.Classification
-	13, // 2: sentinel.ingest.v1.ListEmplacementsResponse.emplacements:type_name -> sentinel.v1.Emplacement
-	13, // 3: sentinel.ingest.v1.UpsertEmplacementRequest.emplacement:type_name -> sentinel.v1.Emplacement
-	13, // 4: sentinel.ingest.v1.UpsertEmplacementResponse.emplacement:type_name -> sentinel.v1.Emplacement
-	15, // 5: sentinel.ingest.v1.Report.observation:type_name -> sentinel.v1.Observation
-	16, // 6: sentinel.ingest.v1.Report.emplacement_state:type_name -> sentinel.v1.EmplacementState
+	15, // 0: sentinel.ingest.v1.GetSessionResponse.emplacements:type_name -> sentinel.v1.Emplacement
+	16, // 1: sentinel.ingest.v1.GetSessionResponse.classification_floor:type_name -> sentinel.v1.Classification
+	15, // 2: sentinel.ingest.v1.ListEmplacementsResponse.emplacements:type_name -> sentinel.v1.Emplacement
+	15, // 3: sentinel.ingest.v1.UpsertEmplacementRequest.emplacement:type_name -> sentinel.v1.Emplacement
+	15, // 4: sentinel.ingest.v1.UpsertEmplacementResponse.emplacement:type_name -> sentinel.v1.Emplacement
+	17, // 5: sentinel.ingest.v1.Report.observation:type_name -> sentinel.v1.Observation
+	18, // 6: sentinel.ingest.v1.Report.emplacement_state:type_name -> sentinel.v1.EmplacementState
 	0,  // 7: sentinel.ingest.v1.Ack.status:type_name -> sentinel.ingest.v1.AckStatus
-	7,  // 8: sentinel.ingest.v1.StreamReportsRequest.report:type_name -> sentinel.ingest.v1.Report
-	8,  // 9: sentinel.ingest.v1.StreamReportsResponse.ack:type_name -> sentinel.ingest.v1.Ack
-	7,  // 10: sentinel.ingest.v1.PublishRequest.reports:type_name -> sentinel.ingest.v1.Report
-	8,  // 11: sentinel.ingest.v1.PublishResponse.acks:type_name -> sentinel.ingest.v1.Ack
+	9,  // 8: sentinel.ingest.v1.StreamReportsRequest.report:type_name -> sentinel.ingest.v1.Report
+	10, // 9: sentinel.ingest.v1.StreamReportsResponse.ack:type_name -> sentinel.ingest.v1.Ack
+	9,  // 10: sentinel.ingest.v1.PublishRequest.reports:type_name -> sentinel.ingest.v1.Report
+	10, // 11: sentinel.ingest.v1.PublishResponse.acks:type_name -> sentinel.ingest.v1.Ack
 	1,  // 12: sentinel.ingest.v1.IngestService.GetSession:input_type -> sentinel.ingest.v1.GetSessionRequest
 	3,  // 13: sentinel.ingest.v1.IngestService.ListEmplacements:input_type -> sentinel.ingest.v1.ListEmplacementsRequest
 	5,  // 14: sentinel.ingest.v1.IngestService.UpsertEmplacement:input_type -> sentinel.ingest.v1.UpsertEmplacementRequest
-	9,  // 15: sentinel.ingest.v1.IngestService.StreamReports:input_type -> sentinel.ingest.v1.StreamReportsRequest
-	11, // 16: sentinel.ingest.v1.IngestService.Publish:input_type -> sentinel.ingest.v1.PublishRequest
-	2,  // 17: sentinel.ingest.v1.IngestService.GetSession:output_type -> sentinel.ingest.v1.GetSessionResponse
-	4,  // 18: sentinel.ingest.v1.IngestService.ListEmplacements:output_type -> sentinel.ingest.v1.ListEmplacementsResponse
-	6,  // 19: sentinel.ingest.v1.IngestService.UpsertEmplacement:output_type -> sentinel.ingest.v1.UpsertEmplacementResponse
-	10, // 20: sentinel.ingest.v1.IngestService.StreamReports:output_type -> sentinel.ingest.v1.StreamReportsResponse
-	12, // 21: sentinel.ingest.v1.IngestService.Publish:output_type -> sentinel.ingest.v1.PublishResponse
-	17, // [17:22] is the sub-list for method output_type
-	12, // [12:17] is the sub-list for method input_type
+	7,  // 15: sentinel.ingest.v1.IngestService.RemoveEmplacement:input_type -> sentinel.ingest.v1.RemoveEmplacementRequest
+	11, // 16: sentinel.ingest.v1.IngestService.StreamReports:input_type -> sentinel.ingest.v1.StreamReportsRequest
+	13, // 17: sentinel.ingest.v1.IngestService.Publish:input_type -> sentinel.ingest.v1.PublishRequest
+	2,  // 18: sentinel.ingest.v1.IngestService.GetSession:output_type -> sentinel.ingest.v1.GetSessionResponse
+	4,  // 19: sentinel.ingest.v1.IngestService.ListEmplacements:output_type -> sentinel.ingest.v1.ListEmplacementsResponse
+	6,  // 20: sentinel.ingest.v1.IngestService.UpsertEmplacement:output_type -> sentinel.ingest.v1.UpsertEmplacementResponse
+	8,  // 21: sentinel.ingest.v1.IngestService.RemoveEmplacement:output_type -> sentinel.ingest.v1.RemoveEmplacementResponse
+	12, // 22: sentinel.ingest.v1.IngestService.StreamReports:output_type -> sentinel.ingest.v1.StreamReportsResponse
+	14, // 23: sentinel.ingest.v1.IngestService.Publish:output_type -> sentinel.ingest.v1.PublishResponse
+	18, // [18:24] is the sub-list for method output_type
+	12, // [12:18] is the sub-list for method input_type
 	12, // [12:12] is the sub-list for extension type_name
 	12, // [12:12] is the sub-list for extension extendee
 	0,  // [0:12] is the sub-list for field type_name
@@ -854,7 +942,7 @@ func file_sentinel_ingest_v1_ingest_service_proto_init() {
 	if File_sentinel_ingest_v1_ingest_service_proto != nil {
 		return
 	}
-	file_sentinel_ingest_v1_ingest_service_proto_msgTypes[6].OneofWrappers = []any{
+	file_sentinel_ingest_v1_ingest_service_proto_msgTypes[8].OneofWrappers = []any{
 		(*Report_Observation)(nil),
 		(*Report_EmplacementState)(nil),
 	}
@@ -864,7 +952,7 @@ func file_sentinel_ingest_v1_ingest_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sentinel_ingest_v1_ingest_service_proto_rawDesc), len(file_sentinel_ingest_v1_ingest_service_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   12,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

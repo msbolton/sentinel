@@ -41,6 +41,7 @@ func main() {
 		zap.String("env", cfg.AppEnv),
 		zap.Bool("auth_dev_bypass", cfg.AuthDevBypass),
 		zap.String("keycloak_url", cfg.KeycloakURL),
+		zap.Bool("demo_enabled", cfg.Demo.Enabled),
 	)
 	if cfg.IsProduction() && cfg.AuthDevBypass {
 		logger.Fatal("AUTH_DEV_BYPASS must not be enabled in production")
@@ -128,6 +129,23 @@ func main() {
 		viewportSync.Start()
 	}
 
+	public := []func(*http.ServeMux){regHandler.RegisterPublicRoutes}
+	protected := []func(*http.ServeMux){regHandler.RegisterAdminRoutes, keyHandler.RegisterRoutes, exportHandler.RegisterRoutes, flightpath.NewHandler(flightpath.Options{BaseURL: cfg.IntelSkyBaseURL}, logger).RegisterRoutes}
+
+	// Public demo: throwaway guests and their visitor sites. Off, nothing of
+	// it exists: no routes, no goroutines, no presence listener. It sets the
+	// hub's presence listener, so it starts before the HTTP server.
+	var demoApp *publicDemo
+	if cfg.Demo.Enabled {
+		demoApp, err = startPublicDemo(cfg.Demo, keycloakAdmin, hub, logger)
+		if err != nil {
+			logger.Fatal("failed to start the public demo", zap.Error(err))
+		}
+		public = append(public, demoApp.RegisterPublicRoutes)
+		protected = append(protected, demoApp.RegisterProtectedRoutes)
+		wsHandler.SetAdmission(demoApp.AdmitStream)
+	}
+
 	handler := server.New(server.Deps{
 		Logger:     logger,
 		Auth:       authMw,
@@ -135,8 +153,8 @@ func main() {
 		CORSOrigin: cfg.CORSOrigin,
 		Upstreams:  up,
 		Locations:  locations.NewHandler(locStore, logger),
-		Public:     []func(*http.ServeMux){regHandler.RegisterPublicRoutes},
-		Protected:  []func(*http.ServeMux){regHandler.RegisterAdminRoutes, keyHandler.RegisterRoutes, exportHandler.RegisterRoutes, flightpath.NewHandler(flightpath.Options{BaseURL: cfg.IntelSkyBaseURL}, logger).RegisterRoutes},
+		Public:     public,
+		Protected:  protected,
 		Root: []func(*http.ServeMux){func(mux *http.ServeMux) {
 			mux.Handle("GET /ws/entities", authMw.RequireAuth(wsHandler))
 		}},
@@ -177,6 +195,9 @@ func main() {
 	defer cancel()
 	if err := httpServer.Shutdown(ctx); err != nil {
 		logger.Error("http server shutdown error", zap.Error(err))
+	}
+	if demoApp != nil {
+		demoApp.Stop()
 	}
 
 	logger.Info("sentinel api gateway shut down gracefully")

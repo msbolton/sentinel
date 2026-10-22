@@ -9,10 +9,12 @@ GO_SERVICES := api-gateway ingest-service entity-service track-service search-se
 SIMULATORS := sensor-sim
 SVC_DIR = $$([[ " $(SIMULATORS) " == *" $$svc "* ]] && echo simulators || echo apps)
 
-# Container images (the names the Helm chart pulls as sentinel/<name>). The
-# sensor-sim simulator is not deployed, so it is not listed. "web" is built
-# from apps/client.
-IMAGES := api-gateway entity-service track-service search-service link-analysis-service alert-service ingest-service analytics-service web
+# Container images (the names the Helm chart pulls as sentinel/<name>). "web"
+# is built from apps/client, sensor-sim (the chart's sensorSim, for the demo)
+# from simulators/sensor-sim, the rest from apps/<name>. IMAGE_DOCKERFILE
+# expands, inside a recipe loop over $$img, to the image's Dockerfile.
+IMAGES := api-gateway entity-service track-service search-service link-analysis-service alert-service ingest-service analytics-service web sensor-sim
+IMAGE_DOCKERFILE = $$([[ " $(SIMULATORS) " == *" $$img "* ]] && echo simulators/$$img || echo apps/$${img/web/client})/Dockerfile
 # REGISTRY and TAG are shared by images-push and deploy, so a deploy from the
 # same commit pulls the images that commit pushed.
 REGISTRY ?=
@@ -179,14 +181,14 @@ images-push: ## Build IMAGES for PLATFORM (default linux/amd64) and push REGISTR
 	@test -n "$(REGISTRY)" || { echo "REGISTRY is required, e.g. make images-push REGISTRY=registry.example.com"; exit 1; }
 	@for img in $(IMAGES); do \
 		echo "== $$img ($(PLATFORM)) -> $(REGISTRY)/sentinel/$$img:$(TAG)"; \
-		docker buildx build --platform $(PLATFORM) -f apps/$${img/web/client}/Dockerfile \
+		docker buildx build --platform $(PLATFORM) -f $(IMAGE_DOCKERFILE) \
 			-t $(REGISTRY)/sentinel/$$img:$(TAG) --push . || exit 1; \
 	done
 
 images-local: ## Build IMAGES for this machine's own platform and load them as sentinel/<name>:TAG, one at a time
 	@for img in $(IMAGES); do \
 		echo "== $$img (native) -> sentinel/$$img:$(TAG)"; \
-		docker buildx build -f apps/$${img/web/client}/Dockerfile \
+		docker buildx build -f $(IMAGE_DOCKERFILE) \
 			-t sentinel/$$img:$(TAG) --load . || exit 1; \
 	done
 
@@ -255,22 +257,24 @@ db-seed: ## Seed database with sample entities, a geofence rule, and locations
 # ----------------------------------------------------------------------------
 
 # Everything the chart renders must validate (kubeconform skips the CRDs it has no schema for), with
-# the defaults, the dev overlay, the prod overlay alone and with the local (k3d) one over it, the
-# optional parts switched on, the data tier alone, the apps
+# the defaults, the dev overlay, the prod overlay alone and with the local (k3d) or the demo one over
+# it, the optional parts switched on, the data tier alone, the apps
 # against an external database and the NetworkPolicies and backups switched off. The pod specs of the
 # hardened templates (the gateway, the services, the web client, both ingest Deployments, the schema
-# and topics Jobs, the data tier and the backups) must each render runAsNonRoot: true; add a template
-# to RESTRICTED when it is hardened too.
+# and topics Jobs, the data tier, the backups and the sensor simulators) must each render
+# runAsNonRoot: true, in a render with the listener, the simulators and the gateway's GeoIP
+# initContainer on; add a template to RESTRICTED when it is hardened too.
 CHART := k8s/charts/sentinel
 CHART_HOST := sentinel.example.com
 CHART_SET := --set ingestService.serviceToken=lint --set global.host=$(CHART_HOST)
 DEV_VALUES := k8s/overlays/dev/values.yaml
 PROD_VALUES := k8s/overlays/prod/values.yaml
 LOCAL_VALUES := k8s/overlays/local/values.yaml
+DEMO_VALUES := k8s/overlays/demo/values.yaml
 RESTRICTED := --show-only templates/api-gateway-deployment.yaml --show-only templates/services.yaml --show-only templates/web.yaml \
 	--show-only templates/ingest-service-deployment.yaml --show-only templates/ingest-listener-deployment.yaml --show-only templates/db-schema-job.yaml \
 	--show-only templates/postgresql.yaml --show-only templates/kafka.yaml --show-only templates/kafka-topics-job.yaml --show-only templates/opensearch.yaml \
-	--show-only templates/keycloak.yaml --show-only templates/backup-cronjob.yaml
+	--show-only templates/keycloak.yaml --show-only templates/backup-cronjob.yaml --show-only templates/sensor-sim.yaml
 DATA_TIER_ONLY := --set apiGateway.enabled=false --set ingestService.enabled=false --set ingestListener.enabled=false --set web.enabled=false \
 	--set entityService.enabled=false --set trackService.enabled=false --set searchService.enabled=false \
 	--set linkAnalysisService.enabled=false --set alertService.enabled=false --set analyticsService.enabled=false
@@ -285,6 +289,10 @@ NETPOL_BACKUP_OPTIONAL := --set networkPolicy.hostNetworkCIDRs={10.42.0.1/32} --
 	--set networkPolicy.geoserver.from[0].ipBlock.cidr=192.0.2.0/24 --set ingestService.serviceMonitor.enabled=true \
 	--set backup.rclone.enabled=true --set backup.rclone.existingSecret=lint --set backup.rclone.remote=lint:sentinel \
 	--set backup.timeZone=Etc/UTC
+
+# The public demo with everything on: the simulators, the gateway's DEMO_* settings and its GeoIP download.
+DEMO_ON := --set sensorSim.enabled=true --set sensorSim.tokenSecret=lint --set apiGateway.demo.enabled=true \
+	--set apiGateway.demo.tokenSecret=lint --set apiGateway.demo.geoip.enabled=true --set apiGateway.demo.geoip.existingSecret=lint
 
 # The Keycloak realm the chart renders from the dev realm file: no dev user (only the service account
 # and sentinel-admin), no -dev secret, every secret a ${ENV} placeholder (the SMTP password too, when
@@ -314,14 +322,14 @@ define chart_validate
 	printf '%s\n' "$$out" | kubeconform -strict -ignore-missing-schemas -summary
 endef
 
-chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics script, the initdb SQL, a production Keycloak realm, runAsNonRoot in every hardened pod spec, the listener's NetworkPolicy rule and the prod overlay's reserved ports, and validate the output, the overlays' too, with kubeconform (needs helm and kubeconform)
+chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics script, the initdb SQL, a production Keycloak realm, runAsNonRoot in every hardened pod spec, the listener's NetworkPolicy rule, the prod overlay's reserved ports and the demo's simulators and gateway settings, and validate the output, the overlays' too, with kubeconform (needs helm and kubeconform)
 	helm lint $(CHART) $(CHART_SET)
 	helm template sentinel $(CHART) $(CHART_SET) | grep -q '^  70_feeds\.sql: '
 	helm template sentinel $(CHART) $(CHART_SET) | grep -q 'observations\.raw|24|'
 	helm template sentinel $(CHART) $(CHART_SET) | grep -q 'CREATE EXTENSION IF NOT EXISTS postgis_topology;'
 	$(call chart_realm_check,)
 	$(call chart_realm_check,$(APPS_OPTIONAL))
-	@restricted="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestListener.enabled=true $(RESTRICTED))"; \
+	@restricted="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestListener.enabled=true $(DEMO_ON) $(RESTRICTED))"; \
 	pods=$$(printf '%s\n' "$$restricted" | grep -cE '^ +containers:'); \
 	roots=$$(printf '%s\n' "$$restricted" | grep -c 'runAsNonRoot: true'); \
 	test "$$pods" -gt 0 && test "$$pods" = "$$roots" || { echo "chart-lint: $$roots runAsNonRoot: true for $$pods hardened pod specs"; exit 1; }
@@ -329,11 +337,14 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics 
 	$(call chart_validate,-f $(DEV_VALUES))
 	$(call chart_validate,-f $(PROD_VALUES))
 	$(call chart_validate,-f $(PROD_VALUES) -f $(LOCAL_VALUES))
+	$(call chart_validate,-f $(PROD_VALUES) -f $(DEMO_VALUES))
 	$(call chart_validate,--set geoserver.enabled=true --set ingestService.serviceMonitor.enabled=true)
 	$(call chart_validate,$(APPS_OPTIONAL))
 	$(call chart_validate,$(DATA_TIER_ONLY))
 	$(call chart_validate,--set postgresql.existingSecret=sentinel-db --set postgresql.enabled=false --set kafka.enabled=false --set opensearch.enabled=false)
 	$(call chart_validate,$(NETPOL_BACKUP_OPTIONAL))
+	$(call chart_validate,$(DEMO_ON))
+	$(call chart_validate,-f $(PROD_VALUES) $(DEMO_ON))
 	$(call chart_validate,--set networkPolicy.enabled=false --set backup.enabled=false)
 	@# The listener's rule: with the listener on and no CIDRs PostgreSQL has no from (open in the
 	@# cluster); with CIDRs they reach both the PostgreSQL and the Kafka policy.
@@ -379,6 +390,37 @@ chart-lint: ## Lint the Helm chart, check that it renders db/schema, the topics 
 	@# GOMEMLIMIT is 80% of a fractional limit too (1.5Gi is 1536 MiB), never "0MiB".
 	@frac="$$(helm template sentinel $(CHART) $(CHART_SET) --set ingestService.resources.limits.memory=1.5Gi --show-only templates/ingest-service-deployment.yaml)"; \
 	printf '%s\n' "$$frac" | grep -A1 'name: GOMEMLIMIT$$' | grep -q 'value: "1228MiB"' || { echo "chart-lint: ingest-service's GOMEMLIMIT is not 80% of a 1.5Gi limit (1228MiB)"; exit 1; }
+	@# The public demo is off by default: no simulator, no DEMO_* and no GeoIP download.
+	@off="$$(helm template sentinel $(CHART) $(CHART_SET))" || exit 1; \
+	! printf '%s\n' "$$off" | grep -q 'sensor-sim' || { echo "chart-lint: the defaults render a sensor simulator"; exit 1; }; \
+	! printf '%s\n' "$$off" | grep -q 'name: DEMO_' || { echo "chart-lint: the defaults render DEMO_* settings"; exit 1; }; \
+	! printf '%s\n' "$$off" | grep -qE -- '- name: geoip$$|/var/lib/geoip' || { echo "chart-lint: the defaults render the GeoIP download"; exit 1; }
+	@# One simulator Deployment per kind, each sending to its node's address on sensorSim.port.
+	@sims="$$(helm template sentinel $(CHART) $(CHART_SET) --set sensorSim.enabled=true --set sensorSim.tokenSecret=t)" || { echo "chart-lint: the simulators do not render"; exit 1; }; \
+	names=$$(printf '%s\n' "$$sims" | awk '/^---/ {d=0} /^kind: Deployment$$/ {d=1} d && /^  name: / {print $$2}' | grep -- '-sensor-sim-' | sort | tr '\n' ' '); \
+	test "$$names" = "sentinel-sensor-sim-eoir sentinel-sensor-sim-esm sentinel-sensor-sim-radar " || { echo "chart-lint: the simulator Deployments are $$names"; exit 1; }; \
+	test "$$(printf '%s\n' "$$sims" | grep -A1 'name: SENSOR_SIM_ADDR$$' | grep -cF 'value: "$$(HOST_IP):6201"')" = 3 || { echo "chart-lint: a simulator does not send to \$$(HOST_IP):6201"; exit 1; }; \
+	! helm template sentinel $(CHART) $(CHART_SET) --set sensorSim.enabled=true >/dev/null 2>&1 || { echo "chart-lint: the simulators render without sensorSim.tokenSecret"; exit 1; }
+	@# The gateway's demo settings, its ingest address on its node and the GeoIP download only with geoip on.
+	@demo="$$(helm template sentinel $(CHART) $(CHART_SET) --set apiGateway.demo.enabled=true --set apiGateway.demo.tokenSecret=t --show-only templates/api-gateway-deployment.yaml)" || { echo "chart-lint: the demo gateway does not render"; exit 1; }; \
+	printf '%s\n' "$$demo" | grep -A1 'name: DEMO_ENABLED$$' | grep -q 'value: "true"' || { echo "chart-lint: the gateway has no DEMO_ENABLED of \"true\""; exit 1; }; \
+	printf '%s\n' "$$demo" | grep -A1 'name: DEMO_INGEST_ADDR$$' | grep -qF 'value: "$$(HOST_IP):6202"' || { echo "chart-lint: DEMO_INGEST_ADDR is not \$$(HOST_IP):6202"; exit 1; }; \
+	! printf '%s\n' "$$demo" | grep -q 'initContainers:\|DEMO_GEOIP_DB' || { echo "chart-lint: the gateway downloads GeoIP with geoip off"; exit 1; }; \
+	geo="$$(helm template sentinel $(CHART) $(CHART_SET) --set apiGateway.demo.enabled=true --set apiGateway.demo.tokenSecret=t --set apiGateway.demo.geoip.enabled=true --set apiGateway.demo.geoip.existingSecret=t --show-only templates/api-gateway-deployment.yaml)" || { echo "chart-lint: the demo gateway with geoip does not render"; exit 1; }; \
+	printf '%s\n' "$$geo" | sed -n '/^      initContainers:$$/,/^      containers:$$/p' | grep -q -- '- name: geoip$$' || { echo "chart-lint: the gateway has no geoip initContainer"; exit 1; }; \
+	printf '%s\n' "$$geo" | grep -A1 'name: DEMO_GEOIP_DB$$' | grep -qF 'value: "/var/lib/geoip/GeoLite2-City.mmdb"' || { echo "chart-lint: DEMO_GEOIP_DB is not /var/lib/geoip/GeoLite2-City.mmdb"; exit 1; }; \
+	printf '%s\n' "$$geo" | grep -A2 'mountPath: /var/lib/geoip$$' | grep -q 'readOnly: true' || { echo "chart-lint: the gateway does not mount /var/lib/geoip read-only"; exit 1; }; \
+	printf '%s\n' "$$geo" | grep -F -- '--connect-timeout 10 --max-time 60 --retry 2 --retry-max-time 120' >/dev/null || { echo "chart-lint: the GeoIP download is not bounded to about 2 minutes (--connect-timeout 10 --max-time 60 --retry 2 --retry-max-time 120)"; exit 1; }; \
+	! helm template sentinel $(CHART) $(CHART_SET) --set apiGateway.demo.enabled=true --set apiGateway.demo.tokenSecret=t --set apiGateway.extraEnv.DEMO_ENABLED=true >/dev/null 2>&1 || { echo "chart-lint: apiGateway.extraEnv may set DEMO_ENABLED"; exit 1; }
+	@# The demo overlay over the prod one: the live feeds on at install beside the prod reserved ports, the
+	@# simulators and the gateway on the Secrets scripts/demo-bootstrap.sh creates, GeoIP from sentinel-geoip.
+	@ov="$$(helm template sentinel $(CHART) $(CHART_SET) -f $(PROD_VALUES) -f $(DEMO_VALUES))" || { echo "chart-lint: the demo overlay does not render"; exit 1; }; \
+	test "$$(printf '%s\n' "$$ov" | grep -A1 'name: FEEDS_BOOTSTRAP_ENABLED$$' | grep -cF 'value: "opensky,aisstream,intelsky,celestrak"')" = 2 || { echo "chart-lint: the demo overlay does not enable the live feeds in both ingest Deployments"; exit 1; }; \
+	test "$$(printf '%s\n' "$$ov" | grep -c 'name: INGEST_RESERVED_PORTS$$')" = 2 || { echo "chart-lint: the demo overlay drops the prod overlay's INGEST_RESERVED_PORTS"; exit 1; }; \
+	test "$$(printf '%s\n' "$$ov" | grep -A3 'name: SENSOR_SIM_TOKEN$$' | grep -c 'name: sentinel-demo-sim-token$$')" = 3 || { echo "chart-lint: the demo simulators do not read sentinel-demo-sim-token"; exit 1; }; \
+	printf '%s\n' "$$ov" | grep -A3 'name: DEMO_INGEST_TOKEN$$' | grep -q 'name: sentinel-demo-visitors-token$$' || { echo "chart-lint: the demo gateway does not read sentinel-demo-visitors-token"; exit 1; }; \
+	test "$$(printf '%s\n' "$$ov" | grep -c 'name: sentinel-geoip$$')" = 2 || { echo "chart-lint: the demo GeoIP download does not read sentinel-geoip"; exit 1; }; \
+	printf '%s\n' "$$ov" | grep -A1 'name: DEMO_GEOIP_DB$$' | grep -qF 'value: "/var/lib/geoip/GeoLite2-City.mmdb"' || { echo "chart-lint: the demo overlay has no DEMO_GEOIP_DB"; exit 1; }
 
 # ----------------------------------------------------------------------------
 # Deployment (docs/deployment.md)

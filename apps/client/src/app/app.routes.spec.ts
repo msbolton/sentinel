@@ -3,10 +3,18 @@ import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { Router, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
+import { EMPTY } from 'rxjs';
 import { routes } from './app.routes';
 import { AuthService } from './core/services/auth.service';
 
 describe('routes', () => {
+  it('serves /demo without a guard, so a signed-out visitor can start a guest session', () => {
+    const demo = routes.find((r) => r.path === 'demo');
+    expect(demo).toBeDefined();
+    expect(demo?.canActivate).toBeUndefined();
+    expect(demo?.loadComponent).toBeDefined();
+  });
+
   it('sends /feeds to /connections, which keeps the operator role guard', async () => {
     TestBed.configureTestingModule({
       providers: [
@@ -38,7 +46,7 @@ describe('routes', () => {
         provideRouter(routes),
         provideHttpClient(),
         provideHttpClientTesting(),
-        { provide: AuthService, useValue: { isAuthenticated: () => true, getUserRoles: () => ['sentinel-viewer'] } },
+        { provide: AuthService, useValue: { isAuthenticated: () => true, getUserRoles: () => ['sentinel-viewer'], isGuest: () => false, sessionLost$: EMPTY, userProfile$: EMPTY } },
       ],
     });
 
@@ -53,7 +61,7 @@ describe('routes', () => {
         provideRouter(routes),
         provideHttpClient(),
         provideHttpClientTesting(),
-        { provide: AuthService, useValue: { isAuthenticated: () => true, getUserRoles: () => ['sentinel-viewer'], getClassificationLevel: () => 'UNCLASSIFIED' } },
+        { provide: AuthService, useValue: { isAuthenticated: () => true, getUserRoles: () => ['sentinel-viewer'], getClassificationLevel: () => 'UNCLASSIFIED', isGuest: () => false, sessionLost$: EMPTY, userProfile$: EMPTY } },
       ],
     });
     expect(routes.find((r) => r.path === 'emplacements')).toEqual({ path: 'emplacements', redirectTo: 'map' });

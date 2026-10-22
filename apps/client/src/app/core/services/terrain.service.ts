@@ -1,5 +1,6 @@
 import { Injectable, signal } from '@angular/core';
 import { environment } from '../../../environments/environment';
+import { startsLite } from '../../features/map/lite-mode';
 
 /** localStorage key for the remembered terrain choice ('true' or 'false'). */
 export const TERRAIN_STORAGE_KEY = 'sentinel.map.terrain';
@@ -9,8 +10,10 @@ export const TERRAIN_STORAGE_KEY = 'sentinel.map.terrain';
  *
  * World Terrain needs a Cesium ion token, so without one the service is
  * unavailable and the globe stays on the ellipsoid. With one it is on unless
- * the user turned it off (remembered in localStorage). If World Terrain fails
- * to load, the globe falls back to the ellipsoid and the toggle reads off.
+ * the user turned it off (remembered in localStorage). On a phone (narrow or
+ * touch screen) it starts off until the user has chosen; a saved choice wins.
+ * If World Terrain fails to load, the globe falls back to the ellipsoid and the
+ * toggle reads off.
  */
 @Injectable({ providedIn: 'root' })
 export class TerrainService {
@@ -33,7 +36,7 @@ export class TerrainService {
       this._enabled.set(false);
       return;
     }
-    if ((this.readStored() ?? true) === false) {
+    if ((this.readStored() ?? !startsLite()) === false) {
       this._enabled.set(false);
       return;
     }

@@ -130,6 +130,8 @@ type keycloakUser struct {
 	LastName   string              `json:"lastName"`
 	Enabled    bool                `json:"enabled"`
 	Attributes map[string][]string `json:"attributes,omitempty"`
+	// CreatedTimestamp is milliseconds since the epoch, set by Keycloak.
+	CreatedTimestamp int64 `json:"createdTimestamp,omitempty"`
 }
 
 type keycloakRole struct {
@@ -511,8 +513,18 @@ func (c *KeycloakClient) assignRealmRoles(ctx context.Context, userID string, na
 			toAssign = append(toAssign, r)
 		}
 	}
-	if len(toAssign) == 0 {
-		return errors.New("required roles " + strings.Join(names, ", ") + " not found")
+	if len(toAssign) != len(names) {
+		var missing []string
+		for _, n := range names {
+			found := false
+			for _, r := range toAssign {
+				found = found || r.Name == n
+			}
+			if !found {
+				missing = append(missing, n)
+			}
+		}
+		return errors.New("required roles " + strings.Join(missing, ", ") + " not found")
 	}
 	resp, err = c.adminRequest(ctx, http.MethodPost, "/users/"+userID+"/role-mappings/realm", toAssign)
 	if err != nil {
@@ -523,6 +535,153 @@ func (c *KeycloakClient) assignRealmRoles(ctx context.Context, userID string, na
 		return fmt.Errorf("assign roles: %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// GuestUser is a throwaway demo account found by role.
+type GuestUser struct {
+	ID        string
+	Username  string
+	CreatedAt time.Time
+}
+
+// TokenResponse is the part of a token endpoint reply the gateway forwards.
+type TokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+// guestCreatedAtAttr records when a throwaway guest was made.
+const guestCreatedAtAttr = "sentinelGuestCreatedAt"
+
+// roleUsersPage is how many users GET /roles/{role}/users is asked for at once.
+const roleUsersPage = 100
+
+// CreateGuestUser makes an enabled, password-bearing account with no required
+// actions and the given realm roles, stamped with sentinelGuestCreatedAt. The
+// realm's user profile requires an email and names for login, so the account
+// gets placeholder ones on the reserved .invalid domain. If the roles cannot be
+// assigned the account is deleted again, so no guest exists without its roles.
+func (c *KeycloakClient) CreateGuestUser(ctx context.Context, username, password string, roles []string) (string, error) {
+	rep := map[string]interface{}{
+		"username":        username,
+		"email":           username + "@guest.invalid",
+		"emailVerified":   true,
+		"firstName":       "Demo",
+		"lastName":        "Guest",
+		"enabled":         true,
+		"requiredActions": []string{},
+		"credentials": []map[string]interface{}{
+			{"type": "password", "value": password, "temporary": false},
+		},
+		"attributes": map[string][]string{
+			guestCreatedAtAttr: {c.now().UTC().Format(time.RFC3339)},
+		},
+	}
+	resp, err := c.adminRequest(ctx, http.MethodPost, "/users", rep)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if !ok(resp) {
+		c.logFailure("failed to create guest user", resp)
+		return "", &APIError{Status: http.StatusInternalServerError, Message: "Failed to create guest user"}
+	}
+	loc := resp.Header.Get("Location")
+	id := loc[strings.LastIndex(loc, "/")+1:]
+	if loc == "" || id == "" {
+		return "", &APIError{Status: http.StatusInternalServerError, Message: "Failed to create guest user"}
+	}
+
+	if err := c.assignRealmRoles(ctx, id, roles); err != nil {
+		c.logger.Error("guest role assignment failed, deleting user", zap.String("userId", id), zap.Error(err))
+		if derr := c.DeleteUser(ctx, id); derr != nil {
+			c.logger.Error("failed to delete role-less guest", zap.String("userId", id), zap.Error(derr))
+		}
+		return "", &APIError{Status: http.StatusInternalServerError, Message: "Failed to create guest user"}
+	}
+	return id, nil
+}
+
+// DeleteUser removes an account; one that is already gone counts as deleted.
+func (c *KeycloakClient) DeleteUser(ctx context.Context, userID string) error {
+	resp, err := c.adminRequest(ctx, http.MethodDelete, "/users/"+url.PathEscape(userID), nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if ok(resp) || resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	c.logFailure("failed to delete user", resp)
+	return &APIError{Status: http.StatusInternalServerError, Message: "Failed to delete user"}
+}
+
+// UsersWithRole lists every user holding a realm role, paging until a short
+// page. CreatedAt is the sentinelGuestCreatedAt attribute when present and
+// valid, else Keycloak's createdTimestamp.
+func (c *KeycloakClient) UsersWithRole(ctx context.Context, role string) ([]GuestUser, error) {
+	out := []GuestUser{}
+	for offset := 0; ; offset += roleUsersPage {
+		path := fmt.Sprintf("/roles/%s/users?briefRepresentation=false&first=%d&max=%d", url.PathEscape(role), offset, roleUsersPage)
+		resp, err := c.adminRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, err
+		}
+		if !ok(resp) {
+			c.logFailure("failed to list users with role", resp)
+			resp.Body.Close()
+			return nil, &APIError{Status: http.StatusInternalServerError, Message: "Failed to list users"}
+		}
+		var page []keycloakUser
+		if err := decode(resp, &page); err != nil {
+			return nil, &APIError{Status: http.StatusInternalServerError, Message: "Failed to list users"}
+		}
+		for _, u := range page {
+			created := time.UnixMilli(u.CreatedTimestamp).UTC()
+			if t, err := time.Parse(time.RFC3339, first(u.Attributes[guestCreatedAtAttr])); err == nil {
+				created = t
+			}
+			out = append(out, GuestUser{ID: u.ID, Username: u.Username, CreatedAt: created})
+		}
+		if len(page) < roleUsersPage {
+			return out, nil
+		}
+	}
+}
+
+// PasswordGrant logs a user in against a public client. It needs no admin
+// token. Neither the password nor the tokens are logged.
+func (c *KeycloakClient) PasswordGrant(ctx context.Context, clientID, username, password string) (TokenResponse, error) {
+	form := url.Values{
+		"grant_type": {"password"},
+		"client_id":  {clientID},
+		"username":   {username},
+		"password":   {password},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.baseURL+"/realms/"+c.realm+"/protocol/openid-connect/token",
+		strings.NewReader(form.Encode()))
+	if err != nil {
+		return TokenResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		c.logger.Error("keycloak password grant failed", zap.Error(err))
+		return TokenResponse{}, &APIError{Status: http.StatusServiceUnavailable, Message: "Keycloak unavailable"}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		// The body is an OAuth error document; log its status, not the credentials.
+		c.logger.Error("keycloak password grant rejected", zap.Int("status", resp.StatusCode))
+		return TokenResponse{}, &APIError{Status: http.StatusBadGateway, Message: "Login failed"}
+	}
+	var tok TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tok); err != nil || tok.AccessToken == "" {
+		return TokenResponse{}, &APIError{Status: http.StatusBadGateway, Message: "Login failed"}
+	}
+	return tok, nil
 }
 
 func first(v []string) string {

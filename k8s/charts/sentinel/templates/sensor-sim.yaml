@@ -1,0 +1,100 @@
+{{- if .Values.sensorSim.enabled }}
+{{- $s := .Values.sensorSim }}
+{{- $token := required "sensorSim.tokenSecret: name the Secret with the simulators' ingest token (key token)" $s.tokenSecret }}
+{{- $seen := list }}
+{{- range $s.kinds }}
+{{- if not (has .kind (list "radar" "eoir" "esm")) }}
+{{- fail (printf "sensorSim.kinds: kind must be radar, eoir or esm, got %q" .kind) }}
+{{- end }}
+{{- if has .kind $seen }}
+{{- fail (printf "sensorSim.kinds: kind %s is listed twice" .kind) }}
+{{- end }}
+{{- $seen = append $seen .kind }}
+{{- $component := printf "sensor-sim-%s" .kind }}
+{{- $config := required (printf "sensorSim.kinds: %s has no config" .kind) .config }}
+{{- $terrain := ne .kind "esm" }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sentinel.fullname" $ }}-{{ $component }}
+  labels:
+    {{- include "sentinel.labels" (dict "ctx" $ "component" $component "tier" "sim") | nindent 4 }}
+spec:
+  replicas: 1
+  # Recreate: the simulator upserts its emplacement by name, so two pods of one
+  # kind would report as the same site.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "sentinel.selectorLabels" (dict "ctx" $ "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sentinel.podLabels" (dict "ctx" $ "component" $component) | nindent 8 }}
+    spec:
+      {{- if not $.Values.ingestListener.host }}
+      # status.hostIP is the listener's address only on the listener's node.
+      {{- with $.Values.ingestListener.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      {{- with $s.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "sentinel.imagePullSecrets" $) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: sensor-sim
+          image: {{ include "sentinel.image" (dict "ctx" $ "image" $s.image) | quote }}
+          imagePullPolicy: {{ $s.image.pullPolicy | default "IfNotPresent" }}
+          {{- with $s.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          args:
+            - --kind
+            - {{ .kind }}
+            - --insecure
+            - --config
+            - {{ ternary $config (printf "/app/examples/%s" $config) (hasPrefix "/" $config) | quote }}
+            {{- if $terrain }}
+            - --terrain-cache
+            - /var/cache/sentinel/terrain
+            {{- end }}
+          env:
+            {{- if $.Values.ingestListener.host }}
+            - name: SENSOR_SIM_ADDR
+              value: {{ printf "%s:%v" $.Values.ingestListener.host $s.port | quote }}
+            {{- else }}
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: SENSOR_SIM_ADDR
+              value: {{ printf "$(HOST_IP):%v" $s.port | quote }}
+            {{- end }}
+            - name: SENSOR_SIM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $token }}
+                  key: token
+          resources:
+            {{- toYaml $s.resources | nindent 12 }}
+          {{- if $terrain }}
+          volumeMounts:
+            - name: terrain-cache
+              mountPath: /var/cache/sentinel/terrain
+          {{- end }}
+      {{- if $terrain }}
+      volumes:
+        - name: terrain-cache
+          emptyDir:
+            sizeLimit: {{ $s.terrainCacheSizeLimit }}
+      {{- end }}
+{{- end }}
+{{- end }}

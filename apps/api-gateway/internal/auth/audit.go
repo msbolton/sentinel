@@ -46,6 +46,15 @@ func (a *Audit) RoleCheckFailed(r *http.Request, u *User, required []string) {
 	)...)
 }
 
+// RoleDenied records an authenticated user refused because they hold a role
+// the route excludes.
+func (a *Audit) RoleDenied(r *http.Request, u *User, denied []string) {
+	a.logger.Warn("role denied", append(baseFields("ROLE_DENIED", r, u),
+		zap.Strings("deniedRoles", denied),
+		zap.Strings("userRoles", u.Roles),
+	)...)
+}
+
 // ClassificationCheckFailed records an authenticated user lacking the required clearance.
 func (a *Audit) ClassificationCheckFailed(r *http.Request, u *User, required string) {
 	a.logger.Warn("classification check failed", append(baseFields("CLASSIFICATION_CHECK_FAILED", r, u),

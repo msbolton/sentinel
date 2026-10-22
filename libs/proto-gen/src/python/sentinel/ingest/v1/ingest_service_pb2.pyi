@@ -65,6 +65,16 @@ class UpsertEmplacementResponse(_message.Message):
     emplacement: _emplacement_pb2.Emplacement
     def __init__(self, emplacement: _Optional[_Union[_emplacement_pb2.Emplacement, _Mapping]] = ...) -> None: ...
 
+class RemoveEmplacementRequest(_message.Message):
+    __slots__ = ("id",)
+    ID_FIELD_NUMBER: _ClassVar[int]
+    id: str
+    def __init__(self, id: _Optional[str] = ...) -> None: ...
+
+class RemoveEmplacementResponse(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
 class Report(_message.Message):
     __slots__ = ("client_ref", "observation", "emplacement_state", "emplacement_id")
     CLIENT_REF_FIELD_NUMBER: _ClassVar[int]

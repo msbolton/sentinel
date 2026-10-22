@@ -1,0 +1,39 @@
+# The public demo at sentinel.msbolton.dev (docs/demo.md). It layers over the
+# prod overlay, and your site file over it. Like the prod overlay it holds no
+# secrets: it names the Secrets that scripts/demo-bootstrap.sh creates (the
+# two ingest tokens) and the MaxMind one you create (docs/demo.md, owner
+# checklist).
+#
+# A first install runs twice (docs/demo.md, Install): the gateway with the
+# demo on cannot start without the visitors token, and the bootstrap script
+# makes that token through the gateway. So:
+#   1. make deploy REGISTRY=registry.example.com \
+#        VALUES="k8s/overlays/demo/values.yaml $HOME/sentinel/sentinel-site.yaml" \
+#        HELM_ARGS="--set apiGateway.demo.enabled=false"
+#   2. scripts/demo-bootstrap.sh --host https://sentinel.msbolton.dev
+#   3. the same make deploy without HELM_ARGS, then roll the gateway and the
+#      simulators (the script prints the kubectl rollout restart).
+# Later upgrades are step 3's make deploy alone.
+
+ingestService:
+  env:
+    # The live feeds, on at install (the built-ins are otherwise seeded
+    # disabled). Merged with the prod overlay's env, so its
+    # INGEST_RESERVED_PORTS stays.
+    FEEDS_BOOTSTRAP_ENABLED: opensky,aisstream,intelsky,celestrak
+
+# Radar, EO/IR and ESM around the clock on the demo-sensors connection (port
+# 6201, sensorSim.port's default).
+sensorSim:
+  enabled: true
+  tokenSecret: sentinel-demo-sim-token
+
+apiGateway:
+  demo:
+    enabled: true
+    # The demo-visitors connection's token (port 6202, demo.ingestPort's default).
+    tokenSecret: sentinel-demo-visitors-token
+    geoip:
+      enabled: true
+      # Keys account-id and license-key: the MaxMind GeoLite2 account.
+      existingSecret: sentinel-geoip

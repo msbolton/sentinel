@@ -1,7 +1,14 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import { HttpInterceptorFn } from '@angular/common/http';
-import { BehaviorSubject, Observable } from 'rxjs';
+import { BehaviorSubject, Observable, Subject } from 'rxjs';
 import { environment } from '../../../environments/environment';
+import { clearGuestSession, forgetDemoVisitor, loadGuestSession, saveGuestSession } from './guest-session-store';
+
+interface TokenResponse {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+}
 
 export interface UserProfile {
   username: string;
@@ -27,15 +34,41 @@ export class AuthService implements OnDestroy {
   readonly isAuthenticated$: Observable<boolean> = this.authenticatedSubject.asObservable();
   readonly userProfile$: Observable<UserProfile | null> = this.userProfileSubject.asObservable();
 
+  private readonly sessionLostSubject = new Subject<void>();
+
+  /**
+   * Emitted when a direct-token session (password grant or guest) can no longer
+   * be refreshed. It fires before the session state is cleared, so a listener
+   * can still see who the user was (for example via isGuest()).
+   */
+  readonly sessionLost$: Observable<void> = this.sessionLostSubject.asObservable();
+
   /** Set when sign-in is unavailable because Keycloak could not be initialised (production only). */
   readonly initError$ = new BehaviorSubject<string | null>(null);
 
+  private markReady!: () => void;
+
+  /**
+   * Resolves once init() has finished (whatever its outcome). Anything that
+   * decides what to do from the signed-in state, such as the /demo entry,
+   * waits for it so it never reads the state before Keycloak has answered.
+   */
+  readonly ready: Promise<void> = new Promise<void>((resolve) => (this.markReady = resolve));
+
   async init(): Promise<boolean> {
+    try {
+      return await this.initKeycloak();
+    } finally {
+      this.markReady();
+    }
+  }
+
+  private async initKeycloak(): Promise<boolean> {
     try {
       const KeycloakModule = await import('keycloak-js').catch(() => null);
 
       if (!KeycloakModule) {
-        return this.handleInitFailure('Keycloak JS adapter not available');
+        return (await this.resumeStoredGuest()) || this.handleInitFailure('Keycloak JS adapter not available');
       }
 
       const Keycloak = KeycloakModule.default;
@@ -48,6 +81,19 @@ export class AuthService implements OnDestroy {
       const authenticated = await this.keycloak.init({
         pkceMethod: 'S256',
       });
+
+      if (this.directToken) {
+        // A direct session (a demo guest) was adopted while Keycloak was still
+        // answering; it must not be reset by this result.
+        return this.isAuthenticated();
+      }
+
+      if (authenticated) {
+        // A real user: nothing of an earlier demo guest on this browser applies.
+        forgetDemoVisitor();
+      } else if (await this.resumeStoredGuest()) {
+        return true;
+      }
 
       this.authenticatedSubject.next(authenticated);
 
@@ -71,7 +117,41 @@ export class AuthService implements OnDestroy {
       return authenticated;
     } catch (error) {
       this.keycloak = null;
-      return this.handleInitFailure('Keycloak initialization failed', error);
+      return (await this.resumeStoredGuest()) || this.handleInitFailure('Keycloak initialization failed', error);
+    }
+  }
+
+  /**
+   * Picks up the demo guest this browser was (a reload, an evicted tab, a
+   * second tab) from its stored refresh token, when Keycloak has no session.
+   * The stored session goes when it is past its expiry, its refresh fails or
+   * the refreshed token is not a guest's; the browser stays a demo visitor,
+   * so the guards send it to /demo for a new one.
+   */
+  private async resumeStoredGuest(): Promise<boolean> {
+    if (this.directToken) return this.isAuthenticated();
+    const stored = loadGuestSession();
+    if (!stored?.refreshToken) return false;
+    const expiresAt = stored.expiresAt ? Date.parse(stored.expiresAt) : NaN;
+    if (!(expiresAt > Date.now())) {
+      clearGuestSession();
+      return false;
+    }
+    try {
+      const t = await this.requestRefresh(stored.refreshToken);
+      if (!(this.parseJwt(t.access_token)?.realm_access?.roles ?? []).includes('sentinel-guest')) {
+        throw new Error('the stored session is not a guest');
+      }
+      if (this.directToken) return this.isAuthenticated(); // a guest was adopted meanwhile
+      this.applyTokenResponse(t.access_token, t.refresh_token, 'unknown');
+      this.authenticatedSubject.next(true);
+      this.setupDirectTokenRefresh(t.expires_in);
+      saveGuestSession({ refreshToken: t.refresh_token });
+      return true;
+    } catch {
+      console.warn('[Auth] The stored demo session could not be resumed');
+      clearGuestSession();
+      return false;
     }
   }
 
@@ -81,6 +161,10 @@ export class AuthService implements OnDestroy {
    * error on the login page.
    */
   private handleInitFailure(reason: string, error?: unknown): boolean {
+    if (this.directToken) {
+      console.warn(`[Auth] ${reason}; keeping the direct session`, error ?? '');
+      return this.isAuthenticated();
+    }
     if (environment.production) {
       console.error(`[Auth] ${reason}; sign-in is unavailable`, error ?? '');
       this.authenticatedSubject.next(false);
@@ -123,23 +207,45 @@ export class AuthService implements OnDestroy {
       }
 
       const tokenResponse = await response.json();
-      this.directToken = tokenResponse.access_token;
-      this.directRefreshToken = tokenResponse.refresh_token;
-
-      const parsed = this.parseJwt(tokenResponse.access_token);
-      this.userProfileSubject.next({
-        username: parsed.preferred_username ?? username,
-        email: parsed.email,
-        roles: parsed.realm_access?.roles ?? [],
-        classificationLevel: parsed.classification_level ?? 'UNCLASSIFIED',
-      });
-
+      this.applyTokenResponse(tokenResponse.access_token, tokenResponse.refresh_token, username);
       this.authenticatedSubject.next(true);
       this.setupDirectTokenRefresh(tokenResponse.expires_in);
+      if (!this.isGuest()) {
+        forgetDemoVisitor(); // a real user signed in: never kept, and no longer a demo visitor
+      }
       return { success: true };
     } catch {
       return { success: false, error: 'Unable to reach authentication server' };
     }
+  }
+
+  /**
+   * Adopts tokens issued by the gateway (a demo guest session) as a direct
+   * session: same in-memory tokens, profile and refresh as loginWithCredentials.
+   * A guest's refresh token is also stored (see guest-session-store.ts), so a
+   * reload or a second tab carries on as the same guest; nobody else's is.
+   */
+  adoptTokens(t: { accessToken: string; refreshToken: string; expiresIn: number }): void {
+    this.applyTokenResponse(t.accessToken, t.refreshToken, 'unknown');
+    this.authenticatedSubject.next(true);
+    this.setupDirectTokenRefresh(t.expiresIn);
+    if (this.isGuest()) {
+      saveGuestSession({ refreshToken: t.refreshToken }, { replace: true });
+    }
+  }
+
+  /** Keeps the tokens in memory and derives the user profile from the access token. */
+  private applyTokenResponse(accessToken: string, refreshToken: string, fallbackUsername: string): void {
+    // Parse first: a token that cannot be read must not become the current one.
+    const parsed = this.parseJwt(accessToken);
+    this.directToken = accessToken;
+    this.directRefreshToken = refreshToken;
+    this.userProfileSubject.next({
+      username: parsed.preferred_username ?? fallbackUsername,
+      email: parsed.email,
+      roles: parsed.realm_access?.roles ?? [],
+      classificationLevel: parsed.classification_level ?? 'UNCLASSIFIED',
+    });
   }
 
   private parseJwt(token: string): any {
@@ -158,39 +264,37 @@ export class AuthService implements OnDestroy {
     }, refreshAt);
   }
 
-  private async refreshDirectToken(): Promise<void> {
-    if (!this.directRefreshToken) return;
-
+  private async requestRefresh(refreshToken: string): Promise<TokenResponse> {
     const body = new URLSearchParams({
       grant_type: 'refresh_token',
       client_id: this.clientId,
-      refresh_token: this.directRefreshToken,
+      refresh_token: refreshToken,
     });
+    const response = await fetch(this.keycloakTokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+    if (!response.ok) {
+      throw new Error('Refresh failed');
+    }
+    return response.json();
+  }
+
+  private async refreshDirectToken(): Promise<void> {
+    if (!this.directRefreshToken) return;
 
     try {
-      const response = await fetch(this.keycloakTokenUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: body.toString(),
-      });
-
-      if (!response.ok) {
-        throw new Error('Refresh failed');
+      const tokenResponse = await this.requestRefresh(this.directRefreshToken);
+      this.applyTokenResponse(tokenResponse.access_token, tokenResponse.refresh_token, 'unknown');
+      if (this.isGuest()) {
+        saveGuestSession({ refreshToken: tokenResponse.refresh_token });
       }
-
-      const tokenResponse = await response.json();
-      this.directToken = tokenResponse.access_token;
-      this.directRefreshToken = tokenResponse.refresh_token;
-
-      const parsed = this.parseJwt(tokenResponse.access_token);
-      this.userProfileSubject.next({
-        username: parsed.preferred_username ?? 'unknown',
-        email: parsed.email,
-        roles: parsed.realm_access?.roles ?? [],
-        classificationLevel: parsed.classification_level ?? 'UNCLASSIFIED',
-      });
     } catch {
       console.warn('[Auth] Direct token refresh failed, session expired');
+      this.sessionLostSubject.next();
+      clearGuestSession();
+      this.clearTimers();
       this.directToken = null;
       this.directRefreshToken = null;
       this.authenticatedSubject.next(false);
@@ -202,6 +306,7 @@ export class AuthService implements OnDestroy {
     this.clearTimers();
     this.directToken = null;
     this.directRefreshToken = null;
+    forgetDemoVisitor();
     if (this.keycloak) {
       await this.keycloak.logout({ redirectUri: window.location.origin });
     }
@@ -228,6 +333,11 @@ export class AuthService implements OnDestroy {
   hasAnyRole(...roles: string[]): boolean {
     const userRoles = this.getUserRoles();
     return roles.some((role) => userRoles.includes(role));
+  }
+
+  /** True for a demo visitor: a read-only guest session. */
+  isGuest(): boolean {
+    return this.hasAnyRole('sentinel-guest');
   }
 
   getClassificationLevel(): string {
