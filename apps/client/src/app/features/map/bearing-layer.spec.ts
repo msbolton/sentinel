@@ -83,6 +83,8 @@ describe('BearingLayer', () => {
     expect(line.polyline.positions[0]).toEqual({ lon: 0, lat: 0, h: 10 });
     expect(line.polyline.positions[1].lon).toBeCloseTo(0.008983, 5);
     expect(line._sentinelBearing).toBe('site-1');
+    expect(line._sentinelBearingKey).toBe('t:t1');
+    expect(live.get('bearing:site-1:1')._sentinelBearingKey).toMatch(/^o:/);
     expect(line.polyline.arcType).toBe(0); // ArcType.NONE: a straight line, as the bearing is
     expect(line.polyline.clampToGround).not.toBe(true);
     expect(line.label.text).toBe('Unknown');

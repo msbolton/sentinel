@@ -12,7 +12,7 @@ import { FlightPathService } from '../../core/services/flight-path.service';
 import { FLIGHT_PATH_DAYS } from '../models/flight-path.model';
 import { pathSummary } from '../../features/map/flight-path';
 import { Entity, EntitySource } from '../models/entity.model';
-import { BearingReason, SiteBearing, SiteHeartbeat, bearingsOf, emplacementIdOf, formatZulu, siteHeartbeatOf } from '../models/emplacement.model';
+import { BearingReason, SiteBearing, SiteHeartbeat, bearingKeyOf, bearingsOf, emplacementIdOf, formatZulu, siteHeartbeatOf } from '../models/emplacement.model';
 import { WebSocketService } from '../../core/services/websocket.service';
 import { EntityBaseline, EntityPlace, Finding, findingKindLabel, formatDuration, formatMetres } from '../models/finding.model';
 import { Location } from '../models/location.model';
@@ -733,7 +733,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                         <span class="field-label">Bearings</span>
                         <ul class="bearing-list">
                           @for (b of bearings; track $index) {
-                            <li class="bearing-row mono">
+                            <li class="bearing-row mono" [class.highlighted]="bearingKey(b) === highlightBearing()">
                               <span class="bearing-head">{{ bearingHead(b) }}</span>
                               <span>az {{ num(b.azimuthDeg) }}° · el {{ num(b.elevationDeg) }}° · {{ bearingAge(b) }}</span>
                               <span class="bearing-reason">{{ bearingReasonText(b.reason) }}</span>
@@ -1397,6 +1397,13 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       color: var(--text-primary);
     }
 
+    .bearing-row.highlighted {
+      margin: 0 -6px;
+      padding: 2px 6px;
+      border-left: 2px solid var(--accent-cyan);
+      background: color-mix(in srgb, var(--accent-cyan) 12%, transparent);
+    }
+
     .bearing-reason {
       color: var(--text-muted);
     }
@@ -1563,6 +1570,10 @@ export class EntityDetailPanelComponent {
     return bearingsOf(this.entity(), this.ws.serverNow());
   });
 
+  protected bearingKey(b: SiteBearing): string {
+    return bearingKeyOf(b);
+  }
+
   protected bearingHead(b: SiteBearing): string {
     const parts = [b.classification || 'Unidentified target'];
     if (b.confidence != null) parts.push(this.percent(b.confidence));
@@ -1633,6 +1644,8 @@ export class EntityDetailPanelComponent {
   private readonly now = signal(Date.now());
 
   entity = input<Entity | null>(null);
+  /** The bearing line clicked on the map (bearingKeyOf), whose row is highlighted; null for none. */
+  highlightBearing = input<string | null>(null);
   /** Changes only when another entity is shown, not when the shown one is updated. */
   private readonly entityId = computed(() => this.entity()?.id);
   close = output<void>();
@@ -1652,6 +1665,12 @@ export class EntityDetailPanelComponent {
       const e = untracked(() => this.entity());
       const pd = e?.platformData;
       this.expandedSections.set({ ...DEFAULT_SECTIONS, platformDetails: !!(pd?.tle || pd?.ais || pd?.rf || pd?.radar || pd?.eoir || (pd?.adsb && e?.source === EntitySource.INTELSKY)) });
+    });
+    // A bearing line clicked on the map: open the section that lists it. It
+    // follows the entity too, since a click can change both at once.
+    effect(() => {
+      this.entityId();
+      if (this.highlightBearing()) untracked(() => this.expandedSections.update((s) => ({ ...s, origin: true })));
     });
     // Behaviour: the baseline and open findings of the shown entity. A
     // request counter drops answers for an entity that is no longer shown.

@@ -234,6 +234,15 @@ export function bearingTtlOf(entity: FieldsCarrier): number {
   return Number.isFinite(ttl) && ttl > 0 ? ttl : DEFAULT_BEARING_TTL_SEC;
 }
 
+/**
+ * A bearing's identity across republishes of its site: its camera track id,
+ * else its time and direction. The map tags each line with it, and the panel
+ * highlights the row of the line clicked.
+ */
+export function bearingKeyOf(b: Pick<SiteBearing, 'trackId' | 'observedAt' | 'azimuthDeg'>): string {
+  return b.trackId ? `t:${b.trackId}` : `o:${b.observedAt}@${b.azimuthDeg}`;
+}
+
 /** The time a bearing's ttl runs from: the server's receipt, else (an older server) the sender's observedAt. */
 export function bearingClockOf(b: Pick<SiteBearing, 'observedAt' | 'receivedAt'>): string {
   return typeof b.receivedAt === 'string' && !Number.isNaN(Date.parse(b.receivedAt)) ? b.receivedAt : b.observedAt;

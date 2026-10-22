@@ -1,4 +1,4 @@
-import { SiteBearing, bearingClockOf, bearingEnd, bearingExpired } from '../../shared/models/emplacement.model';
+import { SiteBearing, bearingClockOf, bearingEnd, bearingExpired, bearingKeyOf } from '../../shared/models/emplacement.model';
 import { BEARING_LINE_CONFIG } from './cesium-config';
 
 /** One camera site's bearing lines, ready to draw. */
@@ -39,7 +39,7 @@ export function bearingAlpha(since: string, ttlSec: number, nowMs: number): numb
  * one entity per bearing, a dashed polyline from the site to the bearing's far
  * end with a label there. The entity is id'd `bearing:<site>:<track|index>` and
  * carries `_sentinelBearing` (the site entity's id) so a click can select the
- * site. A line is dropped when its bearing is gone, expired by the client's
+ * site, and `_sentinelBearingKey` (bearingKeyOf) so the panel can highlight it. A line is dropped when its bearing is gone, expired by the client's
  * own reckoning, or its connection's layer is hidden.
  */
 export class BearingLayer {
@@ -118,6 +118,7 @@ export class BearingLayer {
       },
     });
     entity._sentinelBearing = site.siteEntityId;
+    entity._sentinelBearingKey = bearingKeyOf(b);
     this.drawn.set(id, { entity, key });
   }
 }

@@ -287,7 +287,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     (fakeCesium as any).defined = (x: unknown) => x != null;
     const viewer = (component as any).viewer;
     viewer.scene.canvas = {};
-    viewer.scene.pick = jest.fn(() => ({ id: { id: 'bearing:site-1:t1', _sentinelBearing: 'site-1' } }));
+    viewer.scene.pick = jest.fn(() => ({ id: { id: 'bearing:site-1:t1', _sentinelBearing: 'site-1', _sentinelBearingKey: 't:t1' } }));
     viewer.selectedEntity = { stale: true };
     const site = baseSignalEntity({ id: 'site-1', entityType: EntityType.SENSOR, identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }] } as Partial<Entity>);
     (component as any).emplacementEntities.set('site-1', site);
@@ -298,6 +298,12 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     expect(component.selectedEntity()).toBe(site);
     expect(TestBed.inject(EmplacementService).select).toHaveBeenCalledWith('emp-1');
     expect(viewer.selectedEntity).toBeUndefined();
+    expect((component as any).selectedBearingKey()).toBe('t:t1'); // the panel highlights it
+
+    // Any other click forgets it.
+    viewer.scene.pick = jest.fn(() => undefined);
+    actions.get('L')!({ position: { x: 3, y: 4 } });
+    expect((component as any).selectedBearingKey()).toBeNull();
   });
 
   it('draws the bearing lines a site entity carries and drops them with the site', () => {

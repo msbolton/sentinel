@@ -763,6 +763,21 @@ describe('EntityDetailPanelComponent', () => {
       expect(el.querySelector('.origin-section .bearing-list')).toBeNull();
     });
 
+    it('opens the bearings and highlights the one clicked on the map', () => {
+      fixture.componentRef.setInput('entity', site([bearing({}), bearing({ trackId: 'T2', azimuthDeg: 270 })]));
+      fixture.componentRef.setInput('highlightBearing', 't:T2');
+      fixture.detectChanges();
+      httpMock.match('/api/v1/feeds').forEach((r) => r.flush([]));
+      fixture.detectChanges();
+      const rowsEl = Array.from(el.querySelectorAll('.origin-section .bearing-row'));
+      expect(rowsEl).toHaveLength(2); // the section opened by itself
+      expect(rowsEl.map((r) => r.classList.contains('highlighted'))).toEqual([false, true]);
+
+      fixture.componentRef.setInput('highlightBearing', null);
+      fixture.detectChanges();
+      expect(el.querySelectorAll('.origin-section .bearing-row.highlighted')).toHaveLength(0);
+    });
+
     it('keeps a bearing the feed gave a longer time to live', () => {
       show(site([bearing({ observedAt: secondsAgo(30) })], { bearingTtlSec: '60' }));
       expect(bearingRows()).toHaveLength(1);

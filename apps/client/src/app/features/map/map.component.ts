@@ -179,6 +179,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   viewer: any = null;
   selectedEntity = signal<Entity | null>(null);
+  /** The bearing line last clicked (bearingKeyOf), for the panel to highlight; null after any other click. */
+  readonly selectedBearingKey = signal<string | null>(null);
   showLayerPanel = signal<boolean>(false);
   flyingTo = signal<string | null>(null);
   panelRouteActive = signal<boolean>(false);
@@ -566,6 +568,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         this.viewer.selectedEntity = undefined; // the viewer's own bracket means nothing while drawing
         return;
       }
+      this.selectedBearingKey.set(null);
 
       if (Cesium.defined(pickedObject) && (pickedObject.id?._sentinelOrbit || pickedObject.id?._sentinelFlightPath)) {
         return; // a click on the selection's own overlay keeps the selection
@@ -597,6 +600,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         this.ngZone.run(() => {
           if (emplacementId) this.emplacements.select(emplacementId);
           this.selectedEntity.set(site);
+          this.selectedBearingKey.set(site ? ((pickedObject.id._sentinelBearingKey as string | undefined) ?? null) : null);
         });
         return;
       }

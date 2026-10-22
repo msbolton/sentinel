@@ -93,6 +93,7 @@
   <!-- Entity Detail Panel -->
   <app-entity-detail-panel
     [entity]="selectedEntity()"
+    [highlightBearing]="selectedBearingKey()"
     [class.panel-offset]="panelRouteActive()"
     (close)="closeEntityPopup()"
     (flyTo)="flyToEntity($event)"
