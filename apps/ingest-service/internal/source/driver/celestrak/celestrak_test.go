@@ -372,6 +372,30 @@ func TestHealthRecordsErrorsAndRetryAfter(t *testing.T) {
 	}
 }
 
+// CelesTrak answers a repeat download of a large group with a 403 and no
+// Retry-After, and blocks an address that keeps collecting errors: the
+// driver waits for the next refresh instead of backing off for a minute.
+func TestForbiddenWaitsForTheNextRefresh(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("GP data has not updated since your last successful download"))
+	}))
+	defer srv.Close()
+	drv := newDriver(t, srv.URL, `{"groups":["active"]}`)
+	defer run(t, drv, &memSink{})()
+
+	if !waitFor(func() bool { _, ok := drv.Health().Detail["nextFetchAt"]; return ok }, 2*time.Second) {
+		t.Fatal("next fetch never scheduled")
+	}
+	next, err := time.Parse(time.RFC3339, drv.Health().Detail["nextFetchAt"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wait := time.Until(next); wait < drv.refresh-time.Minute {
+		t.Errorf("next fetch in %v, want the %v refresh", wait.Round(time.Second), drv.refresh)
+	}
+}
+
 func TestRefreshFloorAndAlias(t *testing.T) {
 	d, err := New(driver.Spec{FeedID: "x", Config: json.RawMessage(`{"tleRefreshHours": 6}`)}, driver.Deps{Logger: zap.NewNop()})
 	if err != nil {

@@ -6,7 +6,8 @@
 // updates every two hours, the large groups allow one download per update
 // (a repeat gets 403), and repeated error responses lead to a block. The
 // driver asks for each selection once per refresh with a conditional
-// request, and never refreshes more often than every two hours.
+// request, never refreshes more often than every two hours, and after a
+// 403 waits for the next refresh.
 package celestrak
 
 import (
@@ -395,7 +396,13 @@ func (d *Driver) fetchSelection(ctx context.Context, sink driver.Sink, sel selec
 		if len(body) > 200 {
 			body = body[:200]
 		}
-		return nil, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After"), d.now()), fmt.Errorf("remote returned %d: %s", resp.Status, body)
+		wait := parseRetryAfter(resp.Header.Get("Retry-After"), d.now())
+		if wait == 0 && resp.Status == http.StatusForbidden {
+			// CelesTrak's answer to a repeat download, and to an address it
+			// is about to block: ask again at the next refresh, not in a minute.
+			wait = d.refresh + d.jitter()
+		}
+		return nil, resp.Status, wait, fmt.Errorf("remote returned %d: %s", resp.Status, body)
 	}
 	records, err := tlesgp4.ParseOMM(resp.Body)
 	if err != nil {
