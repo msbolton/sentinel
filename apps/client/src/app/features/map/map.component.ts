@@ -65,6 +65,7 @@ import { pathRuns } from './flight-path';
 import { CLUSTER_CONFIG, CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, drawClusterDisc, syncLabelGlyphClusterShow } from './entity-clusters';
 import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine, type GeoPoint } from './drop-line';
 import { formatAltitude } from '../../shared/geo-format';
+import { blurPosition } from '../../shared/blur';
 import { entityLabel } from './entity-label';
 import { GeofenceService } from '../../core/services/geofence.service';
 import { DRAFT_ID, GeofenceLayer } from './geofence-layer';
@@ -2364,10 +2365,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
    * Their marker follows DemoService.ownPosition (see the constructor).
    */
   private startGuestLocation(): void {
-    const flyTo = (lon: number, lat: number) => {
-      if (!this.viewer || this.viewer.isDestroyed()) return;
-      this.viewer.camera.flyTo({ destination: this.Cesium.Cartesian3.fromDegrees(lon, lat, 50000), duration: 2 });
-    };
+    const flyTo = (lon: number, lat: number) => this.flyToGuestCell(lon, lat);
     const known = this.demo.ownPosition();
     if (known) {
       // Placed already this session (the map was opened again): no second report.
@@ -2412,6 +2410,17 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     );
   }
 
+  /**
+   * Fly a demo guest to the centre of their blurred cell, not their precise
+   * fix: the view centre is sent to the gateway as the viewport, and would
+   * otherwise hand it the position the blur keeps in the browser.
+   */
+  private flyToGuestCell(lon: number, lat: number): void {
+    if (!this.viewer || this.viewer.isDestroyed()) return;
+    const cell = blurPosition(lat, lon);
+    this.viewer.camera.flyTo({ destination: this.Cesium.Cartesian3.fromDegrees(cell.lon, cell.lat, 50000), duration: 2 });
+  }
+
   private saveCameraPosition(): void {
     if (!this.viewer || !this.Cesium) return;
     // A guest's view is not kept: the next visitor on this browser starts at their own location.
@@ -2436,7 +2445,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     if (this.auth.isGuest()) {
       // A guest's location is the one placed for their site; it is not re-read.
       const own = this.demo.ownPosition();
-      if (own) this.viewer.camera.flyTo({ destination: this.Cesium.Cartesian3.fromDegrees(own.lon, own.lat, 50000), duration: 2 });
+      if (own) this.flyToGuestCell(own.lon, own.lat);
       return;
     }
     if (!navigator.geolocation) return;

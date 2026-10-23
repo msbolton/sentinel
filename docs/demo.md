@@ -34,7 +34,7 @@ The Secrets:
 
 These need your accounts or a payment, so nothing here does them for you. Do them before the install.
 
-1. **The server.** At Hetzner Cloud, a shared-vCPU **x86** plan with 16 GB of memory and at least 150 GB of disk: at the time of writing that is the CX42 (8 vCPU, 16 GB, 160 GB SSD), about €17 a month with its IPv4 address, in an EU location (Falkenstein, Nuremberg, Helsinki). Check the current price. Not an Arm (CAX) plan: `postgis/postgis` is amd64 only. Ubuntu 24.04, a public IPv4 address, your SSH key. The CX plans have been EU-only; a US location's 16 GB x86 plan costs more.
+1. **The server.** At Contabo, a Cloud VPS 8 (8 vCPU, 24 GB, 150 GB NVMe): at the time of writing about €14 a month on a monthly term with its IPv4 address, plus about €1.30–1.90 a month for a US region. Check the current price and any setup fee at checkout. Any **x86** plan with 16 GB of memory and 150 GB of disk will do; not an Arm plan: `postgis/postgis` is amd64 only. Ubuntu 24.04, your SSH key, no add-ons. Contabo bills by the month, not the hour, and a new account can wait hours for a manual check before the server appears. (Hetzner's 16 GB x86 plan, the CX43, has shown as unavailable since mid-2026, and its other 16 GB plans cost several times as much.)
 2. **DNS.** An A record `sentinel.msbolton.dev` to the server's IPv4 address. Add no AAAA record unless the node serves the site on IPv6 as well: Let's Encrypt prefers IPv6 when it is published, and the HTTP-01 challenge then fails.
 3. **MaxMind.** A free GeoLite account at maxmind.com, and a licence key (Manage licence keys). Create the Secret once the namespace exists (`docs/deployment.md`, step 1). The values go through a file descriptor, so they never appear on a command line:
 
@@ -66,19 +66,32 @@ These need your accounts or a payment, so nothing here does them for you. Do the
 
 Follow `docs/deployment.md` with the changes below. They are listed in the order of the runbook.
 
+**The first login (step 1).** Contabo hands the server over with root login. Before installing k3s, make the admin user the runbook calls `<admin>`, and close root and password logins:
+
+```bash
+# on the node, as root
+adduser --gecos '' <admin>    # sets the password sudo asks for
+usermod -aG sudo <admin>
+install -d -m 700 -o <admin> -g <admin> /home/<admin>/.ssh
+install -m 600 -o <admin> -g <admin> /root/.ssh/authorized_keys /home/<admin>/.ssh/authorized_keys
+printf 'PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n' > /etc/ssh/sshd_config.d/10-sentinel.conf
+sshd -t && systemctl reload ssh
+apt update && apt full-upgrade -y
+```
+
+The drop-in is named to sort first, because sshd keeps the first value it reads and an image may ship a later file that turns password login on. Check from the workstation in a second terminal, `ssh <admin>@<node> sudo true`, before closing the root session.
+
 **The firewall (step 1).** The demo's connections listen on the node's host network on 6201 and 6202, in plaintext gRPC with a bearer token. They are for the pods on the node only and must not be reachable from the internet. The pods reach them at the node's address, from the pod network, which a host firewall sees as ordinary input.
 
-- The Hetzner Cloud Firewall lets in 22, 80 and 443 only, and nothing else. Use `kubectl` through an SSH tunnel instead of opening 6443 (below):
+- The Contabo Firewall lets in 22, 80 and 443 only, and nothing else. It filters in Contabo's network, before traffic reaches the server, and drops every inbound packet no rule allows; outbound is not restricted. In the Customer Control Panel, Network Services, Firewall, create one with three inbound TCP rules and assign it to the server:
 
-  ```bash
-  hcloud firewall create --name sentinel-demo
-  hcloud firewall add-rule sentinel-demo --direction in --protocol tcp --port 22 --source-ips <your address>/32
-  hcloud firewall add-rule sentinel-demo --direction in --protocol tcp --port 80 --source-ips 0.0.0.0/0 --source-ips ::/0
-  hcloud firewall add-rule sentinel-demo --direction in --protocol tcp --port 443 --source-ips 0.0.0.0/0 --source-ips ::/0
-  hcloud firewall apply-to-resource sentinel-demo --type server --server <server name>
-  ```
+  | Port | Source |
+  |---|---|
+  | 22 | your address, `/32` |
+  | 80 | any, IPv4 and IPv6 |
+  | 443 | any, IPv4 and IPv6 |
 
-  Or the same in the console: Firewalls, Create firewall, three inbound TCP rules, applied to the server. A firewall with rules denies every other inbound packet.
+  Keep it even with ufw below: k3s's servicelb and flannel install iptables rules of their own, which ufw may not cover (`docs/deployment.md`, Open risks). Use `kubectl` through an SSH tunnel instead of opening 6443 (below).
 - ufw on the node, in place of the runbook's rules. The pod and service networks stay allowed, which is what lets the simulators and the gateway reach 6201 and 6202; nothing else reaches them:
 
   ```bash
@@ -214,7 +227,7 @@ They cannot:
 - open Connections, the link graph or the admin settings;
 - see anything above UNCLASSIFIED.
 
-A visitor's precise position never leaves their browser: the browser snaps its fix to the centre of a 0.1° cell before sending it (the gateway snaps again, which changes nothing), and the server stores, logs and publishes only that. The visitor's own dot is drawn at the precise fix, in their browser only. A visitor who denies the location, or leaves the prompt unanswered for 10 s, is placed from their IP address; a fix that still arrives later moves them. A guest may report a position twice at once, then once every 5 s.
+A visitor's precise position never leaves their browser: the browser snaps its fix to the centre of a 0.1° cell before sending it (the gateway snaps again, which changes nothing), and the server stores, logs and publishes only that. The visitor's own dot is drawn at the precise fix, in their browser only. The map opens, and "my location" flies, to the centre of the blurred cell rather than the fix, because the view's bounds go to the gateway as the viewport; where the visitor pans afterwards is theirs to show. A visitor who denies the location, or leaves the prompt unanswered for 10 s, is placed from their IP address; a fix that still arrives later moves them. A guest may report a position twice at once, then once every 5 s.
 
 A guest's session survives a reload, a phone evicting the tab and a second tab: the browser keeps the guest's refresh token and session details in localStorage (a guest's only, never a signed-in user's) and picks them up again. A browser that was a guest and has no session left goes back to `#/demo` for a new one, never to the login form.
 

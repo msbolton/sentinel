@@ -33,6 +33,7 @@ import { sidcFor, symbolDataUrl } from './milstd2525';
 import { ENTITY_TYPE_BILLBOARD_SVGS, svgToDataUrl } from './cesium-config';
 import { BearingLayer } from './bearing-layer';
 import { locationDotDataUrl } from './location-dot';
+import { blurPosition } from '../../shared/blur';
 
 function covFromEllipse(semiMajorM: number, semiMinorM: number, orientationDeg: number) {
   const s1 = semiMajorM / ELLIPSE_95;
@@ -798,16 +799,33 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       localStorage.clear();
     });
 
-    it('opens at its own fix, not the saved camera, and reports that fix once', () => {
+    it('opens at its own blurred cell, not the saved camera, and reports that fix once', () => {
       geolocation({ lat: 51.5, lon: -0.12 });
 
       (component as any).initUserLocation();
 
+      const cell = blurPosition(51.5, -0.12);
       expect(camera.setView).not.toHaveBeenCalled();
       expect(demo.reportPosition).toHaveBeenCalledTimes(1);
       expect(demo.reportPosition).toHaveBeenCalledWith({ lat: 51.5, lon: -0.12 });
-      expect(camera.flyTo).toHaveBeenCalledWith(expect.objectContaining({ destination: { lon: -0.12, lat: 51.5, alt: 50000 } }));
+      expect(camera.flyTo).toHaveBeenCalledWith(expect.objectContaining({ destination: { lon: cell.lon, lat: cell.lat, alt: 50000 } }));
+      expect(camera.flyTo).not.toHaveBeenCalledWith(expect.objectContaining({ destination: { lon: -0.12, lat: 51.5, alt: 50000 } }));
       expect(localStorage.getItem('sentinel-has-geolocated')).toBeNull();
+    });
+
+    it('flies a placed guest to their blurred cell when the map opens again and on "my location"', () => {
+      demo.ownPosition.set({ lat: 51.5, lon: -0.12, source: 'browser' });
+      const cell = blurPosition(51.5, -0.12);
+      const toCell = expect.objectContaining({ destination: { lon: cell.lon, lat: cell.lat, alt: 50000 } });
+
+      (component as any).initUserLocation();
+      expect(demo.reportPosition).not.toHaveBeenCalled();
+      expect(camera.flyTo).toHaveBeenLastCalledWith(toCell);
+
+      camera.flyTo.mockClear();
+      component.goToMyLocation();
+      expect(camera.flyTo).toHaveBeenCalledTimes(1);
+      expect(camera.flyTo).toHaveBeenCalledWith(toCell);
     });
 
     it("flies to the gateway's answer when the visitor declines, and stays put when there is none", async () => {
@@ -817,8 +835,9 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       (component as any).initUserLocation();
       await Promise.resolve();
 
+      const cell = blurPosition(48.85, 2.35);
       expect(demo.reportPosition).toHaveBeenCalledWith('denied');
-      expect(camera.flyTo).toHaveBeenCalledWith(expect.objectContaining({ destination: { lon: 2.35, lat: 48.85, alt: 50000 } }));
+      expect(camera.flyTo).toHaveBeenCalledWith(expect.objectContaining({ destination: { lon: cell.lon, lat: cell.lat, alt: 50000 } }));
 
       camera.flyTo.mockClear();
       demo.reportPosition.mockResolvedValueOnce(null);
