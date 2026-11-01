@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { BehaviorSubject, of } from 'rxjs';
@@ -77,9 +79,28 @@ describe('HudReadoutsComponent', () => {
   });
 
   it('shows dashes when the cursor is off the globe', () => {
+    cursor.setCursor({ lat: 11.59, lon: 43.15 });
+    fixture.detectChanges();
+    expect(readout('cursor')).toContain('11.5900° N 43.1500° E');
+    expect(readout('cursor')).not.toContain('—');
+
     cursor.setCursor(null);
     fixture.detectChanges();
     expect(readout('cursor')).toContain('—');
+  });
+
+  it('moves the right-hand readouts clear of an open route panel', () => {
+    // jest-preset-angular strips component styles, so getComputedStyle sees no rules;
+    // the rule is checked in the source and the host class it keys on is applied.
+    const source = readFileSync(join(__dirname, 'hud-readouts.component.ts'), 'utf-8');
+    expect(source).toMatch(/:host\(\.panel-open\) \.hud-tr,\s*:host\(\.panel-open\) \.hud-br \{\s*right: var\(--panel-width\);/);
+
+    const host = fixture.nativeElement as HTMLElement;
+    host.classList.add('panel-open');
+    fixture.detectChanges();
+    expect(host.matches('.panel-open')).toBe(true);
+    expect(host.querySelector('.hud-tr')).not.toBeNull();
+    expect(host.querySelector('.hud-br')).not.toBeNull();
   });
 
   it('shows bearing and range from the cursor to the selected track', () => {

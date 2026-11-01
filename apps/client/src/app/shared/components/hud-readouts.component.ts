@@ -39,11 +39,11 @@ import { UserMenuComponent } from './user-menu.component';
     </div>
 
     <div class="hud hud-tr">
-      <div class="tr-row">
-        <span><span class="dim">trk</span> <span class="strong" data-readout="tracks">{{ trackCount() }}</span></span>
-        <span><span class="dim">alr</span> <span class="alr" [class.hot]="alertCount() > 0" data-readout="alerts">{{ alertCount() }}</span></span>
-        <app-user-menu class="hud" [expanded]="false" />
+      <div>
+        <span class="dim">trk</span> <span class="strong" data-readout="tracks">{{ trackCount() }}</span>
+        <span class="dim">alr</span> <span class="alr" [class.hot]="alertCount() > 0" data-readout="alerts">{{ alertCount() }}</span>
       </div>
+      <app-user-menu class="hud" [expanded]="false" />
       <div data-readout="clearance"><span class="dim">clr</span> {{ classification() }}</div>
     </div>
 
@@ -86,19 +86,22 @@ import { UserMenuComponent } from './user-menu.component';
     .hud-bl { left: 0; bottom: 0; }
     .hud-br { right: 0; bottom: 0; text-align: right; }
 
-    .tr-row {
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-      gap: 10px;
-    }
-
     .dim { color: var(--text-muted); }
     .strong { color: var(--accent-cyan); }
     .alr.hot { color: var(--accent-yellow); }
 
     app-user-menu {
       pointer-events: auto;
+    }
+
+    .hud-tl app-demo-badge {
+      pointer-events: auto;
+    }
+
+    /* A route panel covers the right edge of the map; the right-hand readouts move clear of it. */
+    :host(.panel-open) .hud-tr,
+    :host(.panel-open) .hud-br {
+      right: var(--panel-width);
     }
 
     .hud-cls {

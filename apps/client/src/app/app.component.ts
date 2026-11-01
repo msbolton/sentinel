@@ -82,7 +82,7 @@ import { HudReadoutsComponent } from './shared/components/hud-readouts.component
           <app-map class="map-background"></app-map>
 
           <!-- Corner readouts and the classification word over the map -->
-          <app-hud-readouts></app-hud-readouts>
+          <app-hud-readouts [class.panel-open]="panelRouteActive()"></app-hud-readouts>
 
           <!-- Feature panels render on top of the map -->
           <div class="panel-overlay">
@@ -146,6 +146,8 @@ export class AppComponent implements OnInit {
   readonly settingsItem: NavItem = { path: '/settings', label: 'Settings', icon: 'settings', key: '' };
   isFullScreenRoute = signal<boolean>(false);
   isPageRoute = signal<boolean>(false);
+  /** A route panel (alerts, search, …) is open over the right edge of the map. */
+  panelRouteActive = signal<boolean>(false);
   connectionStatus = signal<ConnectionStatus>('disconnected');
   entityCount = signal<number>(0);
   unacknowledgedAlertCount = signal<number>(0);
@@ -169,6 +171,7 @@ export class AppComponent implements OnInit {
       const path = url.replace(/\?.*$/, '');
       this.isFullScreenRoute.set(['/login', '/register', '/demo'].includes(path));
       this.isPageRoute.set(path.startsWith('/admin') || path.startsWith('/settings') || path.startsWith('/connections') || path.startsWith('/feeds'));
+      this.panelRouteActive.set(path !== '/map' && path !== '/' && path !== '' && !this.isPageRoute() && !this.isFullScreenRoute());
     };
     classifyRoute(this.router.url);
     this.router.events.pipe(

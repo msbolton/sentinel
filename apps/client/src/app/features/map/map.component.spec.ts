@@ -1039,12 +1039,14 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       const canvas: HTMLCanvasElement = (component as any).viewer.scene.canvas;
 
       move({ endPosition: { x: 1, y: 2 } });
+      expect(cursor.cursor()).toEqual({ lat: 10, lon: 20 });
       canvas.dispatchEvent(new MouseEvent('mouseleave'));
       expect(cursor.cursor()).toBeNull();
 
-      const remove = jest.spyOn(canvas, 'removeEventListener');
       component.ngOnDestroy();
-      expect(remove).toHaveBeenCalledWith('mouseleave', expect.any(Function));
+      cursor.setCursor({ lat: 1, lon: 2 });
+      canvas.dispatchEvent(new MouseEvent('mouseleave'));
+      expect(cursor.cursor()).toEqual({ lat: 1, lon: 2 });
     });
 
     it('keeps publishing mid-drag and picks once per move', () => {
