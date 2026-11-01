@@ -297,6 +297,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
     /* In the top-right HUD readout: a small borderless glyph whose panel drops below and to the left. */
     :host(.hud) {
       display: block;
+      position: relative;
       pointer-events: auto;
     }
 

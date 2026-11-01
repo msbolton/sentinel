@@ -76,6 +76,20 @@ describe('HudReadoutsComponent', () => {
     expect(text).toContain('011432Z NOV 26');
     expect(text).toContain('1284');
     expect(text).toContain('SECRET');
+    const tr = (fixture.nativeElement as HTMLElement).querySelector('.hud-tr')!.textContent!.replace(/\s+/g, ' ');
+    expect(tr).toContain('trk 1284 alr 3');
+  });
+
+  it('keeps the user menu in the flow of the top-right block', () => {
+    // Styles are stripped under jest-preset-angular, so check the rules in the source:
+    // the corner rule must not reach the menu's host (which also carries class "hud"),
+    // and the menu's HUD host is positioned relative.
+    const hud = readFileSync(join(__dirname, 'hud-readouts.component.ts'), 'utf-8');
+    expect(hud).toMatch(/\n\s*div\.hud \{\s*position: absolute;/);
+    expect(hud).not.toMatch(/\n\s*\.hud \{/);
+    const menu = readFileSync(join(__dirname, 'user-menu.component.ts'), 'utf-8');
+    expect(menu).toMatch(/:host\(\.hud\) \{[^}]*position: relative;/);
+    expect((fixture.nativeElement as HTMLElement).querySelector('.hud-tr app-user-menu.hud')).not.toBeNull();
   });
 
   it('shows dashes when the cursor is off the globe', () => {

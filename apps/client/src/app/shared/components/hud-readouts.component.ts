@@ -30,7 +30,7 @@ import { UserMenuComponent } from './user-menu.component';
     <div class="hud-cls" data-readout="classification">{{ classification() }}</div>
 
     <div class="hud hud-tl">
-      <div><span class="strong">SENTINEL</span> <span class="dim">·</span> {{ opName }}</div>
+      <div><span class="strong">SENTINEL</span>&ngsp;<span class="dim">·</span> {{ opName }}</div>
       @if (isGuest()) {
         <app-demo-badge [compact]="false" />
       }
@@ -40,8 +40,7 @@ import { UserMenuComponent } from './user-menu.component';
 
     <div class="hud hud-tr">
       <div>
-        <span class="dim">trk</span> <span class="strong" data-readout="tracks">{{ trackCount() }}</span>
-        <span class="dim">alr</span> <span class="alr" [class.hot]="alertCount() > 0" data-readout="alerts">{{ alertCount() }}</span>
+        <span class="dim">trk</span>&ngsp;<span class="strong" data-readout="tracks">{{ trackCount() }}</span>&ngsp;<span class="dim alr-label">alr</span>&ngsp;<span class="alr" [class.hot]="alertCount() > 0" data-readout="alerts">{{ alertCount() }}</span>
       </div>
       <app-user-menu class="hud" [expanded]="false" />
       <div data-readout="clearance"><span class="dim">clr</span> {{ classification() }}</div>
@@ -75,7 +74,8 @@ import { UserMenuComponent } from './user-menu.component';
       color: var(--text-primary);
     }
 
-    .hud {
+    /* div only: the user menu's host carries class "hud" too and must stay in flow. */
+    div.hud {
       position: absolute;
       padding: 10px 12px;
       white-space: nowrap;
@@ -87,6 +87,7 @@ import { UserMenuComponent } from './user-menu.component';
     .hud-br { right: 0; bottom: 0; text-align: right; }
 
     .dim { color: var(--text-muted); }
+    .alr-label { margin-left: 12px; }
     .strong { color: var(--accent-cyan); }
     .alr.hot { color: var(--accent-yellow); }
 
