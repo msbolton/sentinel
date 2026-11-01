@@ -387,7 +387,7 @@ interface RegisterForm {
     }
 
     .app-title {
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 28px;
       font-weight: 700;
       letter-spacing: 6px;
@@ -396,7 +396,7 @@ interface RegisterForm {
     }
 
     .app-subtitle {
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 12px;
       color: rgba(255, 255, 255, 0.4);
       margin: 6px 0 0;
@@ -428,7 +428,7 @@ interface RegisterForm {
 
     .input-label {
       display: block;
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 10px;
       font-weight: 600;
       letter-spacing: 1.5px;
@@ -443,7 +443,7 @@ interface RegisterForm {
       border: 1px solid rgba(59, 130, 246, 0.2);
       border-radius: 8px;
       color: rgba(255, 255, 255, 0.9);
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 14px;
       outline: none;
       transition: border-color 0.2s ease, background 0.2s ease;
@@ -470,7 +470,7 @@ interface RegisterForm {
     }
 
     .error-message {
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 12px;
       color: #f87171;
       margin: 0;
@@ -485,7 +485,7 @@ interface RegisterForm {
       color: white;
       border: none;
       border-radius: 8px;
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 14px;
       font-weight: 600;
       letter-spacing: 2px;
@@ -519,7 +519,7 @@ interface RegisterForm {
     }
 
     .auth-notice {
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 12px;
       color: rgba(255, 255, 255, 0.3);
       margin: 16px 0 0;
@@ -554,7 +554,7 @@ interface RegisterForm {
     }
 
     .success-message {
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 16px;
       font-weight: 600;
       color: rgba(255, 255, 255, 0.9);
@@ -562,7 +562,7 @@ interface RegisterForm {
     }
 
     .success-detail {
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 13px;
       color: rgba(255, 255, 255, 0.4);
       margin: 0;

@@ -231,7 +231,7 @@ export interface ActiveUser {
       display: block;
       padding: 24px;
       color: #e0e0e0;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-family: var(--font-sans);
     }
 
     .page-title {
@@ -319,7 +319,7 @@ export interface ActiveUser {
     }
 
     .monospace {
-      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-family: var(--font-mono);
     }
 
     .classification-badge {

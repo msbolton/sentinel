@@ -113,6 +113,10 @@ export class LinkGraphComponent implements OnInit, OnDestroy, AfterViewInit {
       return;
     }
 
+    // vis-network draws on a canvas, so it needs the resolved font string, not var().
+    const rootStyle = getComputedStyle(document.documentElement);
+    const fontMono = rootStyle.getPropertyValue('--font-mono').trim() || 'monospace';
+
     this.ngZone.runOutsideAngular(() => {
       // Destroy existing network
       if (this.network) {
@@ -128,7 +132,7 @@ export class LinkGraphComponent implements OnInit, OnDestroy, AfterViewInit {
         font: {
           color: '#e0e6ed',
           size: 12,
-          face: 'JetBrains Mono, monospace',
+          face: fontMono,
         },
         borderWidth: 2,
         shadow: {
@@ -147,7 +151,7 @@ export class LinkGraphComponent implements OnInit, OnDestroy, AfterViewInit {
         font: {
           color: '#5a6a80',
           size: 10,
-          face: 'JetBrains Mono, monospace',
+          face: fontMono,
           align: 'middle',
           strokeWidth: 3,
           strokeColor: '#0a0e17',

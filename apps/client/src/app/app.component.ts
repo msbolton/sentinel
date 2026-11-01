@@ -174,7 +174,7 @@ import { SessionEndedComponent } from './features/demo/session-ended.component';
       position: absolute;
       inset: 0;
       overflow-y: auto;
-      background: #060e1f;
+      background: var(--bg-primary);
     }
 
     .map-background {
