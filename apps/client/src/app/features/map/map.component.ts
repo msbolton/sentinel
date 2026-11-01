@@ -87,6 +87,7 @@ import { isFromMilitaryFeed, sidcFor, symbolDataUrl } from './milstd2525';
 import { locationDotDataUrl } from './location-dot';
 import { GeofenceDrawTool } from './geofence-draw';
 import { GeofenceToolbarComponent } from './geofence-toolbar.component';
+import { SelectionReticleComponent } from './selection-reticle.component';
 import { DrawSession, addPoint, canFinish, draftFromSession, finishShape, newSession, setAnchor, setCursor, setRadius } from './geofence-draw-state';
 import { GeofenceConfig, GeofenceShape, LngLat } from '../../shared/models/geofence.model';
 
@@ -179,7 +180,7 @@ const GUEST_LOCATION_TIMEOUT_MS = 10_000;
   selector: 'app-map',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, IconComponent, GeofenceToolbarComponent],
+  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, IconComponent, GeofenceToolbarComponent, SelectionReticleComponent],
   templateUrl: './map.component.html',
   styleUrls: ['./map.component.scss'],
 })

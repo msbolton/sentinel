@@ -216,9 +216,9 @@
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
-// --- Entity Detail Panel offset when sidebar panel is open ---
+// --- Track card offset when a route panel is open ---
 app-entity-detail-panel.panel-offset ::ng-deep .detail-panel {
-  right: calc(var(--panel-width, 380px) + 12px);
+  right: calc(16px + var(--panel-width, 380px));
 }
 
 // Cesium widget overrides
