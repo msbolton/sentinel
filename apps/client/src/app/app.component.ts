@@ -15,12 +15,13 @@ import { MapComponent } from './features/map/map.component';
 import { WelcomeCardComponent } from './features/demo/welcome-card.component';
 import { SessionEndedComponent } from './features/demo/session-ended.component';
 import { HudReadoutsComponent } from './shared/components/hud-readouts.component';
+import { AlertTickerComponent } from './shared/components/alert-ticker.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, HasRoleDirective, IconComponent, WelcomeCardComponent, SessionEndedComponent, HudReadoutsComponent],
+  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, HasRoleDirective, IconComponent, WelcomeCardComponent, SessionEndedComponent, HudReadoutsComponent, AlertTickerComponent],
   template: `
     @if (isFullScreenRoute()) {
       <!-- Login page renders full-screen, no app shell -->
@@ -83,6 +84,9 @@ import { HudReadoutsComponent } from './shared/components/hud-readouts.component
 
           <!-- Corner readouts and the classification word over the map -->
           <app-hud-readouts [class.panel-open]="panelRouteActive()"></app-hud-readouts>
+
+          <!-- Open alerts along the top centre; click selects the track -->
+          <app-alert-ticker></app-alert-ticker>
 
           <!-- Feature panels render on top of the map -->
           <div class="panel-overlay">
