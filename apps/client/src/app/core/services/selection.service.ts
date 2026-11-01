@@ -15,7 +15,7 @@ export class SelectionService {
 
   /** The selected track. */
   readonly entity: WritableSignal<Entity | null> = signal<Entity | null>(null);
-  /** Window pixels of the selected track, set by MapComponent each render; null when off the globe or unselected. */
+  /** Window pixels of the selected track, set by MapComponent each render; null when unselected, behind the globe or behind the camera. */
   readonly screenPoint: WritableSignal<{ x: number; y: number } | null> = signal<{ x: number; y: number } | null>(null);
   /** Where MapComponent should fly the camera. */
   readonly fly$: Observable<LatLon> = this.flyRequests.asObservable();

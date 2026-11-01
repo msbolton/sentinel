@@ -435,6 +435,12 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.ngZone.runOutsideAngular(() => untracked(() => this.syncDropLine(selected)));
     });
 
+    // A new selection needs a frame so postRender reports its screen point (request-render mode).
+    effect(() => {
+      this.selectedEntity();
+      untracked(() => this.scheduleRender());
+    });
+
     // Track whether a panel route is active (anything other than /map or /)
     const routerSub = this.router.events.pipe(
       filter((e): e is NavigationEnd => e instanceof NavigationEnd),
@@ -510,6 +516,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.removeScreenPointListener?.();
     this.removeScreenPointListener = null;
     this.selection.screenPoint.set(null);
+    this.selection.entity.set(null);
     if (this.viewer && !this.viewer.isDestroyed()) {
       this.viewer.destroy();
     }
@@ -599,18 +606,26 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     });
   }
 
-  /** Reports where the selected track sits in window pixels; only changes are set. */
+  /**
+   * Reports where the selected track is drawn, in window pixels: its Cesium
+   * entity's current position (dead-reckoned or propagated), else its last fix.
+   * Null with no selection or position, behind the globe, or behind the camera.
+   * Only changes are set.
+   */
   private updateSelectionScreenPoint(): void {
-    const position = this.selectedEntity()?.position;
+    const selected = this.selectedEntity();
     let next: { x: number; y: number } | null = null;
-    if (position && this.viewer && this.Cesium) {
+    if (selected && this.viewer && this.Cesium) {
       const Cesium = this.Cesium;
       const scene = this.viewer.scene;
-      const win = Cesium.SceneTransforms.worldToWindowCoordinates(
-        scene,
-        Cesium.Cartesian3.fromDegrees(position.longitude, position.latitude, position.altitude ?? 0),
-      );
-      if (win) next = { x: win.x, y: win.y };
+      const p = selected.position;
+      const world =
+        this.entityMap.get(selected.id)?.position?.getValue(this.viewer.clock.currentTime) ??
+        (p ? Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude, p.altitude ?? 0) : undefined);
+      if (world && new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84, scene.camera.positionWC).isPointVisible(world)) {
+        const win = Cesium.SceneTransforms.worldToWindowCoordinates(scene, world);
+        if (win) next = { x: win.x, y: win.y };
+      }
     }
     const prev = this.selection.screenPoint();
     if (prev === next || (prev && next && prev.x === next.x && prev.y === next.y)) return;

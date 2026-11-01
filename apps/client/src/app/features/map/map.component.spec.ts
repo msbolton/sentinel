@@ -1020,11 +1020,22 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       expect(flyTo).toHaveBeenCalledWith({ destination: { lon: 44, lat: 12, alt: 60000 }, duration: 1.2 });
     });
 
+    function stubScreenTransforms(visible = true) {
+      const toWindow = jest.fn((_scene: unknown, _world: unknown) => ({ x: 100, y: 200 }) as { x: number; y: number } | undefined);
+      const isPointVisible = jest.fn(() => visible);
+      (fakeCesium as any).SceneTransforms = { worldToWindowCoordinates: toWindow };
+      (fakeCesium as any).Ellipsoid = { WGS84: {} };
+      (fakeCesium as any).EllipsoidalOccluder = jest.fn(() => ({ isPointVisible }));
+      const viewer = (component as any).viewer;
+      viewer.scene.camera = { positionWC: { x: 0, y: 0, z: 1e7 } };
+      viewer.clock = { currentTime: 'now' };
+      return { toWindow, isPointVisible };
+    }
+    const update = () => (component as any).updateSelectionScreenPoint();
+
     it('reports the selected track in window pixels after each render, setting only changes', () => {
       const selection = TestBed.inject(SelectionService);
-      const toWindow = jest.fn(() => ({ x: 100, y: 200 }) as { x: number; y: number } | undefined);
-      (fakeCesium as any).SceneTransforms = { worldToWindowCoordinates: toWindow };
-      const update = () => (component as any).updateSelectionScreenPoint();
+      const { toWindow } = stubScreenTransforms();
 
       update();
       expect(selection.screenPoint()).toBeNull();
@@ -1046,6 +1057,42 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       toWindow.mockReturnValue({ x: 1, y: 2 });
       component.selectedEntity.set(baseSignalEntity({ position: undefined }));
       update();
+      expect(selection.screenPoint()).toBeNull();
+    });
+
+    it('places the point where the track is drawn, not at its last fix', () => {
+      const { toWindow } = stubScreenTransforms();
+      const drawn = { x: 1, y: 2, z: 3 };
+      const getValue = jest.fn(() => drawn);
+      (component as any).entityMap.set('sig-1', { position: { getValue } });
+      component.selectedEntity.set(baseSignalEntity({ position: { latitude: 50, longitude: -1 } }));
+
+      update();
+
+      expect(getValue).toHaveBeenCalledWith('now');
+      expect(toWindow).toHaveBeenCalledWith((component as any).viewer.scene, drawn);
+      expect(TestBed.inject(SelectionService).screenPoint()).toEqual({ x: 100, y: 200 });
+    });
+
+    it('reports no point for a track hidden behind the globe', () => {
+      const { toWindow, isPointVisible } = stubScreenTransforms(false);
+      component.selectedEntity.set(baseSignalEntity({ position: { latitude: -50, longitude: 179 } }));
+
+      update();
+
+      expect(isPointVisible).toHaveBeenCalledWith({ lon: 179, lat: -50, alt: 0 });
+      expect(toWindow).not.toHaveBeenCalled();
+      expect(TestBed.inject(SelectionService).screenPoint()).toBeNull();
+    });
+
+    it('clears the shared selection when the map is destroyed', () => {
+      const selection = TestBed.inject(SelectionService);
+      component.selectedEntity.set(baseSignalEntity());
+      selection.screenPoint.set({ x: 1, y: 2 });
+
+      component.ngOnDestroy();
+
+      expect(selection.entity()).toBeNull();
       expect(selection.screenPoint()).toBeNull();
     });
   });
