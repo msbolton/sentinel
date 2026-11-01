@@ -398,6 +398,7 @@ describe('EntityDetailPanelComponent', () => {
       fixture.detectChanges();
       const meter = el.querySelector('.confidence[role="meter"]')!;
       expect(meter.getAttribute('aria-valuenow')).toBe('0.91');
+      expect(meter.getAttribute('aria-label')).toBe('Strongest finding confidence');
       expect((meter.querySelector('i') as HTMLElement).style.width).toBe('91%');
     });
   });

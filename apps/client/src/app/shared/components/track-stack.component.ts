@@ -37,7 +37,7 @@ const TICK_MS = 5000;
     :host {
       position: absolute;
       right: 16px;
-      top: calc(56px + var(--track-card-height, 0px) + 6px);
+      top: calc(92px + var(--track-card-height, 0px) + 6px);
       width: 300px;
       z-index: 60;
       display: flex;

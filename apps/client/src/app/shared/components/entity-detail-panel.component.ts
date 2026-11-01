@@ -172,7 +172,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                 }
               </ul>
             </div>
-            <div class="confidence" role="meter" [attr.aria-valuenow]="topScore()" aria-valuemin="0" aria-valuemax="1"><i [style.width.%]="topScore() * 100"></i></div>
+            <div class="confidence" role="meter" aria-label="Strongest finding confidence" [attr.aria-valuenow]="topScore()" aria-valuemin="0" aria-valuemax="1"><i [style.width.%]="topScore() * 100"></i></div>
           }
 
           <div class="sections">
@@ -684,7 +684,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                     <iframe
                       title="3D model"
                       [srcdoc]="modelViewerHtml()"
-                      style="width:100%;height:200px;display:block;border:none;border-radius:8px;background:transparent"
+                      style="width:100%;height:200px;display:block;border:none;border-radius:0;background:transparent"
                     ></iframe>
                   </div>
                 }
@@ -858,7 +858,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
     /* The track card: a translucent glass readout at the top right. */
     .detail-panel {
       position: absolute;
-      top: 56px;
+      top: 92px;
       right: 16px;
       bottom: auto;
       width: 320px;
@@ -919,7 +919,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      border-radius: var(--radius-sm);
+      border-radius: 0;
       background: transparent;
       color: var(--text-secondary);
       transition: all var(--transition-fast);
@@ -1008,7 +1008,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
 
     .fact {
       padding: 10px 12px;
-      border-radius: var(--radius-md);
+      border-radius: 0;
       background: var(--bg-primary);
       border: 1px solid var(--border-color);
       display: flex;
@@ -1188,7 +1188,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       color: var(--text-secondary);
       background: transparent;
       border: 1px solid var(--border-color, rgba(148, 163, 184, 0.3));
-      border-radius: 4px;
+      border-radius: 0;
       cursor: pointer;
 
       &.active {
@@ -1224,7 +1224,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
     .tle-lines {
       margin: 4px 0 0;
       padding: 6px 8px;
-      border-radius: 4px;
+      border-radius: 0;
       background: var(--bg-primary);
       font-size: 0.66rem;
       line-height: 1.4;
@@ -1247,7 +1247,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       justify-content: space-between;
       gap: 8px;
       padding: 3px 6px;
-      border-radius: 4px;
+      border-radius: 0;
       font-size: 0.78rem;
       cursor: pointer;
 
@@ -1296,7 +1296,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
     .finding-item {
       padding: 8px 10px;
       border: 1px solid color-mix(in srgb, var(--text-muted) 35%, transparent);
-      border-radius: var(--radius-md);
+      border-radius: 0;
       background: color-mix(in srgb, var(--text-muted) 7%, transparent);
 
       &.critical { border-color: color-mix(in srgb, var(--accent-red) 35%, transparent); background: color-mix(in srgb, var(--accent-red) 7%, transparent); }
@@ -1467,7 +1467,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
     /* Confidence: the strongest open finding's score. */
     .confidence {
       height: 4px;
-      margin: 0 12px 10px;
+      margin: 0 0 10px;
       background: rgba(111, 227, 207, 0.12);
     }
 
@@ -2040,5 +2040,5 @@ export class EntityDetailPanelComponent {
   });
 
   /** The strongest open finding's score, held to 0..1 for the confidence meter. */
-  protected topScore = computed(() => Math.min(1, Math.max(0, ...this.findings().map((f) => f.score ?? 0))));
+  protected topScore = computed(() => Math.min(1, Math.max(0, ...this.findings().map((f) => f.score))));
 }
