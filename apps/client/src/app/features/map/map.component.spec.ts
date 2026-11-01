@@ -20,6 +20,7 @@ import { FeedService } from '../../core/services/feed.service';
 import { AuthService } from '../../core/services/auth.service';
 import { DemoBounds, DemoPosition, DemoService } from '../../core/services/demo.service';
 import { SelectionService } from '../../core/services/selection.service';
+import { MapCursorService } from '../../core/services/map-cursor.service';
 import {
   Affiliation,
   Classification,
@@ -1002,6 +1003,62 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       localStorage.clear();
       (component as any).saveCameraPosition();
       expect(localStorage.getItem('sentinel-camera-position')).not.toBeNull();
+    });
+  });
+
+  describe('publishing the cursor and camera altitude', () => {
+    function moveHandler() {
+      const actions = new Map<unknown, (e: any) => void>();
+      (fakeCesium as any).ScreenSpaceEventHandler = function () {
+        return { setInputAction: (fn: (e: any) => void, type: unknown) => actions.set(type, fn) };
+      };
+      (fakeCesium as any).ScreenSpaceEventType = { LEFT_CLICK: 'L', LEFT_DOUBLE_CLICK: 'D', MOUSE_MOVE: 'M', LEFT_DOWN: 'DN', LEFT_UP: 'UP' };
+      (component as any).viewer.scene.canvas = {};
+      (component as any).setupEventHandlers();
+      return actions.get('M')!;
+    }
+
+    it('publishes the globe pick under the mouse as lat/lon, and null off the globe', () => {
+      const cursor = TestBed.inject(MapCursorService);
+      const pick = jest.spyOn(component as any, 'pickLngLat').mockReturnValue([-1.1, 50.8]);
+      const move = moveHandler();
+
+      move({ endPosition: { x: 1, y: 2 } });
+      expect(pick).toHaveBeenCalledWith({ x: 1, y: 2 });
+      expect(cursor.cursor()).toEqual({ lat: 50.8, lon: -1.1 });
+
+      pick.mockReturnValue(null);
+      move({ endPosition: { x: 3, y: 4 } });
+      expect(cursor.cursor()).toBeNull();
+    });
+
+    it('keeps publishing mid-drag and picks once per move', () => {
+      const cursor = TestBed.inject(MapCursorService);
+      const pick = jest.spyOn(component as any, 'pickLngLat').mockReturnValue([20, 10]);
+      const moveHandle = jest.fn(() => ({ kind: 'circle' }));
+      (component as any).geofenceLayer = { moveHandle, destroy: jest.fn() };
+      (component as any).handleDrag = { zoneId: 'z1', index: 0, config: null };
+      const move = moveHandler();
+
+      move({ endPosition: { x: 1, y: 2 } });
+
+      expect(pick).toHaveBeenCalledTimes(1);
+      expect(moveHandle).toHaveBeenCalledWith('z1', 0, [20, 10]);
+      expect(cursor.cursor()).toEqual({ lat: 10, lon: 20 });
+    });
+
+    it('publishes the camera height once up front and after each camera move', () => {
+      const cursor = TestBed.inject(MapCursorService);
+      const camera = { positionCartographic: { height: 1500 }, moveEnd: { addEventListener: jest.fn() } };
+      (component as any).viewer.camera = camera;
+      jest.spyOn(component as any, 'saveCameraPosition').mockImplementation(() => undefined);
+      (component as any).setupCameraMoveHandler();
+      (component as any).publishCameraAltitude();
+      expect(cursor.cameraAltitudeM()).toBe(1500);
+
+      camera.positionCartographic.height = 42_000;
+      camera.moveEnd.addEventListener.mock.calls[0][0]();
+      expect(cursor.cameraAltitudeM()).toBe(42_000);
     });
   });
 

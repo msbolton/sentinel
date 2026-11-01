@@ -35,6 +35,7 @@ import { TerrainService } from '../../core/services/terrain.service';
 import { LayerVisibilityService } from '../../core/services/layer-visibility.service';
 import { MapViewportService } from '../../core/services/map-viewport.service';
 import { SelectionService } from '../../core/services/selection.service';
+import { MapCursorService } from '../../core/services/map-cursor.service';
 import type { LatLon } from '../../shared/geo-math';
 import { Location } from '../../shared/models/location.model';
 import {
@@ -188,6 +189,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   viewer: any = null;
   private readonly selection = inject(SelectionService);
+  private readonly mapCursor = inject(MapCursorService);
   /** The selected track: the shared SelectionService's own writable signal. */
   selectedEntity = this.selection.entity;
   /** The bearing line last clicked (bearingKeyOf), for the panel to highlight; null after any other click. */
@@ -493,6 +495,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // setView, which does not fire moveEnd. A later flyTo (geolocation)
     // fires moveEnd and refreshes it.
     this.sendViewportBounds();
+    this.publishCameraAltitude(); // the HUD has a value before the first move
   }
 
   ngOnDestroy(): void {
@@ -719,14 +722,15 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       if (canFinish(trimmed).ok) this.ngZone.run(() => { this.drawSession.set(trimmed); this.finishDrawing(); });
     }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
     handler.setInputAction((move: any) => {
+      // One pick feeds the HUD readout and the drag/draw below, which keep reading it mid-gesture.
+      const p = this.pickLngLat(move.endPosition);
+      this.mapCursor.setCursor(p ? { lat: p[1], lon: p[0] } : null);
       if (this.handleDrag) {
-        const p = this.pickLngLat(move.endPosition);
         if (p) this.handleDrag.config = this.geofenceLayer?.moveHandle(this.handleDrag.zoneId, this.handleDrag.index, p) ?? null;
         return;
       }
       const session = this.drawSession();
       if (!session) return;
-      const p = this.pickLngLat(move.endPosition);
       this.drawSession.set(setCursor(session, p));
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
@@ -771,7 +775,12 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.viewer.camera.moveEnd.addEventListener(() => {
       this.cameraMovedSubject.next();
       this.saveCameraPosition();
+      this.publishCameraAltitude();
     });
+  }
+
+  private publishCameraAltitude(): void {
+    this.mapCursor.setCameraAltitude(this.viewer?.camera?.positionCartographic?.height ?? null);
   }
 
   private sendViewportBounds(): void {
