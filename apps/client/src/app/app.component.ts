@@ -14,12 +14,13 @@ import { HasRoleDirective } from './shared/directives/has-role.directive';
 import { MapComponent } from './features/map/map.component';
 import { WelcomeCardComponent } from './features/demo/welcome-card.component';
 import { SessionEndedComponent } from './features/demo/session-ended.component';
+import { HudReadoutsComponent } from './shared/components/hud-readouts.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, HasRoleDirective, IconComponent, WelcomeCardComponent, SessionEndedComponent],
+  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, HasRoleDirective, IconComponent, WelcomeCardComponent, SessionEndedComponent, HudReadoutsComponent],
   template: `
     @if (isFullScreenRoute()) {
       <!-- Login page renders full-screen, no app shell -->
@@ -79,6 +80,9 @@ import { SessionEndedComponent } from './features/demo/session-ended.component';
         } @else {
           <!-- Map is always rendered in the background -->
           <app-map class="map-background"></app-map>
+
+          <!-- Corner readouts and the classification word over the map -->
+          <app-hud-readouts></app-hud-readouts>
 
           <!-- Feature panels render on top of the map -->
           <div class="panel-overlay">

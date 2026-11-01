@@ -286,7 +286,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     (fakeCesium as any).ScreenSpaceEventType = { LEFT_CLICK: 'L', LEFT_DOUBLE_CLICK: 'D', MOUSE_MOVE: 'M', LEFT_DOWN: 'DN', LEFT_UP: 'UP' };
     (fakeCesium as any).defined = (x: unknown) => x != null;
     const viewer = (component as any).viewer;
-    viewer.scene.canvas = {};
+    viewer.scene.canvas = document.createElement('canvas');
     viewer.scene.pick = jest.fn(() => ({ id: { _sentinelEmplacement: 'emp-1' } }));
     viewer.selectedEntity = { stale: true };
     const site = baseSignalEntity({ id: 'site-1', entityType: EntityType.SENSOR, identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }] } as Partial<Entity>);
@@ -310,7 +310,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     (fakeCesium as any).ScreenSpaceEventType = { LEFT_CLICK: 'L', LEFT_DOUBLE_CLICK: 'D', MOUSE_MOVE: 'M', LEFT_DOWN: 'DN', LEFT_UP: 'UP' };
     (fakeCesium as any).defined = (x: unknown) => x != null;
     const viewer = (component as any).viewer;
-    viewer.scene.canvas = {};
+    viewer.scene.canvas = document.createElement('canvas');
     viewer.scene.pick = jest.fn(() => ({ id: { id: 'bearing:site-1:t1', _sentinelBearing: 'site-1', _sentinelBearingKey: 't:t1' } }));
     viewer.selectedEntity = { stale: true };
     const site = baseSignalEntity({ id: 'site-1', entityType: EntityType.SENSOR, identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }] } as Partial<Entity>);
@@ -364,7 +364,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     (fakeCesium as any).ScreenSpaceEventType = { LEFT_CLICK: 'L', LEFT_DOUBLE_CLICK: 'D', MOUSE_MOVE: 'M', LEFT_DOWN: 'DN', LEFT_UP: 'UP' };
     (fakeCesium as any).defined = (x: unknown) => x != null;
     const viewer = (component as any).viewer;
-    viewer.scene.canvas = {};
+    viewer.scene.canvas = document.createElement('canvas');
     viewer.scene.pick = jest.fn(() => ({ id: { _sentinelEmplacement: 'emp-2' } }));
     component.selectedEntity.set(baseSignalEntity({ id: 'ac-1', entityType: EntityType.AIRCRAFT }));
 
@@ -1013,7 +1013,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
         return { setInputAction: (fn: (e: any) => void, type: unknown) => actions.set(type, fn) };
       };
       (fakeCesium as any).ScreenSpaceEventType = { LEFT_CLICK: 'L', LEFT_DOUBLE_CLICK: 'D', MOUSE_MOVE: 'M', LEFT_DOWN: 'DN', LEFT_UP: 'UP' };
-      (component as any).viewer.scene.canvas = {};
+      (component as any).viewer.scene.canvas = document.createElement('canvas');
       (component as any).setupEventHandlers();
       return actions.get('M')!;
     }
@@ -1030,6 +1030,21 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       pick.mockReturnValue(null);
       move({ endPosition: { x: 3, y: 4 } });
       expect(cursor.cursor()).toBeNull();
+    });
+
+    it('clears the cursor when the pointer leaves the map canvas, and stops listening once destroyed', () => {
+      const cursor = TestBed.inject(MapCursorService);
+      jest.spyOn(component as any, 'pickLngLat').mockReturnValue([20, 10]);
+      const move = moveHandler();
+      const canvas: HTMLCanvasElement = (component as any).viewer.scene.canvas;
+
+      move({ endPosition: { x: 1, y: 2 } });
+      canvas.dispatchEvent(new MouseEvent('mouseleave'));
+      expect(cursor.cursor()).toBeNull();
+
+      const remove = jest.spyOn(canvas, 'removeEventListener');
+      component.ngOnDestroy();
+      expect(remove).toHaveBeenCalledWith('mouseleave', expect.any(Function));
     });
 
     it('keeps publishing mid-drag and picks once per move', () => {

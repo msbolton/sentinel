@@ -259,6 +259,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private themePostProcessStage: any = null;
   /** Removes the postRender listener that reports the selected track's screen point. */
   private removeScreenPointListener: (() => void) | null = null;
+  private removeCanvasLeaveListener: (() => void) | null = null;
 
   /** Cached ageout configs fetched from backend, refreshed every 60s */
   private ageoutConfigs: Array<{ sourceType: string | null; staleThresholdMs: number }> = [];
@@ -518,6 +519,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.subscriptions.unsubscribe();
     this.removeScreenPointListener?.();
     this.removeScreenPointListener = null;
+    this.removeCanvasLeaveListener?.();
+    this.removeCanvasLeaveListener = null;
     this.selection.screenPoint.set(null);
     this.selection.entity.set(null);
     if (this.viewer && !this.viewer.isDestroyed()) {
@@ -640,6 +643,12 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
     const Cesium = this.Cesium;
     const handler = new Cesium.ScreenSpaceEventHandler(this.viewer.scene.canvas);
+
+    // Leaving the map clears the HUD cursor readout; MOUSE_MOVE never fires off the canvas.
+    const canvas: HTMLCanvasElement = this.viewer.scene.canvas;
+    const onLeave = () => this.mapCursor.setCursor(null);
+    canvas.addEventListener('mouseleave', onLeave);
+    this.removeCanvasLeaveListener = () => canvas.removeEventListener('mouseleave', onLeave);
 
     // Left click - select entity
     handler.setInputAction((click: any) => {
