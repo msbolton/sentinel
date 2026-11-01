@@ -19,6 +19,7 @@ import { EmplacementService } from '../../core/services/emplacement.service';
 import { FeedService } from '../../core/services/feed.service';
 import { AuthService } from '../../core/services/auth.service';
 import { DemoBounds, DemoPosition, DemoService } from '../../core/services/demo.service';
+import { SelectionService } from '../../core/services/selection.service';
 import {
   Affiliation,
   Classification,
@@ -1001,6 +1002,51 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       localStorage.clear();
       (component as any).saveCameraPosition();
       expect(localStorage.getItem('sentinel-camera-position')).not.toBeNull();
+    });
+  });
+
+  describe('shared selection', () => {
+    it('is the SelectionService signal itself', () => {
+      expect(component.selectedEntity).toBe(TestBed.inject(SelectionService).entity);
+    });
+
+    it('flies the camera 60 km above a track selected through the service', () => {
+      const flyTo = jest.fn();
+      (component as any).viewer.camera = { flyTo };
+      (component as any).subscribeToFlyTo();
+
+      TestBed.inject(SelectionService).select(baseSignalEntity({ position: { latitude: 12, longitude: 44 } }));
+
+      expect(flyTo).toHaveBeenCalledWith({ destination: { lon: 44, lat: 12, alt: 60000 }, duration: 1.2 });
+    });
+
+    it('reports the selected track in window pixels after each render, setting only changes', () => {
+      const selection = TestBed.inject(SelectionService);
+      const toWindow = jest.fn(() => ({ x: 100, y: 200 }) as { x: number; y: number } | undefined);
+      (fakeCesium as any).SceneTransforms = { worldToWindowCoordinates: toWindow };
+      const update = () => (component as any).updateSelectionScreenPoint();
+
+      update();
+      expect(selection.screenPoint()).toBeNull();
+      expect(toWindow).not.toHaveBeenCalled();
+
+      component.selectedEntity.set(baseSignalEntity({ position: { latitude: 50, longitude: -1, altitude: 300 } }));
+      update();
+      expect(toWindow).toHaveBeenCalledWith((component as any).viewer.scene, { lon: -1, lat: 50, alt: 300 });
+      const first = selection.screenPoint();
+      expect(first).toEqual({ x: 100, y: 200 });
+
+      update();
+      expect(selection.screenPoint()).toBe(first);
+
+      toWindow.mockReturnValue(undefined);
+      update();
+      expect(selection.screenPoint()).toBeNull();
+
+      toWindow.mockReturnValue({ x: 1, y: 2 });
+      component.selectedEntity.set(baseSignalEntity({ position: undefined }));
+      update();
+      expect(selection.screenPoint()).toBeNull();
     });
   });
 });

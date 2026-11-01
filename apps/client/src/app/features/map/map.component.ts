@@ -34,6 +34,8 @@ import { BuildingsService } from '../../core/services/buildings.service';
 import { TerrainService } from '../../core/services/terrain.service';
 import { LayerVisibilityService } from '../../core/services/layer-visibility.service';
 import { MapViewportService } from '../../core/services/map-viewport.service';
+import { SelectionService } from '../../core/services/selection.service';
+import type { LatLon } from '../../shared/geo-math';
 import { Location } from '../../shared/models/location.model';
 import {
   configureCesium,
@@ -185,7 +187,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   cesiumContainer!: ElementRef<HTMLDivElement>;
 
   viewer: any = null;
-  selectedEntity = signal<Entity | null>(null);
+  private readonly selection = inject(SelectionService);
+  /** The selected track: the shared SelectionService's own writable signal. */
+  selectedEntity = this.selection.entity;
   /** The bearing line last clicked (bearingKeyOf), for the panel to highlight; null after any other click. */
   readonly selectedBearingKey = signal<string | null>(null);
   showLayerPanel = signal<boolean>(false);
@@ -251,6 +255,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private drLastTickMs = 0;
   private drScratch: any = null;
   private themePostProcessStage: any = null;
+  /** Removes the postRender listener that reports the selected track's screen point. */
+  private removeScreenPointListener: (() => void) | null = null;
 
   /** Cached ageout configs fetched from backend, refreshed every 60s */
   private ageoutConfigs: Array<{ sourceType: string | null; staleThresholdMs: number }> = [];
@@ -501,6 +507,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.deadReckoning.clear();
         this.satellites.clear();
     this.subscriptions.unsubscribe();
+    this.removeScreenPointListener?.();
+    this.removeScreenPointListener = null;
+    this.selection.screenPoint.set(null);
     if (this.viewer && !this.viewer.isDestroyed()) {
       this.viewer.destroy();
     }
@@ -543,6 +552,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.resyncEmplacements();
       this.flyToFocus();
       this.flyToDemoFocus();
+      this.removeScreenPointListener = this.viewer.scene.postRender.addEventListener(() => this.updateSelectionScreenPoint());
 
       // Set dark atmosphere
       this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
@@ -587,6 +597,24 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       // Force render
       this.viewer.scene.requestRender();
     });
+  }
+
+  /** Reports where the selected track sits in window pixels; only changes are set. */
+  private updateSelectionScreenPoint(): void {
+    const position = this.selectedEntity()?.position;
+    let next: { x: number; y: number } | null = null;
+    if (position && this.viewer && this.Cesium) {
+      const Cesium = this.Cesium;
+      const scene = this.viewer.scene;
+      const win = Cesium.SceneTransforms.worldToWindowCoordinates(
+        scene,
+        Cesium.Cartesian3.fromDegrees(position.longitude, position.latitude, position.altitude ?? 0),
+      );
+      if (win) next = { x: win.x, y: win.y };
+    }
+    const prev = this.selection.screenPoint();
+    if (prev === next || (prev && next && prev.x === next.x && prev.y === next.y)) return;
+    this.selection.screenPoint.set(next);
   }
 
   private setupEventHandlers(): void {
@@ -1953,16 +1981,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   flyToEntity(entity: Entity): void {
-    if (!this.viewer || !this.Cesium || !entity.position) return;
+    if (!entity.position) return;
+    this.flyCameraTo({ lat: entity.position.latitude, lon: entity.position.longitude });
+  }
 
-    const Cesium = this.Cesium;
+  /** The camera fly used for a track: 60 km above it, over 1.2 s. */
+  private flyCameraTo(point: LatLon): void {
+    if (!this.viewer || !this.Cesium) return;
     this.viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(
-        entity.position.longitude,
-        entity.position.latitude,
-        50000,
-      ),
-      duration: 1.0,
+      destination: this.Cesium.Cartesian3.fromDegrees(point.lon, point.lat, 60_000),
+      duration: 1.2,
     });
   }
 
@@ -2266,6 +2294,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.flyToLocation(location);
     });
     this.subscriptions.add(sub);
+    this.subscriptions.add(
+      this.selection.fly$.subscribe((point) => this.ngZone.runOutsideAngular(() => this.flyCameraTo(point))),
+    );
   }
 
   private flyToLocation(location: Location): void {
