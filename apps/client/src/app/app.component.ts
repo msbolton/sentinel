@@ -16,12 +16,13 @@ import { WelcomeCardComponent } from './features/demo/welcome-card.component';
 import { SessionEndedComponent } from './features/demo/session-ended.component';
 import { HudReadoutsComponent } from './shared/components/hud-readouts.component';
 import { AlertTickerComponent } from './shared/components/alert-ticker.component';
+import { TrackStackComponent } from './shared/components/track-stack.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, HasRoleDirective, IconComponent, WelcomeCardComponent, SessionEndedComponent, HudReadoutsComponent, AlertTickerComponent],
+  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, HasRoleDirective, IconComponent, WelcomeCardComponent, SessionEndedComponent, HudReadoutsComponent, AlertTickerComponent, TrackStackComponent],
   template: `
     @if (isFullScreenRoute()) {
       <!-- Login page renders full-screen, no app shell -->
@@ -87,6 +88,9 @@ import { AlertTickerComponent } from './shared/components/alert-ticker.component
 
           <!-- Open alerts along the top centre; click selects the track -->
           <app-alert-ticker></app-alert-ticker>
+
+          <!-- The ten freshest tracks in view down the right edge; click selects -->
+          <app-track-stack [class.panel-open]="panelRouteActive()"></app-track-stack>
 
           <!-- Feature panels render on top of the map -->
           <div class="panel-overlay">
