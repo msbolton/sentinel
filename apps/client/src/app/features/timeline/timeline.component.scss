@@ -5,11 +5,11 @@
 
 .timeline-strip {
   position: fixed;
-  bottom: var(--status-bar-height);
-  left: var(--sidebar-width);
+  bottom: 0;
+  left: 40px;
   right: 0;
   height: var(--timeline-height);
-  background: var(--bg-secondary);
+  background: var(--bg-panel);
   border-top: 1px solid var(--border-color);
   display: flex;
   align-items: center;

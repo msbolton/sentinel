@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, DestroyRef, HostListener, inject, signal, computed, ChangeDetectionStrategy } from '@angular/core';
+import { Component, OnInit, DestroyRef, HostListener, inject, signal, computed, ChangeDetectionStrategy } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { CommonModule } from '@angular/common';
 import { Router, RouterOutlet, RouterLink, RouterLinkActive, NavigationEnd } from '@angular/router';
@@ -8,14 +8,10 @@ import { AuthService, UserProfile } from './core/services/auth.service';
 import { AlertService } from './core/services/alert.service';
 import { AnalyticsService } from './core/services/analytics.service';
 import { ThemeService } from './core/services/theme.service';
-import { NAV_GROUPS, NavItem, NavRailService, routeForShortcut } from './core/services/nav-rail.service';
+import { NAV_GROUPS, NavItem, routeForShortcut } from './core/services/nav-rail.service';
 import { IconComponent } from './shared/components/icon.component';
-import { ThemePickerComponent } from './shared/components/theme-picker.component';
-import { LayersPillComponent } from './shared/components/layers-pill.component';
-import { UserMenuComponent } from './shared/components/user-menu.component';
 import { HasRoleDirective } from './shared/directives/has-role.directive';
 import { MapComponent } from './features/map/map.component';
-import { DemoBadgeComponent } from './features/demo/demo-badge.component';
 import { WelcomeCardComponent } from './features/demo/welcome-card.component';
 import { SessionEndedComponent } from './features/demo/session-ended.component';
 
@@ -23,71 +19,45 @@ import { SessionEndedComponent } from './features/demo/session-ended.component';
   selector: 'app-root',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, ThemePickerComponent, LayersPillComponent, UserMenuComponent, HasRoleDirective, IconComponent, DemoBadgeComponent, WelcomeCardComponent, SessionEndedComponent],
+  imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive, MapComponent, HasRoleDirective, IconComponent, WelcomeCardComponent, SessionEndedComponent],
   template: `
     @if (isFullScreenRoute()) {
       <!-- Login page renders full-screen, no app shell -->
       <router-outlet></router-outlet>
     } @else {
-      <!-- Navigation rail: labelled when expanded, flyout labels when collapsed -->
-      <nav class="sidebar" [class.collapsed]="!rail.expanded()" aria-label="Primary">
-        <div class="sidebar-brand">
-          <img class="sidebar-logo" src="assets/brand/sentinel-icon-64.png" alt="" aria-hidden="true" width="28" height="28" />
-          <span class="sidebar-wordmark">SENTINEL</span>
-        </div>
-        <!-- Only a demo guest sees this; it sits under the brand so it shows whether the rail is open or not. -->
-        @if (isGuest()) {
-          <app-demo-badge class="demo-badge" [compact]="!rail.expanded()"></app-demo-badge>
-        }
-
-        <div class="sidebar-nav">
-          @for (group of navGroups; track group.label) {
-            <div class="sidebar-group">
-              <div class="sidebar-group-label">{{ group.label }}</div>
-              @for (item of group.items; track item.path) {
-                @if (item.roles) {
-                  <ng-container *appHasRole="item.roles">
-                    <ng-container *ngTemplateOutlet="navItem; context: { $implicit: item }" />
-                  </ng-container>
-                } @else {
-                  <ng-container *ngTemplateOutlet="navItem; context: { $implicit: item }" />
-                }
+      <!-- Tool rail: icons only, centred on the left edge; labels show in a flyout on hover or focus -->
+      <nav class="rail" aria-label="Primary">
+        @for (group of navGroups; track group.label) {
+          <div class="rail-group">
+            @for (item of group.items; track item.path) {
+              @if (item.roles) {
+                <ng-container *appHasRole="item.roles">
+                  <ng-container *ngTemplateOutlet="railItem; context: { $implicit: item }" />
+                </ng-container>
+              } @else {
+                <ng-container *ngTemplateOutlet="railItem; context: { $implicit: item }" />
               }
-            </div>
-          }
-        </div>
-
-        <div class="sidebar-footer">
-          <button
-            type="button"
-            class="sidebar-collapse"
-            (click)="rail.toggle()"
-            [attr.aria-expanded]="rail.expanded()"
-            [attr.aria-label]="rail.expanded() ? 'Collapse navigation' : 'Expand navigation'"
-            [title]="rail.expanded() ? 'Collapse navigation' : 'Expand navigation'">
-            <app-icon [name]="rail.expanded() ? 'chevron-left' : 'chevron-right'" />
-            <span class="sidebar-item-label">Collapse</span>
-          </button>
-          <ng-container *ngTemplateOutlet="navItem; context: { $implicit: settingsItem }" />
-          <app-user-menu [expanded]="rail.expanded()"></app-user-menu>
+            }
+          </div>
+          <div class="rail-gap" aria-hidden="true"></div>
+        }
+        <div class="rail-group">
+          <ng-container *ngTemplateOutlet="railItem; context: { $implicit: settingsItem }" />
         </div>
       </nav>
 
-      <ng-template #navItem let-item>
+      <ng-template #railItem let-item>
         <a
-          class="sidebar-item"
+          class="rail-item"
           [routerLink]="item.path"
           routerLinkActive="active"
           [attr.aria-label]="item.label"
           [attr.data-key]="item.key || null">
-          <app-icon [name]="item.icon" [size]="20" />
-          <span class="sidebar-item-label">{{ item.label }}</span>
+          <app-icon [name]="item.icon" [size]="18" />
           @if (badgeCount(item); as n) {
             <span class="badge" [class.badge-findings]="item.badge === 'findings'">{{ n > 99 ? '99+' : n }}</span>
-          } @else if (item.key) {
-            <kbd class="sidebar-key">{{ item.key | uppercase }}</kbd>
           }
-          <span class="sidebar-flyout" role="tooltip">
+          <span class="rail-flyout" role="tooltip">
             {{ item.label }}
             @if (badgeCount(item); as n) {
               <span class="flyout-count">{{ n }} open</span>
@@ -99,7 +69,7 @@ import { SessionEndedComponent } from './features/demo/session-ended.component';
         </a>
       </ng-template>
 
-      <!-- Main Content Area -->
+      <!-- Main Content Area: fills the window; the rail floats over it -->
       <main class="main-content">
         @if (isPageRoute()) {
           <!-- Full-page routes (admin) render directly without map -->
@@ -110,37 +80,12 @@ import { SessionEndedComponent } from './features/demo/session-ended.component';
           <!-- Map is always rendered in the background -->
           <app-map class="map-background"></app-map>
 
-          <!-- Floating pills -->
-          <div class="floating-pills">
-            <app-layers-pill></app-layers-pill>
-            <app-theme-picker></app-theme-picker>
-          </div>
-
           <!-- Feature panels render on top of the map -->
           <div class="panel-overlay">
             <router-outlet></router-outlet>
           </div>
         }
       </main>
-
-      <!-- Status Bar -->
-      <footer class="status-bar">
-        <div class="status-item" [ngClass]="connectionStatus()">
-          <span class="status-dot"></span>
-          <span>{{ connectionStatus() | titlecase }}</span>
-        </div>
-        <span class="status-item">
-          <span class="font-mono">{{ entityCount() }} entities</span>
-        </span>
-        <div class="status-spacer"></div>
-        <span class="status-item font-mono">
-          {{ userProfile()?.classificationLevel ?? 'UNCLASSIFIED' }}
-        </span>
-        <span class="status-item font-mono">
-          {{ userProfile()?.username ?? '--' }}
-        </span>
-        <span class="status-item font-mono">{{ currentTime() }}</span>
-      </footer>
 
       <!-- The public demo's cards: each shows only for a guest (or an ended guest session). -->
       <app-welcome-card></app-welcome-card>
@@ -155,18 +100,9 @@ import { SessionEndedComponent } from './features/demo/session-ended.component';
       overflow: hidden;
     }
 
-    .demo-badge {
-      display: flex;
-      justify-content: center;
-      flex-shrink: 0;
-    }
-
     .main-content {
       position: fixed;
-      top: 0;
-      left: var(--sidebar-width);
-      right: 0;
-      bottom: var(--status-bar-height);
+      inset: 0;
       overflow: hidden;
     }
 
@@ -174,6 +110,7 @@ import { SessionEndedComponent } from './features/demo/session-ended.component';
       position: absolute;
       inset: 0;
       overflow-y: auto;
+      padding-left: 48px;
       background: var(--bg-primary);
     }
 
@@ -184,19 +121,6 @@ import { SessionEndedComponent } from './features/demo/session-ended.component';
       width: 100%;
       height: 100%;
       z-index: 1;
-    }
-
-    .floating-pills {
-      position: absolute;
-      left: 16px;
-      bottom: 16px;
-      z-index: 50;
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 8px;
-      max-height: calc(100% - 32px);
-      overflow-y: auto;
     }
 
     .panel-overlay {
@@ -213,8 +137,7 @@ import { SessionEndedComponent } from './features/demo/session-ended.component';
     }
   `],
 })
-export class AppComponent implements OnInit, OnDestroy {
-  readonly rail = inject(NavRailService);
+export class AppComponent implements OnInit {
   readonly navGroups = NAV_GROUPS;
   readonly settingsItem: NavItem = { path: '/settings', label: 'Settings', icon: 'settings', key: '' };
   isFullScreenRoute = signal<boolean>(false);
@@ -226,10 +149,8 @@ export class AppComponent implements OnInit, OnDestroy {
   userProfile = signal<UserProfile | null>(null);
   isAdmin = computed(() => this.userProfile()?.roles?.includes('sentinel-admin') ?? false);
   isGuest = computed(() => this.userProfile()?.roles?.includes('sentinel-guest') ?? false);
-  currentTime = signal<string>('');
   private readonly destroyRef = inject(DestroyRef);
   private readonly themeService = inject(ThemeService);
-  private timeInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly router: Router,
@@ -280,10 +201,6 @@ export class AppComponent implements OnInit, OnDestroy {
     ).subscribe((count) => {
       this.unacknowledgedAlertCount.set(count);
     });
-
-    // Update clock
-    this.updateTime();
-    this.timeInterval = setInterval(() => this.updateTime(), 1000);
   }
 
   /** The live count an item carries on its badge, or 0 for none. */
@@ -304,19 +221,5 @@ export class AppComponent implements OnInit, OnDestroy {
       event.preventDefault();
       this.router.navigateByUrl(path);
     }
-  }
-
-  ngOnDestroy(): void {
-    if (this.timeInterval) {
-      clearInterval(this.timeInterval);
-      this.timeInterval = null;
-    }
-  }
-
-  private updateTime(): void {
-    const now = new Date();
-    this.currentTime.set(
-      now.toISOString().replace('T', ' ').substring(0, 19) + 'Z',
-    );
   }
 }

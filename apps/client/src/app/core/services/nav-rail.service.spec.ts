@@ -1,32 +1,4 @@
-import { TestBed } from '@angular/core/testing';
-import { NAV_GROUPS, NavRailService, routeForShortcut } from './nav-rail.service';
-
-describe('NavRailService', () => {
-  beforeEach(() => {
-    localStorage.clear();
-    document.documentElement.style.removeProperty('--sidebar-width');
-    TestBed.resetTestingModule();
-  });
-
-  it('starts expanded and publishes the rail width as --sidebar-width', () => {
-    const rail = TestBed.inject(NavRailService);
-    expect(rail.expanded()).toBe(true);
-    expect(document.documentElement.style.getPropertyValue('--sidebar-width')).toBe('208px');
-  });
-
-  it('collapses on toggle and narrows the rail', () => {
-    const rail = TestBed.inject(NavRailService);
-    rail.toggle();
-    expect(rail.expanded()).toBe(false);
-    expect(document.documentElement.style.getPropertyValue('--sidebar-width')).toBe('56px');
-  });
-
-  it('remembers a collapsed rail across reloads', () => {
-    TestBed.inject(NavRailService).toggle();
-    TestBed.resetTestingModule();
-    expect(TestBed.inject(NavRailService).expanded()).toBe(false);
-  });
-});
+import { NAV_GROUPS, routeForShortcut } from './nav-rail.service';
 
 describe('routeForShortcut', () => {
   const press = (key: string, over: Partial<{ ctrlKey: boolean; metaKey: boolean; altKey: boolean; target: EventTarget | null }> = {}) =>

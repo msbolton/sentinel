@@ -550,274 +550,126 @@ textarea {
   }
 }
 
-// --- Sidebar (navigation rail) ---
-// Width comes from --sidebar-width, which NavRailService sets to 208px
-// (labels) or 56px (icons only). Main content and the status bar key off it.
-.sidebar {
+// --- Tool rail ---
+// A 40px column of icon buttons centred on the left edge, floating over the
+// full-screen map. Labels show in a flyout on hover or keyboard focus.
+.rail {
   position: fixed;
-  top: 0;
   left: 0;
-  width: var(--sidebar-width);
-  height: 100%;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border-color);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 40px;
   display: flex;
   flex-direction: column;
-  z-index: 1000;
-  padding: 8px;
   gap: 2px;
+  padding: 2px;
+  z-index: 1000;
+}
 
-  &-brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    height: 40px;
-    padding: 0 6px;
-    margin-bottom: 10px;
-  }
+.rail-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 
-  &-logo {
-    width: 28px;
-    height: 28px;
-    display: block;
-    flex-shrink: 0;
-    border-radius: 7px;
-    filter: drop-shadow(0 0 6px rgba(37, 99, 235, 0.45));
-  }
+.rail-gap {
+  height: 6px;
+}
 
-  &-wordmark {
-    flex: 1;
-    min-width: 0;
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
+// A group whose items are all role-gated away renders nothing; drop it and its gap.
+.rail-group:empty,
+.rail-group:empty + .rail-gap {
+  display: none;
+}
+
+.rail-item {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+
+  &:hover {
     color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
   }
 
-  &-nav {
+  &.active {
+    color: var(--accent-cyan);
+    border-color: var(--accent-cyan);
+    background: rgba(111, 227, 207, 0.08);
+  }
+
+  &:focus-visible {
+    outline: 1px solid var(--accent-cyan);
+    outline-offset: 1px;
+  }
+
+  &:hover .rail-flyout,
+  &:focus-visible .rail-flyout {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
-    flex: 1;
-    min-height: 0;
   }
 
-  &-group {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-
-    & + & {
-      margin-top: 12px;
-    }
-  }
-
-  &-group-label {
-    padding: 0 12px 4px;
-    font-family: var(--font-mono);
-    font-size: 0.65rem;
-    font-weight: 600;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    white-space: nowrap;
-  }
-
-  &-item,
-  &-collapse {
-    position: relative;
+  .badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
     display: flex;
     align-items: center;
-    gap: 12px;
-    height: 40px;
-    padding: 0 12px;
-    border-radius: var(--radius-md);
-    color: var(--text-secondary);
-    background: transparent;
-    text-decoration: none;
-    font-size: 0.85rem;
-    font-weight: 500;
-    width: 100%;
-    transition: background var(--transition-fast), color var(--transition-fast);
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    background: var(--accent-red);
+    color: var(--bg-primary);
 
-    &:hover {
-      background: rgba(255, 255, 255, 0.05);
-      color: var(--text-primary);
-    }
-
-    &:focus-visible {
-      outline: 2px solid var(--accent-blue);
-      outline-offset: -2px;
+    &.badge-findings {
+      background: var(--accent-orange);
     }
   }
+}
 
-  &-item.active {
-    background: rgba(111, 227, 207, 0.15);
-    color: var(--accent-blue);
+.rail-flyout {
+  display: none;
+  position: absolute;
+  left: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 1100;
 
-    &::before {
-      content: '';
-      position: absolute;
-      left: -8px;
-      top: 10px;
-      bottom: 10px;
-      width: 2px;
-      border-radius: 2px;
-      background: var(--accent-blue);
-    }
-  }
-
-  &-item-label {
-    flex: 1;
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  &-key {
+  kbd {
     font-family: var(--font-mono);
     font-size: 0.65rem;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     border: 1px solid var(--border-color);
-    border-radius: 4px;
     padding: 0 5px;
     line-height: 16px;
   }
 
-  .badge {
-    min-width: 20px;
-    height: 20px;
-    padding: 0 6px;
-    border-radius: 10px;
-    background: var(--accent-red);
-    color: #fff;
+  .flyout-count {
     font-family: var(--font-mono);
     font-size: 0.7rem;
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    &.badge-findings {
-      background: var(--accent-orange);
-      color: var(--bg-primary);
-    }
-  }
-
-  &-flyout {
-    display: none;
-  }
-
-  &-collapse {
-    color: var(--text-muted);
-  }
-
-  &-footer {
-    margin-top: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding-top: 8px;
-    border-top: 1px solid var(--border-color);
-  }
-
-  // --- Collapsed: icons only, label in a flyout on hover or focus ---
-  &.collapsed {
-    .sidebar-brand {
-      justify-content: center;
-      padding: 0;
-    }
-
-    .sidebar-wordmark,
-    .sidebar-group-label,
-    .sidebar-item-label,
-    .sidebar-key {
-      display: none;
-    }
-
-    .sidebar-group + .sidebar-group {
-      margin-top: 6px;
-      padding-top: 6px;
-      border-top: 1px solid var(--border-color);
-    }
-
-    .sidebar-item,
-    .sidebar-collapse {
-      justify-content: center;
-      padding: 0;
-      width: 40px;
-    }
-
-    .badge {
-      position: absolute;
-      top: 2px;
-      right: 2px;
-      min-width: 18px;
-      height: 18px;
-      padding: 0 5px;
-      font-size: 0.65rem;
-      border: 2px solid var(--bg-secondary);
-      box-sizing: content-box;
-    }
-
-    .sidebar-item:hover .sidebar-flyout,
-    .sidebar-item:focus-visible .sidebar-flyout {
-      display: flex;
-    }
-
-    .sidebar-flyout {
-      position: absolute;
-      left: calc(100% + 10px);
-      top: 50%;
-      transform: translateY(-50%);
-      align-items: center;
-      gap: 10px;
-      height: 36px;
-      padding: 0 10px 0 12px;
-      background: var(--bg-tertiary);
-      border: 1px solid var(--border-color);
-      border-radius: var(--radius-md);
-      box-shadow: var(--shadow-lg);
-      font-size: 0.85rem;
-      font-weight: 500;
-      color: var(--text-primary);
-      white-space: nowrap;
-      pointer-events: none;
-      z-index: 1100;
-
-      &::before {
-        content: '';
-        position: absolute;
-        left: -5px;
-        top: 13px;
-        width: 8px;
-        height: 8px;
-        background: var(--bg-tertiary);
-        border-left: 1px solid var(--border-color);
-        border-bottom: 1px solid var(--border-color);
-        transform: rotate(45deg);
-      }
-
-      kbd {
-        font-family: var(--font-mono);
-        font-size: 0.65rem;
-        color: var(--text-secondary);
-        border: 1px solid var(--border-color);
-        border-radius: 4px;
-        padding: 0 5px;
-        line-height: 16px;
-      }
-
-      .flyout-count {
-        font-family: var(--font-mono);
-        font-size: 0.7rem;
-        color: var(--accent-orange);
-      }
-    }
+    color: var(--accent-orange);
   }
 }
 
@@ -865,49 +717,6 @@ textarea {
 @keyframes slideInRight {
   from { transform: translateX(100%); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
-}
-
-// --- Status Bar ---
-.status-bar {
-  position: fixed;
-  bottom: 0;
-  left: var(--sidebar-width);
-  right: 0;
-  height: var(--status-bar-height);
-  background: var(--bg-secondary);
-  border-top: 1px solid var(--border-color);
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
-  font-size: 0.75rem;
-  font-family: var(--font-mono);
-  color: var(--text-muted);
-  z-index: 800;
-  gap: 16px;
-
-  .status-item {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-
-    &.connected .status-dot { background: var(--accent-green); }
-    &.disconnected .status-dot { background: var(--accent-red); }
-    &.reconnecting .status-dot { background: var(--accent-yellow); animation: pulse 1s infinite; }
-  }
-
-  .status-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--text-muted);
-  }
-
-  .status-spacer { flex: 1; }
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
 }
 
 // --- Alert Notifications ---
