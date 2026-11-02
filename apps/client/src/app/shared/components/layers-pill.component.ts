@@ -17,6 +17,7 @@ import { LayerVisibilityService } from '../../core/services/layer-visibility.ser
 import { EntityService } from '../../core/services/entity.service';
 import { Feed, directionOf, layerKeyOf } from '../../shared/models/feed.model';
 import { HasRoleDirective } from '../directives/has-role.directive';
+import { IconComponent } from './icon.component';
 
 type Freshness = 'green' | 'yellow' | 'red' | 'gray' | 'none';
 
@@ -33,7 +34,7 @@ interface LayerRow {
 }
 
 /**
- * The "DATA LAYERS" pill on the map: one row per feed (built-ins first) and
+ * The data-layers toggle in the map control column (a 36px square that opens a panel to its right): one row per feed (built-ins first) and
  * one per extra layer key present on the map. The eye toggle is this user's
  * own visibility (LayerVisibilityService); feed health and counts are read
  * only. Enabling, editing and deleting feeds live on the /connections page.
@@ -42,18 +43,22 @@ interface LayerRow {
 @Component({
   selector: 'app-layers-pill',
   standalone: true,
-  imports: [RouterLink, HasRoleDirective],
+  imports: [RouterLink, HasRoleDirective, IconComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="pill-container" [class.expanded]="expanded()">
       <!-- Pill / Header bar -->
-      <button class="pill-header" (click)="toggle()">
-        <span class="pill-label">DATA LAYERS</span>
+      <button
+        class="pill-header"
+        type="button"
+        title="Data layers"
+        aria-label="Data layers"
+        [attr.aria-expanded]="expanded()"
+        (click)="toggle()">
+        <app-icon name="layers" [size]="18" />
         @if (!expanded() && visibleCount() > 0) {
           <span class="feed-badge">{{ visibleCount() }}</span>
         }
-        <span class="pill-rule" [class.visible]="expanded()"></span>
-        <span class="pill-toggle-btn">{{ expanded() ? '−' : '+' }}</span>
       </button>
 
       <!-- Expanded panel -->
@@ -119,93 +124,71 @@ interface LayerRow {
     }
 
     .pill-container {
-      display: inline-flex;
-      flex-direction: column;
-    }
-
-    .pill-container.expanded {
-      width: 340px;
+      position: relative;
+      width: 36px;
+      height: 36px;
     }
 
     .pill-header {
-      display: inline-flex;
+      position: relative;
+      display: flex;
       align-items: center;
-      gap: 10px;
-      padding: 10px 18px;
-      min-width: 200px;
-      border-radius: 24px;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border-radius: 0;
       background: var(--bg-panel);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
       border: 1px solid var(--border-color);
       cursor: pointer;
-      font-family: var(--font-mono);
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--text-secondary);
-      white-space: nowrap;
+      color: var(--text-muted);
       transition: color var(--transition-fast), border-color var(--transition-fast);
 
       &:hover {
         color: var(--text-primary);
-        border-color: color-mix(in srgb, var(--border-color) 100%, var(--text-muted) 30%);
       }
     }
 
     .pill-container.expanded .pill-header {
-      width: 100%;
-      border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-    }
-
-    .pill-rule {
-      flex: 1;
-      height: 1px;
-
-      &.visible {
-        background: var(--border-color);
-      }
-    }
-
-    .pill-toggle-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 20px;
-      height: 20px;
-      border-radius: 4px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--border-color);
-      font-size: 0.85rem;
-      line-height: 1;
-      flex-shrink: 0;
-      color: var(--text-muted);
+      color: var(--accent-cyan);
+      border-color: var(--accent-cyan);
+      background: color-mix(in srgb, var(--accent-cyan) 8%, transparent);
     }
 
     .feed-badge {
+      position: absolute;
+      top: -6px;
+      right: -6px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-width: 18px;
-      height: 18px;
-      padding: 0 5px;
-      border-radius: 9px;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      border-radius: 0;
       background: var(--accent-green);
       color: #000;
-      font-size: 0.65rem;
+      font-family: var(--font-mono);
+      font-size: 0.6rem;
       font-weight: 700;
       line-height: 1;
     }
 
     .pill-panel {
+      position: absolute;
+      left: calc(100% + 6px);
+      top: 0;
+      width: 280px;
+      z-index: 20;
       background: var(--bg-panel);
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
       border: 1px solid var(--border-color);
-      border-top: none;
-      border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+      border-radius: 0;
+      box-shadow: none;
       padding: 6px;
-      animation: floatIn 200ms cubic-bezier(0.16, 1, 0.3, 1);
+      font-family: var(--font-mono);
+      font-size: 12px;
     }
 
     .layer-row {
@@ -213,7 +196,7 @@ interface LayerRow {
       align-items: center;
       gap: 8px;
       padding: 8px 10px;
-      border-radius: var(--radius-sm);
+      border-radius: 0;
       transition: background var(--transition-fast), opacity var(--transition-fast);
 
       &:hover {
@@ -231,7 +214,7 @@ interface LayerRow {
       justify-content: center;
       width: 24px;
       height: 24px;
-      border-radius: 4px;
+      border-radius: 0;
       background: rgba(6, 182, 212, 0.1);
       border: 1px solid var(--accent-cyan, var(--accent-blue));
       color: var(--accent-cyan, var(--accent-blue));
@@ -321,7 +304,7 @@ interface LayerRow {
       width: 100%;
       padding: 8px 10px;
       margin-top: 4px;
-      border-radius: var(--radius-sm);
+      border-radius: 0;
       font-family: var(--font-mono);
       font-size: 0.7rem;
       font-weight: 600;
@@ -337,17 +320,6 @@ interface LayerRow {
       &:hover {
         background: rgba(6, 182, 212, 0.18);
         border-color: var(--accent-cyan, var(--accent-blue));
-      }
-    }
-
-    @keyframes floatIn {
-      from {
-        opacity: 0;
-        transform: translateY(-4px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
       }
     }
   `],

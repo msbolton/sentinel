@@ -65,8 +65,8 @@ describe('Map CRT post-processing', () => {
       stageRef.current = new Cesium.PostProcessStage({ fragmentShader: 'flir-iron-bow' });
       viewer.scene.postProcessStages.add(stageRef.current);
     } else {
-      viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
-      viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a0e17');
+      viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#050607');
+      viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#050607');
     }
     viewer.scene.requestRender();
   }
@@ -93,7 +93,7 @@ describe('Map CRT post-processing', () => {
     expect(mockPostProcessStages.remove).toHaveBeenCalledTimes(1);
     expect(stageRef.current).toBeNull();
     expect(stages.length).toBe(0);
-    expect(mockScene.backgroundColor.css).toBe('#0a0e17');
+    expect(mockScene.backgroundColor.css).toBe('#050607');
   });
 
   it('should not add duplicate stages on repeated CRT switches', () => {
@@ -139,7 +139,7 @@ describe('Map CRT post-processing', () => {
     expect(mockPostProcessStages.remove).toHaveBeenCalledTimes(1);
     expect(stageRef.current).toBeNull();
     expect(stages.length).toBe(0);
-    expect(mockScene.backgroundColor.css).toBe('#0a0e17');
+    expect(mockScene.backgroundColor.css).toBe('#050607');
   });
 
   it('should swap post-process stage when switching from CRT to NIGHT_VISION', () => {
@@ -202,7 +202,7 @@ describe('Map CRT post-processing', () => {
     expect(mockPostProcessStages.remove).toHaveBeenCalledTimes(1);
     expect(stageRef.current).toBeNull();
     expect(stages.length).toBe(0);
-    expect(mockScene.backgroundColor.css).toBe('#0a0e17');
+    expect(mockScene.backgroundColor.css).toBe('#050607');
   });
 
   it('should swap post-process stage when switching from FLIR to FLIR_IRON_BOW', () => {

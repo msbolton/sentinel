@@ -112,4 +112,11 @@ describe('ThemePickerComponent', () => {
     const btnAfter = fixture.nativeElement.querySelector('.pill-toggle-btn');
     expect(btnAfter.textContent.trim()).toBe('−');
   });
+
+  it('renders only the options when inline', () => {
+    fixture.componentRef.setInput('inline', true);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.pill-header')).toBeNull();
+    expect(fixture.nativeElement.querySelectorAll('.theme-option').length).toBe(5);
+  });
 });

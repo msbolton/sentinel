@@ -5,6 +5,7 @@ import { DatePipe, UpperCasePipe } from '@angular/common';
 import { AuthService, UserProfile } from '../../core/services/auth.service';
 import { ApiKeyService } from '../../core/services/api-key.service';
 import { ApiKeysTabComponent } from './api-keys-tab.component';
+import { ThemePickerComponent } from '../../shared/components/theme-picker.component';
 
 export interface PendingUser {
   id: string;
@@ -30,7 +31,7 @@ export interface ActiveUser {
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [DatePipe, UpperCasePipe, ApiKeysTabComponent],
+  imports: [DatePipe, UpperCasePipe, ApiKeysTabComponent, ThemePickerComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="settings-page">
@@ -87,6 +88,12 @@ export interface ActiveUser {
               </div>
             </div>
           }
+
+          <section class="display-block">
+            <h2 class="display-heading">Display</h2>
+            <p class="display-help">Pick the map and interface theme for this browser.</p>
+            <app-theme-picker [inline]="true"></app-theme-picker>
+          </section>
         </div>
       }
 
@@ -277,6 +284,24 @@ export interface ActiveUser {
       border-radius: 8px;
       padding: 24px;
       max-width: 600px;
+    }
+
+    .display-block {
+      margin-top: 32px;
+      max-width: 600px;
+    }
+
+    .display-heading {
+      margin: 0 0 6px 0;
+      font-size: 16px;
+      font-weight: 600;
+      color: #ffffff;
+    }
+
+    .display-help {
+      margin: 0 0 12px 0;
+      font-size: 13px;
+      color: #8888aa;
     }
 
     .avatar {

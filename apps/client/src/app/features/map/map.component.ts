@@ -88,6 +88,7 @@ import { locationDotDataUrl } from './location-dot';
 import { GeofenceDrawTool } from './geofence-draw';
 import { GeofenceToolbarComponent } from './geofence-toolbar.component';
 import { SelectionReticleComponent } from './selection-reticle.component';
+import { LayersPillComponent } from '../../shared/components/layers-pill.component';
 import { DrawSession, addPoint, canFinish, draftFromSession, finishShape, newSession, setAnchor, setCursor, setRadius } from './geofence-draw-state';
 import { GeofenceConfig, GeofenceShape, LngLat } from '../../shared/models/geofence.model';
 
@@ -180,7 +181,7 @@ const GUEST_LOCATION_TIMEOUT_MS = 10_000;
   selector: 'app-map',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, IconComponent, GeofenceToolbarComponent, SelectionReticleComponent],
+  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, IconComponent, GeofenceToolbarComponent, SelectionReticleComponent, LayersPillComponent],
   templateUrl: './map.component.html',
   styleUrls: ['./map.component.scss'],
 })
@@ -557,6 +558,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
     this.ngZone.runOutsideAngular(() => {
       this.viewer = new Cesium.Viewer(container, viewerOptions);
+      // Mute the base imagery slightly so tracks and overlays read first.
+      const base = this.viewer.imageryLayers?.get(0);
+      if (base) base.saturation = 0.8;
       this.setupClusterSources();
       this.geofenceLayer = new GeofenceLayer(this.viewer, Cesium);
       this.emplacementLayer = new EmplacementLayer(this.viewer, Cesium);
@@ -569,8 +573,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.removeScreenPointListener = this.viewer.scene.postRender.addEventListener(() => this.updateSelectionScreenPoint());
 
       // Set dark atmosphere
-      this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
-      this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a0e17');
+      this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#050607');
+      this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#050607');
 
       // Disable expensive visual features
       if (this.viewer.scene.sun) this.viewer.scene.sun.show = false;
@@ -948,8 +952,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       });
       this.viewer.scene.postProcessStages.add(this.themePostProcessStage);
     } else {
-      this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
-      this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a0e17');
+      this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#050607');
+      this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#050607');
     }
 
     this.viewer.scene.requestRender();
