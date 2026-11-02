@@ -299,7 +299,6 @@ body[data-theme="crt"]::after {
 
 body[data-theme="crt"] {
   h1, h2, h3, h4, h5, h6,
-  .sidebar-logo,
   .card-title,
   .toast-title,
   .chip {
@@ -333,7 +332,6 @@ body[data-theme="night-vision"]::after {
 // Glow on headings and prominent elements
 body[data-theme="night-vision"] {
   h1, h2, h3, h4, h5, h6,
-  .sidebar-logo,
   .card-title,
   .toast-title,
   .chip {
@@ -389,7 +387,6 @@ body[data-theme="flir-iron-bow"]::after {
 body[data-theme="flir"],
 body[data-theme="flir-iron-bow"] {
   h1, h2, h3, h4, h5, h6,
-  .sidebar-logo,
   .card-title,
   .toast-title,
   .chip {
@@ -566,6 +563,16 @@ textarea {
   z-index: 1000;
 }
 
+// On a viewport too short for the whole rail, let it scroll so every item
+// stays reachable. Only then: scrolling clips the hover flyouts and badges.
+@media (max-height: 480px) {
+  .rail {
+    max-height: 100vh;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+}
+
 .rail-group {
   display: flex;
   flex-direction: column;
@@ -602,7 +609,7 @@ textarea {
   &.active {
     color: var(--accent-cyan);
     border-color: var(--accent-cyan);
-    background: rgba(111, 227, 207, 0.08);
+    background: color-mix(in srgb, var(--accent-cyan) 8%, transparent);
   }
 
   &:focus-visible {
@@ -712,11 +719,6 @@ textarea {
     padding: 12px 16px;
     border-top: 1px solid var(--border-color);
   }
-}
-
-@keyframes slideInRight {
-  from { transform: translateX(100%); opacity: 0; }
-  to { transform: translateX(0); opacity: 1; }
 }
 
 // --- Alert Notifications ---
@@ -844,7 +846,7 @@ textarea {
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
-  border-radius: 100px;
+  border-radius: 0;
   font-size: 0.75rem;
   font-weight: 500;
   border: 1px solid transparent;

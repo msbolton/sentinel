@@ -15,6 +15,7 @@ import { IconComponent } from '../../shared/components/icon.component';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Subscription, interval } from 'rxjs';
 import { PlaybackState, TimelineEvent } from '../../shared/models/track.model';
+import { monoFont } from '../../shared/mono-font';
 
 @Component({
   selector: 'app-timeline',
@@ -228,7 +229,7 @@ export class TimelineComponent implements OnInit, OnDestroy, AfterViewInit {
 
     // Time labels
     ctx.fillStyle = '#5a6a80';
-    ctx.font = '10px JetBrains Mono, monospace';
+    ctx.font = `10px ${monoFont()}`;
     ctx.textAlign = 'center';
 
     const labelCount = 6;

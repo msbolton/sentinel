@@ -44,7 +44,7 @@ interface RegisterForm {
             <div class="success-icon">
               <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <circle cx="12" cy="12" r="10" stroke="rgba(59,130,246,0.5)" stroke-width="1.5"/>
-                <path d="M8 12.5L10.5 15L16 9" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M8 12.5L10.5 15L16 9" style="stroke: var(--accent-cyan)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </div>
             <h1 class="app-title">SENTINEL</h1>
@@ -203,8 +203,8 @@ interface RegisterForm {
       inset: 0;
       pointer-events: none;
       background-image:
-        linear-gradient(rgba(59, 130, 246, 0.07) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(59, 130, 246, 0.07) 1px, transparent 1px);
+        linear-gradient(rgba(111, 227, 207, 0.07) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(111, 227, 207, 0.07) 1px, transparent 1px);
       background-size: 60px 60px;
     }
 
@@ -220,7 +220,7 @@ interface RegisterForm {
     .radar-circle {
       position: absolute;
       border-radius: 50%;
-      border: 1px solid rgba(59, 130, 246, 0.1);
+      border: 1px solid rgba(111, 227, 207, 0.1);
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
@@ -234,7 +234,7 @@ interface RegisterForm {
     .radar-circle-2 {
       width: 350px;
       height: 350px;
-      border-color: rgba(59, 130, 246, 0.15);
+      border-color: rgba(111, 227, 207, 0.15);
     }
 
     .radar-circle-3 {
@@ -253,7 +253,7 @@ interface RegisterForm {
       background: conic-gradient(
         from 0deg,
         transparent 0deg,
-        rgba(59, 130, 246, 0.08) 30deg,
+        rgba(111, 227, 207, 0.08) 30deg,
         transparent 60deg
       );
       animation: sweep 8s linear infinite;
@@ -277,8 +277,8 @@ interface RegisterForm {
       left: 18%;
       width: 6px;
       height: 6px;
-      background: #3b82f6;
-      box-shadow: 0 0 12px 4px rgba(59, 130, 246, 0.4);
+      background: var(--accent-cyan);
+      box-shadow: 0 0 12px 4px rgba(111, 227, 207, 0.4);
       animation-delay: 0s;
     }
 
@@ -307,8 +307,8 @@ interface RegisterForm {
       left: 25%;
       width: 5px;
       height: 5px;
-      background: #3b82f6;
-      box-shadow: 0 0 12px 4px rgba(59, 130, 246, 0.4);
+      background: var(--accent-cyan);
+      box-shadow: 0 0 12px 4px rgba(111, 227, 207, 0.4);
       animation-delay: 0.5s;
     }
 
@@ -324,7 +324,7 @@ interface RegisterForm {
       height: 2px;
       border-radius: 50%;
       pointer-events: none;
-      background: rgba(59, 130, 246, 0.4);
+      background: rgba(111, 227, 207, 0.4);
       animation: drift 12s ease-in-out infinite;
     }
 
@@ -355,11 +355,11 @@ interface RegisterForm {
       max-width: 480px;
       padding: 40px 36px;
       background: rgba(8, 16, 38, 0.92);
-      border: 1px solid rgba(59, 130, 246, 0.2);
+      border: 1px solid rgba(111, 227, 207, 0.2);
       border-radius: 12px;
       text-align: center;
       box-shadow:
-        0 0 60px rgba(59, 130, 246, 0.08),
+        0 0 60px rgba(111, 227, 207, 0.08),
         0 25px 80px rgba(0, 0, 0, 0.5);
       backdrop-filter: blur(12px);
       animation: cardAppear 0.6s ease-out;
@@ -383,7 +383,7 @@ interface RegisterForm {
       height: 72px;
       margin: 0 auto 18px;
       border-radius: 16px;
-      box-shadow: 0 0 28px rgba(37, 99, 235, 0.45), 0 0 6px rgba(59, 130, 246, 0.6);
+      box-shadow: 0 0 28px rgba(111, 227, 207, 0.45), 0 0 6px rgba(111, 227, 207, 0.6);
     }
 
     .app-title {
@@ -406,7 +406,7 @@ interface RegisterForm {
     .divider {
       width: 100%;
       height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.3), transparent);
+      background: linear-gradient(90deg, transparent, rgba(111, 227, 207, 0.3), transparent);
       margin: 28px 0;
     }
 
@@ -440,7 +440,7 @@ interface RegisterForm {
       width: 100%;
       padding: 11px 14px;
       background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(59, 130, 246, 0.2);
+      border: 1px solid rgba(111, 227, 207, 0.2);
       border-radius: 8px;
       color: rgba(255, 255, 255, 0.9);
       font-family: var(--font-sans);
@@ -460,7 +460,7 @@ interface RegisterForm {
     }
 
     .register-input:focus {
-      border-color: rgba(59, 130, 246, 0.5);
+      border-color: rgba(111, 227, 207, 0.5);
       background: rgba(255, 255, 255, 0.08);
     }
 
@@ -481,8 +481,8 @@ interface RegisterForm {
       display: block;
       width: 100%;
       padding: 13px 24px;
-      background: linear-gradient(135deg, #3b82f6, #2563eb);
-      color: white;
+      background: var(--accent-cyan);
+      color: var(--bg-primary);
       border: none;
       border-radius: 8px;
       font-family: var(--font-sans);
@@ -490,7 +490,7 @@ interface RegisterForm {
       font-weight: 600;
       letter-spacing: 2px;
       cursor: pointer;
-      box-shadow: 0 4px 20px rgba(59, 130, 246, 0.3);
+      box-shadow: 0 4px 20px rgba(111, 227, 207, 0.3);
       transition: box-shadow 0.2s ease, transform 0.15s ease;
       text-decoration: none;
       text-align: center;
@@ -498,13 +498,13 @@ interface RegisterForm {
     }
 
     .sign-in-btn:hover:not(:disabled) {
-      box-shadow: 0 6px 28px rgba(59, 130, 246, 0.45);
+      box-shadow: 0 6px 28px rgba(111, 227, 207, 0.45);
       transform: translateY(-1px);
     }
 
     .sign-in-btn:active:not(:disabled) {
       transform: translateY(0);
-      box-shadow: 0 2px 12px rgba(59, 130, 246, 0.3);
+      box-shadow: 0 2px 12px rgba(111, 227, 207, 0.3);
     }
 
     .sign-in-btn:disabled {
@@ -526,13 +526,13 @@ interface RegisterForm {
     }
 
     .sign-in-link {
-      color: rgba(59, 130, 246, 0.8);
+      color: rgba(111, 227, 207, 0.8);
       text-decoration: none;
       transition: color 0.2s ease;
     }
 
     .sign-in-link:hover {
-      color: #3b82f6;
+      color: var(--accent-cyan);
     }
 
     /* Success state */

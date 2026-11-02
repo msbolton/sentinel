@@ -80,7 +80,7 @@ describe('TrackStackComponent', () => {
     expect(r[0].textContent).toContain('HOS · 12 s ago');
     expect(r[0].classList).toContain('h');
     expect(r[1].textContent).toContain('trk-old OLD ONE');
-    expect(r[1].textContent).toContain('FRI · 5 min ago');
+    expect(r[1].textContent).toContain('FRD · 5 min ago');
     expect(r[1].classList).not.toContain('h');
   });
 

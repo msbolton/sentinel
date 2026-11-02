@@ -57,6 +57,9 @@ function formatHhmmz(iso: string): string {
       border-left: 2px solid var(--accent-cyan);
       border-radius: 0;
       padding: 5px 12px;
+      max-width: 320px;
+      overflow: hidden;
+      text-overflow: ellipsis;
       white-space: nowrap;
       cursor: pointer;
     }

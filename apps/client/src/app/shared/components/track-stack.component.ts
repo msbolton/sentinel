@@ -6,7 +6,7 @@ import { MapViewportService } from '../../core/services/map-viewport.service';
 import { SelectionService } from '../../core/services/selection.service';
 import { freshnessOf } from '../freshness';
 import { Affiliation, Entity } from '../models/entity.model';
-import { freshestInView } from '../track-stack';
+import { affiliationAbbrev, freshestInView } from '../track-stack';
 
 const TICK_MS = 5000;
 
@@ -122,6 +122,6 @@ export class TrackStackComponent {
   }
 
   meta(e: Entity): string {
-    return `${(e.affiliation ?? Affiliation.UNKNOWN).slice(0, 3)} · ${freshnessOf(e, this.now()).label}`;
+    return `${affiliationAbbrev(e.affiliation)} · ${freshnessOf(e, this.now()).label}`;
   }
 }

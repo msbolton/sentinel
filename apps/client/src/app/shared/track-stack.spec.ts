@@ -1,5 +1,5 @@
-import { freshestInView } from './track-stack';
-import { Classification, Entity, EntitySource, EntityType } from './models/entity.model';
+import { affiliationAbbrev, freshestInView } from './track-stack';
+import { Affiliation, Classification, Entity, EntitySource, EntityType } from './models/entity.model';
 
 const now = Date.parse('2026-11-01T14:32:00Z');
 const seenAgo = (s: number) => new Date(now - s * 1000).toISOString();
@@ -74,5 +74,23 @@ describe('freshestInView', () => {
     const found = freshestInView([at(0, 179), at(0, -179), at(0, 0)], { north: 1, south: -1, east: -178, west: 178 }, now);
     expect(found.length).toBe(2);
     expect(found.map((e) => e.position?.longitude).sort()).toEqual([-179, 179]);
+  });
+});
+
+describe('affiliationAbbrev', () => {
+  it.each([
+    [Affiliation.FRIENDLY, 'FRD'],
+    [Affiliation.HOSTILE, 'HOS'],
+    [Affiliation.NEUTRAL, 'NEU'],
+    [Affiliation.UNKNOWN, 'UNK'],
+    [Affiliation.ASSUMED_FRIENDLY, 'AFR'],
+    [Affiliation.SUSPECT, 'SUS'],
+    [Affiliation.PENDING, 'PND'],
+  ])('abbreviates %s as %s', (affiliation, abbrev) => {
+    expect(affiliationAbbrev(affiliation)).toBe(abbrev);
+  });
+
+  it('says UNK when there is no affiliation', () => {
+    expect(affiliationAbbrev(undefined)).toBe('UNK');
   });
 });

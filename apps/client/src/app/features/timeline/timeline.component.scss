@@ -6,7 +6,7 @@
 .timeline-strip {
   position: fixed;
   bottom: 0;
-  left: 40px;
+  left: var(--sidebar-width);
   right: 0;
   height: var(--timeline-height);
   background: var(--bg-panel);

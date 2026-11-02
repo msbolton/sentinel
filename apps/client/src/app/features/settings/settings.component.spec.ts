@@ -72,6 +72,14 @@ describe('SettingsComponent', () => {
       expect(el.textContent).toContain('admin');
       expect(el.textContent).toContain('admin@sentinel.local');
     });
+
+    it('offers the theme list under a Display heading', () => {
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+      expect(el.querySelector('.display-heading')?.textContent?.trim()).toBe('Display');
+      expect(el.querySelector('app-theme-picker .pill-header')).toBeNull();
+      expect(el.querySelectorAll('app-theme-picker .theme-option').length).toBe(5);
+    });
   });
 
   describe('User Management tab (admin)', () => {

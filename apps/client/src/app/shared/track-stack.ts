@@ -1,8 +1,23 @@
 import { ViewportBounds } from '../features/map/viewport-bounds';
-import { Entity } from './models/entity.model';
+import { Affiliation, Entity } from './models/entity.model';
 
 /** Rows the track stack shows. */
 export const TRACK_STACK_LIMIT = 10;
+
+const AFFILIATION_ABBREV: Partial<Record<Affiliation, string>> = {
+  [Affiliation.FRIENDLY]: 'FRD',
+  [Affiliation.HOSTILE]: 'HOS',
+  [Affiliation.NEUTRAL]: 'NEU',
+  [Affiliation.UNKNOWN]: 'UNK',
+  [Affiliation.ASSUMED_FRIENDLY]: 'AFR',
+  [Affiliation.SUSPECT]: 'SUS',
+  [Affiliation.PENDING]: 'PND',
+};
+
+/** Three-letter code for a stack row; every affiliation gets its own, missing or unrecognised reads UNK. */
+export function affiliationAbbrev(a: Affiliation | undefined): string {
+  return (a && AFFILIATION_ABBREV[a]) || 'UNK';
+}
 
 function inView(lat: number, lon: number, b: ViewportBounds): boolean {
   if (lat < b.south || lat > b.north) return false;

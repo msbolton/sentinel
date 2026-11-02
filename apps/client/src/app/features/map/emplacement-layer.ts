@@ -4,6 +4,7 @@ import { EntityType } from '../../shared/models/entity.model';
 import { ENTITY_TYPE_PIN_COLORS, LABEL_SCALE_BY_DISTANCE, LABEL_TRANSLUCENCY_BY_DISTANCE } from './cesium-config';
 import { coverageRings, hasCoverage } from './emplacement-geometry';
 import { locationDotDataUrl } from './location-dot';
+import { monoFont } from '../../shared/mono-font';
 
 /** The id the form's unsaved draft is drawn under; it is never an emplacement id. */
 export const EMPLACEMENT_DRAFT_ID = '__emplacement_draft__';
@@ -158,7 +159,7 @@ export class EmplacementLayer {
       },
       label: {
         text,
-        font: '11px JetBrains Mono, monospace',
+        font: `11px ${monoFont()}`,
         fillColor: color,
         outlineColor: C.Color.BLACK,
         outlineWidth: 2,

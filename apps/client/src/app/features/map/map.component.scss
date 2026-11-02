@@ -53,7 +53,7 @@
   }
 
   &.active {
-    background: rgba(111, 227, 207, 0.08);
+    background: color-mix(in srgb, var(--accent-cyan) 8%, transparent);
     color: var(--accent-cyan);
     border-color: var(--accent-cyan);
   }
@@ -262,7 +262,7 @@ app-entity-detail-panel.panel-offset ::ng-deep .detail-panel {
       border-radius: var(--radius-sm, 6px);
       color: var(--text-primary, #e2e8f0);
       backdrop-filter: blur(12px);
-      font-family: var(--font-mono, 'JetBrains Mono', monospace);
+      font-family: var(--font-mono);
       font-size: 0.85rem;
 
       &:focus {
@@ -347,7 +347,7 @@ app-entity-detail-panel.panel-offset ::ng-deep .detail-panel {
         }
 
         &.active {
-          background: rgba(111, 227, 207, 0.15);
+          background: color-mix(in srgb, var(--accent-cyan) 15%, transparent);
           color: var(--accent-blue, #3b82f6);
         }
       }

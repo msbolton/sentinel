@@ -113,6 +113,7 @@ function isLightColor(hex: string): boolean {
 /** All satellites are re-propagated this often; the selected one every frame. */
 const SAT_STEP_INTERVAL_MS = 250;
 import { environment } from '../../../environments/environment';
+import { monoFont } from '../../shared/mono-font';
 
 // Configure Cesium before imports
 configureCesium();
@@ -1140,7 +1141,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         ellipse: signalEllipse,
         label: {
           text: labelText,
-          font: '12px JetBrains Mono, monospace',
+          font: `12px ${monoFont()}`,
           fillColor: Cesium.Color.WHITE.withAlpha(billboardAlpha),
           outlineColor: Cesium.Color.BLACK,
           outlineWidth: 2,

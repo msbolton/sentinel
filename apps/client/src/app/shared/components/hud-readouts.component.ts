@@ -77,6 +77,7 @@ import { UserMenuComponent } from './user-menu.component';
     /* div only: the user menu's host carries class "hud" too and must stay in flow. */
     div.hud {
       position: absolute;
+      text-shadow: 0 0 2px #000, 0 0 6px #000;
       padding: 10px 12px;
       white-space: nowrap;
     }
@@ -107,6 +108,7 @@ import { UserMenuComponent } from './user-menu.component';
 
     .hud-cls {
       position: absolute;
+      text-shadow: 0 0 2px #000, 0 0 6px #000;
       top: 0;
       left: 50%;
       transform: translateX(-50%);
