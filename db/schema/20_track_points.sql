@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS sentinel.track_points (
 );
 
 CREATE INDEX IF NOT EXISTS idx_track_points_entity_time ON sentinel.track_points ("entityId", "timestamp" DESC);
+-- Replay and the timeline filter points by box.
+CREATE INDEX IF NOT EXISTS idx_track_points_position ON sentinel.track_points USING gist (position);
 
 DO $$
 BEGIN

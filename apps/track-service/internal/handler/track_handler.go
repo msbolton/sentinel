@@ -192,7 +192,7 @@ func (h *TrackHandler) getTimeline(w http.ResponseWriter, r *http.Request) {
 		httputil.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	buckets, err := h.store.GetTimeline(r.Context(), p.Start, p.End, p.Buckets, ceilingOf(r))
+	buckets, err := h.store.GetTimeline(r.Context(), p.Start, p.End, p.Buckets, ceilingOf(r), nil)
 	if err != nil {
 		httputil.ErrorWithLogger(w, http.StatusInternalServerError, "failed to query timeline", h.logger, err)
 		return
