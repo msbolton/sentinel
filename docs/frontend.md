@@ -114,6 +114,7 @@ The app is a glass cockpit: the map fills the window and everything else floats 
 - **Alert ticker**: open alerts in a strip along the top centre. Clicking one selects its track.
 - **Track card**: selecting a track opens a translucent card at the top right, 92px down, with bracket corners and a reticle on the map. The **track stack** under it lists the ten freshest tracks in view; clicking a row selects that track.
 - **Route panels**: Search, Alerts, Findings, Geofences, Link analysis, Locations and the other map routes open as panels on the right, 380px wide. While one is open the right-hand HUD readouts and the track stack shift left by its width.
+- **Search panel**: a query of two or more characters, the type, source and classification chips and the "within current viewport" toggle all feed one debounced request to `/api/v1/search` (`core/services/search.service.ts`). Clicking a hit selects its track: the live one when the map has it, else fetched, else the indexed copy at its last known position.
 - **Timeline strip**: the timeline along the bottom of the map, starting at the right edge of the rail.
 - **Pages**: Settings, Connections, Admin and Feeds render as full pages with a left margin for the rail.
 

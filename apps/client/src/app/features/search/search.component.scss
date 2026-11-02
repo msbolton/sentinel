@@ -153,6 +153,11 @@
 }
 
 .entity-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -163,6 +168,15 @@
   &:hover {
     border-color: var(--border-active);
     background: var(--bg-panel-hover);
+  }
+
+  &.selected {
+    border-color: var(--accent-cyan);
+  }
+
+  &:focus-visible {
+    outline: 1px solid var(--accent-cyan);
+    outline-offset: -1px;
   }
 
   &-header {

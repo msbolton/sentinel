@@ -25,7 +25,11 @@ type EntityDocument struct {
 	FeedID              *string                `json:"feedId,omitempty"`
 	AgeoutState         *string                `json:"ageoutState,omitempty"`
 	Identities          []string               `json:"identities,omitempty"` // "ICAO24:A1B2C3"
-	Exercise            bool                   `json:"exercise,omitempty"`
+	// Identifiers is every platform identifier and natural identity as plain
+	// text (callsign, MMSI, ICAO hex, registration, NORAD id, source id), so
+	// full-text search finds a track by any of them, whatever its case.
+	Identifiers []string `json:"identifiers,omitempty"`
+	Exercise    bool     `json:"exercise,omitempty"`
 }
 
 // GeoPoint represents a geographic point for OpenSearch.
