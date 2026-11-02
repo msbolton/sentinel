@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { Router } from '@angular/router';
@@ -109,6 +111,12 @@ describe('TimelineComponent', () => {
   it('makes the strip root focusable and shows the REPLAY pill', () => {
     expect(strip().getAttribute('tabindex')).toBe('0');
     expect(el.querySelector('.mode')?.textContent?.trim()).toBe('REPLAY');
+  });
+
+  it('takes pointer events although the router outlet container does not', () => {
+    // .panel-overlay sets pointer-events: none and its encapsulated `> *` rule never reaches this host.
+    const styles = readFileSync(join(__dirname, 'timeline.component.scss'), 'utf-8');
+    expect(styles).toMatch(/^\.strip \{[^{}]*pointer-events: auto;/m);
   });
 
   it('renders one rect per non-zero type segment and six tick labels', () => {

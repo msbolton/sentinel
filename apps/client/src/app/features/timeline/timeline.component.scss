@@ -3,6 +3,8 @@
 }
 
 .strip {
+  // The router outlet's container (.panel-overlay) has pointer-events: none.
+  pointer-events: auto;
   position: fixed;
   bottom: 0;
   left: var(--sidebar-width);
