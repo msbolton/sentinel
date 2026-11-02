@@ -166,6 +166,14 @@ describe('ReplayService', () => {
       expect(service.playing()).toBe(false);
     });
 
+    it('tick exactly at the window end pauses there (a clamped clock never passes it)', () => {
+      service.play();
+      service.tick(service.window().end);
+
+      expect(service.cursor()).toEqual(service.window().end);
+      expect(service.playing()).toBe(false);
+    });
+
     it('tick inside the window just moves the cursor and keeps playing', () => {
       service.play();
       const t = new Date(service.window().start.getTime() + 5000);
@@ -181,6 +189,18 @@ describe('ReplayService', () => {
       service.play();
 
       service.tick(new Date(b.getTime() + 1000));
+
+      expect(service.cursor()).toEqual(a);
+      expect(service.playing()).toBe(true);
+    });
+
+    it('with a range, tick exactly at its end loops to its start and keeps playing', () => {
+      const a = new Date(service.window().start.getTime() + 10 * 60_000);
+      const b = new Date(service.window().start.getTime() + 20 * 60_000);
+      service.setRange(a, b);
+      service.play();
+
+      service.tick(b);
 
       expect(service.cursor()).toEqual(a);
       expect(service.playing()).toBe(true);
@@ -277,6 +297,44 @@ describe('ReplayService', () => {
       expect(service.playing()).toBe(false);
       service.setSpeed(600);
       expect(service.speed()).toBe(600);
+    });
+
+    it('play from the end of the window rewinds to the start and marks a seek', () => {
+      service.enter();
+      service.seek(service.window().end);
+      const before = service.seekRequested();
+
+      service.play();
+
+      expect(service.cursor()).toEqual(service.window().start);
+      expect(service.playing()).toBe(true);
+      expect(service.seekRequested()).toBe(before + 1);
+    });
+
+    it('play from the end of a range rewinds to the range start', () => {
+      service.enter();
+      const start = service.window().start.getTime();
+      const a = new Date(start + 10 * 60_000);
+      const b = new Date(start + 20 * 60_000);
+      service.setRange(a, b);
+      service.seek(b);
+
+      service.play();
+
+      expect(service.cursor()).toEqual(a);
+      expect(service.playing()).toBe(true);
+    });
+
+    it('play mid-window keeps the cursor and does not mark a seek', () => {
+      service.enter();
+      const mid = new Date(service.window().start.getTime() + 1000);
+      service.seek(mid);
+      const before = service.seekRequested();
+
+      service.play();
+
+      expect(service.cursor()).toEqual(mid);
+      expect(service.seekRequested()).toBe(before);
     });
   });
 

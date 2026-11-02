@@ -129,7 +129,10 @@ export class ReplayService {
     this.seekRequestedState.update((n) => n + 1);
   }
 
+  /** Starts the clock; from the end of the clock bounds it first rewinds to their start. */
   play(): void {
+    const { start, end } = this.clockBounds();
+    if (this.cursorState().getTime() >= end.getTime()) this.seek(start);
     this.playingState.set(true);
   }
 
@@ -172,11 +175,11 @@ export class ReplayService {
     this.refreshRequests.next();
   }
 
-  /** The map's clock reports its time here; loops over a range, stops at the end of a bare window. */
+  /** The map's clock reports its time here; reaching the end loops over a range or stops a bare window. */
   tick(d: Date): void {
     const { start, end } = this.clockBounds();
     const t = d.getTime();
-    if (t <= end.getTime()) {
+    if (t < end.getTime()) {
       this.cursorState.set(this.clamped(t));
     } else if (this.rangeState()) {
       this.cursorState.set(start);
