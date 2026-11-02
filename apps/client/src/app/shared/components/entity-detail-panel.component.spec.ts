@@ -391,16 +391,6 @@ describe('EntityDetailPanelComponent', () => {
       expect(analytics.reviewFinding).toHaveBeenCalledWith('f1', 'DISMISSED');
       expect(el.querySelector('.finding-item')).toBeNull();
     });
-
-    it('meters the strongest open finding under the findings list', () => {
-      analytics.findings = [makeFinding({ id: 'f1', score: 0.4 }), makeFinding({ id: 'f2', score: 0.91 })];
-      fixture.componentRef.setInput('entity', makeEntity());
-      fixture.detectChanges();
-      const meter = el.querySelector('.confidence[role="meter"]')!;
-      expect(meter.getAttribute('aria-valuenow')).toBe('0.91');
-      expect(meter.getAttribute('aria-label')).toBe('Strongest finding confidence');
-      expect((meter.querySelector('i') as HTMLElement).style.width).toBe('91%');
-    });
   });
 
   describe('track card', () => {

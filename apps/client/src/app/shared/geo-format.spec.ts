@@ -39,7 +39,7 @@ describe('formatAltitude', () => {
 
 describe('formatMgrs', () => {
   it('formats MGRS with spaced groups at 10 m precision', () => {
-    expect(formatMgrs(12.055, 44.8144)).toMatch(/^38P [A-Z]{2} \d{4} \d{4}$/);
+    expect(formatMgrs(12.055, 44.8144)).toBe('38P MU 7979 3264');
   });
 
   it('returns a dash outside the UTM bands instead of throwing', () => {

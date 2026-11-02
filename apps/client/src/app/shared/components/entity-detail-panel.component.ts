@@ -172,7 +172,6 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                 }
               </ul>
             </div>
-            <div class="confidence" role="meter" aria-label="Strongest finding confidence" [attr.aria-valuenow]="topScore()" aria-valuemin="0" aria-valuemax="1"><i [style.width.%]="topScore() * 100"></i></div>
           }
 
           <div class="sections">
@@ -1464,19 +1463,6 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       &.unknown { color: var(--accent-yellow); }
     }
 
-    /* Confidence: the strongest open finding's score. */
-    .confidence {
-      height: 4px;
-      margin: 0 0 10px;
-      background: rgba(111, 227, 207, 0.12);
-    }
-
-    .confidence i {
-      display: block;
-      height: 100%;
-      background: var(--accent-yellow);
-    }
-
     .chip-op-status {
       font-size: 0.7rem;
       &.OPERATIONAL {
@@ -2038,7 +2024,4 @@ export class EntityDetailPanelComponent {
       default: return 'other';
     }
   });
-
-  /** The strongest open finding's score, held to 0..1 for the confidence meter. */
-  protected topScore = computed(() => Math.min(1, Math.max(0, ...this.findings().map((f) => f.score))));
 }
