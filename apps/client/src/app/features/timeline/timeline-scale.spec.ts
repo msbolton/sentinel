@@ -64,6 +64,13 @@ describe('tickLabels', () => {
     for (const t of ticks) expect(t.label).toMatch(/^\d{2} \d{2}:\d{2}$/);
   });
 
+  it('puts each label on its exact minute despite fractional milliseconds', () => {
+    // 7/10 of 6h is 15119999.999999998 ms in floating point; near the epoch nothing absorbs it.
+    const epoch = new Date(0);
+    const ticks = tickLabels({ start: epoch, end: new Date(6 * HOUR) }, 11);
+    expect(ticks[7].label).toBe('04:12');
+  });
+
   it('honours the requested count', () => {
     expect(tickLabels(window6h, 3).map((t) => t.label)).toEqual(['06:00', '09:00', '12:00']);
   });

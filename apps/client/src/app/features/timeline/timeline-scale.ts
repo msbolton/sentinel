@@ -46,7 +46,9 @@ export function tickLabels(window: TimeWindow, count = 6): { x: number; label: s
   const ticks: { x: number; label: string }[] = [];
   for (let i = 0; i < count; i++) {
     const x = count > 1 ? i / (count - 1) : 0;
-    const t = new Date(window.start.getTime() + x * total);
+    // Whole milliseconds: Date truncates a fraction, so a tick on a minute could read a minute early.
+    const offset = count > 1 ? Math.round((i * total) / (count - 1)) : 0;
+    const t = new Date(window.start.getTime() + offset);
     const time = `${pad2(t.getUTCHours())}:${pad2(t.getUTCMinutes())}`;
     ticks.push({ x, label: withDay ? `${pad2(t.getUTCDate())} ${time}` : time });
   }

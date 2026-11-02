@@ -1,54 +1,110 @@
-<div class="timeline-strip">
-  <!-- Playback Controls -->
-  <div class="playback-controls">
-    <button class="playback-btn" (click)="skipBackward()" title="Skip Backward" aria-label="Skip backward">
+<div class="strip" tabindex="0" role="group" aria-label="Replay timeline" (keydown)="onKeydown($event)">
+  <span class="mode"><span class="dot" aria-hidden="true"></span>REPLAY</span>
+
+  <div class="windows segmented" role="group" aria-label="Window">
+    @for (p of presets; track p) {
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        [attr.data-preset]="p"
+        [attr.aria-pressed]="replay.preset() === p"
+        (click)="replay.setWindow(p)">{{ p }}</button>
+    }
+  </div>
+
+  <div class="histogram" #histogram>
+    <svg
+      [attr.viewBox]="'0 0 ' + width() + ' ' + svgHeight"
+      preserveAspectRatio="none"
+      (pointerdown)="onPointerDown($event)"
+      (pointermove)="onPointerMove($event)"
+      (pointerup)="onPointerUp($event)"
+      (pointercancel)="onPointerCancel()"
+      (dblclick)="replay.clearRange()">
+      @for (col of columns(); track $index) {
+        <svg:g>
+          <svg:title>{{ col.title }}</svg:title>
+          @for (seg of col.segments; track seg.type) {
+            <svg:rect
+              [attr.x]="col.x"
+              [attr.y]="seg.y"
+              [attr.width]="col.drawWidth"
+              [attr.height]="seg.height"
+              [attr.fill]="typeColorVar(seg.type)"
+              [attr.data-type]="seg.type" />
+          }
+        </svg:g>
+      }
+      <svg:line class="baseline" x1="0" [attr.x2]="width()" [attr.y1]="barHeight" [attr.y2]="barHeight" />
+      @for (tick of ticks(); track $index) {
+        <svg:text class="mono tick" [attr.x]="tick.x" [attr.y]="tickY" [attr.text-anchor]="tick.anchor">{{ tick.label }}</svg:text>
+      }
+      @if (rangeBand(); as band) {
+        <svg:rect class="range" [attr.x]="band.x" y="0" [attr.width]="band.width" [attr.height]="barHeight" />
+      }
+      <svg:line class="playhead" [attr.x1]="playheadX()" [attr.x2]="playheadX()" y1="0" [attr.y2]="barHeight" />
+      <svg:polygon class="playhead-cap" [attr.points]="capPoints()" />
+    </svg>
+
+    @if (replay.bucketsStatus() === 'loading') {
+      <div class="loading-bar" aria-hidden="true"></div>
+    }
+    @if (replay.bucketsStatus() === 'failed') {
+      <div class="message" role="status">
+        <span>Playback is unavailable.</span>
+        <button type="button" class="btn btn-secondary btn-sm" (click)="replay.refresh()">Retry</button>
+      </div>
+    } @else if (empty()) {
+      <div class="message" role="status">No recorded tracks in view for this window.</div>
+    }
+    @if (replay.truncated()) {
+      <div class="note">Showing the {{ replay.maxEntities }} busiest tracks in view</div>
+    }
+  </div>
+
+  <div class="transport">
+    <button
+      type="button"
+      class="btn btn-ghost btn-sm"
+      aria-label="Step back"
+      [disabled]="transportDisabled()"
+      (click)="step(-1)">
       <app-icon name="skip-back" [size]="14" />
     </button>
     <button
-      class="playback-btn play-btn"
-      (click)="togglePlayback()"
-      [title]="playing() ? 'Pause' : 'Play'"
-      [attr.aria-label]="playing() ? 'Pause' : 'Play'">
-      @if (playing()) {
-        <app-icon name="pause" [size]="14" />
-      } @else {
-        <app-icon name="play" [size]="14" />
-      }
+      type="button"
+      class="btn btn-sm play"
+      [attr.aria-label]="replay.playing() ? 'Pause' : 'Play'"
+      [disabled]="transportDisabled()"
+      (click)="playPause()">
+      <app-icon [name]="replay.playing() ? 'pause' : 'play'" [size]="14" />
     </button>
-    <button class="playback-btn" (click)="skipForward()" title="Skip Forward" aria-label="Skip forward">
+    <button
+      type="button"
+      class="btn btn-ghost btn-sm"
+      aria-label="Step forward"
+      [disabled]="transportDisabled()"
+      (click)="step(1)">
       <app-icon name="skip-forward" [size]="14" />
     </button>
-    <button class="playback-btn" (click)="resetTime()" title="Reset to Now" aria-label="Reset to now">
-      <app-icon name="square" [size]="14" />
-    </button>
   </div>
 
-  <!-- Speed Selector -->
-  <div class="speed-control">
-    <span class="speed-label">Speed:</span>
+  <div class="speeds segmented" role="group" aria-label="Speed">
     @for (s of speeds; track s) {
       <button
-        class="speed-btn"
-        [class.active]="speed() === s"
-        (click)="setSpeed(s)">
-        {{ s }}x
-      </button>
+        type="button"
+        class="btn btn-ghost btn-sm"
+        [attr.aria-pressed]="replay.speed() === s"
+        (click)="replay.setSpeed(s)">{{ s }}×</button>
     }
   </div>
 
-  <!-- Timeline Visualization -->
-  <div class="timeline-canvas-container">
-    <canvas #timelineCanvas class="timeline-canvas"></canvas>
-    <div #brushOverlay class="brush-overlay"></div>
-  </div>
-
-  <!-- Time Display -->
-  <div class="time-display">
-    <span class="time-current mono">{{ formatTime(currentTime()) }}</span>
-    @if (brushStart() && brushEnd()) {
-      <span class="time-range mono">
-        {{ formatTime(brushStart()!) }} &mdash; {{ formatTime(brushEnd()!) }}
-      </span>
+  <div class="readout">
+    <span class="mono dtg">{{ dtg() }}</span>
+    @if (rangeText(); as text) {
+      <span class="mono range-text">{{ text }}</span>
     }
   </div>
+
+  <button type="button" class="btn btn-sm live" (click)="goLive()">LIVE</button>
 </div>
