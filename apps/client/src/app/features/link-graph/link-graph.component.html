@@ -1,112 +1,178 @@
 <div class="panel link-graph-panel">
   <div class="panel-header">
-    <h2>Link Analysis</h2>
-    @if (graphLoaded()) {
-      <span class="graph-stats mono">
-        {{ nodeCount() }} nodes / {{ edgeCount() }} edges
-      </span>
+    <h2>Link analysis</h2>
+    @if (graph()) {
+      <span class="graph-stats mono">{{ nodeCount() }} entities / {{ edgeCount() }} links</span>
     }
   </div>
 
-  <!-- Search & Controls -->
   <div class="graph-controls">
-    <div class="input-group">
-      <input
-        type="text"
-        class="entity-input"
-        placeholder="Enter entity ID to analyze..."
-        [value]="entityIdInput()"
-        (input)="entityIdInput.set($any($event.target).value)"
-        (keyup.enter)="loadGraph()"
-      />
-      <button class="btn btn-primary btn-sm" (click)="loadGraph()" [disabled]="loading()">
-        @if (loading()) {
-          <span class="mini-spinner"></span>
-        } @else {
-          Analyze
-        }
-      </button>
-    </div>
+    <app-entity-picker placeholder="Entity to analyse" (picked)="onCenterPicked($event)" />
 
     <div class="depth-control">
-      <label class="depth-label">Depth: {{ depth() }}</label>
+      <label class="depth-label" for="link-depth">Depth: {{ maxDepth() }}</label>
       <input
+        id="link-depth"
         type="range"
         min="1"
         max="5"
-        [value]="depth()"
-        (input)="depth.set(+$any($event.target).value)"
+        [value]="maxDepth()"
+        (change)="setDepth(+$any($event.target).value)"
       />
     </div>
 
-    <!-- Link Type Filters -->
     <div class="link-type-filters">
-      <span class="filter-label">Link Types</span>
+      <span class="filter-label">Link types</span>
       <div class="chip-row">
         @for (type of linkTypes; track type) {
           <button
+            type="button"
             class="link-chip"
             [class.active]="selectedLinkTypes().has(type)"
+            [attr.aria-pressed]="selectedLinkTypes().has(type)"
             (click)="toggleLinkType(type)">
-            {{ type }}
+            {{ linkTypeLabel(type) }}
           </button>
         }
       </div>
     </div>
   </div>
 
-  <!-- Graph Visualization -->
   <div class="graph-area">
-    <div #graphContainer class="graph-canvas"></div>
+    <div #graphContainer class="graph-canvas" [class.hidden]="!graph() || isEmpty()"></div>
 
-    @if (!graphLoaded() && !loading()) {
-      <div class="graph-placeholder">
-        <span class="placeholder-icon"><app-icon name="share" [size]="40" [strokeWidth]="1.5" /></span>
-        <p>Enter an entity ID to visualize its link network</p>
-        <p class="text-xs text-muted">Double-click nodes to expand the graph</p>
+    @if (!center() && !loading()) {
+      <div class="graph-state">
+        <span class="state-icon"><app-icon name="share" [size]="40" [strokeWidth]="1.5" /></span>
+        <p>Pick an entity to see what it is linked to.</p>
+        <p class="text-xs text-muted">Or open a track on the map and choose Links.</p>
       </div>
     }
 
     @if (loading()) {
-      <div class="graph-loading">
+      <div class="graph-state">
         <div class="loading-spinner"></div>
-        <span>Building graph...</span>
+        <span>Building graph…</span>
       </div>
     }
 
-    <!-- Graph Toolbar -->
-    @if (graphLoaded()) {
+    @if (failed()) {
+      <div class="graph-state">
+        <span class="state-icon"><app-icon name="alert-triangle" [size]="32" [strokeWidth]="1.5" /></span>
+        <p>Link analysis is unavailable. Try again in a moment.</p>
+        <button type="button" class="btn btn-secondary btn-sm" (click)="loadGraph()">Retry</button>
+      </div>
+    }
+
+    @if (isEmpty() && !loading()) {
+      <div class="graph-state">
+        <span class="state-icon"><app-icon name="link" [size]="32" [strokeWidth]="1.5" /></span>
+        <p>{{ center()?.name }} has no links yet.</p>
+        <p class="text-xs text-muted">Add one below to start its network.</p>
+      </div>
+    }
+
+    @if (graph() && !isEmpty()) {
       <div class="graph-toolbar">
-        <button class="tool-btn" (click)="zoomIn()" title="Zoom In" aria-label="Zoom in"><app-icon name="zoom-in" /></button>
-        <button class="tool-btn" (click)="zoomOut()" title="Zoom Out" aria-label="Zoom out"><app-icon name="zoom-out" /></button>
-        <button class="tool-btn" (click)="fitGraph()" title="Fit Graph" aria-label="Fit graph"><app-icon name="fit" /></button>
-        <button class="tool-btn" (click)="togglePhysics()" title="Toggle Physics" aria-label="Toggle physics"><app-icon name="zap" /></button>
+        <button type="button" class="tool-btn" (click)="zoomIn()" title="Zoom in" aria-label="Zoom in"><app-icon name="zoom-in" /></button>
+        <button type="button" class="tool-btn" (click)="zoomOut()" title="Zoom out" aria-label="Zoom out"><app-icon name="zoom-out" /></button>
+        <button type="button" class="tool-btn" (click)="fitGraph()" title="Fit graph" aria-label="Fit graph"><app-icon name="fit" /></button>
       </div>
     }
 
-    <!-- Selected Node Info -->
     @if (selectedNode(); as node) {
-      <div class="node-info">
-        <div class="node-info-header">
-          <span class="node-dot" [style.background]="node.color?.background || '#6b7280'"></span>
-          <span class="node-label">{{ node.label }}</span>
+      <div class="info-card" data-card="node">
+        <div class="info-header">
+          <span class="node-dot" [style.background]="nodeColor(node.entityType)"></span>
+          <span class="info-title">{{ node.name }}</span>
         </div>
-        <div class="node-info-meta">
+        <div class="info-meta">
           <span class="chip chip-entity-type" [ngClass]="node.entityType">{{ node.entityType }}</span>
-          <span class="mono text-xs">{{ node.id }}</span>
+          <span class="chip chip-classification" [ngClass]="node.classification">{{ node.classification }}</span>
         </div>
-        @if (node.title) {
-          <p class="node-info-title">{{ node.title }}</p>
-        }
-        <div class="node-info-actions">
-          <button class="btn btn-secondary btn-sm" (click)="entityIdInput.set(node.id); loadGraph()">
-            Expand
-          </button>
-          <button class="btn btn-ghost btn-sm" (click)="selectedNode.set(null)">
-            Dismiss
-          </button>
+        <div class="info-actions">
+          <button type="button" class="btn btn-primary btn-sm" (click)="showOnMap(node)">Show on map</button>
+          @if (node.entityId !== center()?.id) {
+            <button type="button" class="btn btn-secondary btn-sm" (click)="expand(node)">Expand</button>
+          }
+          <button type="button" class="btn btn-ghost btn-sm" (click)="dismiss()">Dismiss</button>
+        </div>
+      </div>
+    }
+
+    @if (selectedEdge(); as edge) {
+      <div class="info-card" data-card="edge">
+        <div class="info-header">
+          <span class="info-title">{{ linkTypeLabel(edge.linkType) }}</span>
+          <span class="mono text-xs text-muted">{{ confidencePercent(edge.confidence) }} confidence</span>
+        </div>
+        <p class="info-endpoints">
+          <span>{{ nodeName(edge.sourceEntityId) }}</span>
+          <app-icon name="chevron-right" [size]="12" />
+          <span>{{ nodeName(edge.targetEntityId) }}</span>
+        </p>
+        <div class="info-actions">
+          <button type="button" class="btn btn-secondary btn-sm" (click)="removeLink(edge)">Remove link</button>
+          <button type="button" class="btn btn-ghost btn-sm" (click)="dismiss()">Dismiss</button>
         </div>
       </div>
     }
   </div>
+
+  @if (center()) {
+    <div class="add-link">
+      @if (!addingLink()) {
+        <button type="button" class="btn btn-secondary btn-sm add-link-toggle" (click)="startLink()">
+          <app-icon name="plus" [size]="14" /> Add link from {{ linkSource()?.name }}
+        </button>
+      } @else {
+        <div class="add-link-form">
+          <div class="form-row">
+            <span class="form-label">From</span>
+            <span class="form-value">{{ linkSource()?.name }}</span>
+          </div>
+          <div class="form-row">
+            <span class="form-label">To</span>
+            @if (linkTarget(); as target) {
+              <span class="form-value">
+                {{ target.name }}
+                <button type="button" class="btn btn-ghost btn-sm" (click)="linkTarget.set(null)">Change</button>
+              </span>
+            } @else {
+              <app-entity-picker placeholder="Entity to link to" (picked)="onLinkTargetPicked($event)" />
+            }
+          </div>
+          <div class="form-row">
+            <label class="form-label" for="link-type">Type</label>
+            <select id="link-type" class="form-select" [value]="linkType()" (change)="linkType.set($any($event.target).value)">
+              @for (type of linkTypes; track type) {
+                <option [value]="type">{{ linkTypeLabel(type) }}</option>
+              }
+            </select>
+          </div>
+          <div class="form-row">
+            <label class="form-label" for="link-confidence">Confidence: {{ confidencePercent(linkConfidence()) }}</label>
+            <input
+              id="link-confidence"
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              [value]="linkConfidence()"
+              (input)="linkConfidence.set(+$any($event.target).value)"
+            />
+          </div>
+          @if (linkError(); as error) {
+            <p class="form-error text-xs">{{ error }}</p>
+          }
+          <div class="form-actions">
+            <button type="button" class="btn btn-primary btn-sm" [disabled]="!canSaveLink()" (click)="saveLink()">
+              @if (linkSaving()) { Saving… } @else { Save link }
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm" (click)="cancelLink()">Cancel</button>
+          </div>
+        </div>
+      }
+    </div>
+  }
 </div>
