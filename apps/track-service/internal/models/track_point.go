@@ -59,3 +59,12 @@ type ReplayEntity struct {
 	Classification string        `json:"classification"`
 	Points         [][5]*float64 `json:"points"`
 }
+
+// ReplayResponse is the body of GET /api/v1/tracks/replay. Truncated is set
+// when more tracks matched than were returned.
+type ReplayResponse struct {
+	StartTime time.Time      `json:"startTime"`
+	EndTime   time.Time      `json:"endTime"`
+	Entities  []ReplayEntity `json:"entities"`
+	Truncated bool           `json:"truncated"`
+}
