@@ -1460,7 +1460,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   // --- Collections and clustering --------------------------------------------
 
   /**
-   * Aircraft, vessels and vehicles each live in their own data source so
+   * Aircraft, vessels, vehicles and satellites each live in their own data source so
    * Cesium can cluster them when their pins crowd together; everything else
    * stays in the viewer's default collection.
    */
