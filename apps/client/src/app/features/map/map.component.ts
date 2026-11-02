@@ -1700,7 +1700,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     for (const [id, entity] of [...this.emplacementEntities]) {
       if (!emplacementDrawingOf(entity, ids)) {
         this.emplacementEntities.delete(id);
-        this.addOrUpdateCesiumEntity(entity);
+        if (!this.inReplay()) this.addOrUpdateCesiumEntity(entity); // leaving replay refetches it
       }
     }
     this.scheduleRender();
@@ -2051,6 +2051,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     }
     this.clearLiveEntities();
     this.hideLiveLayers();
+    this.viewer.clock.shouldAnimate = false; // a running live clock is no replay to report as paused
     this.syncReplayClock();
     this.seekReplayClock(); // entering is not a seek, so the clock starts at the cursor here
     this.drawReplay(this.replay.replay());
@@ -2117,7 +2118,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     clock.stopTime = JulianDate.fromDate(end);
     clock.clockRange = this.replay.range() ? ClockRange.LOOP_STOP : ClockRange.CLAMPED;
     clock.multiplier = this.replay.speed();
-    clock.shouldAnimate = this.replay.playing();
+    const playing = this.replay.playing();
+    // The throttle may have held back the last ticks: a pause reports where the clock stopped.
+    if (clock.shouldAnimate && !playing) this.reportReplayTime(clock);
+    clock.shouldAnimate = playing;
     this.scheduleRender();
   }
 
@@ -2143,6 +2147,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const now = Date.now();
     if (now - this.replayTickAtMs < REPLAY_TICK_INTERVAL_MS) return;
     this.replayTickAtMs = now;
+    this.reportReplayTime(clock);
+  }
+
+  private reportReplayTime(clock: any): void {
     const at = this.Cesium.JulianDate.toDate(clock.currentTime);
     this.ngZone.run(() => this.replay.tick(at));
   }

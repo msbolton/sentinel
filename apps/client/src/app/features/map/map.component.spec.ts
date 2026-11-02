@@ -1382,6 +1382,44 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       now.mockRestore();
     });
 
+    it('reports where the clock stopped when playback pauses, past the throttle', () => {
+      (component as any).bindReplayClock();
+      const onTick = clock.onTick.addEventListener.mock.calls[0][0];
+      const now = jest.spyOn(Date, 'now');
+      enter();
+      replay.playing.set(true);
+      fixture.detectChanges();
+      clock.currentTime = { d: at('2026-11-02T10:05:00Z') };
+      now.mockReturnValue(1_000);
+      onTick(clock);
+      clock.currentTime = { d: at('2026-11-02T10:06:00Z') };
+      now.mockReturnValue(1_050);
+      onTick(clock); // held back by the throttle
+      expect(replay.tick).toHaveBeenCalledTimes(1);
+
+      replay.playing.set(false);
+      fixture.detectChanges();
+
+      expect(clock.shouldAnimate).toBe(false);
+      expect(replay.tick).toHaveBeenCalledTimes(2);
+      expect(replay.tick).toHaveBeenLastCalledWith(at('2026-11-02T10:06:00Z'));
+      now.mockRestore();
+    });
+
+    it('adds no live entity mid-replay when an emplacement disappears', () => {
+      const site = baseSignalEntity({
+        id: 'site-1', entityType: EntityType.SENSOR, identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }],
+        position: { latitude: 10, longitude: 20 },
+      } as Partial<Entity>);
+      enter();
+      (component as any).loadedEmplacementIds = new Set(['emp-1']);
+      (component as any).emplacementEntities.set('site-1', site);
+
+      (component as any).syncLoadedEmplacements(); // the 30 s refresh no longer lists emp-1
+
+      expect((component as any).entityMap.size).toBe(0);
+    });
+
     it('selects the replayed track under a click, placed at the cursor', () => {
       const actions = new Map<unknown, (e: any) => void>();
       (fakeCesium as any).ScreenSpaceEventHandler = function () {
