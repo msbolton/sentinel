@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -198,15 +200,33 @@ func parseTimelineParams(r *http.Request) (timelineParams, error) {
 	return p, nil
 }
 
+// historyQueryTimeout bounds the timeline and replay queries, which scan up to
+// a week of points: it sits under the server's 10 s write timeout, so the
+// caller gets a 503 instead of a dropped connection.
+const historyQueryTimeout = 8 * time.Second
+
+// writeQueryError answers a failed history query: 503 with timeoutMsg when the
+// query ran out of time, otherwise a logged 500 with failMsg.
+func (h *TrackHandler) writeQueryError(w http.ResponseWriter, err error, timeoutMsg, failMsg string) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		h.logger.Warn(timeoutMsg, zap.Error(err))
+		httputil.Error(w, http.StatusServiceUnavailable, timeoutMsg)
+		return
+	}
+	httputil.ErrorWithLogger(w, http.StatusInternalServerError, failMsg, h.logger, err)
+}
+
 func (h *TrackHandler) getTimeline(w http.ResponseWriter, r *http.Request) {
 	p, err := parseTimelineParams(r)
 	if err != nil {
 		httputil.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	buckets, err := h.store.GetTimeline(r.Context(), p.Start, p.End, p.Buckets, ceilingOf(r), p.Box)
+	ctx, cancel := context.WithTimeout(r.Context(), historyQueryTimeout)
+	defer cancel()
+	buckets, err := h.store.GetTimeline(ctx, p.Start, p.End, p.Buckets, ceilingOf(r), p.Box)
 	if err != nil {
-		httputil.ErrorWithLogger(w, http.StatusInternalServerError, "failed to query timeline", h.logger, err)
+		h.writeQueryError(w, err, "timeline timed out", "failed to query timeline")
 		return
 	}
 	httputil.JSON(w, http.StatusOK, buckets)
@@ -328,13 +348,15 @@ func (h *TrackHandler) getReplay(w http.ResponseWriter, r *http.Request) {
 		httputil.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	entities, truncated, err := h.store.GetReplay(r.Context(), store.ReplayQuery{
+	ctx, cancel := context.WithTimeout(r.Context(), historyQueryTimeout)
+	defer cancel()
+	entities, truncated, err := h.store.GetReplay(ctx, store.ReplayQuery{
 		Start: p.Start, End: p.End, Box: p.Box,
 		MaxEntities: p.MaxEntities, MaxPoints: p.MaxPoints,
 		Ceiling: ceilingOf(r),
 	})
 	if err != nil {
-		httputil.ErrorWithLogger(w, http.StatusInternalServerError, "failed to query replay", h.logger, err)
+		h.writeQueryError(w, err, "replay timed out", "failed to query replay")
 		return
 	}
 	if entities == nil {

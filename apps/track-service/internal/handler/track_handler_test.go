@@ -1,10 +1,16 @@
 package handler
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/sentinel/track-service/internal/models"
 )
@@ -162,5 +168,39 @@ func TestBuildSegments_SplitsOnGaps(t *testing.T) {
 	}
 	if len(buildSegments(nil)) != 0 {
 		t.Error("nil input should yield no segments")
+	}
+}
+
+func TestWriteQueryError(t *testing.T) {
+	h := &TrackHandler{logger: zap.NewNop()}
+	for _, c := range []struct {
+		name    string
+		err     error
+		status  int
+		message string
+	}{
+		{"a deadline, wrapped as the store wraps it", fmt.Errorf("querying replay: %w", context.DeadlineExceeded), http.StatusServiceUnavailable, "replay timed out"},
+		{"any other failure", errors.New("connection refused"), http.StatusInternalServerError, "failed to query replay"},
+		{"a cancelled caller is not a timeout", fmt.Errorf("querying replay: %w", context.Canceled), http.StatusInternalServerError, "failed to query replay"},
+	} {
+		rec := httptest.NewRecorder()
+		h.writeQueryError(rec, c.err, "replay timed out", "failed to query replay")
+		var body struct {
+			Message    string `json:"message"`
+			StatusCode int    `json:"statusCode"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: body %q: %v", c.name, rec.Body.String(), err)
+		}
+		if rec.Code != c.status || body.Message != c.message {
+			t.Errorf("%s: %d %q, want %d %q", c.name, rec.Code, body.Message, c.status, c.message)
+		}
+	}
+}
+
+func TestHistoryQueryTimeoutIsUnderTheWriteTimeout(t *testing.T) {
+	// cmd/server/main.go sets WriteTimeout to 10 s.
+	if historyQueryTimeout >= 10*time.Second {
+		t.Errorf("historyQueryTimeout = %v, must be under the 10 s write timeout", historyQueryTimeout)
 	}
 }
