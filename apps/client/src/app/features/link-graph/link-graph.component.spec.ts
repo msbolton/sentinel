@@ -63,6 +63,7 @@ describe('LinkGraphComponent', () => {
     expect(links.graph).toHaveBeenCalledWith({ centerId: 'c', maxDepth: 2 });
     expect(text(f)).toContain('2 entities / 1 links');
     expect(f.componentInstance.center()).toEqual({ id: 'c', name: 'Centre' });
+    expect(f.nativeElement.querySelector('.picker-input').value).toBe('Centre');
   });
 
   it('asks only for the chosen link types and depth', async () => {
@@ -158,5 +159,24 @@ describe('LinkGraphComponent', () => {
     expect(links.delete).toHaveBeenCalledWith('e1');
     expect(c.selectedEdge()).toBeNull();
     expect(links.graph).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a selected link or node the reloaded graph no longer holds', async () => {
+    const f = await create();
+    const c = f.componentInstance;
+    c.selectedEdge.set(linked.edges[0]);
+    c.selectedNode.set(neighbour);
+    links.graph.mockReturnValue(of({ nodes: [centre], edges: [] }));
+    c.loadGraph();
+    expect(c.selectedEdge()).toBeNull();
+    expect(c.selectedNode()).toBeNull();
+  });
+
+  it('opens the add-link form on the default link type', async () => {
+    const f = await create();
+    f.componentInstance.startLink();
+    f.detectChanges();
+    const select: HTMLSelectElement = f.nativeElement.querySelector('#link-type');
+    expect(select.value).toBe(LinkType.ASSOCIATION);
   });
 });

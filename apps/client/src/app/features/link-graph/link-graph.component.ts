@@ -155,6 +155,7 @@ export class LinkGraphComponent implements OnInit, OnDestroy {
           next: (graph) => {
             this.graph.set(graph);
             this.loading.set(false);
+            this.pruneSelection(graph);
             const centerNode = graph.nodes.find((n) => n.entityId === center.id);
             if (centerNode && centerNode.name !== center.name) this.center.set({ id: center.id, name: centerNode.name });
             void this.render(graph, center.id);
@@ -222,6 +223,14 @@ export class LinkGraphComponent implements OnInit, OnDestroy {
         if (node) this.ngZone.run(() => this.expand(node));
       });
     });
+  }
+
+  /** Drops a selection the reloaded graph no longer holds. */
+  private pruneSelection(graph: GraphResult): void {
+    const node = this.selectedNode();
+    if (node && !graph.nodes.some((n) => n.entityId === node.entityId)) this.selectedNode.set(null);
+    const edge = this.selectedEdge();
+    if (edge && !graph.edges.some((e) => e.id === edge.id)) this.selectedEdge.set(null);
   }
 
   /** Re-centres the graph on a node. */

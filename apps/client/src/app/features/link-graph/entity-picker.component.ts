@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, OnInit, computed, inject, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, OnInit, computed, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { toObservable } from '@angular/core/rxjs-interop';
 import { catchError, debounceTime, map, of, switchMap } from 'rxjs';
@@ -114,6 +114,8 @@ export class EntityPickerComponent implements OnInit {
   private readonly destroyRef = inject(DestroyRef);
 
   placeholder = input<string>('Find an entity by name or identifier');
+  /** A name chosen elsewhere that the box should show, such as the route's entity. */
+  value = input<string>('');
   /** The chosen entity, or a bare id the user pasted (name is the id then). */
   picked = output<SearchHit>();
 
@@ -122,13 +124,28 @@ export class EntityPickerComponent implements OnInit {
   searching = signal<boolean>(false);
   /** A search ran for the current query, so "no matches" is meaningful. */
   searched = signal<boolean>(false);
+  /** The name of the last pick, which fills the box but is not a new query. */
+  private readonly pickedName = signal<string | null>(null);
 
   private readonly term = computed(() => {
     const q = this.query().trim();
-    return q.length >= MIN_QUERY_LENGTH && !UUID.test(q) ? q : null;
+    return q.length >= MIN_QUERY_LENGTH && !UUID.test(q) && q !== this.pickedName() ? q : null;
   });
 
   private readonly terms$ = toObservable(this.term);
+
+  constructor() {
+    effect(() => {
+      const value = this.value();
+      untracked(() => {
+        if (value === this.query()) return;
+        this.pickedName.set(value || null);
+        this.query.set(value);
+        this.hits.set([]);
+        this.searched.set(false);
+      });
+    });
+  }
 
   ngOnInit(): void {
     const sub = this.terms$
@@ -164,6 +181,7 @@ export class EntityPickerComponent implements OnInit {
   }
 
   pick(hit: SearchHit): void {
+    this.pickedName.set(hit.name);
     this.query.set(hit.name);
     this.hits.set([]);
     this.searched.set(false);
@@ -171,6 +189,7 @@ export class EntityPickerComponent implements OnInit {
   }
 
   clear(): void {
+    this.pickedName.set(null);
     this.query.set('');
     this.hits.set([]);
     this.searched.set(false);

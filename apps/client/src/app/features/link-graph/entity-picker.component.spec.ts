@@ -57,6 +57,11 @@ describe('EntityPickerComponent', () => {
     expect(picked).toEqual([{ id: 'b', name: 'UAL456', entityType: EntityType.AIRCRAFT }]);
     expect(fixture.componentInstance.query()).toBe('UAL456');
     expect(hits()).toHaveLength(0);
+    // The picked name fills the box but must not run as a new search.
+    jest.advanceTimersByTime(300);
+    fixture.detectChanges();
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(hits()).toHaveLength(0);
   });
 
   it('picks a pasted entity id on enter without searching', () => {
@@ -65,6 +70,16 @@ describe('EntityPickerComponent', () => {
     expect(search).not.toHaveBeenCalled();
     fixture.componentInstance.onEnter();
     expect(picked).toEqual([{ id, name: id, entityType: EntityType.UNKNOWN }]);
+  });
+
+  it('shows a name set from outside without searching for it', () => {
+    fixture.componentRef.setInput('value', 'NAVSTAR 51');
+    fixture.detectChanges();
+    jest.advanceTimersByTime(300);
+    fixture.detectChanges();
+    expect(fixture.componentInstance.query()).toBe('NAVSTAR 51');
+    expect(search).not.toHaveBeenCalled();
+    expect(hits()).toHaveLength(0);
   });
 
   it('says when nothing matches', () => {
