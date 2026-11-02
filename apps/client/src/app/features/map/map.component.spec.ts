@@ -137,7 +137,8 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       speed: signal(60),
       clockBounds: signal({ start, end }),
       range: signal<{ start: Date; end: Date } | null>(null),
-      seekRequested: signal(0),
+      seekRequested: signal({ n: 0, at: start }),
+      seekApplied: jest.fn(),
       tick: jest.fn(),
     };
   }
@@ -1323,14 +1324,59 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       replay.cursor.set(at('2026-11-02T10:15:00Z'));
       fixture.detectChanges();
       expect(clock.currentTime).toEqual({ d: at('2026-11-02T10:00:00Z') }); // a cursor move alone is not a seek
-      replay.seekRequested.set(1);
+      replay.seekRequested.set({ n: 1, at: at('2026-11-02T10:15:00Z') });
       fixture.detectChanges();
       expect(clock.currentTime).toEqual({ d: at('2026-11-02T10:15:00Z') });
     });
 
+    it('a seek sets the clock to the request target, not the cursor, then reports it applied', () => {
+      enter();
+      replay.seekApplied.mockClear();
+
+      // A clock report moved the cursor after the seek was requested.
+      replay.cursor.set(at('2026-11-02T10:40:00Z'));
+      replay.seekRequested.set({ n: 1, at: at('2026-11-02T10:12:00Z') });
+      fixture.detectChanges();
+
+      expect(clock.currentTime).toEqual({ d: at('2026-11-02T10:12:00Z') });
+      expect(replay.seekApplied).toHaveBeenCalledTimes(1);
+    });
+
+    it('entering replay starts the clock at the cursor and clears any pending seek', () => {
+      replay.cursor.set(at('2026-11-02T10:05:00Z'));
+      enter();
+      expect(clock.currentTime).toEqual({ d: at('2026-11-02T10:05:00Z') });
+      expect(replay.seekApplied).toHaveBeenCalled();
+    });
+
+    it('a stale request does not move the clock after entering, but entering again starts at the cursor', () => {
+      replay.seekRequested.set({ n: 3, at: at('2026-11-02T10:50:00Z') });
+      replay.cursor.set(at('2026-11-02T10:05:00Z'));
+      enter();
+      expect(clock.currentTime).toEqual({ d: at('2026-11-02T10:05:00Z') });
+
+      replay.mode.set('live');
+      fixture.detectChanges();
+      replay.cursor.set(at('2026-11-02T10:07:00Z'));
+      enter();
+      expect(clock.currentTime).toEqual({ d: at('2026-11-02T10:07:00Z') });
+    });
+
+    it('clears the replay layer when the response goes away', () => {
+      enter();
+      replay.replay.set({ entities: [], startTime: 'a', endTime: 'b', truncated: false });
+      fixture.detectChanges();
+      layer().clear.mockClear();
+
+      replay.replay.set(null);
+      fixture.detectChanges();
+
+      expect(layer().clear).toHaveBeenCalledTimes(1);
+    });
+
     it('leaves the clock alone in live mode', () => {
       replay.speed.set(600);
-      replay.seekRequested.set(1);
+      replay.seekRequested.set({ n: 1, at: at('2026-11-02T10:15:00Z') });
       fixture.detectChanges();
 
       expect(clock.multiplier).toBe(1);
@@ -1495,15 +1541,16 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       expect((component as any).flightPathLines).toHaveLength(0);
     });
 
-    it('keeps a live selection when leaving', () => {
+    it('clears a live selection on entering, so no live track card or overlay shows in replay', () => {
       const live = baseSignalEntity({ id: 'sig-1' });
       component.selectedEntity.set(live);
       enter();
 
+      expect(component.selectedEntity()).toBeNull();
+
       replay.mode.set('live');
       fixture.detectChanges();
-
-      expect(component.selectedEntity()).toBe(live);
+      expect(component.selectedEntity()).toBeNull();
     });
   });
 });

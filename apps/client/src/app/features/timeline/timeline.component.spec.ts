@@ -35,7 +35,7 @@ function mockReplay() {
     bucketsStatus: signal<FetchStatus>('ready'),
     replay: signal(null),
     replayStatus: signal<FetchStatus>('ready'),
-    seekRequested: signal(0),
+    seekRequested: signal({ n: 0, at: start }),
     truncated: signal(false),
     maxEntities: 500,
     enter: jest.fn(),
@@ -293,10 +293,33 @@ describe('TimelineComponent', () => {
     expect(el.querySelector('.loading-bar')).not.toBeNull();
   });
 
+  it('shows a loading bar while the replay loads', () => {
+    replay.replayStatus.set('loading');
+    fixture.detectChanges();
+    expect(el.querySelector('.loading-bar')).not.toBeNull();
+  });
+
+  it('offers a retry and disables the transport when the replay fails', () => {
+    replay.replayStatus.set('failed');
+    fixture.detectChanges();
+    expect(el.querySelector('.histogram')?.textContent).toContain('Playback is unavailable.');
+    expect(button('Play').disabled).toBe(true);
+    expect(button('Step back').disabled).toBe(true);
+    expect(button('Step forward').disabled).toBe(true);
+    key(strip(), ' ');
+    key(strip(), 'ArrowRight');
+    expect(replay.play).not.toHaveBeenCalled();
+    expect(replay.stepForward).not.toHaveBeenCalled();
+    const retry = Array.from(el.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Retry')!;
+    retry.click();
+    expect(replay.refresh).toHaveBeenCalledTimes(1);
+  });
+
   it('offers a retry when the buckets fail', () => {
     replay.bucketsStatus.set('failed');
     fixture.detectChanges();
     expect(el.querySelector('.histogram')?.textContent).toContain('Playback is unavailable.');
+    expect(button('Play').disabled).toBe(true);
     const retry = Array.from(el.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Retry')!;
     retry.click();
     expect(replay.refresh).toHaveBeenCalledTimes(1);

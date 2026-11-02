@@ -298,6 +298,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private replayLayer: ReplayLayer | null = null;
   /** The track a click picked from the replay, so leaving replay can drop it from the selection. */
   private replaySelection: Entity | null = null;
+  /** The last seek request (ReplayService.seekRequested().n) the clock was moved for. */
+  private appliedSeekN = -1;
   /** When the clock last reported its time to the replay service (Date.now ms). */
   private replayTickAtMs = 0;
 
@@ -479,8 +481,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       untracked(() => this.syncReplayClock());
     });
     effect(() => {
-      this.replay.seekRequested();
-      untracked(() => this.seekReplayClock());
+      // The target travels with the request: a clock report landing before this
+      // runs may already have moved the cursor away from it.
+      const { n, at } = this.replay.seekRequested();
+      untracked(() => this.seekReplayClock(at, n));
     });
 
     // Track whether a right-hand route panel is open (not the map, a page or the timeline)
@@ -2049,17 +2053,22 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       cancelAnimationFrame(this.drFrame);
       this.drFrame = null;
     }
+    // A live track selected before entering would keep showing live data in the card and overlays.
+    const selected = untracked(() => this.selectedEntity());
+    if (selected && selected !== this.replaySelection) this.selectedEntity.set(null);
     this.clearLiveEntities();
     this.hideLiveLayers();
     this.viewer.clock.shouldAnimate = false; // a running live clock is no replay to report as paused
     this.syncReplayClock();
-    this.seekReplayClock(); // entering is not a seek, so the clock starts at the cursor here
+    // Entering is not a seek, so the clock starts at the cursor here; the request standing now is covered by it.
+    this.seekReplayClock(this.replay.cursor(), this.replay.seekRequested().n);
     this.drawReplay(this.replay.replay());
   }
 
   private leaveReplay(): void {
     this.replayLayer?.clear();
     this.replayLayer = null;
+    this.appliedSeekN = -1; // entering again always moves the clock to the cursor
     const clock = this.viewer.clock;
     clock.shouldAnimate = false;
     clock.currentTime = this.Cesium.JulianDate.now();
@@ -2125,15 +2134,23 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.scheduleRender();
   }
 
-  /** Moves the clock to the cursor: on each seek, and on entering replay. */
-  private seekReplayClock(): void {
-    if (!this.inReplay()) return;
-    this.viewer.clock.currentTime = this.Cesium.JulianDate.fromDate(this.replay.cursor());
+  /**
+   * Moves the clock to a seek's target (or the cursor, on entering replay) and
+   * tells the service it has. Request `n` is applied once: entering covers the
+   * request standing at that moment, which the seek effect must not replay.
+   */
+  private seekReplayClock(at: Date, n: number): void {
+    if (!this.inReplay() || n === this.appliedSeekN) return;
+    this.appliedSeekN = n;
+    this.viewer.clock.currentTime = this.Cesium.JulianDate.fromDate(at);
+    this.replay.seekApplied();
     this.scheduleRender();
   }
 
+  /** Draws a replay response; none (a failed or cleared request) leaves the globe empty. */
   private drawReplay(response: ReplayResponse | null): void {
     if (response) this.replayLayer?.build(response);
+    else this.replayLayer?.clear();
   }
 
   /**

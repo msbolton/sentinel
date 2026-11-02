@@ -1,8 +1,10 @@
+import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { Classification, Entity, EntitySource, EntityType } from '../../shared/models/entity.model';
 import { LatLon } from '../../shared/geo-math';
 import { EntityService } from './entity.service';
 import { MapViewportService } from './map-viewport.service';
+import { ReplayMode, ReplayService } from './replay.service';
 import { SelectionService } from './selection.service';
 
 const base: Entity = {
@@ -21,10 +23,17 @@ describe('SelectionService', () => {
   let service: SelectionService;
   let entityService: { getEntityById: jest.Mock };
   let viewport: MapViewportService;
+  let mode: ReturnType<typeof signal<ReplayMode>>;
 
   beforeEach(() => {
     entityService = { getEntityById: jest.fn() };
-    TestBed.configureTestingModule({ providers: [{ provide: EntityService, useValue: entityService }] });
+    mode = signal<ReplayMode>('live');
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: EntityService, useValue: entityService },
+        { provide: ReplayService, useValue: { mode } },
+      ],
+    });
     service = TestBed.inject(SelectionService);
     viewport = TestBed.inject(MapViewportService);
   });
@@ -88,5 +97,35 @@ describe('SelectionService', () => {
     expect(service.selectById(known.id)).toBe(true);
     expect(service.entity()).toBe(known);
     expect(flights).toEqual([{ lat: -3, lon: 120 }]);
+  });
+
+  describe('while the map replays', () => {
+    const known = { ...base, position: { latitude: -3, longitude: 120 } };
+
+    beforeEach(() => mode.set('replay'));
+
+    it('selectById (the alert ticker and track stack path) returns false and selects nothing', () => {
+      entityService.getEntityById.mockReturnValue(known);
+      const flights: LatLon[] = [];
+      service.fly$.subscribe((p) => flights.push(p));
+
+      expect(service.selectById(known.id)).toBe(false);
+      expect(service.entity()).toBeNull();
+      expect(flights).toEqual([]);
+    });
+
+    it('select ignores a live track and keeps the replay pick', () => {
+      const replayPick = { ...base, id: 'replayed' };
+      service.entity.set(replayPick); // how the map selects a replayed track
+
+      expect(service.select(known)).toBe(false);
+      expect(service.entity()).toBe(replayPick);
+    });
+
+    it('select(null) still clears', () => {
+      service.entity.set(known);
+      expect(service.select(null)).toBe(true);
+      expect(service.entity()).toBeNull();
+    });
   });
 });

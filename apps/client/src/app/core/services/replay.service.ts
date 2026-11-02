@@ -30,6 +30,12 @@ export type FetchStatus = 'idle' | 'loading' | 'ready' | 'failed';
 
 export type ReplayMode = 'live' | 'replay';
 
+/** A requested jump of the clock: `n` counts requests, `at` is where the clock should go. */
+export interface SeekRequest {
+  n: number;
+  at: Date;
+}
+
 /** How long viewport and window changes settle before the history is refetched. */
 const REFRESH_DEBOUNCE_MS = 500;
 
@@ -54,7 +60,9 @@ export class ReplayService {
   private readonly bucketsStatusState = signal<FetchStatus>('idle');
   private readonly replayState = signal<ReplayResponse | null>(null);
   private readonly replayStatusState = signal<FetchStatus>('idle');
-  private readonly seekRequestedState = signal(0);
+  private readonly seekRequestedState = signal<SeekRequest>({ n: 0, at: this.cursorState() });
+  /** A seek the map has not applied to its clock yet; clock reports are dropped until it has. */
+  private seekPending = false;
 
   readonly mode = this.modeState.asReadonly();
   readonly preset = this.presetState.asReadonly();
@@ -68,7 +76,11 @@ export class ReplayService {
   readonly bucketsStatus = this.bucketsStatusState.asReadonly();
   readonly replay = this.replayState.asReadonly();
   readonly replayStatus = this.replayStatusState.asReadonly();
-  /** Increments on every requested jump (never on {@link tick}) so the map can tell a seek from its own clock. */
+  /**
+   * Changes on every requested jump (never on {@link tick}) and carries its
+   * target, so the map can tell a seek from its own clock and a clock report
+   * landing before the map applies it cannot move the target.
+   */
   readonly seekRequested = this.seekRequestedState.asReadonly();
 
   /** The most entities one replay fetch returns; the strip says so when `truncated`. */
@@ -110,6 +122,7 @@ export class ReplayService {
   exit(): void {
     this.exits.next();
     this.modeState.set('live');
+    this.seekPending = false;
     this.playingState.set(false);
     this.replayState.set(null);
     this.bucketsState.set([]);
@@ -120,13 +133,18 @@ export class ReplayService {
   setWindow(preset: WindowPreset): void {
     this.presetState.set(preset);
     this.resetWindow(preset);
-    this.seekRequestedState.update((n) => n + 1);
+    this.requestSeek();
     this.refresh();
   }
 
   seek(d: Date): void {
     this.cursorState.set(this.clamped(d.getTime()));
-    this.seekRequestedState.update((n) => n + 1);
+    this.requestSeek();
+  }
+
+  /** The map has moved its clock to the last requested seek; its clock reports count again. */
+  seekApplied(): void {
+    this.seekPending = false;
   }
 
   /** Starts the clock; from the end of the clock bounds it first rewinds to their start. */
@@ -163,7 +181,7 @@ export class ReplayService {
     const hi = Math.min(w.end.getTime(), Math.max(a.getTime(), b.getTime()));
     this.rangeState.set({ start: new Date(lo), end: new Date(hi) });
     this.cursorState.set(this.clamped(this.cursorState().getTime()));
-    this.seekRequestedState.update((n) => n + 1);
+    this.requestSeek();
   }
 
   clearRange(): void {
@@ -175,8 +193,13 @@ export class ReplayService {
     this.refreshRequests.next();
   }
 
-  /** The map's clock reports its time here; reaching the end loops over a range or stops a bare window. */
+  /**
+   * The map's clock reports its time here; reaching the end loops over a range
+   * or stops a bare window. A report made before the map applied a pending seek
+   * comes from the old clock position and is dropped.
+   */
   tick(d: Date): void {
+    if (this.seekPending) return;
     const { start, end } = this.clockBounds();
     const t = d.getTime();
     if (t < end.getTime()) {
@@ -187,6 +210,12 @@ export class ReplayService {
       this.cursorState.set(end);
       this.playingState.set(false);
     }
+  }
+
+  /** Marks a jump to the current cursor for the map to apply. */
+  private requestSeek(): void {
+    this.seekPending = true;
+    this.seekRequestedState.update(({ n }) => ({ n: n + 1, at: this.cursorState() }));
   }
 
   private resetWindow(preset: WindowPreset): void {
@@ -229,6 +258,8 @@ export class ReplayService {
         this.replayStatusState.set('ready');
       }),
       catchError(() => {
+        // The map draws whatever `replay` holds: a failed request leaves nothing stale on it.
+        this.replayState.set(null);
         this.replayStatusState.set('failed');
         return EMPTY;
       }),

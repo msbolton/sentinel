@@ -105,10 +105,18 @@ export class TimelineComponent implements OnInit, AfterViewInit, OnDestroy {
     return { x, width: timeToX(range.end, this.replay.window(), this.width()) - x };
   });
 
+  /** Either request in flight: the histogram and the replay arrive separately. */
+  protected readonly loading = computed(
+    () => this.replay.bucketsStatus() === 'loading' || this.replay.replayStatus() === 'loading',
+  );
+  /** Either request failed: there is nothing trustworthy to play until a retry succeeds. */
+  protected readonly failed = computed(
+    () => this.replay.bucketsStatus() === 'failed' || this.replay.replayStatus() === 'failed',
+  );
   protected readonly empty = computed(
     () => this.replay.bucketsStatus() === 'ready' && this.replay.buckets().every((b) => b.count === 0),
   );
-  protected readonly transportDisabled = this.empty;
+  protected readonly transportDisabled = computed(() => this.empty() || this.failed());
 
   protected readonly dtg = computed(() => formatDtg(this.replay.cursor()));
   protected readonly rangeText = computed(() => {

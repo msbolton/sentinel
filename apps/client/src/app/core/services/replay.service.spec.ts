@@ -186,6 +186,7 @@ describe('ReplayService', () => {
       const a = new Date(service.window().start.getTime() + 10 * 60_000);
       const b = new Date(service.window().start.getTime() + 20 * 60_000);
       service.setRange(a, b);
+      service.seekApplied(); // what the map does once its clock is at the range start
       service.play();
 
       service.tick(new Date(b.getTime() + 1000));
@@ -198,6 +199,7 @@ describe('ReplayService', () => {
       const a = new Date(service.window().start.getTime() + 10 * 60_000);
       const b = new Date(service.window().start.getTime() + 20 * 60_000);
       service.setRange(a, b);
+      service.seekApplied(); // what the map does once its clock is at the range start
       service.play();
 
       service.tick(b);
@@ -218,12 +220,63 @@ describe('ReplayService', () => {
     });
 
     it('seek increments seekRequested but tick does not', () => {
-      const before = service.seekRequested();
+      const before = service.seekRequested().n;
       service.tick(new Date(service.window().start.getTime() + 1000));
-      expect(service.seekRequested()).toBe(before);
+      expect(service.seekRequested().n).toBe(before);
 
       service.seek(new Date(service.window().start.getTime() + 2000));
-      expect(service.seekRequested()).toBe(before + 1);
+      expect(service.seekRequested().n).toBe(before + 1);
+    });
+
+    it('carries the seek target with the request', () => {
+      const t = new Date(service.window().start.getTime() + 20 * 60_000);
+      service.seek(t);
+      expect(service.seekRequested().at).toEqual(t);
+
+      service.stepForward();
+      expect(service.seekRequested().at).toEqual(new Date(t.getTime() + service.stepMs()));
+
+      const a = new Date(service.window().start.getTime() + 40 * 60_000);
+      const b = new Date(service.window().start.getTime() + 50 * 60_000);
+      service.setRange(a, b);
+      expect(service.seekRequested().at).toEqual(a);
+
+      service.setWindow('6h');
+      expect(service.seekRequested().at).toEqual(service.window().start);
+    });
+
+    it('a tick arriving after a seek but before the map applies it does not move the cursor', () => {
+      service.play();
+      const target = new Date(service.window().start.getTime() + 30 * 60_000);
+      service.seek(target);
+
+      // The clock was still at its old position when it reported.
+      service.tick(new Date(service.window().start.getTime() + 5000));
+      expect(service.cursor()).toEqual(target);
+      expect(service.playing()).toBe(true);
+
+      service.seekApplied();
+      const later = new Date(target.getTime() + 1000);
+      service.tick(later);
+      expect(service.cursor()).toEqual(later);
+    });
+
+    it('a stale tick past the end cannot pause a seek that is still pending', () => {
+      service.play();
+      const target = new Date(service.window().start.getTime() + 30 * 60_000);
+      service.seek(target);
+      service.tick(service.window().end);
+      expect(service.playing()).toBe(true);
+      expect(service.cursor()).toEqual(target);
+    });
+
+    it('exit drops a pending seek', () => {
+      service.seek(new Date(service.window().start.getTime() + 30 * 60_000));
+      service.exit();
+      service.enter();
+      const t = new Date(service.window().start.getTime() + 1000);
+      service.tick(t);
+      expect(service.cursor()).toEqual(t);
     });
   });
 
@@ -234,14 +287,14 @@ describe('ReplayService', () => {
       const start = service.window().start.getTime();
       const a = new Date(start + 30 * 60_000);
       const b = new Date(start + 10 * 60_000);
-      const before = service.seekRequested();
+      const before = service.seekRequested().n;
 
       service.setRange(a, b);
 
       expect(service.range()).toEqual({ start: b, end: a });
       expect(service.clockBounds()).toEqual({ start: b, end: a });
       expect(service.cursor()).toEqual(b);
-      expect(service.seekRequested()).toBe(before + 1);
+      expect(service.seekRequested().n).toBe(before + 1);
     });
 
     it('keeps a cursor that is already inside the range', () => {
@@ -277,10 +330,10 @@ describe('ReplayService', () => {
     });
 
     it('stepping clamps at the window and marks one seek', () => {
-      const before = service.seekRequested();
+      const before = service.seekRequested().n;
       service.stepBack(5);
       expect(service.cursor()).toEqual(service.window().start);
-      expect(service.seekRequested()).toBe(before + 1);
+      expect(service.seekRequested().n).toBe(before + 1);
     });
   });
 
@@ -302,13 +355,13 @@ describe('ReplayService', () => {
     it('play from the end of the window rewinds to the start and marks a seek', () => {
       service.enter();
       service.seek(service.window().end);
-      const before = service.seekRequested();
+      const before = service.seekRequested().n;
 
       service.play();
 
       expect(service.cursor()).toEqual(service.window().start);
       expect(service.playing()).toBe(true);
-      expect(service.seekRequested()).toBe(before + 1);
+      expect(service.seekRequested().n).toBe(before + 1);
     });
 
     it('play from the end of a range rewinds to the range start', () => {
@@ -329,12 +382,12 @@ describe('ReplayService', () => {
       service.enter();
       const mid = new Date(service.window().start.getTime() + 1000);
       service.seek(mid);
-      const before = service.seekRequested();
+      const before = service.seekRequested().n;
 
       service.play();
 
       expect(service.cursor()).toEqual(mid);
-      expect(service.seekRequested()).toBe(before);
+      expect(service.seekRequested().n).toBe(before);
     });
   });
 
@@ -452,17 +505,32 @@ describe('ReplayService', () => {
       expect(service.replay()).toEqual(response);
     });
 
-    it('a failing replay marks the replay failed and keeps the previous data', () => {
+    it('a failing replay marks the replay failed and clears the previous response, so the map draws nothing stale', () => {
       service.enter();
       settle();
+      expect(service.replay()).toEqual(response);
       track.replay.mockReturnValue(throwError(() => new Error('boom')) as Observable<ReplayResponse>);
 
       service.refresh();
       settle();
 
       expect(service.replayStatus()).toBe('failed');
-      expect(service.replay()).toEqual(response);
+      expect(service.replay()).toBeNull();
+      expect(service.truncated()).toBe(false);
       expect(service.bucketsStatus()).toBe('ready');
+      expect(service.buckets()).toEqual(buckets);
+    });
+
+    it('a failing timeline keeps the previous buckets', () => {
+      service.enter();
+      settle();
+      track.timeline.mockReturnValue(throwError(() => new Error('boom')) as Observable<TimelineEvent[]>);
+
+      service.refresh();
+      settle();
+
+      expect(service.bucketsStatus()).toBe('failed');
+      expect(service.buckets()).toEqual(buckets);
     });
   });
 });

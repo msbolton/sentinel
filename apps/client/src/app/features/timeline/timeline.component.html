@@ -46,10 +46,10 @@
       <svg:polygon class="playhead-cap" [attr.points]="capPoints()" />
     </svg>
 
-    @if (replay.bucketsStatus() === 'loading') {
+    @if (loading()) {
       <div class="loading-bar" aria-hidden="true"></div>
     }
-    @if (replay.bucketsStatus() === 'failed') {
+    @if (failed()) {
       <div class="message" role="status">
         <span>Playback is unavailable.</span>
         <button type="button" class="btn btn-secondary btn-sm" (click)="replay.refresh()">Retry</button>
