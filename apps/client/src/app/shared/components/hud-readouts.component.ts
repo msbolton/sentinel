@@ -67,7 +67,8 @@ import { UserMenuComponent } from './user-menu.component';
       position: absolute;
       inset: 0;
       pointer-events: none;
-      z-index: 60;
+      /* Above the track stack and ticker (60) so the user menu panel is not covered; below the detail panel (100). */
+      z-index: 70;
       font-family: var(--font-mono);
       font-size: 12px;
       line-height: 1.5;
