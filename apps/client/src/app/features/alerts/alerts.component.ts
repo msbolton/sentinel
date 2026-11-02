@@ -34,8 +34,7 @@ export class AlertsComponent implements OnInit, OnDestroy {
 
     // Subscribe to real-time alerts
     const alertSub = this.alertService.alertStream$.subscribe((alert) => {
-      const current = this.alerts();
-      this.alerts.set([alert, ...current]);
+      this.mergeAlert(alert);
     });
     this.subscriptions.add(alertSub);
 
@@ -75,14 +74,27 @@ export class AlertsComponent implements OnInit, OnDestroy {
     this.alertService.acknowledgeAlert(alert.id).subscribe({
       next: (updated) => {
         const current = this.alerts();
-        const index = current.findIndex((a) => a.id === updated.id);
+        const index = current.findIndex((a) => a.id === alert.id);
         if (index >= 0) {
-          const updated_alerts = [...current];
-          updated_alerts[index] = updated;
-          this.alerts.set(updated_alerts);
+          const next = [...current];
+          next[index] = { ...current[index], ...updated, acknowledged: true };
+          this.alerts.set(next);
         }
       },
     });
+  }
+
+  /** Replace an existing row in place (keeping fields a sparse update omits), else add it on top. */
+  private mergeAlert(incoming: Alert): void {
+    const current = this.alerts();
+    const index = current.findIndex((a) => a.id === incoming.id);
+    if (index < 0) {
+      this.alerts.set([incoming, ...current]);
+      return;
+    }
+    const next = [...current];
+    next[index] = { ...current[index], ...incoming };
+    this.alerts.set(next);
   }
 
   filterBySeverity(severity: AlertSeverity | null): void {

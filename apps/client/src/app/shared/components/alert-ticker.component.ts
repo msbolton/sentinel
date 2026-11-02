@@ -79,7 +79,7 @@ function formatHhmmz(iso: string): string {
 
     .tick:focus-visible {
       outline: 1px solid var(--accent-cyan);
-      outline-offset: 0;
+      outline-offset: -1px;
     }
   `],
 })

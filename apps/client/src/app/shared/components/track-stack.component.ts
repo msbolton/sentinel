@@ -88,7 +88,7 @@ const UNFREEZE_MS = 250;
 
     .row:focus-visible {
       outline: 1px solid var(--accent-cyan);
-      outline-offset: 0;
+      outline-offset: -1px;
     }
 
     .who {
