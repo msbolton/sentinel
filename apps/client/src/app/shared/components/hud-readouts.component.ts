@@ -27,7 +27,7 @@ import { UserMenuComponent } from './user-menu.component';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DemoBadgeComponent, UserMenuComponent],
   template: `
-    <div class="hud-cls" data-readout="classification">{{ classification() }}</div>
+    <div class="hud-cls" [class]="classificationClass()" data-readout="classification">{{ classification() }}</div>
 
     <div class="hud hud-tl">
       <div><span class="strong">SENTINEL</span>&ngsp;<span class="dim">·</span> {{ opName }}</div>
@@ -106,6 +106,12 @@ import { UserMenuComponent } from './user-menu.component';
       right: var(--panel-width);
     }
 
+    /* The timeline strip runs along the bottom of the map; the bottom readouts sit above it. */
+    :host(.timeline-open) .hud-bl,
+    :host(.timeline-open) .hud-br {
+      bottom: var(--timeline-height, 80px);
+    }
+
     .hud-cls {
       position: absolute;
       text-shadow: 0 0 2px #000, 0 0 6px #000;
@@ -115,8 +121,14 @@ import { UserMenuComponent } from './user-menu.component';
       padding: 2px 10px;
       font-size: 10px;
       letter-spacing: 0.2em;
-      color: var(--accent-green);
+      color: var(--text-primary);
     }
+
+    /* The same level colours as the track card's classification banner. */
+    .hud-cls.UNCLASSIFIED { color: var(--accent-green); }
+    .hud-cls.CONFIDENTIAL { color: var(--accent-blue); }
+    .hud-cls.SECRET { color: var(--accent-red); }
+    .hud-cls.TOP_SECRET { color: var(--accent-yellow); }
   `],
 })
 export class HudReadoutsComponent {
@@ -132,6 +144,8 @@ export class HudReadoutsComponent {
   private readonly profile = toSignal(this.auth.userProfile$, { initialValue: null });
   readonly isGuest = computed(() => this.profile()?.roles?.includes('sentinel-guest') ?? false);
   readonly classification = computed(() => this.profile()?.classificationLevel ?? 'UNCLASSIFIED');
+  /** The level as a class name the colour rules key on (TOP SECRET → TOP_SECRET). */
+  readonly classificationClass = computed(() => this.classification().trim().toUpperCase().replace(/\s+/g, '_'));
 
   readonly trackCount = toSignal(inject(EntityService).currentEntities$.pipe(map((m) => m.size)), { initialValue: 0 });
   readonly alertCount = toSignal(inject(AlertService).unacknowledgedCount$, { initialValue: 0 });
@@ -179,7 +193,11 @@ export class HudReadoutsComponent {
   });
 
   constructor() {
+    const destroyRef = inject(DestroyRef);
     const timer = setInterval(() => this.now.set(new Date()), 1000);
-    inject(DestroyRef).onDestroy(() => clearInterval(timer));
+    destroyRef.onDestroy(() => clearInterval(timer));
+    // Keep the feeds readout's health current while the HUD is up.
+    const release = this.feeds.poll(30_000);
+    destroyRef.onDestroy(release);
   }
 }

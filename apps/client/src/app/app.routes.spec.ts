@@ -6,8 +6,15 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { EMPTY } from 'rxjs';
 import { routes } from './app.routes';
 import { AuthService } from './core/services/auth.service';
+import { MapRouteComponent } from './features/map/map-route.component';
 
 describe('routes', () => {
+  it('gives /map an empty placeholder, not a second MapComponent in the panel outlet', async () => {
+    const map = routes.find((r) => r.path === 'map');
+    expect(map?.canActivate?.length).toBe(1);
+    expect(await map!.loadComponent!()).toBe(MapRouteComponent);
+  });
+
   it('serves /demo without a guard, so a signed-out visitor can start a guest session', () => {
     const demo = routes.find((r) => r.path === 'demo');
     expect(demo).toBeDefined();

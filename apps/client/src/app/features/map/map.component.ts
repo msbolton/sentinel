@@ -35,6 +35,7 @@ import { TerrainService } from '../../core/services/terrain.service';
 import { LayerVisibilityService } from '../../core/services/layer-visibility.service';
 import { MapViewportService } from '../../core/services/map-viewport.service';
 import { SelectionService } from '../../core/services/selection.service';
+import { isPanelRoute } from '../../core/services/route-classes';
 import { MapCursorService } from '../../core/services/map-cursor.service';
 import type { LatLon } from '../../shared/geo-math';
 import { Location } from '../../shared/models/location.model';
@@ -447,19 +448,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       untracked(() => this.scheduleRender());
     });
 
-    // Track whether a panel route is active (anything other than /map or /)
+    // Track whether a right-hand route panel is open (not the map, a page or the timeline)
     const routerSub = this.router.events.pipe(
       filter((e): e is NavigationEnd => e instanceof NavigationEnd),
     ).subscribe((e) => {
-      const url = e.urlAfterRedirects ?? e.url;
-      const isPanelRoute = url !== '/map' && url !== '/' && url !== '';
-      this.panelRouteActive.set(isPanelRoute);
+      this.panelRouteActive.set(isPanelRoute(e.urlAfterRedirects ?? e.url));
     });
     this.subscriptions.add(routerSub);
 
     // Check initial route
-    const currentUrl = this.router.url;
-    this.panelRouteActive.set(currentUrl !== '/map' && currentUrl !== '/' && currentUrl !== '');
+    this.panelRouteActive.set(isPanelRoute(this.router.url));
   }
 
   async ngAfterViewInit(): Promise<void> {
@@ -524,8 +522,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.removeScreenPointListener = null;
     this.removeCanvasLeaveListener?.();
     this.removeCanvasLeaveListener = null;
-    this.selection.screenPoint.set(null);
-    this.selection.entity.set(null);
+    // Only the map that owns a viewer owns the shared selection.
+    if (this.viewer) {
+      this.selection.screenPoint.set(null);
+      this.selection.entity.set(null);
+    }
     if (this.viewer && !this.viewer.isDestroyed()) {
       this.viewer.destroy();
     }

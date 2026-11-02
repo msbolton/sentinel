@@ -35,9 +35,13 @@ describe('HudReadoutsComponent', () => {
   let fixture: ComponentFixture<HudReadoutsComponent>;
   let cursor: MapCursorService;
   let selection: SelectionService;
+  let poll: jest.Mock;
+  let release: jest.Mock;
 
   beforeEach(async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-11-01T14:32:00Z'));
+    release = jest.fn();
+    poll = jest.fn(() => release);
     const profile: UserProfile = { username: 'w.operator', roles: ['sentinel-operator'], classificationLevel: 'SECRET' };
     await TestBed.configureTestingModule({
       imports: [HudReadoutsComponent],
@@ -53,7 +57,7 @@ describe('HudReadoutsComponent', () => {
             isGuest: () => false,
           },
         },
-        { provide: FeedService, useValue: { feeds: signal([]) } },
+        { provide: FeedService, useValue: { feeds: signal([]), poll } },
       ],
     }).compileComponents();
 
@@ -90,6 +94,28 @@ describe('HudReadoutsComponent', () => {
     const menu = readFileSync(join(__dirname, 'user-menu.component.ts'), 'utf-8');
     expect(menu).toMatch(/:host\(\.hud\) \{[^}]*position: relative;/);
     expect((fixture.nativeElement as HTMLElement).querySelector('.hud-tr app-user-menu.hud')).not.toBeNull();
+  });
+
+  it('polls feed health every 30 s and releases the poll on destroy', () => {
+    expect(poll).toHaveBeenCalledWith(30000);
+    expect(release).not.toHaveBeenCalled();
+    fixture.destroy();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('colours the classification word by level, like the track card banner', () => {
+    fixture.detectChanges();
+    const cls = (fixture.nativeElement as HTMLElement).querySelector('.hud-cls')!;
+    expect(cls.textContent).toContain('SECRET');
+    expect(cls.classList).toContain('SECRET');
+    expect(cls.classList).not.toContain('UNCLASSIFIED');
+    const source = readFileSync(join(__dirname, 'hud-readouts.component.ts'), 'utf-8');
+    expect(source).toMatch(/\.hud-cls\.SECRET \{ color: var\(--accent-red\); \}/);
+  });
+
+  it('lifts the bottom readouts above the timeline strip', () => {
+    const source = readFileSync(join(__dirname, 'hud-readouts.component.ts'), 'utf-8');
+    expect(source).toMatch(/:host\(\.timeline-open\) \.hud-bl,\s*:host\(\.timeline-open\) \.hud-br \{\s*bottom: var\(--timeline-height, 80px\);/);
   });
 
   it('shows dashes when the cursor is off the globe', () => {

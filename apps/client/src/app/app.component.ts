@@ -9,6 +9,7 @@ import { AlertService } from './core/services/alert.service';
 import { AnalyticsService } from './core/services/analytics.service';
 import { ThemeService } from './core/services/theme.service';
 import { NAV_GROUPS, NavItem, routeForShortcut } from './core/services/nav-rail.service';
+import { isFullScreenRoute, isPageRoute, isPanelRoute, isTimelineRoute } from './core/services/route-classes';
 import { IconComponent } from './shared/components/icon.component';
 import { HasRoleDirective } from './shared/directives/has-role.directive';
 import { MapComponent } from './features/map/map.component';
@@ -84,10 +85,10 @@ import { TrackStackComponent } from './shared/components/track-stack.component';
           <app-map class="map-background"></app-map>
 
           <!-- Corner readouts and the classification word over the map -->
-          <app-hud-readouts [class.panel-open]="panelRouteActive()"></app-hud-readouts>
+          <app-hud-readouts [class.panel-open]="panelRouteActive()" [class.timeline-open]="timelineOpen()"></app-hud-readouts>
 
           <!-- Open alerts along the top centre; click selects the track -->
-          <app-alert-ticker></app-alert-ticker>
+          <app-alert-ticker [class.panel-open]="panelRouteActive()"></app-alert-ticker>
 
           <!-- The ten freshest tracks in view down the right edge; click selects -->
           <app-track-stack [class.panel-open]="panelRouteActive()"></app-track-stack>
@@ -156,6 +157,8 @@ export class AppComponent implements OnInit {
   isPageRoute = signal<boolean>(false);
   /** A route panel (alerts, search, …) is open over the right edge of the map. */
   panelRouteActive = signal<boolean>(false);
+  /** The timeline strip is open along the bottom of the map. */
+  timelineOpen = signal<boolean>(false);
   connectionStatus = signal<ConnectionStatus>('disconnected');
   entityCount = signal<number>(0);
   unacknowledgedAlertCount = signal<number>(0);
@@ -176,10 +179,10 @@ export class AppComponent implements OnInit {
   async ngOnInit(): Promise<void> {
     // Track route type for layout switching
     const classifyRoute = (url: string) => {
-      const path = url.replace(/\?.*$/, '');
-      this.isFullScreenRoute.set(['/login', '/register', '/demo'].includes(path));
-      this.isPageRoute.set(path.startsWith('/admin') || path.startsWith('/settings') || path.startsWith('/connections') || path.startsWith('/feeds'));
-      this.panelRouteActive.set(path !== '/map' && path !== '/' && path !== '' && !this.isPageRoute() && !this.isFullScreenRoute());
+      this.isFullScreenRoute.set(isFullScreenRoute(url));
+      this.isPageRoute.set(isPageRoute(url));
+      this.panelRouteActive.set(isPanelRoute(url));
+      this.timelineOpen.set(isTimelineRoute(url));
     };
     classifyRoute(this.router.url);
     this.router.events.pipe(

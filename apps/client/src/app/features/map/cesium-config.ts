@@ -31,7 +31,7 @@ export const CESIUM_VIEWER_OPTIONS = {
   homeButton: false,
   infoBox: false,
   sceneModePicker: false,
-  selectionIndicator: true,
+  selectionIndicator: false,
   navigationHelpButton: false,
   navigationInstructionsInitiallyVisible: false,
   creditContainer: undefined as any,

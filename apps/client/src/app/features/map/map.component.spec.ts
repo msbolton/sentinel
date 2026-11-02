@@ -175,7 +175,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
             showFootprint: signal(false),
           },
         },
-        { provide: MapViewportService, useValue: { updateBounds: jest.fn() } },
+        { provide: MapViewportService, useValue: { updateBounds: jest.fn(), bounds: () => null } },
         {
           provide: GeofenceService,
           useValue: {
@@ -1168,6 +1168,19 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
 
       expect(selection.entity()).toBeNull();
       expect(selection.screenPoint()).toBeNull();
+    });
+
+    it('leaves the shared selection alone when a map that never made a viewer is destroyed', () => {
+      const selection = TestBed.inject(SelectionService);
+      const picked = baseSignalEntity();
+      selection.entity.set(picked);
+      selection.screenPoint.set({ x: 1, y: 2 });
+      (component as any).viewer = null;
+
+      component.ngOnDestroy();
+
+      expect(selection.entity()).toBe(picked);
+      expect(selection.screenPoint()).toEqual({ x: 1, y: 2 });
     });
   });
 });
