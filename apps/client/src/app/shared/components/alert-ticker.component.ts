@@ -1,7 +1,8 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, of } from 'rxjs';
 import { AlertService } from '../../core/services/alert.service';
+import { EntityService } from '../../core/services/entity.service';
 import { SelectionService } from '../../core/services/selection.service';
 import { pushAlert } from '../alert-ticker';
 import { Alert, AlertSeverity } from '../models/alert.model';
@@ -46,6 +47,15 @@ function formatHhmmz(iso: string): string {
       display: flex;
       gap: 1px;
       pointer-events: none;
+      /* Clear of the corner readouts on both sides. */
+      max-width: calc(100vw - 600px);
+      overflow: hidden;
+    }
+
+    /* A route panel covers the right edge of the map; centre over what is left. */
+    :host(.panel-open) {
+      left: calc((100vw - var(--panel-width)) / 2);
+      max-width: calc(100vw - var(--panel-width) - 600px);
     }
 
     .tick {
@@ -76,6 +86,8 @@ function formatHhmmz(iso: string): string {
 export class AlertTickerComponent {
   private readonly selection = inject(SelectionService);
   private readonly service = inject(AlertService);
+  private readonly entities = inject(EntityService);
+  private readonly destroyRef = inject(DestroyRef);
 
   readonly alerts = signal<Alert[]>([]);
 
@@ -113,7 +125,20 @@ export class AlertTickerComponent {
     return `${formatHhmmz(a.createdAt)} ${a.title.toUpperCase()}${entity}`;
   }
 
+  /**
+   * Selects the alerted track: from the cache when it is in view, else fetched
+   * from the API. When the track cannot be fetched, flies to where the alert fired.
+   */
   select(a: Alert): void {
-    if (a.entityId) this.selection.selectById(a.entityId);
+    if (!a.entityId || this.selection.selectById(a.entityId)) return;
+    this.entities
+      .getEntity(a.entityId)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (entity) => this.selection.select(entity),
+        error: () => {
+          if (a.position) this.selection.flyTo({ lat: a.position.latitude, lon: a.position.longitude });
+        },
+      });
   }
 }

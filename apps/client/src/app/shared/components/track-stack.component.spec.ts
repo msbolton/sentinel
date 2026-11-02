@@ -129,6 +129,47 @@ describe('TrackStackComponent', () => {
     expect(select).toHaveBeenCalledWith(b);
     expect(rows()[1].classList).toContain('on');
     expect(rows()[0].classList).not.toContain('on');
+    expect(rows()[1].getAttribute('aria-pressed')).toBe('true');
+    expect(rows()[0].getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('holds the row order while the pointer is over the stack', () => {
+    const a = track('a', { lastSeenAt: seenAgo(2) });
+    const b = track('b', { lastSeenAt: seenAgo(20) });
+    load(a, b);
+    viewport.set(view);
+    fixture.detectChanges();
+    const host = fixture.nativeElement as HTMLElement;
+
+    host.dispatchEvent(new MouseEvent('mouseenter'));
+    load(a, { ...b, lastSeenAt: seenAgo(1) }, track('c', { lastSeenAt: seenAgo(0) }));
+    fixture.detectChanges();
+    expect(rows().map((r) => r.textContent)).toEqual([
+      expect.stringContaining('a MV ATLAS'),
+      expect.stringContaining('b MV ATLAS'),
+    ]);
+
+    // Crossing the gap between rows does not release it at once.
+    host.dispatchEvent(new MouseEvent('mouseleave'));
+    jest.advanceTimersByTime(100);
+    host.dispatchEvent(new MouseEvent('mouseenter'));
+    jest.advanceTimersByTime(500);
+    fixture.detectChanges();
+    expect(rows()).toHaveLength(2);
+
+    host.dispatchEvent(new MouseEvent('mouseleave'));
+    jest.advanceTimersByTime(250);
+    fixture.detectChanges();
+    expect(rows().map((r) => r.textContent)).toEqual([
+      expect.stringContaining('c MV ATLAS'),
+      expect.stringContaining('b MV ATLAS'),
+      expect.stringContaining('a MV ATLAS'),
+    ]);
+  });
+
+  it('stops above the bottom-right readouts', () => {
+    const source = readFileSync(join(__dirname, 'track-stack.component.ts'), 'utf8');
+    expect(source).toMatch(/max-height: calc\(100vh - 92px - var\(--track-card-height, 0px\) - 6px - 90px\);\s*overflow: hidden;/);
   });
 
   it('stops its timer when destroyed', () => {

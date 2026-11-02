@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, linkedSignal, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { map } from 'rxjs';
 import { EntityService } from '../../core/services/entity.service';
@@ -9,17 +9,24 @@ import { Affiliation, Entity } from '../models/entity.model';
 import { affiliationAbbrev, freshestInView } from '../track-stack';
 
 const TICK_MS = 5000;
+/** How long the order stays frozen after the pointer leaves, so crossing the gap between rows does not reshuffle them. */
+const UNFREEZE_MS = 250;
 
 /**
  * A short stack of one-line rows down the right edge of the map: the ten
  * tracks in view that reported most recently, freshest first. Clicking a row
  * selects the track. Renders nothing while the list is empty; only the rows
- * take pointer events.
+ * take pointer events. The order holds still while the pointer is over the
+ * stack, so a row does not move out from under a click.
  */
 @Component({
   selector: 'app-track-stack',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: {
+    '(mouseenter)': 'onPointerEnter()',
+    '(mouseleave)': 'onPointerLeave()',
+  },
   template: `
     @for (e of rows(); track e.id) {
       <button
@@ -27,6 +34,7 @@ const TICK_MS = 5000;
         class="row"
         [class.h]="isHostile(e)"
         [class.on]="e.id === selection.entity()?.id"
+        [attr.aria-pressed]="e.id === selection.entity()?.id"
         (click)="selection.select(e)">
         <span class="who">{{ who(e) }}</span>
         <span class="meta">{{ meta(e) }}</span>
@@ -44,6 +52,9 @@ const TICK_MS = 5000;
       flex-direction: column;
       gap: 6px;
       pointer-events: none;
+      /* Stop above the bottom-right readouts. */
+      max-height: calc(100vh - 92px - var(--track-card-height, 0px) - 6px - 90px);
+      overflow: hidden;
     }
 
     /* A route panel covers the right edge of the map; the stack moves clear of it. */
@@ -106,11 +117,42 @@ export class TrackStackComponent {
   );
   private readonly now = signal(Date.now());
 
-  readonly rows = computed(() => freshestInView(this.entities(), this.viewport.bounds(), this.now()));
+  /** The pointer is over the stack: the row order is held. */
+  readonly hovered = signal(false);
+  private unfreezeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private readonly live = computed(() => freshestInView(this.entities(), this.viewport.bounds(), this.now()));
+
+  /** The live rows, except while hovered, when the last order shown is kept. */
+  readonly rows = linkedSignal<{ live: Entity[]; hovered: boolean }, Entity[]>({
+    source: () => ({ live: this.live(), hovered: this.hovered() }),
+    computation: (src, previous) => (src.hovered && previous ? previous.value : src.live),
+  });
 
   constructor() {
     const timer = setInterval(() => this.now.set(Date.now()), TICK_MS);
-    inject(DestroyRef).onDestroy(() => clearInterval(timer));
+    inject(DestroyRef).onDestroy(() => {
+      clearInterval(timer);
+      this.cancelUnfreeze();
+    });
+  }
+
+  onPointerEnter(): void {
+    this.cancelUnfreeze();
+    this.hovered.set(true);
+  }
+
+  onPointerLeave(): void {
+    this.cancelUnfreeze();
+    this.unfreezeTimer = setTimeout(() => {
+      this.unfreezeTimer = null;
+      this.hovered.set(false);
+    }, UNFREEZE_MS);
+  }
+
+  private cancelUnfreeze(): void {
+    if (this.unfreezeTimer !== null) clearTimeout(this.unfreezeTimer);
+    this.unfreezeTimer = null;
   }
 
   isHostile(e: Entity): boolean {

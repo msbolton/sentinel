@@ -40,3 +40,9 @@ export function viewWidthNm(bounds: ViewportBounds): number {
   const midLat = toRad((bounds.north + bounds.south) / 2);
   return degrees * NM_PER_DEGREE_AT_EQUATOR * Math.cos(midLat);
 }
+
+/** True when the point lies inside the viewport bounds; a view whose west edge is east of its east edge crosses the antimeridian. */
+export function inBounds(p: LatLon, b: ViewportBounds): boolean {
+  if (p.lat < b.south || p.lat > b.north) return false;
+  return b.west <= b.east ? p.lon >= b.west && p.lon <= b.east : p.lon >= b.west || p.lon <= b.east;
+}

@@ -1,4 +1,5 @@
 import { ViewportBounds } from '../features/map/viewport-bounds';
+import { inBounds } from './geo-math';
 import { Affiliation, Entity } from './models/entity.model';
 
 /** Rows the track stack shows. */
@@ -17,12 +18,6 @@ const AFFILIATION_ABBREV: Partial<Record<Affiliation, string>> = {
 /** Three-letter code for a stack row; every affiliation gets its own, missing or unrecognised reads UNK. */
 export function affiliationAbbrev(a: Affiliation | undefined): string {
   return (a && AFFILIATION_ABBREV[a]) || 'UNK';
-}
-
-function inView(lat: number, lon: number, b: ViewportBounds): boolean {
-  if (lat < b.south || lat > b.north) return false;
-  // west > east means the view crosses the antimeridian.
-  return b.west <= b.east ? lon >= b.west && lon <= b.east : lon >= b.west || lon <= b.east;
 }
 
 function seenMs(e: Entity): number {
@@ -50,7 +45,7 @@ export function freshestInView(
   if (!bounds) return [];
   const found: Entity[] = [];
   for (const e of entities) {
-    if (e.position && inView(e.position.latitude, e.position.longitude, bounds)) found.push(e);
+    if (e.position && inBounds({ lat: e.position.latitude, lon: e.position.longitude }, bounds)) found.push(e);
   }
   // Compare rather than subtract: two unparseable times would make -Infinity - -Infinity NaN.
   return found.sort((a, b) => cmpDesc(seenMs(a), seenMs(b))).slice(0, limit);
