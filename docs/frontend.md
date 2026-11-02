@@ -42,7 +42,7 @@ apps/client/src/
 │   │   ├── link-graph/
 │   │   │   └── link-graph.component.ts  # vis-network graph view
 │   │   └── timeline/
-│   │       └── timeline.component.ts    # Track history timeline
+│   │       └── timeline.component.ts    # Replay timeline strip
 │   └── shared/
 │       └── models/
 │           ├── entity.model.ts     # Entity interfaces & enums
@@ -63,7 +63,7 @@ All routes are lazy-loaded. The CesiumJS map renders as a persistent background 
 | `/alerts` | `AlertsComponent` | Alert list with acknowledgment |
 | `/findings` | `FindingsComponent` | Departures from entity baselines: expected vs seen, confirm/dismiss, show on map |
 | `/link-graph` | `LinkGraphComponent` | Entity relationship graph (vis-network) |
-| `/timeline` | `TimelineComponent` | Historical track replay |
+| `/timeline` | `TimelineComponent` | Replay mode: scrub and play back recorded tracks in the current view |
 
 ## Core Services
 
@@ -116,7 +116,7 @@ The app is a glass cockpit: the map fills the window and everything else floats 
 - **Route panels**: Search, Alerts, Findings, Geofences, Link analysis, Locations and the other map routes open as panels on the right, 380px wide. While one is open the right-hand HUD readouts and the track stack shift left by its width.
 - **Search panel**: a query of two or more characters, the type, source and classification chips and the "within current viewport" toggle all feed one debounced request to `/api/v1/search` (`core/services/search.service.ts`). Clicking a hit selects its track: the live one when the map has it, else fetched, else the indexed copy at its last known position.
 - **Link analysis panel**: centred on one entity, picked by name or identifier through the search index or opened from the track card's Links action (`/link-graph?entity=<id>`). The depth slider and link-type chips feed `/api/v1/links/graph` (`core/services/link.service.ts`); vis-network draws the result. Clicking a node offers Show on map (selects the track like a search hit) and Expand (re-centres); clicking a link offers Remove. Analysts add links from the centre or the selected node to an entity picked the same way.
-- **Timeline strip**: the timeline along the bottom of the map, starting at the right edge of the rail.
+- **Timeline strip**: opening `/timeline` puts the map into replay mode and draws a strip along the bottom of the map, starting at the right edge of the rail. It shows a histogram of recorded track activity in the current view over the chosen window (`1h`, `6h`, `24h` or `7d`, ending now), stacked by entity type in the map's colours. Clicking the histogram seeks; dragging the playhead scrubs; dragging anywhere else, or Shift-dragging, selects a range that playback then loops, and a double-click or Escape clears it. Play and pause run the clock at 1×, 10×, 60× or 600×. From the keyboard, Space plays and pauses, the arrow keys step (Shift for ten steps), `1`-`4` pick the speed and `L` goes live. The map hides every live layer and drops incoming live events while replay runs, draws the recorded tracks with a 10-minute trail, and refetches when the view moves. A REPLAY pill sits in the strip and the HUD's top-left clock reads `REPLAY <DTG>` in yellow; the LIVE button returns to `/map`, where the live layers refill. State lives in `core/services/replay.service.ts`, which fetches through `core/services/track.service.ts` (`/api/v1/tracks/replay` and `/tracks/timeline`).
 - **Pages**: Settings, Connections, Admin and Feeds render as full pages with a left margin for the rail.
 
 The theme picker (Normal, CRT, Night Vision, FLIR White Hot, FLIR Iron Bow) lives in **Settings → Profile → Display**. The choice is stored per browser.
