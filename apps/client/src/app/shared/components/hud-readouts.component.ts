@@ -7,6 +7,7 @@ import { EntityService } from '../../core/services/entity.service';
 import { FeedService } from '../../core/services/feed.service';
 import { MapCursorService } from '../../core/services/map-cursor.service';
 import { MapViewportService } from '../../core/services/map-viewport.service';
+import { ReplayService } from '../../core/services/replay.service';
 import { SelectionService } from '../../core/services/selection.service';
 import { ConnectionStatus, WebSocketService } from '../../core/services/websocket.service';
 import { DemoBadgeComponent } from '../../features/demo/demo-badge.component';
@@ -34,7 +35,11 @@ import { UserMenuComponent } from './user-menu.component';
       @if (isGuest()) {
         <app-demo-badge [compact]="false" />
       }
-      <div data-readout="dtg">{{ dtg() }}</div>
+      <div data-readout="dtg" [class.replay]="replaying()">
+        @if (replaying()) {
+          <span class="replay-tag">REPLAY</span>&ngsp;
+        }{{ dtg() }}
+      </div>
       <div data-readout="feeds"><span class="dim">feeds</span> {{ feedHealth().fresh }}/{{ feedHealth().total }}</div>
     </div>
 
@@ -92,6 +97,7 @@ import { UserMenuComponent } from './user-menu.component';
     .alr-label { margin-left: 12px; }
     .strong { color: var(--accent-cyan); }
     .alr.hot { color: var(--accent-yellow); }
+    .replay-tag, .replay { color: var(--accent-yellow); }
 
     app-user-menu {
       pointer-events: auto;
@@ -110,7 +116,7 @@ import { UserMenuComponent } from './user-menu.component';
     /* The timeline strip runs along the bottom of the map; the bottom readouts sit above it. */
     :host(.timeline-open) .hud-bl,
     :host(.timeline-open) .hud-br {
-      bottom: var(--timeline-height, 80px);
+      bottom: var(--timeline-height, 96px);
     }
 
     .hud-cls {
@@ -138,6 +144,7 @@ export class HudReadoutsComponent {
   private readonly cursor = inject(MapCursorService);
   private readonly viewport = inject(MapViewportService);
   private readonly selection = inject(SelectionService);
+  private readonly replay = inject(ReplayService);
 
   /** There is no operation concept yet; the map is the only one. */
   readonly opName = 'MAP';
@@ -155,7 +162,9 @@ export class HudReadoutsComponent {
   });
 
   private readonly now = signal(new Date());
-  readonly dtg = computed(() => formatDtg(this.now()));
+  readonly replaying = computed(() => this.replay.mode() === 'replay');
+  /** The wall clock live; the replay cursor's time while a replay is on. */
+  readonly dtg = computed(() => formatDtg(this.replaying() ? this.replay.cursor() : this.now()));
 
   /** Inbound, enabled connections, and of those the ones reporting healthy (the layers pill's green dot). */
   readonly feedHealth = computed(() => {
