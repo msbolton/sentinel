@@ -166,11 +166,27 @@ describe('TimelineComponent', () => {
     expect(replay.seek).not.toHaveBeenCalled();
   });
 
-  it('scrubs rather than brushes when Shift-dragging from the playhead', () => {
+  it('Shift-drag from the playhead brushes', () => {
     pointer(svg(), 'pointerdown', 152, true);
     pointer(svg(), 'pointermove', 300, true);
-    expect(replay.setRange).not.toHaveBeenCalled();
-    expect(replay.seek).toHaveBeenCalled();
+    pointer(svg(), 'pointerup', 300, true);
+    expect(replay.setRange).toHaveBeenLastCalledWith(
+      new Date(start.getTime() + 1.52 * HOUR),
+      new Date(start.getTime() + 3 * HOUR),
+    );
+    expect(replay.seek).not.toHaveBeenCalled();
+    expect(replay.pause).not.toHaveBeenCalled();
+  });
+
+  it('brushes a range with a plain drag away from the playhead, earlier time first', () => {
+    pointer(svg(), 'pointerdown', 450);
+    pointer(svg(), 'pointermove', 300);
+    pointer(svg(), 'pointerup', 300);
+    expect(replay.setRange).toHaveBeenLastCalledWith(
+      new Date(start.getTime() + 3 * HOUR),
+      new Date(start.getTime() + 4.5 * HOUR),
+    );
+    expect(replay.seek).not.toHaveBeenCalled();
   });
 
   it('draws the range and clears it on double-click or Escape', () => {

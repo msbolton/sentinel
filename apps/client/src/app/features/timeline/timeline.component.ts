@@ -27,7 +27,7 @@ const BAR_HEIGHT = 34;
 const TICK_Y = 46;
 /** Used until the ResizeObserver reports a width (and always in jsdom). */
 const FALLBACK_WIDTH = 600;
-/** A press this close to the playhead grabs it, even with Shift held. */
+/** A press this close to the playhead grabs it to scrub; Shift, or a press elsewhere, brushes a range. */
 const PLAYHEAD_GRAB_PX = 6;
 /** Movement below this is still a click. */
 const DRAG_THRESHOLD_PX = 3;
@@ -190,7 +190,7 @@ export class TimelineComponent implements OnInit, AfterViewInit, OnDestroy {
     const x = this.localX(e);
     const grabsPlayhead = Math.abs(x - this.playheadX()) <= PLAYHEAD_GRAB_PX;
     this.drag = {
-      kind: e.shiftKey && !grabsPlayhead ? 'brush' : 'scrub',
+      kind: grabsPlayhead && !e.shiftKey ? 'scrub' : 'brush',
       startX: x,
       anchor: this.timeAt(x),
       moved: false,
@@ -213,7 +213,11 @@ export class TimelineComponent implements OnInit, AfterViewInit, OnDestroy {
       }
     }
     if (drag.kind === 'scrub') this.replay.seek(this.timeAt(x));
-    else this.replay.setRange(drag.anchor, this.timeAt(x));
+    else {
+      const t = this.timeAt(x);
+      if (t < drag.anchor) this.replay.setRange(t, drag.anchor);
+      else this.replay.setRange(drag.anchor, t);
+    }
   }
 
   protected onPointerUp(e: PointerEvent): void {
