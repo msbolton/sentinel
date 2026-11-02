@@ -1,6 +1,7 @@
 package consumer
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -31,6 +32,9 @@ func TestDocumentFromEntity(t *testing.T) {
 	if doc.PlatformIdentifiers == nil || *doc.PlatformIdentifiers.ICAOHex != "A1B2C3" || *doc.PlatformIdentifiers.Squawk != "1200" || *doc.PlatformIdentifiers.Callsign != "UAL123" {
 		t.Errorf("platform identifiers = %+v", doc.PlatformIdentifiers)
 	}
+	if want := []string{"UAL123", "A1B2C3", "1200"}; !reflect.DeepEqual(doc.Identifiers, want) {
+		t.Errorf("identifiers = %v, want %v", doc.Identifiers, want)
+	}
 	if DocumentFromEntity(nil) != nil || DocumentFromEntity(&sentinelv1.Entity{}) != nil {
 		t.Error("nil or id-less entities must yield no document")
 	}
@@ -43,5 +47,24 @@ func TestDocumentFromEntityExercise(t *testing.T) {
 	}
 	if live := DocumentFromEntity(&sentinelv1.Entity{Id: "e2", Name: "UAL1"}); live == nil || live.Exercise {
 		t.Fatalf("live entity doc = %+v", live)
+	}
+}
+
+func TestIdentifiersCoverEveryPlatform(t *testing.T) {
+	en := &sentinelv1.Entity{
+		Id: "v1", Name: "EVER GIVEN", SourceEntityId: "ais-353136000",
+		Platforms: map[string]*sentinelv1.PlatformDetail{
+			"ais": {Detail: &sentinelv1.PlatformDetail_Ais{Ais: &sentinelv1.AisDetail{Mmsi: "353136000", Imo: "9811000", Callsign: "H3RC"}}},
+			"tle": {Detail: &sentinelv1.PlatformDetail_Tle{Tle: &sentinelv1.TleDetail{NoradId: 25544}}},
+		},
+		Identities: []*sentinelv1.Identity{{Type: sentinelv1.IdentityType_IDENTITY_TYPE_MMSI, Value: "353136000"}},
+	}
+	doc := DocumentFromEntity(en)
+	want := []string{"H3RC", "353136000", "9811000", "25544", "ais-353136000"}
+	if !reflect.DeepEqual(doc.Identifiers, want) {
+		t.Errorf("identifiers = %v, want %v", doc.Identifiers, want)
+	}
+	if bare := DocumentFromEntity(&sentinelv1.Entity{Id: "x", Name: "n"}); bare.Identifiers != nil {
+		t.Errorf("no identifiers should stay nil, got %v", bare.Identifiers)
 	}
 }

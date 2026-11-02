@@ -42,7 +42,7 @@ apps/client/src/
 │   │   ├── link-graph/
 │   │   │   └── link-graph.component.ts  # vis-network graph view
 │   │   └── timeline/
-│   │       └── timeline.component.ts    # Track history timeline
+│   │       └── timeline.component.ts    # Replay timeline strip
 │   └── shared/
 │       └── models/
 │           ├── entity.model.ts     # Entity interfaces & enums
@@ -63,7 +63,7 @@ All routes are lazy-loaded. The CesiumJS map renders as a persistent background 
 | `/alerts` | `AlertsComponent` | Alert list with acknowledgment |
 | `/findings` | `FindingsComponent` | Departures from entity baselines: expected vs seen, confirm/dismiss, show on map |
 | `/link-graph` | `LinkGraphComponent` | Entity relationship graph (vis-network) |
-| `/timeline` | `TimelineComponent` | Historical track replay |
+| `/timeline` | `TimelineComponent` | Replay mode: scrub and play back recorded tracks in the current view |
 
 ## Core Services
 
@@ -114,7 +114,9 @@ The app is a glass cockpit: the map fills the window and everything else floats 
 - **Alert ticker**: open alerts in a strip along the top centre. Clicking one selects its track.
 - **Track card**: selecting a track opens a translucent card at the top right, 92px down, with bracket corners and a reticle on the map. The **track stack** under it lists the ten freshest tracks in view; clicking a row selects that track.
 - **Route panels**: Search, Alerts, Findings, Geofences, Link analysis, Locations and the other map routes open as panels on the right, 380px wide. While one is open the right-hand HUD readouts and the track stack shift left by its width.
-- **Timeline strip**: the timeline along the bottom of the map, starting at the right edge of the rail.
+- **Search panel**: a query of two or more characters, the type, source and classification chips and the "within current viewport" toggle all feed one debounced request to `/api/v1/search` (`core/services/search.service.ts`). Clicking a hit selects its track: the live one when the map has it, else fetched, else the indexed copy at its last known position.
+- **Link analysis panel**: centred on one entity, picked by name or identifier through the search index or opened from the track card's Links action (`/link-graph?entity=<id>`). The depth slider and link-type chips feed `/api/v1/links/graph` (`core/services/link.service.ts`); vis-network draws the result. Clicking a node offers Show on map (selects the track like a search hit) and Expand (re-centres); clicking a link offers Remove. Analysts add links from the centre or the selected node to an entity picked the same way.
+- **Timeline strip**: opening `/timeline` puts the map into replay mode and draws a strip along the bottom of the map, starting at the right edge of the rail. It shows a 120-bucket histogram of recorded track activity in the current view over the chosen window (`1h`, `6h`, `24h` or `7d`, ending now), stacked by entity type in the map's colours. Clicking the histogram seeks; dragging the playhead scrubs; dragging anywhere else, or Shift-dragging, selects a range that playback then loops, and a double-click or Escape clears it. Play and pause run the clock at 1×, 10×, 60× or 600×. From the keyboard, Space plays and pauses, the arrow keys step (Shift for ten steps), `1`-`4` pick the speed and `L` goes live. The map hides every live layer and drops incoming live events while replay runs, draws the recorded tracks with a 10-minute trail (`features/map/replay-layer.ts`), and refetches when the view moves. Live selection is off in replay: entering clears a live selection, the track stack hides and the alert ticker and panels cannot select a live track; a replayed track is selected by clicking it. If either request fails the strip says playback is unavailable, offers Retry and disables the transport. A REPLAY pill sits in the strip and the HUD's top-left clock reads `REPLAY <DTG>` in yellow; the LIVE button returns to `/map`, where the live layers refill. State lives in `core/services/replay.service.ts`, which fetches through `core/services/track.service.ts` (`/api/v1/tracks/replay` and `/tracks/timeline`).
 - **Pages**: Settings, Connections, Admin and Feeds render as full pages with a left margin for the rail.
 
 The theme picker (Normal, CRT, Night Vision, FLIR White Hot, FLIR Iron Bow) lives in **Settings → Profile → Display**. The choice is stored per browser.
@@ -176,4 +178,5 @@ In a development build, a failed Keycloak initialisation falls back to a local `
 - **satellite.js is pinned to 6.0.2**: 7.x re-exports a WASM bulk propagator that imports `node:worker_threads` and `node:module`, which breaks the production bundle while `tsc` and Jest still pass; 6.0.2 has the same API, ships CommonJS with types and needs no Jest mapping
 - **Vessels**: a hull seen from above, coloured by AIS ship type category (`shared/vessel-format.ts`, `features/map/vessel-style.ts`) and turned to the heading while moving or when a true heading is reported; Vessel Details opens by default with the navigational status in words and the yearless AIS ETA as `17 Oct 22:00 UTC`
 - **Flight paths**: selecting an aircraft with an ICAO address loads its past path through `FlightPathService` (`GET /api/v1/aircraft/{hex}/path`), today by default for IntelSky aircraft and off for others; the map draws it as a dashed orange line at altitude (`features/map/flight-path.ts`) and Aircraft Details has the Off / Today / 3 d / 7 d control. Times are read from the points' `ts`; IntelSky's own date strings are UTC+2
+- **Clustering**: aircraft, vessels, vehicles and satellites each live in their own Cesium data source so their pins collapse into a counted disc in the type colour when they crowd within 48 px (`features/map/entity-clusters.ts`, `CLUSTERED_TYPES`); a click on a disc flies in. Satellites joined the set because a constellation covers a wide view with hundreds of pins over the aircraft below
 - **Vessel density**: `density:grid` frames (`WebSocketService.density$`) are drawn as counted discs, merged to about a dozen across the view, while the view is larger than the feed's cap and the grid is under 60 s old (`features/map/density-overlay.ts`); individual vessels are hidden meanwhile and a click on a disc flies in

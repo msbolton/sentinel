@@ -191,7 +191,39 @@ func DocumentFromEntity(en *sentinelv1.Entity) *opensearch.EntityDocument {
 		}
 	}
 	doc.PlatformIdentifiers = platformIdentifiers(en)
+	doc.Identifiers = identifiers(en, doc.PlatformIdentifiers)
 	return doc
+}
+
+// identifiers flattens the platform identifiers and natural identities into
+// the searchable text field, deduplicated, in a stable order.
+func identifiers(en *sentinelv1.Entity, p *opensearch.PlatformIdentifiers) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(v string) {
+		if v == "" || seen[v] {
+			return
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	if p != nil {
+		for _, s := range []*string{p.Callsign, p.MMSI, p.IMO, p.ICAOHex, p.Registration, p.Squawk} {
+			if s != nil {
+				add(*s)
+			}
+		}
+		if p.NoradID != nil {
+			add(strconv.Itoa(*p.NoradID))
+		}
+	}
+	for _, id := range en.Identities {
+		if id != nil {
+			add(id.Value)
+		}
+	}
+	add(en.SourceEntityId)
+	return out
 }
 
 func platformIdentifiers(en *sentinelv1.Entity) *opensearch.PlatformIdentifiers {

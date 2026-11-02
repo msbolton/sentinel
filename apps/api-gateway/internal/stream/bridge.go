@@ -319,9 +319,14 @@ func alertFromProto(ev *sentinelv1.AlertEvent) ClientAlert {
 		ID: al.AlertId, Title: al.Title, Message: al.Description, Severity: pbjson.EnumName(al.Severity), AlertType: pbjson.EnumName(al.AlertType),
 		EntityID: al.EntityId, RuleID: al.RuleId, Metadata: al.Metadata, CreatedAt: orNow(tsString(al.CreatedAt)),
 		Acknowledged:   al.AcknowledgedAt != nil,
+		AcknowledgedBy: al.AcknowledgedBy,
 		Classification: enumOrEmpty(al.Classification),
 	}
 	a.UpdatedAt = a.CreatedAt
+	if al.AcknowledgedAt != nil {
+		a.AcknowledgedAt = tsString(al.AcknowledgedAt)
+		a.UpdatedAt = a.AcknowledgedAt
+	}
 	if a.Metadata == nil {
 		a.Metadata = map[string]string{}
 	}
@@ -336,18 +341,22 @@ func alertFromProto(ev *sentinelv1.AlertEvent) ClientAlert {
 
 // ClientAlert matches apps/client/src/app/shared/models/alert.model.ts.
 type ClientAlert struct {
-	ID           string            `json:"id"`
-	Title        string            `json:"title"`
-	Message      string            `json:"message"`
-	Severity     string            `json:"severity"`
-	AlertType    string            `json:"alertType"`
-	EntityID     string            `json:"entityId,omitempty"`
-	RuleID       string            `json:"ruleId,omitempty"`
-	Position     *Position         `json:"position,omitempty"`
-	Acknowledged bool              `json:"acknowledged"`
-	Metadata     map[string]string `json:"metadata"`
-	CreatedAt    string            `json:"createdAt"`
-	UpdatedAt    string            `json:"updatedAt"`
+	ID           string    `json:"id"`
+	Title        string    `json:"title"`
+	Message      string    `json:"message"`
+	Severity     string    `json:"severity"`
+	AlertType    string    `json:"alertType"`
+	EntityID     string    `json:"entityId,omitempty"`
+	RuleID       string    `json:"ruleId,omitempty"`
+	Position     *Position `json:"position,omitempty"`
+	Acknowledged bool      `json:"acknowledged"`
+	// Set once an operator acknowledges; the frame then updates the alert in place.
+	AcknowledgedBy string            `json:"acknowledgedBy,omitempty"`
+	AcknowledgedAt string            `json:"acknowledgedAt,omitempty"`
+	Metadata       map[string]string `json:"metadata"`
+	CreatedAt      string            `json:"createdAt"`
+	// UpdatedAt is the acknowledgement time once there is one, else CreatedAt.
+	UpdatedAt string `json:"updatedAt"`
 	// Classification inherited from the entity when the alert fired; empty
 	// when the producer did not set it.
 	Classification string `json:"classification,omitempty"`

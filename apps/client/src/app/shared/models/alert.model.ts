@@ -36,11 +36,12 @@ export interface AlertRule {
   updatedAt: string;
 }
 
+/** Filters for GET /api/v1/alerts; paging is 1-based pages of pageSize (max 200). */
 export interface AlertQuery {
   severity?: AlertSeverity;
   alertType?: AlertType;
   acknowledged?: boolean;
   entityId?: string;
-  limit?: number;
-  offset?: number;
+  page?: number;
+  pageSize?: number;
 }

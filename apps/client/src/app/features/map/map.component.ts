@@ -65,6 +65,9 @@ import { SatelliteTracker, periodMinutes, type SatPosition } from './satellite-t
 import { footprintRadiusM, sampleOrbit, splitAtAntimeridian } from './orbit-geometry';
 import { OrbitOverlayService } from '../../core/services/orbit-overlay.service';
 import { FlightPathService, FlightPathState } from '../../core/services/flight-path.service';
+import { ReplayService } from '../../core/services/replay.service';
+import { ReplayResponse } from '../../shared/models/track.model';
+import { ReplayLayer } from './replay-layer';
 import { pathRuns } from './flight-path';
 import { CLUSTER_CONFIG, CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, drawClusterDisc, syncLabelGlyphClusterShow } from './entity-clusters';
 import { DROP_LINE_CONFIG, dropLinePoints, showsDropLine, type GeoPoint } from './drop-line';
@@ -95,6 +98,8 @@ import { GeofenceConfig, GeofenceShape, LngLat } from '../../shared/models/geofe
 
 /** Dead-reckoning frame cap: ~30 fps is plenty for gliding markers. */
 const DR_FRAME_INTERVAL_MS = 33;
+/** The replay clock reports its time to the ReplayService at most this often. */
+const REPLAY_TICK_INTERVAL_MS = 100;
 /** Pick window, in pixels, used to find the track under a ring's anchor click. */
 const ANCHOR_PICK_PX = 14;
 
@@ -287,6 +292,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private readonly auth = inject(AuthService);
   /** The public-demo visitor's session; see guest-map.ts. Inert for anyone else. */
   private readonly demo = inject(DemoService);
+  /** Timeline playback, which the map follows; see the Replay section. */
+  private readonly replay = inject(ReplayService);
+  /** Draws the timeline replay; set exactly while the map is in replay mode (see inReplay). */
+  private replayLayer: ReplayLayer | null = null;
+  /** The track a click picked from the replay, so leaving replay can drop it from the selection. */
+  private replaySelection: Entity | null = null;
+  /** The last seek request (ReplayService.seekRequested().n) the clock was moved for. */
+  private appliedSeekN = -1;
+  /** When the clock last reported its time to the replay service (Date.now ms). */
+  private replayTickAtMs = 0;
 
   constructor(
     private readonly ngZone: NgZone,
@@ -448,6 +463,30 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       untracked(() => this.scheduleRender());
     });
 
+    // Timeline replay: the live tracks give way to the recorded ones, which
+    // the Cesium clock runs from the replay service; see the Replay section.
+    effect(() => {
+      this.replay.mode();
+      this.ngZone.runOutsideAngular(() => untracked(() => this.applyReplayState()));
+    });
+    effect(() => {
+      const response = this.replay.replay();
+      this.ngZone.runOutsideAngular(() => untracked(() => this.drawReplay(response)));
+    });
+    effect(() => {
+      this.replay.clockBounds();
+      this.replay.range();
+      this.replay.speed();
+      this.replay.playing();
+      untracked(() => this.syncReplayClock());
+    });
+    effect(() => {
+      // The target travels with the request: a clock report landing before this
+      // runs may already have moved the cursor away from it.
+      const { n, at } = this.replay.seekRequested();
+      untracked(() => this.seekReplayClock(at, n));
+    });
+
     // Track whether a right-hand route panel is open (not the map, a page or the timeline)
     const routerSub = this.router.events.pipe(
       filter((e): e is NavigationEnd => e instanceof NavigationEnd),
@@ -477,6 +516,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // currentEntities$ subscription which drops the first emission.
     this.entityService.getEntities({ pageSize: 500 }).subscribe((response) => {
       this.ngZone.runOutsideAngular(() => {
+        if (this.inReplay()) return; // a page opened on the timeline
         for (const entity of response.data) {
           this.addOrUpdateCesiumEntity(entity);
         }
@@ -573,6 +613,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.flyToFocus();
       this.flyToDemoFocus();
       this.removeScreenPointListener = this.viewer.scene.postRender.addEventListener(() => this.updateSelectionScreenPoint());
+      this.bindReplayClock();
 
       // Set dark atmosphere
       this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#050607');
@@ -714,6 +755,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       if (Cesium.defined(pickedObject) && (pickedObject.id?._sentinelDropLine || pickedObject.id?._sentinelGeofenceHandle)) {
         return; // a click on a handle is the start of a drag, not a deselection
       }
+      const pickedId = pickedObject?.id?.id;
+      if (typeof pickedId === 'string' && pickedId.startsWith('replay:')) {
+        this.ngZone.run(() => this.selectReplayEntity(pickedId));
+        return;
+      }
       if (Cesium.defined(pickedObject) && pickedObject.id?._sentinelEntity) {
         this.ngZone.run(() => {
           this.selectedEntity.set(pickedObject.id._sentinelEntity);
@@ -821,11 +867,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.mapViewport.set(bounds);
     this.syncDensity();
     this.wsService.sendViewportUpdate(bounds);
+    if (this.inReplay()) return; // live tracks are refetched on leaving replay
 
     // Also fetch entities in this viewport (no bbox when the globe is visible).
     const query = isGlobalBounds(bounds) ? { pageSize: 500 } : { ...bounds, pageSize: 500 };
     this.entityService.getEntities(query).subscribe((response) => {
       this.ngZone.runOutsideAngular(() => {
+        if (this.inReplay()) return; // replay began while this was in flight
         for (const entity of response.data) {
           this.addOrUpdateCesiumEntity(entity);
         }
@@ -851,7 +899,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       throttleTime(1000),
     ).subscribe((entities) => {
       this.ngZone.runOutsideAngular(() => {
-        if (!this.viewer) return;
+        if (!this.viewer || this.inReplay()) return;
         this.suspendCollectionEvents();
         try {
           entities.forEach((entity, id) => {
@@ -886,7 +934,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   private processCesiumBatch(events: EntityEvent[]): void {
-    if (!this.viewer) return;
+    if (!this.viewer || this.inReplay()) return; // a replay drops live events
 
     console.debug(`[Map] Processing batch of ${events.length} entity events`);
 
@@ -1396,7 +1444,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private syncFlightPath(state: FlightPathState): void {
     if (!this.viewer || this.viewer.isDestroyed()) return;
     const path = state.path;
-    if (!path || path.points.length < 2) {
+    if (!path || path.points.length < 2 || this.inReplay()) {
       this.clearFlightPath();
       return;
     }
@@ -1460,7 +1508,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   // --- Collections and clustering --------------------------------------------
 
   /**
-   * Aircraft, vessels and vehicles each live in their own data source so
+   * Aircraft, vessels, vehicles and satellites each live in their own data source so
    * Cesium can cluster them when their pins crowd together; everything else
    * stays in the viewer's default collection.
    */
@@ -1601,7 +1649,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   /** Zoom in on a cluster until its members come apart. */
   private flyToCluster(members: any[]): void {
     const Cesium = this.Cesium;
-    const now = Cesium.JulianDate.now();
+    // A replayed track is only placed within its recorded span: ask at the replay clock's time.
+    const now = this.inReplay() ? this.viewer.clock.currentTime : Cesium.JulianDate.now();
     const points = members
       .map((m) => m.position?.getValue(now))
       .filter((p: any) => Cesium.defined(p));
@@ -1655,7 +1704,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     for (const [id, entity] of [...this.emplacementEntities]) {
       if (!emplacementDrawingOf(entity, ids)) {
         this.emplacementEntities.delete(id);
-        this.addOrUpdateCesiumEntity(entity);
+        if (!this.inReplay()) this.addOrUpdateCesiumEntity(entity); // leaving replay refetches it
       }
     }
     this.scheduleRender();
@@ -1695,7 +1744,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const now = this.wsService.serverNow();
     const rows = new Map(this.emplacements.emplacements().map((e) => [e.id, e]));
     const sites: BearingSite[] = [];
-    for (const entity of this.emplacementEntities.values()) {
+    // A replay draws no bearing lines: they belong to the live picture.
+    for (const entity of this.inReplay() ? [] : this.emplacementEntities.values()) {
       if (!entity.position || entity.ageoutState === 'AGED_OUT') continue;
       const bearings = bearingsOf(entity, now);
       if (bearings.length === 0) continue;
@@ -1845,7 +1895,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   /** Show the drop line under the selected aircraft, drone or satellite, or none. */
   private syncDropLine(selected: Entity | null): void {
     if (!this.viewer || !this.Cesium) return;
-    if (!selected || !showsDropLine(selected)) {
+    if (!selected || !showsDropLine(selected) || this.inReplay()) {
       this.clearDropLine();
       return;
     }
@@ -1971,6 +2021,162 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         requestAnimationFrame(check);
       }
     });
+  }
+
+  // --- Replay --------------------------------------------------------------------
+
+  /** Whether the map is replaying the timeline: live tracks are hidden and live events dropped. */
+  private inReplay(): boolean {
+    return this.replayLayer !== null;
+  }
+
+  /** Listens to the clock, once the viewer exists, and takes up the replay state it may already be in. */
+  private bindReplayClock(): void {
+    this.viewer.clock.onTick.addEventListener((clock: any) => this.onReplayClockTick(clock));
+    this.applyReplayState();
+  }
+
+  /** Enters or leaves replay to match the service; nothing until the viewer exists. */
+  private applyReplayState(): void {
+    if (!this.viewer) return;
+    const replaying = this.replay.mode() === 'replay';
+    if (replaying && !this.inReplay()) this.enterReplay();
+    else if (!replaying && this.inReplay()) this.leaveReplay();
+  }
+
+  private enterReplay(): void {
+    this.replayLayer = new ReplayLayer(this.viewer, this.Cesium, {
+      billboardFor: (entity) => this.getBillboardImage(entity),
+      clusterImageFor: (type, count) => this.clusterImage(type, count),
+    });
+    if (this.drFrame !== null) {
+      cancelAnimationFrame(this.drFrame);
+      this.drFrame = null;
+    }
+    // A live track selected before entering would keep showing live data in the card and overlays.
+    const selected = untracked(() => this.selectedEntity());
+    if (selected && selected !== this.replaySelection) this.selectedEntity.set(null);
+    this.clearLiveEntities();
+    this.hideLiveLayers();
+    this.viewer.clock.shouldAnimate = false; // a running live clock is no replay to report as paused
+    this.syncReplayClock();
+    // Entering is not a seek, so the clock starts at the cursor here; the request standing now is covered by it.
+    this.seekReplayClock(this.replay.cursor(), this.replay.seekRequested().n);
+    this.drawReplay(this.replay.replay());
+  }
+
+  private leaveReplay(): void {
+    this.replayLayer?.clear();
+    this.replayLayer = null;
+    this.appliedSeekN = -1; // entering again always moves the clock to the cursor
+    const clock = this.viewer.clock;
+    clock.shouldAnimate = false;
+    clock.currentTime = this.Cesium.JulianDate.now();
+    clock.clockRange = this.Cesium.ClockRange.UNBOUNDED;
+    clock.multiplier = 1;
+    if (this.replaySelection && untracked(() => this.selectedEntity()) === this.replaySelection) {
+      this.selectedEntity.set(null);
+    }
+    this.replaySelection = null;
+    this.clearLiveEntities();
+    this.showLiveLayers();
+    this.sendViewportBounds();
+  }
+
+  /** Removes the live tracks from the globe, without the server call clearAllEntities makes; emplacement sites stay. */
+  private clearLiveEntities(): void {
+    for (const [id, cesiumEntity] of this.entityMap) {
+      (cesiumEntity.entityCollection ?? this.viewer.entities).remove(cesiumEntity);
+      this.ellipseOutlines?.remove(id);
+    }
+    this.entityMap.clear();
+    this.trackTrails.clear();
+    this.deadReckoning.clear();
+    this.satellites.clear();
+    this.scheduleRender();
+  }
+
+  /** Hides the live picture's layers and overlays; geofences, emplacements and the user's location stay. */
+  private hideLiveLayers(): void {
+    for (const source of this.clusterSources.values()) source.show = false;
+    if (this.densitySource) this.densitySource.show = false;
+    this.resyncBearings(); // draws none in replay
+    this.clearFlightPath();
+    this.clearOrbitOverlay();
+    this.clearDropLine();
+    this.scheduleRender();
+  }
+
+  private showLiveLayers(): void {
+    // Vessels stay hidden while the density discs stand in for them (see syncDensity).
+    for (const [type, source] of this.clusterSources) source.show = !(type === EntityType.VESSEL && this.densityShown);
+    if (this.densitySource) this.densitySource.show = true;
+    this.resyncBearings();
+    this.syncDropLine(untracked(() => this.selectedEntity()));
+    this.syncFlightPath(untracked(() => this.flightPath.state()));
+    this.scheduleRender();
+  }
+
+  /** Runs the clock over the clock bounds at the replay speed: a range loops, a bare window stops at its end. */
+  private syncReplayClock(): void {
+    if (!this.inReplay()) return;
+    const { JulianDate, ClockRange } = this.Cesium;
+    const clock = this.viewer.clock;
+    const { start, end } = this.replay.clockBounds();
+    clock.startTime = JulianDate.fromDate(start);
+    clock.stopTime = JulianDate.fromDate(end);
+    clock.clockRange = this.replay.range() ? ClockRange.LOOP_STOP : ClockRange.CLAMPED;
+    clock.multiplier = this.replay.speed();
+    const playing = this.replay.playing();
+    // The throttle may have held back the last ticks: a pause reports where the clock stopped.
+    if (clock.shouldAnimate && !playing) this.reportReplayTime(clock);
+    clock.shouldAnimate = playing;
+    this.scheduleRender();
+  }
+
+  /**
+   * Moves the clock to a seek's target (or the cursor, on entering replay) and
+   * tells the service it has. Request `n` is applied once: entering covers the
+   * request standing at that moment, which the seek effect must not replay.
+   */
+  private seekReplayClock(at: Date, n: number): void {
+    if (!this.inReplay() || n === this.appliedSeekN) return;
+    this.appliedSeekN = n;
+    this.viewer.clock.currentTime = this.Cesium.JulianDate.fromDate(at);
+    this.replay.seekApplied();
+    this.scheduleRender();
+  }
+
+  /** Draws a replay response; none (a failed or cleared request) leaves the globe empty. */
+  private drawReplay(response: ReplayResponse | null): void {
+    if (response) this.replayLayer?.build(response);
+    else this.replayLayer?.clear();
+  }
+
+  /**
+   * While the replay plays, reports the clock's time to the service at most
+   * every REPLAY_TICK_INTERVAL_MS, and asks for every frame: in request-render
+   * mode a moving clock alone draws nothing.
+   */
+  private onReplayClockTick(clock: any): void {
+    if (!this.inReplay() || !clock.shouldAnimate) return;
+    this.viewer.scene.requestRender();
+    const now = Date.now();
+    if (now - this.replayTickAtMs < REPLAY_TICK_INTERVAL_MS) return;
+    this.replayTickAtMs = now;
+    this.reportReplayTime(clock);
+  }
+
+  private reportReplayTime(clock: any): void {
+    const at = this.Cesium.JulianDate.toDate(clock.currentTime);
+    this.ngZone.run(() => this.replay.tick(at));
+  }
+
+  /** Selects a replayed track, placed where it was at the cursor. */
+  private selectReplayEntity(cesiumId: string): void {
+    const entity = this.replayLayer?.entityAt(cesiumId, this.replay.cursor()) ?? null;
+    this.replaySelection = entity;
+    this.selectedEntity.set(entity);
   }
 
   // --- Public methods for template ---

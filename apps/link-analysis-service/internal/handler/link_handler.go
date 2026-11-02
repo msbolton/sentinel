@@ -5,13 +5,28 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/sentinel/go-common/classification"
 	"github.com/sentinel/go-common/httputil"
+	"github.com/sentinel/go-common/middleware"
 	"github.com/sentinel/link-analysis-service/internal/store"
 	"go.uber.org/zap"
 )
+
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// linkTypePattern accepts the sentinel.v1.LinkType names (COMMUNICATION,
+// COMMAND_CONTROL, ...) without the service depending on the proto package.
+var linkTypePattern = regexp.MustCompile(`^[A-Z][A-Z_]{0,49}$`)
+
+// levelsOf lists the classification levels the caller may see, from the
+// clearance the gateway propagated.
+func levelsOf(r *http.Request) []string {
+	return classification.AtOrBelow(classification.Normalize(middleware.Classification(r.Context())))
+}
 
 // LinkHandler handles link HTTP endpoints.
 type LinkHandler struct {
@@ -38,19 +53,18 @@ func (h *LinkHandler) handleGetLinks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
 	entityID := q.Get("entityId")
-	if entityID == "" {
-		httputil.Error(w, http.StatusBadRequest, "entityId is required")
+	if !uuidPattern.MatchString(entityID) {
+		httputil.Error(w, http.StatusBadRequest, "entityId must be an entity UUID")
 		return
 	}
 
-	linkTypes := parseLinkTypes(q)
-	minConfidence, err := parseMinConfidence(q)
+	f, err := parseFilter(r)
 	if err != nil {
 		httputil.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	links, err := h.store.GetLinks(r.Context(), entityID, linkTypes, minConfidence)
+	links, err := h.store.GetLinks(r.Context(), entityID, f)
 	if err != nil {
 		h.logger.Error("get links failed", zap.Error(err))
 		httputil.Error(w, http.StatusInternalServerError, "Failed to get links")
@@ -64,8 +78,8 @@ func (h *LinkHandler) handleGetGraph(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
 	centerID := q.Get("centerId")
-	if centerID == "" {
-		httputil.Error(w, http.StatusBadRequest, "centerId is required")
+	if !uuidPattern.MatchString(centerID) {
+		httputil.Error(w, http.StatusBadRequest, "centerId must be an entity UUID")
 		return
 	}
 
@@ -74,14 +88,13 @@ func (h *LinkHandler) handleGetGraph(w http.ResponseWriter, r *http.Request) {
 		httputil.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	linkTypes := parseLinkTypes(q)
-	minConfidence, err := parseMinConfidence(q)
+	f, err := parseFilter(r)
 	if err != nil {
 		httputil.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	result, err := h.store.GetGraph(r.Context(), centerID, maxDepth, linkTypes, minConfidence)
+	result, err := h.store.GetGraph(r.Context(), centerID, maxDepth, f)
 	if err != nil {
 		h.logger.Error("get graph failed", zap.Error(err))
 		httputil.Error(w, http.StatusInternalServerError, "Failed to get graph")
@@ -96,12 +109,12 @@ func (h *LinkHandler) handleShortestPath(w http.ResponseWriter, r *http.Request)
 
 	fromID := q.Get("from")
 	toID := q.Get("to")
-	if fromID == "" || toID == "" {
-		httputil.Error(w, http.StatusBadRequest, "from and to are required")
+	if !uuidPattern.MatchString(fromID) || !uuidPattern.MatchString(toID) {
+		httputil.Error(w, http.StatusBadRequest, "from and to must be entity UUIDs")
 		return
 	}
 
-	result, err := h.store.FindShortestPath(r.Context(), fromID, toID)
+	result, err := h.store.FindShortestPath(r.Context(), fromID, toID, levelsOf(r))
 	if err != nil {
 		h.logger.Error("shortest path failed", zap.Error(err))
 		httputil.Error(w, http.StatusInternalServerError, "Failed to find shortest path")
@@ -136,8 +149,16 @@ func (h *LinkHandler) handleCreateLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.SourceEntityID == "" || req.TargetEntityID == "" || req.LinkType == "" {
-		httputil.Error(w, http.StatusBadRequest, "sourceEntityId, targetEntityId, and linkType are required")
+	if !uuidPattern.MatchString(req.SourceEntityID) || !uuidPattern.MatchString(req.TargetEntityID) {
+		httputil.Error(w, http.StatusBadRequest, "sourceEntityId and targetEntityId must be entity UUIDs")
+		return
+	}
+	if strings.EqualFold(req.SourceEntityID, req.TargetEntityID) {
+		httputil.Error(w, http.StatusBadRequest, "an entity cannot be linked to itself")
+		return
+	}
+	if !linkTypePattern.MatchString(req.LinkType) {
+		httputil.Error(w, http.StatusBadRequest, "linkType must be a LinkType name such as ASSOCIATION")
 		return
 	}
 
@@ -160,7 +181,11 @@ func (h *LinkHandler) handleCreateLink(w http.ResponseWriter, r *http.Request) {
 		FirstObserved:  req.FirstObserved,
 		LastObserved:   req.LastObserved,
 		Metadata:       req.Metadata,
-	})
+	}, levelsOf(r))
+	if errors.Is(err, store.ErrNotFound) {
+		httputil.Error(w, http.StatusNotFound, "Entity not found")
+		return
+	}
 	if err != nil {
 		h.logger.Error("create link failed", zap.Error(err))
 		httputil.Error(w, http.StatusInternalServerError, "Failed to create link")
@@ -172,13 +197,13 @@ func (h *LinkHandler) handleCreateLink(w http.ResponseWriter, r *http.Request) {
 
 func (h *LinkHandler) handleDeleteLink(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if id == "" {
-		httputil.Error(w, http.StatusBadRequest, "id is required")
+	if !uuidPattern.MatchString(id) {
+		httputil.Error(w, http.StatusBadRequest, "id must be a link UUID")
 		return
 	}
 
-	if err := h.store.Delete(r.Context(), id); err != nil {
-		if strings.Contains(err.Error(), "not found") {
+	if err := h.store.Delete(r.Context(), id, levelsOf(r)); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
 			httputil.Error(w, http.StatusNotFound, "Link not found")
 			return
 		}
@@ -188,6 +213,19 @@ func (h *LinkHandler) handleDeleteLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.NoContent(w)
+}
+
+// parseFilter reads the type and confidence filters and the caller's clearance.
+func parseFilter(r *http.Request) (store.Filter, error) {
+	minConfidence, err := parseMinConfidence(r.URL.Query())
+	if err != nil {
+		return store.Filter{}, err
+	}
+	return store.Filter{
+		LinkTypes:     parseLinkTypes(r.URL.Query()),
+		MinConfidence: minConfidence,
+		Levels:        levelsOf(r),
+	}, nil
 }
 
 // parseLinkTypes accepts repeated ?types=A&types=B or comma-separated ?types=A,B.

@@ -62,6 +62,20 @@ BEGIN
 END
 $$;
 
+-- Replay and the timeline filter points by box. On a hypertable the GiST index
+-- is built one chunk per transaction, so a long history is not locked for the
+-- whole build. TimescaleDB commits between chunks, which a DO block cannot
+-- survive (the backend aborts), so the branch is psql's \if: every runner of
+-- db/schema (make db-schema, the Compose db-schema job, the Helm schema Job)
+-- is psql.
+SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') AS track_points_timescaledb \gset
+\if :track_points_timescaledb
+CREATE INDEX IF NOT EXISTS idx_track_points_position ON sentinel.track_points USING gist (position)
+  WITH (timescaledb.transaction_per_chunk);
+\else
+CREATE INDEX IF NOT EXISTS idx_track_points_position ON sentinel.track_points USING gist (position);
+\endif
+
 -- Columns added with the observation store; a no-op on a database this file
 -- created, present for databases created before them.
 ALTER TABLE sentinel.track_points

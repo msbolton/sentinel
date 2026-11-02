@@ -11,18 +11,26 @@ import (
 	"github.com/sentinel/go-common/classification"
 	"github.com/sentinel/go-common/httputil"
 	"github.com/sentinel/go-common/middleware"
+	sentinelv1 "github.com/sentinel/proto-gen/sentinel/v1"
 	"go.uber.org/zap"
 )
 
-// AlertHandler handles alert HTTP endpoints.
-type AlertHandler struct {
-	store  *store.AlertStore
-	logger *zap.Logger
+// AlertPublisher emits an alert's lifecycle events; the evaluator implements it.
+type AlertPublisher interface {
+	PublishAlertEvent(alert *store.AlertRecord, eventType sentinelv1.AlertEventType)
 }
 
-// NewAlertHandler creates a new alert handler.
-func NewAlertHandler(store *store.AlertStore, logger *zap.Logger) *AlertHandler {
-	return &AlertHandler{store: store, logger: logger}
+// AlertHandler handles alert HTTP endpoints.
+type AlertHandler struct {
+	store     *store.AlertStore
+	publisher AlertPublisher
+	logger    *zap.Logger
+}
+
+// NewAlertHandler creates a new alert handler. publisher may be nil, in which
+// case acknowledgements and resolutions are stored but not broadcast.
+func NewAlertHandler(store *store.AlertStore, publisher AlertPublisher, logger *zap.Logger) *AlertHandler {
+	return &AlertHandler{store: store, publisher: publisher, logger: logger}
 }
 
 // RegisterRoutes registers alert endpoints on the mux.
@@ -91,15 +99,13 @@ func (h *AlertHandler) handleAcknowledge(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var body struct {
-		UserID string `json:"userId"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.UserID == "" {
-		httputil.Error(w, http.StatusBadRequest, "userId is required")
+	userID := acknowledgingUser(r)
+	if userID == "" {
+		httputil.Error(w, http.StatusBadRequest, "no authenticated user and no userId in the body")
 		return
 	}
 
-	if err := h.store.AcknowledgeAlert(r.Context(), id, body.UserID); err != nil {
+	if err := h.store.AcknowledgeAlert(r.Context(), id, userID); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			httputil.Error(w, http.StatusNotFound, "Alert not found")
 			return
@@ -109,8 +115,7 @@ func (h *AlertHandler) handleAcknowledge(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	alert, _ := h.store.GetAlert(r.Context(), id)
-	httputil.JSON(w, http.StatusOK, alert)
+	h.respondUpdated(w, r, id, sentinelv1.AlertEventType_ALERT_EVENT_TYPE_ACKNOWLEDGED)
 }
 
 func (h *AlertHandler) handleResolve(w http.ResponseWriter, r *http.Request) {
@@ -129,8 +134,36 @@ func (h *AlertHandler) handleResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	alert, _ := h.store.GetAlert(r.Context(), id)
+	h.respondUpdated(w, r, id, sentinelv1.AlertEventType_ALERT_EVENT_TYPE_RESOLVED)
+}
+
+// respondUpdated answers with the alert as it now is and broadcasts the change.
+func (h *AlertHandler) respondUpdated(w http.ResponseWriter, r *http.Request, id string, eventType sentinelv1.AlertEventType) {
+	alert, err := h.store.GetAlert(r.Context(), id)
+	if err != nil {
+		h.logger.Error("reload alert failed", zap.String("alertId", id), zap.Error(err))
+		httputil.Error(w, http.StatusInternalServerError, "Failed to load alert")
+		return
+	}
+	if h.publisher != nil {
+		h.publisher.PublishAlertEvent(alert, eventType)
+	}
 	httputil.JSON(w, http.StatusOK, alert)
+}
+
+// acknowledgingUser is who acknowledges: the user the gateway authenticated,
+// else a userId in the body (for callers that reach the service directly).
+func acknowledgingUser(r *http.Request) string {
+	if id := middleware.UserID(r.Context()); id != "" {
+		return id
+	}
+	var body struct {
+		UserID string `json:"userId"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	return body.UserID
 }
 
 type createRuleRequest struct {

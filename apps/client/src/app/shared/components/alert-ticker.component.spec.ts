@@ -167,7 +167,7 @@ describe('AlertTickerComponent', () => {
     );
     const fixture = await create();
 
-    expect(getAlerts).toHaveBeenCalledWith({ acknowledged: false, limit: 5 });
+    expect(getAlerts).toHaveBeenCalledWith({ acknowledged: false, pageSize: 5 });
     const t = ticks(fixture);
     expect(t[0].textContent).toContain('NEWER');
     expect(t[1].textContent).toContain('OLDER');

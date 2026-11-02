@@ -3,6 +3,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { map } from 'rxjs';
 import { EntityService } from '../../core/services/entity.service';
 import { MapViewportService } from '../../core/services/map-viewport.service';
+import { ReplayService } from '../../core/services/replay.service';
 import { SelectionService } from '../../core/services/selection.service';
 import { freshnessOf } from '../freshness';
 import { Affiliation, Entity } from '../models/entity.model';
@@ -17,7 +18,8 @@ const UNFREEZE_MS = 250;
  * tracks in view that reported most recently, freshest first. Clicking a row
  * selects the track. Renders nothing while the list is empty; only the rows
  * take pointer events. The order holds still while the pointer is over the
- * stack, so a row does not move out from under a click.
+ * stack, so a row does not move out from under a click. Hidden while the map
+ * replays history: its rows are live tracks.
  */
 @Component({
   selector: 'app-track-stack',
@@ -28,17 +30,19 @@ const UNFREEZE_MS = 250;
     '(mouseleave)': 'onPointerLeave()',
   },
   template: `
-    @for (e of rows(); track e.id) {
-      <button
-        type="button"
-        class="row"
-        [class.h]="isHostile(e)"
-        [class.on]="e.id === selection.entity()?.id"
-        [attr.aria-pressed]="e.id === selection.entity()?.id"
-        (click)="selection.select(e)">
-        <span class="who">{{ who(e) }}</span>
-        <span class="meta">{{ meta(e) }}</span>
-      </button>
+    @if (!replaying()) {
+      @for (e of rows(); track e.id) {
+        <button
+          type="button"
+          class="row"
+          [class.h]="isHostile(e)"
+          [class.on]="e.id === selection.entity()?.id"
+          [attr.aria-pressed]="e.id === selection.entity()?.id"
+          (click)="selection.select(e)">
+          <span class="who">{{ who(e) }}</span>
+          <span class="meta">{{ meta(e) }}</span>
+        </button>
+      }
     }
   `,
   styles: [`
@@ -108,6 +112,9 @@ const UNFREEZE_MS = 250;
 export class TrackStackComponent {
   readonly selection = inject(SelectionService);
   private readonly viewport = inject(MapViewportService);
+  private readonly replay = inject(ReplayService);
+
+  readonly replaying = computed(() => this.replay.mode() === 'replay');
 
   // currentEntities$ re-emits the same mutated Map, which toSignal would treat as unchanged;
   // copying the values gives every emission a new reference.

@@ -1,3 +1,5 @@
+import { Classification, EntityType } from './entity.model';
+
 export interface TrackPoint {
   timestamp: string;
   latitude: number;
@@ -32,10 +34,32 @@ export interface TimelineEvent {
   entityTypes: Record<string, number>;
 }
 
-export interface PlaybackState {
-  playing: boolean;
-  currentTime: Date;
-  startTime: Date;
-  endTime: Date;
-  speed: number;
+/** One sample of a replayed track: [epochMs, lon, lat, altitudeM, headingDeg]. */
+export type ReplayPoint = [
+  epochMs: number,
+  lon: number,
+  lat: number,
+  altitudeM: number | null,
+  headingDeg: number | null,
+];
+
+export interface ReplayEntity {
+  entityId: string;
+  entityType: EntityType;
+  name: string;
+  classification: Classification;
+  points: ReplayPoint[];
+}
+
+/** The busiest tracks in a box over a window; `truncated` when the entity cap cut some off. */
+export interface ReplayResponse {
+  startTime: string;
+  endTime: string;
+  entities: ReplayEntity[];
+  truncated: boolean;
+}
+
+export interface TimeWindow {
+  start: Date;
+  end: Date;
 }
