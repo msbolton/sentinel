@@ -1,4 +1,5 @@
 import { EntityType } from '../../shared/models/entity.model';
+import { monoFont } from '../../shared/mono-font';
 
 /**
  * Types that collapse into a counted disc when their pins crowd together on
@@ -52,7 +53,7 @@ export function drawClusterDisc(
   ctx.strokeStyle = 'rgba(10, 14, 23, 0.9)';
   ctx.stroke();
   ctx.fillStyle = textColor;
-  ctx.font = `700 ${spec.text.length > 2 ? 22 : 26}px "JetBrains Mono", monospace`;
+  ctx.font = `700 ${spec.text.length > 2 ? 22 : 26}px ${monoFont()}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(spec.text, r, r + 1);

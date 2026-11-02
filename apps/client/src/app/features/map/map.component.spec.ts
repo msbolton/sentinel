@@ -19,6 +19,8 @@ import { EmplacementService } from '../../core/services/emplacement.service';
 import { FeedService } from '../../core/services/feed.service';
 import { AuthService } from '../../core/services/auth.service';
 import { DemoBounds, DemoPosition, DemoService } from '../../core/services/demo.service';
+import { SelectionService } from '../../core/services/selection.service';
+import { MapCursorService } from '../../core/services/map-cursor.service';
 import {
   Affiliation,
   Classification,
@@ -173,7 +175,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
             showFootprint: signal(false),
           },
         },
-        { provide: MapViewportService, useValue: { updateBounds: jest.fn() } },
+        { provide: MapViewportService, useValue: { updateBounds: jest.fn(), bounds: () => null } },
         {
           provide: GeofenceService,
           useValue: {
@@ -284,7 +286,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     (fakeCesium as any).ScreenSpaceEventType = { LEFT_CLICK: 'L', LEFT_DOUBLE_CLICK: 'D', MOUSE_MOVE: 'M', LEFT_DOWN: 'DN', LEFT_UP: 'UP' };
     (fakeCesium as any).defined = (x: unknown) => x != null;
     const viewer = (component as any).viewer;
-    viewer.scene.canvas = {};
+    viewer.scene.canvas = document.createElement('canvas');
     viewer.scene.pick = jest.fn(() => ({ id: { _sentinelEmplacement: 'emp-1' } }));
     viewer.selectedEntity = { stale: true };
     const site = baseSignalEntity({ id: 'site-1', entityType: EntityType.SENSOR, identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }] } as Partial<Entity>);
@@ -308,7 +310,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     (fakeCesium as any).ScreenSpaceEventType = { LEFT_CLICK: 'L', LEFT_DOUBLE_CLICK: 'D', MOUSE_MOVE: 'M', LEFT_DOWN: 'DN', LEFT_UP: 'UP' };
     (fakeCesium as any).defined = (x: unknown) => x != null;
     const viewer = (component as any).viewer;
-    viewer.scene.canvas = {};
+    viewer.scene.canvas = document.createElement('canvas');
     viewer.scene.pick = jest.fn(() => ({ id: { id: 'bearing:site-1:t1', _sentinelBearing: 'site-1', _sentinelBearingKey: 't:t1' } }));
     viewer.selectedEntity = { stale: true };
     const site = baseSignalEntity({ id: 'site-1', entityType: EntityType.SENSOR, identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }] } as Partial<Entity>);
@@ -362,7 +364,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     (fakeCesium as any).ScreenSpaceEventType = { LEFT_CLICK: 'L', LEFT_DOUBLE_CLICK: 'D', MOUSE_MOVE: 'M', LEFT_DOWN: 'DN', LEFT_UP: 'UP' };
     (fakeCesium as any).defined = (x: unknown) => x != null;
     const viewer = (component as any).viewer;
-    viewer.scene.canvas = {};
+    viewer.scene.canvas = document.createElement('canvas');
     viewer.scene.pick = jest.fn(() => ({ id: { _sentinelEmplacement: 'emp-2' } }));
     component.selectedEntity.set(baseSignalEntity({ id: 'ac-1', entityType: EntityType.AIRCRAFT }));
 
@@ -1001,6 +1003,184 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
       localStorage.clear();
       (component as any).saveCameraPosition();
       expect(localStorage.getItem('sentinel-camera-position')).not.toBeNull();
+    });
+  });
+
+  describe('publishing the cursor and camera altitude', () => {
+    function moveHandler() {
+      const actions = new Map<unknown, (e: any) => void>();
+      (fakeCesium as any).ScreenSpaceEventHandler = function () {
+        return { setInputAction: (fn: (e: any) => void, type: unknown) => actions.set(type, fn) };
+      };
+      (fakeCesium as any).ScreenSpaceEventType = { LEFT_CLICK: 'L', LEFT_DOUBLE_CLICK: 'D', MOUSE_MOVE: 'M', LEFT_DOWN: 'DN', LEFT_UP: 'UP' };
+      (component as any).viewer.scene.canvas = document.createElement('canvas');
+      (component as any).setupEventHandlers();
+      return actions.get('M')!;
+    }
+
+    it('publishes the globe pick under the mouse as lat/lon, and null off the globe', () => {
+      const cursor = TestBed.inject(MapCursorService);
+      const pick = jest.spyOn(component as any, 'pickLngLat').mockReturnValue([-1.1, 50.8]);
+      const move = moveHandler();
+
+      move({ endPosition: { x: 1, y: 2 } });
+      expect(pick).toHaveBeenCalledWith({ x: 1, y: 2 });
+      expect(cursor.cursor()).toEqual({ lat: 50.8, lon: -1.1 });
+
+      pick.mockReturnValue(null);
+      move({ endPosition: { x: 3, y: 4 } });
+      expect(cursor.cursor()).toBeNull();
+    });
+
+    it('clears the cursor when the pointer leaves the map canvas, and stops listening once destroyed', () => {
+      const cursor = TestBed.inject(MapCursorService);
+      jest.spyOn(component as any, 'pickLngLat').mockReturnValue([20, 10]);
+      const move = moveHandler();
+      const canvas: HTMLCanvasElement = (component as any).viewer.scene.canvas;
+
+      move({ endPosition: { x: 1, y: 2 } });
+      expect(cursor.cursor()).toEqual({ lat: 10, lon: 20 });
+      canvas.dispatchEvent(new MouseEvent('mouseleave'));
+      expect(cursor.cursor()).toBeNull();
+
+      component.ngOnDestroy();
+      cursor.setCursor({ lat: 1, lon: 2 });
+      canvas.dispatchEvent(new MouseEvent('mouseleave'));
+      expect(cursor.cursor()).toEqual({ lat: 1, lon: 2 });
+    });
+
+    it('keeps publishing mid-drag and picks once per move', () => {
+      const cursor = TestBed.inject(MapCursorService);
+      const pick = jest.spyOn(component as any, 'pickLngLat').mockReturnValue([20, 10]);
+      const moveHandle = jest.fn(() => ({ kind: 'circle' }));
+      (component as any).geofenceLayer = { moveHandle, destroy: jest.fn() };
+      (component as any).handleDrag = { zoneId: 'z1', index: 0, config: null };
+      const move = moveHandler();
+
+      move({ endPosition: { x: 1, y: 2 } });
+
+      expect(pick).toHaveBeenCalledTimes(1);
+      expect(moveHandle).toHaveBeenCalledWith('z1', 0, [20, 10]);
+      expect(cursor.cursor()).toEqual({ lat: 10, lon: 20 });
+    });
+
+    it('publishes the camera height once up front and after each camera move', () => {
+      const cursor = TestBed.inject(MapCursorService);
+      const camera = { positionCartographic: { height: 1500 }, moveEnd: { addEventListener: jest.fn() } };
+      (component as any).viewer.camera = camera;
+      jest.spyOn(component as any, 'saveCameraPosition').mockImplementation(() => undefined);
+      (component as any).setupCameraMoveHandler();
+      (component as any).publishCameraAltitude();
+      expect(cursor.cameraAltitudeM()).toBe(1500);
+
+      camera.positionCartographic.height = 42_000;
+      camera.moveEnd.addEventListener.mock.calls[0][0]();
+      expect(cursor.cameraAltitudeM()).toBe(42_000);
+    });
+  });
+
+  describe('shared selection', () => {
+    it('is the SelectionService signal itself', () => {
+      expect(component.selectedEntity).toBe(TestBed.inject(SelectionService).entity);
+    });
+
+    it('flies the camera 60 km above a track selected through the service', () => {
+      const flyTo = jest.fn();
+      (component as any).viewer.camera = { flyTo };
+      (component as any).subscribeToFlyTo();
+
+      TestBed.inject(SelectionService).select(baseSignalEntity({ position: { latitude: 12, longitude: 44 } }));
+
+      expect(flyTo).toHaveBeenCalledWith({ destination: { lon: 44, lat: 12, alt: 60000 }, duration: 1.2 });
+    });
+
+    function stubScreenTransforms(visible = true) {
+      const toWindow = jest.fn((_scene: unknown, _world: unknown) => ({ x: 100, y: 200 }) as { x: number; y: number } | undefined);
+      const isPointVisible = jest.fn(() => visible);
+      (fakeCesium as any).SceneTransforms = { worldToWindowCoordinates: toWindow };
+      (fakeCesium as any).Ellipsoid = { WGS84: {} };
+      (fakeCesium as any).EllipsoidalOccluder = jest.fn(() => ({ isPointVisible }));
+      const viewer = (component as any).viewer;
+      viewer.scene.camera = { positionWC: { x: 0, y: 0, z: 1e7 } };
+      viewer.clock = { currentTime: 'now' };
+      return { toWindow, isPointVisible };
+    }
+    const update = () => (component as any).updateSelectionScreenPoint();
+
+    it('reports the selected track in window pixels after each render, setting only changes', () => {
+      const selection = TestBed.inject(SelectionService);
+      const { toWindow } = stubScreenTransforms();
+
+      update();
+      expect(selection.screenPoint()).toBeNull();
+      expect(toWindow).not.toHaveBeenCalled();
+
+      component.selectedEntity.set(baseSignalEntity({ position: { latitude: 50, longitude: -1, altitude: 300 } }));
+      update();
+      expect(toWindow).toHaveBeenCalledWith((component as any).viewer.scene, { lon: -1, lat: 50, alt: 300 });
+      const first = selection.screenPoint();
+      expect(first).toEqual({ x: 100, y: 200 });
+
+      update();
+      expect(selection.screenPoint()).toBe(first);
+
+      toWindow.mockReturnValue(undefined);
+      update();
+      expect(selection.screenPoint()).toBeNull();
+
+      toWindow.mockReturnValue({ x: 1, y: 2 });
+      component.selectedEntity.set(baseSignalEntity({ position: undefined }));
+      update();
+      expect(selection.screenPoint()).toBeNull();
+    });
+
+    it('places the point where the track is drawn, not at its last fix', () => {
+      const { toWindow } = stubScreenTransforms();
+      const drawn = { x: 1, y: 2, z: 3 };
+      const getValue = jest.fn(() => drawn);
+      (component as any).entityMap.set('sig-1', { position: { getValue } });
+      component.selectedEntity.set(baseSignalEntity({ position: { latitude: 50, longitude: -1 } }));
+
+      update();
+
+      expect(getValue).toHaveBeenCalledWith('now');
+      expect(toWindow).toHaveBeenCalledWith((component as any).viewer.scene, drawn);
+      expect(TestBed.inject(SelectionService).screenPoint()).toEqual({ x: 100, y: 200 });
+    });
+
+    it('reports no point for a track hidden behind the globe', () => {
+      const { toWindow, isPointVisible } = stubScreenTransforms(false);
+      component.selectedEntity.set(baseSignalEntity({ position: { latitude: -50, longitude: 179 } }));
+
+      update();
+
+      expect(isPointVisible).toHaveBeenCalledWith({ lon: 179, lat: -50, alt: 0 });
+      expect(toWindow).not.toHaveBeenCalled();
+      expect(TestBed.inject(SelectionService).screenPoint()).toBeNull();
+    });
+
+    it('clears the shared selection when the map is destroyed', () => {
+      const selection = TestBed.inject(SelectionService);
+      component.selectedEntity.set(baseSignalEntity());
+      selection.screenPoint.set({ x: 1, y: 2 });
+
+      component.ngOnDestroy();
+
+      expect(selection.entity()).toBeNull();
+      expect(selection.screenPoint()).toBeNull();
+    });
+
+    it('leaves the shared selection alone when a map that never made a viewer is destroyed', () => {
+      const selection = TestBed.inject(SelectionService);
+      const picked = baseSignalEntity();
+      selection.entity.set(picked);
+      selection.screenPoint.set({ x: 1, y: 2 });
+      (component as any).viewer = null;
+
+      component.ngOnDestroy();
+
+      expect(selection.entity()).toBe(picked);
+      expect(selection.screenPoint()).toEqual({ x: 1, y: 2 });
     });
   });
 });

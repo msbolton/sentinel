@@ -10,8 +10,9 @@ export const routes: Routes = [
   {
     path: 'map',
     canActivate: [authGuard],
+    // The shell renders the map itself; the outlet gets an empty placeholder.
     loadComponent: () =>
-      import('./features/map/map.component').then((m) => m.MapComponent),
+      import('./features/map/map-route.component').then((m) => m.MapRouteComponent),
   },
   {
     path: 'search',

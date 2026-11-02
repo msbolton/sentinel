@@ -124,7 +124,7 @@ import { levelsUpTo, normalizeClearance } from '../../shared/models/classificati
       color: #b0b0cc;
 
       code {
-        font-family: 'JetBrains Mono', 'Fira Code', monospace;
+        font-family: var(--font-mono);
         color: #e0e0e0;
       }
     }
@@ -219,7 +219,7 @@ import { levelsUpTo, normalizeClearance } from '../../shared/models/classificati
     }
 
     .monospace {
-      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-family: var(--font-mono);
     }
 
     .classification-badge {

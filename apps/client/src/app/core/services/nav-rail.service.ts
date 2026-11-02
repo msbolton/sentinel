@@ -1,4 +1,3 @@
-import { Injectable, signal } from '@angular/core';
 import { IconName } from '../../shared/components/icon.component';
 
 export interface NavItem {
@@ -45,11 +44,6 @@ export const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
-export const RAIL_EXPANDED_PX = 208;
-export const RAIL_COLLAPSED_PX = 56;
-
-const STORAGE_KEY = 'sentinel-nav-expanded';
-
 const ROUTE_BY_KEY = new Map(NAV_GROUPS.flatMap((g) => g.items).map((item) => [item.key, item.path]));
 
 type ShortcutEvent = Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey' | 'target'>;
@@ -68,33 +62,4 @@ function isEditable(target: EventTarget | null): boolean {
   if ((target as HTMLElement).isContentEditable) return true;
   const editable = target.closest('[contenteditable]');
   return editable !== null && editable.getAttribute('contenteditable') !== 'false';
-}
-
-/**
- * Whether the navigation rail shows labels (208px) or icons only (56px).
- * The choice is this browser's and persists. The width is published as the
- * --sidebar-width custom property the shell's layout is built on.
- */
-@Injectable({ providedIn: 'root' })
-export class NavRailService {
-  readonly expanded = signal(localStorage.getItem(STORAGE_KEY) !== 'false');
-
-  constructor() {
-    this.applyWidth();
-  }
-
-  toggle(): void {
-    this.setExpanded(!this.expanded());
-  }
-
-  setExpanded(expanded: boolean): void {
-    this.expanded.set(expanded);
-    localStorage.setItem(STORAGE_KEY, String(expanded));
-    this.applyWidth();
-  }
-
-  private applyWidth(): void {
-    const px = this.expanded() ? RAIL_EXPANDED_PX : RAIL_COLLAPSED_PX;
-    document.documentElement.style.setProperty('--sidebar-width', `${px}px`);
-  }
 }

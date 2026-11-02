@@ -102,8 +102,8 @@ import { AuthService } from '../../core/services/auth.service';
       inset: 0;
       pointer-events: none;
       background-image:
-        linear-gradient(rgba(59, 130, 246, 0.07) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(59, 130, 246, 0.07) 1px, transparent 1px);
+        linear-gradient(rgba(111, 227, 207, 0.07) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(111, 227, 207, 0.07) 1px, transparent 1px);
       background-size: 60px 60px;
     }
 
@@ -119,7 +119,7 @@ import { AuthService } from '../../core/services/auth.service';
     .radar-circle {
       position: absolute;
       border-radius: 50%;
-      border: 1px solid rgba(59, 130, 246, 0.1);
+      border: 1px solid rgba(111, 227, 207, 0.1);
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
@@ -133,7 +133,7 @@ import { AuthService } from '../../core/services/auth.service';
     .radar-circle-2 {
       width: 350px;
       height: 350px;
-      border-color: rgba(59, 130, 246, 0.15);
+      border-color: rgba(111, 227, 207, 0.15);
     }
 
     .radar-circle-3 {
@@ -152,7 +152,7 @@ import { AuthService } from '../../core/services/auth.service';
       background: conic-gradient(
         from 0deg,
         transparent 0deg,
-        rgba(59, 130, 246, 0.08) 30deg,
+        rgba(111, 227, 207, 0.08) 30deg,
         transparent 60deg
       );
       animation: sweep 8s linear infinite;
@@ -176,8 +176,8 @@ import { AuthService } from '../../core/services/auth.service';
       left: 18%;
       width: 6px;
       height: 6px;
-      background: #3b82f6;
-      box-shadow: 0 0 12px 4px rgba(59, 130, 246, 0.4);
+      background: var(--accent-cyan);
+      box-shadow: 0 0 12px 4px rgba(111, 227, 207, 0.4);
       animation-delay: 0s;
     }
 
@@ -206,8 +206,8 @@ import { AuthService } from '../../core/services/auth.service';
       left: 25%;
       width: 5px;
       height: 5px;
-      background: #3b82f6;
-      box-shadow: 0 0 12px 4px rgba(59, 130, 246, 0.4);
+      background: var(--accent-cyan);
+      box-shadow: 0 0 12px 4px rgba(111, 227, 207, 0.4);
       animation-delay: 0.5s;
     }
 
@@ -223,7 +223,7 @@ import { AuthService } from '../../core/services/auth.service';
       height: 2px;
       border-radius: 50%;
       pointer-events: none;
-      background: rgba(59, 130, 246, 0.4);
+      background: rgba(111, 227, 207, 0.4);
       animation: drift 12s ease-in-out infinite;
     }
 
@@ -253,11 +253,11 @@ import { AuthService } from '../../core/services/auth.service';
       width: 340px;
       padding: 40px 36px;
       background: rgba(8, 16, 38, 0.92);
-      border: 1px solid rgba(59, 130, 246, 0.2);
+      border: 1px solid rgba(111, 227, 207, 0.2);
       border-radius: 12px;
       text-align: center;
       box-shadow:
-        0 0 60px rgba(59, 130, 246, 0.08),
+        0 0 60px rgba(111, 227, 207, 0.08),
         0 25px 80px rgba(0, 0, 0, 0.5);
       backdrop-filter: blur(12px);
       animation: cardAppear 0.6s ease-out;
@@ -281,11 +281,11 @@ import { AuthService } from '../../core/services/auth.service';
       height: 72px;
       margin: 0 auto 18px;
       border-radius: 16px;
-      box-shadow: 0 0 28px rgba(37, 99, 235, 0.45), 0 0 6px rgba(59, 130, 246, 0.6);
+      box-shadow: 0 0 28px rgba(111, 227, 207, 0.45), 0 0 6px rgba(111, 227, 207, 0.6);
     }
 
     .app-title {
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 28px;
       font-weight: 700;
       letter-spacing: 6px;
@@ -294,7 +294,7 @@ import { AuthService } from '../../core/services/auth.service';
     }
 
     .app-subtitle {
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 12px;
       color: rgba(255, 255, 255, 0.4);
       margin: 6px 0 0;
@@ -304,7 +304,7 @@ import { AuthService } from '../../core/services/auth.service';
     .divider {
       width: 100%;
       height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.3), transparent);
+      background: linear-gradient(90deg, transparent, rgba(111, 227, 207, 0.3), transparent);
       margin: 28px 0;
     }
 
@@ -320,7 +320,7 @@ import { AuthService } from '../../core/services/auth.service';
 
     .input-label {
       display: block;
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 10px;
       font-weight: 600;
       letter-spacing: 1.5px;
@@ -332,10 +332,10 @@ import { AuthService } from '../../core/services/auth.service';
       width: 100%;
       padding: 11px 14px;
       background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(59, 130, 246, 0.2);
+      border: 1px solid rgba(111, 227, 207, 0.2);
       border-radius: 8px;
       color: rgba(255, 255, 255, 0.9);
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 14px;
       outline: none;
       transition: border-color 0.2s ease, background 0.2s ease;
@@ -347,7 +347,7 @@ import { AuthService } from '../../core/services/auth.service';
     }
 
     .login-input:focus {
-      border-color: rgba(59, 130, 246, 0.5);
+      border-color: rgba(111, 227, 207, 0.5);
       background: rgba(255, 255, 255, 0.08);
     }
 
@@ -357,7 +357,7 @@ import { AuthService } from '../../core/services/auth.service';
     }
 
     .error-message {
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 12px;
       color: #f87171;
       margin: 0;
@@ -367,27 +367,27 @@ import { AuthService } from '../../core/services/auth.service';
     .sign-in-btn {
       width: 100%;
       padding: 13px 24px;
-      background: linear-gradient(135deg, #3b82f6, #2563eb);
-      color: white;
+      background: var(--accent-cyan);
+      color: var(--bg-primary);
       border: none;
       border-radius: 8px;
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 14px;
       font-weight: 600;
       letter-spacing: 2px;
       cursor: pointer;
-      box-shadow: 0 4px 20px rgba(59, 130, 246, 0.3);
+      box-shadow: 0 4px 20px rgba(111, 227, 207, 0.3);
       transition: box-shadow 0.2s ease, transform 0.15s ease;
     }
 
     .sign-in-btn:hover:not(:disabled) {
-      box-shadow: 0 6px 28px rgba(59, 130, 246, 0.45);
+      box-shadow: 0 6px 28px rgba(111, 227, 207, 0.45);
       transform: translateY(-1px);
     }
 
     .sign-in-btn:active:not(:disabled) {
       transform: translateY(0);
-      box-shadow: 0 2px 12px rgba(59, 130, 246, 0.3);
+      box-shadow: 0 2px 12px rgba(111, 227, 207, 0.3);
     }
 
     .sign-in-btn:disabled {
@@ -396,7 +396,7 @@ import { AuthService } from '../../core/services/auth.service';
     }
 
     .auth-notice {
-      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 11px;
       color: rgba(255, 255, 255, 0.25);
       margin: 16px 0 0;
@@ -404,12 +404,12 @@ import { AuthService } from '../../core/services/auth.service';
     }
 
     .request-link {
-      color: rgba(59, 130, 246, 0.8);
+      color: rgba(111, 227, 207, 0.8);
       text-decoration: none;
     }
 
     .request-link:hover {
-      color: rgba(59, 130, 246, 1);
+      color: rgba(111, 227, 207, 1);
       text-decoration: underline;
     }
   `],

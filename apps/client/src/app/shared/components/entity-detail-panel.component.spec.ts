@@ -393,6 +393,20 @@ describe('EntityDetailPanelComponent', () => {
     });
   });
 
+  describe('track card', () => {
+    afterEach(() => document.documentElement.style.removeProperty('--track-card-height'));
+
+    it('publishes its height for the track stack while shown, and takes it back when hidden', () => {
+      fixture.componentRef.setInput('entity', makeEntity());
+      fixture.detectChanges();
+      expect(document.documentElement.style.getPropertyValue('--track-card-height')).not.toBe('');
+
+      fixture.componentRef.setInput('entity', null);
+      fixture.detectChanges();
+      expect(document.documentElement.style.getPropertyValue('--track-card-height')).toBe('');
+    });
+  });
+
   describe('satellite orbit section', () => {
     const line1 = '1 25544U 98067A   26063.86671769  .00009014  00000+0  17477-3 0  9999';
     const line2 = '2 25544  51.6315  96.2009 0008177 157.5272 202.6076 15.48447334555585';

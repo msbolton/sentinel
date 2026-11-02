@@ -1,4 +1,4 @@
-import { formatAltitude, formatCoordinate } from './geo-format';
+import { formatAltitude, formatCoordinate, formatMgrs } from './geo-format';
 
 describe('formatCoordinate', () => {
   it('writes latitude with four decimals and a hemisphere', () => {
@@ -34,5 +34,16 @@ describe('formatAltitude', () => {
     expect(formatAltitude(null)).toBe('—');
     expect(formatAltitude(undefined)).toBe('—');
     expect(formatAltitude(Number.NaN)).toBe('—');
+  });
+});
+
+describe('formatMgrs', () => {
+  it('formats MGRS with spaced groups at 10 m precision', () => {
+    expect(formatMgrs(12.055, 44.8144)).toBe('38P MU 7979 3264');
+  });
+
+  it('returns a dash outside the UTM bands instead of throwing', () => {
+    expect(formatMgrs(85, 10)).toBe('—');
+    expect(formatMgrs(-85, 10)).toBe('—');
   });
 });

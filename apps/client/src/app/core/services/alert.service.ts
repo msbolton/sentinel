@@ -1,6 +1,6 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
-import { BehaviorSubject, Observable, Subscription, map, scan, startWith } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, Subscription, map, merge, scan, startWith } from 'rxjs';
 import { WebSocketService } from './websocket.service';
 import {
   Alert,
@@ -14,8 +14,10 @@ export class AlertService implements OnDestroy {
   private readonly wsSubscription: Subscription;
 
   private readonly unacknowledgedCountSubject = new BehaviorSubject<number>(0);
+  /** Alerts this client acknowledged, so live views drop them without waiting for the server. */
+  private readonly localUpdates = new Subject<Alert>();
 
-  /** Real-time alert stream from WebSocket */
+  /** Real-time alert stream: the WebSocket's alerts plus this client's acknowledgements. */
   readonly alertStream$: Observable<Alert>;
 
   /** Count of unacknowledged alerts */
@@ -25,7 +27,7 @@ export class AlertService implements OnDestroy {
     private readonly http: HttpClient,
     private readonly wsService: WebSocketService,
   ) {
-    this.alertStream$ = this.wsService.alertStream$;
+    this.alertStream$ = merge(this.wsService.alertStream$, this.localUpdates);
 
     // Track unacknowledged count from real-time alerts
     this.wsSubscription = this.wsService.alertStream$.pipe(
@@ -67,6 +69,8 @@ export class AlertService implements OnDestroy {
         if (current > 0) {
           this.unacknowledgedCountSubject.next(current - 1);
         }
+        // The server answers with the updated alert; mark it acknowledged either way.
+        this.localUpdates.next({ ...(alert ?? {}), id, acknowledged: true } as Alert);
         return alert;
       }),
     );

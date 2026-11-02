@@ -1,5 +1,6 @@
 import { formatAltitude } from '../../shared/geo-format';
 import { Entity, EntityType } from '../../shared/models/entity.model';
+import { monoFont } from '../../shared/mono-font';
 
 export interface GeoPoint {
   lat: number;
@@ -46,5 +47,7 @@ export const DROP_LINE_CONFIG = {
   color: '#f59e0b',
   width: 1.5,
   dashLength: 12,
-  labelFont: '11px JetBrains Mono, monospace',
+  get labelFont(): string {
+    return `11px ${monoFont()}`;
+  },
 };

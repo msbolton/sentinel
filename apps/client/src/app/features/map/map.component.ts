@@ -34,6 +34,10 @@ import { BuildingsService } from '../../core/services/buildings.service';
 import { TerrainService } from '../../core/services/terrain.service';
 import { LayerVisibilityService } from '../../core/services/layer-visibility.service';
 import { MapViewportService } from '../../core/services/map-viewport.service';
+import { SelectionService } from '../../core/services/selection.service';
+import { isPanelRoute } from '../../core/services/route-classes';
+import { MapCursorService } from '../../core/services/map-cursor.service';
+import type { LatLon } from '../../shared/geo-math';
 import { Location } from '../../shared/models/location.model';
 import {
   configureCesium,
@@ -84,6 +88,8 @@ import { isFromMilitaryFeed, sidcFor, symbolDataUrl } from './milstd2525';
 import { locationDotDataUrl } from './location-dot';
 import { GeofenceDrawTool } from './geofence-draw';
 import { GeofenceToolbarComponent } from './geofence-toolbar.component';
+import { SelectionReticleComponent } from './selection-reticle.component';
+import { LayersPillComponent } from '../../shared/components/layers-pill.component';
 import { DrawSession, addPoint, canFinish, draftFromSession, finishShape, newSession, setAnchor, setCursor, setRadius } from './geofence-draw-state';
 import { GeofenceConfig, GeofenceShape, LngLat } from '../../shared/models/geofence.model';
 
@@ -108,6 +114,7 @@ function isLightColor(hex: string): boolean {
 /** All satellites are re-propagated this often; the selected one every frame. */
 const SAT_STEP_INTERVAL_MS = 250;
 import { environment } from '../../../environments/environment';
+import { monoFont } from '../../shared/mono-font';
 
 // Configure Cesium before imports
 configureCesium();
@@ -176,7 +183,7 @@ const GUEST_LOCATION_TIMEOUT_MS = 10_000;
   selector: 'app-map',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, IconComponent, GeofenceToolbarComponent],
+  imports: [CommonModule, FormsModule, EntityDetailPanelComponent, IconComponent, GeofenceToolbarComponent, SelectionReticleComponent, LayersPillComponent],
   templateUrl: './map.component.html',
   styleUrls: ['./map.component.scss'],
 })
@@ -185,7 +192,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   cesiumContainer!: ElementRef<HTMLDivElement>;
 
   viewer: any = null;
-  selectedEntity = signal<Entity | null>(null);
+  private readonly selection = inject(SelectionService);
+  private readonly mapCursor = inject(MapCursorService);
+  /** The selected track: the shared SelectionService's own writable signal. */
+  selectedEntity = this.selection.entity;
   /** The bearing line last clicked (bearingKeyOf), for the panel to highlight; null after any other click. */
   readonly selectedBearingKey = signal<string | null>(null);
   showLayerPanel = signal<boolean>(false);
@@ -251,6 +261,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private drLastTickMs = 0;
   private drScratch: any = null;
   private themePostProcessStage: any = null;
+  /** Removes the postRender listener that reports the selected track's screen point. */
+  private removeScreenPointListener: (() => void) | null = null;
+  private removeCanvasLeaveListener: (() => void) | null = null;
 
   /** Cached ageout configs fetched from backend, refreshed every 60s */
   private ageoutConfigs: Array<{ sourceType: string | null; staleThresholdMs: number }> = [];
@@ -429,19 +442,22 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.ngZone.runOutsideAngular(() => untracked(() => this.syncDropLine(selected)));
     });
 
-    // Track whether a panel route is active (anything other than /map or /)
+    // A new selection needs a frame so postRender reports its screen point (request-render mode).
+    effect(() => {
+      this.selectedEntity();
+      untracked(() => this.scheduleRender());
+    });
+
+    // Track whether a right-hand route panel is open (not the map, a page or the timeline)
     const routerSub = this.router.events.pipe(
       filter((e): e is NavigationEnd => e instanceof NavigationEnd),
     ).subscribe((e) => {
-      const url = e.urlAfterRedirects ?? e.url;
-      const isPanelRoute = url !== '/map' && url !== '/' && url !== '';
-      this.panelRouteActive.set(isPanelRoute);
+      this.panelRouteActive.set(isPanelRoute(e.urlAfterRedirects ?? e.url));
     });
     this.subscriptions.add(routerSub);
 
     // Check initial route
-    const currentUrl = this.router.url;
-    this.panelRouteActive.set(currentUrl !== '/map' && currentUrl !== '/' && currentUrl !== '');
+    this.panelRouteActive.set(isPanelRoute(this.router.url));
   }
 
   async ngAfterViewInit(): Promise<void> {
@@ -481,6 +497,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // setView, which does not fire moveEnd. A later flyTo (geolocation)
     // fires moveEnd and refreshes it.
     this.sendViewportBounds();
+    this.publishCameraAltitude(); // the HUD has a value before the first move
   }
 
   ngOnDestroy(): void {
@@ -501,6 +518,15 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.deadReckoning.clear();
         this.satellites.clear();
     this.subscriptions.unsubscribe();
+    this.removeScreenPointListener?.();
+    this.removeScreenPointListener = null;
+    this.removeCanvasLeaveListener?.();
+    this.removeCanvasLeaveListener = null;
+    // Only the map that owns a viewer owns the shared selection.
+    if (this.viewer) {
+      this.selection.screenPoint.set(null);
+      this.selection.entity.set(null);
+    }
     if (this.viewer && !this.viewer.isDestroyed()) {
       this.viewer.destroy();
     }
@@ -534,6 +560,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
     this.ngZone.runOutsideAngular(() => {
       this.viewer = new Cesium.Viewer(container, viewerOptions);
+      // Mute the base imagery slightly so tracks and overlays read first.
+      const base = this.viewer.imageryLayers?.get(0);
+      if (base) base.saturation = 0.8;
       this.setupClusterSources();
       this.geofenceLayer = new GeofenceLayer(this.viewer, Cesium);
       this.emplacementLayer = new EmplacementLayer(this.viewer, Cesium);
@@ -543,10 +572,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.resyncEmplacements();
       this.flyToFocus();
       this.flyToDemoFocus();
+      this.removeScreenPointListener = this.viewer.scene.postRender.addEventListener(() => this.updateSelectionScreenPoint());
 
       // Set dark atmosphere
-      this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
-      this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a0e17');
+      this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#050607');
+      this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#050607');
 
       // Disable expensive visual features
       if (this.viewer.scene.sun) this.viewer.scene.sun.show = false;
@@ -589,11 +619,43 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     });
   }
 
+  /**
+   * Reports where the selected track is drawn, in window pixels: its Cesium
+   * entity's current position (dead-reckoned or propagated), else its last fix.
+   * Null with no selection or position, behind the globe, or behind the camera.
+   * Only changes are set.
+   */
+  private updateSelectionScreenPoint(): void {
+    const selected = this.selectedEntity();
+    let next: { x: number; y: number } | null = null;
+    if (selected && this.viewer && this.Cesium) {
+      const Cesium = this.Cesium;
+      const scene = this.viewer.scene;
+      const p = selected.position;
+      const world =
+        this.entityMap.get(selected.id)?.position?.getValue(this.viewer.clock.currentTime) ??
+        (p ? Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude, p.altitude ?? 0) : undefined);
+      if (world && new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84, scene.camera.positionWC).isPointVisible(world)) {
+        const win = Cesium.SceneTransforms.worldToWindowCoordinates(scene, world);
+        if (win) next = { x: win.x, y: win.y };
+      }
+    }
+    const prev = this.selection.screenPoint();
+    if (prev === next || (prev && next && prev.x === next.x && prev.y === next.y)) return;
+    this.selection.screenPoint.set(next);
+  }
+
   private setupEventHandlers(): void {
     if (!this.viewer || !this.Cesium) return;
 
     const Cesium = this.Cesium;
     const handler = new Cesium.ScreenSpaceEventHandler(this.viewer.scene.canvas);
+
+    // Leaving the map clears the HUD cursor readout; MOUSE_MOVE never fires off the canvas.
+    const canvas: HTMLCanvasElement = this.viewer.scene.canvas;
+    const onLeave = () => this.mapCursor.setCursor(null);
+    canvas.addEventListener('mouseleave', onLeave);
+    this.removeCanvasLeaveListener = () => canvas.removeEventListener('mouseleave', onLeave);
 
     // Left click - select entity
     handler.setInputAction((click: any) => {
@@ -676,14 +738,15 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       if (canFinish(trimmed).ok) this.ngZone.run(() => { this.drawSession.set(trimmed); this.finishDrawing(); });
     }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
     handler.setInputAction((move: any) => {
+      // One pick feeds the HUD readout and the drag/draw below, which keep reading it mid-gesture.
+      const p = this.pickLngLat(move.endPosition);
+      this.mapCursor.setCursor(p ? { lat: p[1], lon: p[0] } : null);
       if (this.handleDrag) {
-        const p = this.pickLngLat(move.endPosition);
         if (p) this.handleDrag.config = this.geofenceLayer?.moveHandle(this.handleDrag.zoneId, this.handleDrag.index, p) ?? null;
         return;
       }
       const session = this.drawSession();
       if (!session) return;
-      const p = this.pickLngLat(move.endPosition);
       this.drawSession.set(setCursor(session, p));
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
@@ -728,7 +791,12 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.viewer.camera.moveEnd.addEventListener(() => {
       this.cameraMovedSubject.next();
       this.saveCameraPosition();
+      this.publishCameraAltitude();
     });
+  }
+
+  private publishCameraAltitude(): void {
+    this.mapCursor.setCameraAltitude(this.viewer?.camera?.positionCartographic?.height ?? null);
   }
 
   private sendViewportBounds(): void {
@@ -886,8 +954,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       });
       this.viewer.scene.postProcessStages.add(this.themePostProcessStage);
     } else {
-      this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0a0e17');
-      this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a0e17');
+      this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#050607');
+      this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#050607');
     }
 
     this.viewer.scene.requestRender();
@@ -1074,7 +1142,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         ellipse: signalEllipse,
         label: {
           text: labelText,
-          font: '12px JetBrains Mono, monospace',
+          font: `12px ${monoFont()}`,
           fillColor: Cesium.Color.WHITE.withAlpha(billboardAlpha),
           outlineColor: Cesium.Color.BLACK,
           outlineWidth: 2,
@@ -1953,16 +2021,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   }
 
   flyToEntity(entity: Entity): void {
-    if (!this.viewer || !this.Cesium || !entity.position) return;
+    if (!entity.position) return;
+    this.flyCameraTo({ lat: entity.position.latitude, lon: entity.position.longitude });
+  }
 
-    const Cesium = this.Cesium;
+  /** The camera fly used for a track: 60 km above it, over 1.2 s. */
+  private flyCameraTo(point: LatLon): void {
+    if (!this.viewer || !this.Cesium) return;
     this.viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(
-        entity.position.longitude,
-        entity.position.latitude,
-        50000,
-      ),
-      duration: 1.0,
+      destination: this.Cesium.Cartesian3.fromDegrees(point.lon, point.lat, 60_000),
+      duration: 1.2,
     });
   }
 
@@ -2266,6 +2334,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       this.flyToLocation(location);
     });
     this.subscriptions.add(sub);
+    this.subscriptions.add(
+      this.selection.fly$.subscribe((point) => this.ngZone.runOutsideAngular(() => this.flyCameraTo(point))),
+    );
   }
 
   private flyToLocation(location: Location): void {

@@ -1,6 +1,7 @@
 import { GeofenceConfig, GeofenceDraft, GeofenceRule, LngLat } from '../../shared/models/geofence.model';
 import { LABEL_SCALE_BY_DISTANCE, LABEL_TRANSLUCENCY_BY_DISTANCE } from './cesium-config';
 import { circlePolygon, formatDistance, geodesicDistanceM } from './geofence-geometry';
+import { monoFont } from '../../shared/mono-font';
 
 /** Where a ring's anchor track is drawn right now, or null when it is not on the map. */
 export type AnchorPosition = (entityId: string) => LngLat | null;
@@ -20,7 +21,7 @@ export function zoneEntityOptions(zone: GeofenceRule, selected: boolean, Cesium:
   const color = Cesium.Color.fromCssColorString(zone.config.color);
   const label = (text: string) => ({
     text,
-    font: '11px JetBrains Mono, monospace',
+    font: `11px ${monoFont()}`,
     fillColor: color,
     outlineColor: Cesium.Color.BLACK,
     outlineWidth: 2,

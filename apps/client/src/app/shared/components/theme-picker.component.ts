@@ -2,10 +2,12 @@ import {
   Component,
   ChangeDetectionStrategy,
   signal,
+  input,
   inject,
   HostListener,
   ElementRef,
 } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
 import { ThemeService, ThemePreset } from '../../core/services/theme.service';
 
 interface ThemeOption {
@@ -17,43 +19,65 @@ interface ThemeOption {
 @Component({
   selector: 'app-theme-picker',
   standalone: true,
+  imports: [NgTemplateOutlet],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="pill-container" [class.expanded]="expanded()">
-      <!-- Pill / Header bar -->
-      <button class="pill-header" (click)="toggle()">
-        <span class="pill-label">STYLE PRESETS</span>
-        <span class="pill-rule" [class.visible]="expanded()"></span>
-        <span class="pill-toggle-btn">{{ expanded() ? '−' : '+' }}</span>
-      </button>
-
-      <!-- Expanded panel -->
-      @if (expanded()) {
-        <div class="pill-panel">
-          @for (option of themeOptions; track option.value) {
-            <button
-              class="theme-option"
-              [class.active]="currentTheme() === option.value"
-              (click)="selectTheme(option.value)">
-              <span class="theme-swatch" [style.background]="option.swatch">
-                @if (currentTheme() === option.value) {
-                  <svg class="swatch-check" width="10" height="10" viewBox="0 0 24 24"
-                       fill="none" stroke="currentColor" stroke-width="3"
-                       stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="20 6 9 17 4 12"/>
-                  </svg>
-                }
-              </span>
-              <span class="theme-name">{{ option.label }}</span>
-            </button>
-          }
-        </div>
+    <ng-template #options>
+      @for (option of themeOptions; track option.value) {
+        <button
+          class="theme-option"
+          [class.active]="currentTheme() === option.value"
+          (click)="selectTheme(option.value)">
+          <span class="theme-swatch" [style.background]="option.swatch">
+            @if (currentTheme() === option.value) {
+              <svg class="swatch-check" width="10" height="10" viewBox="0 0 24 24"
+                   fill="none" stroke="currentColor" stroke-width="3"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            }
+          </span>
+          <span class="theme-name">{{ option.label }}</span>
+        </button>
       }
-    </div>
+    </ng-template>
+
+    @if (inline()) {
+      <div class="inline-list">
+        <ng-container *ngTemplateOutlet="options"></ng-container>
+      </div>
+    } @else {
+      <div class="pill-container" [class.expanded]="expanded()">
+        <!-- Pill / Header bar -->
+        <button class="pill-header" (click)="toggle()">
+          <span class="pill-label">STYLE PRESETS</span>
+          <span class="pill-rule" [class.visible]="expanded()"></span>
+          <span class="pill-toggle-btn">{{ expanded() ? '−' : '+' }}</span>
+        </button>
+
+        <!-- Expanded panel -->
+        @if (expanded()) {
+          <div class="pill-panel">
+            <ng-container *ngTemplateOutlet="options"></ng-container>
+          </div>
+        }
+      </div>
+    }
   `,
   styles: [`
     :host {
       display: block;
+    }
+
+    .inline-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-width: 280px;
+
+      .theme-option {
+        border: 1px solid var(--border-color);
+      }
     }
 
     .pill-container {
@@ -189,6 +213,9 @@ interface ThemeOption {
 export class ThemePickerComponent {
   private readonly themeService = inject(ThemeService);
   private readonly elementRef = inject(ElementRef);
+
+  /** When true, render only the option list (no pill header), e.g. inside Settings. */
+  readonly inline = input(false);
 
   readonly expanded = signal(false);
   readonly currentTheme = this.themeService.currentTheme;

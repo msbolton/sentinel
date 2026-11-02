@@ -1,4 +1,4 @@
-import { Component, computed, CUSTOM_ELEMENTS_SCHEMA, DestroyRef, effect, inject, input, output, signal, untracked } from '@angular/core';
+import { afterRenderEffect, Component, computed, CUSTOM_ELEMENTS_SCHEMA, DestroyRef, effect, ElementRef, inject, input, output, signal, untracked, viewChild } from '@angular/core';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { CommonModule } from '@angular/common';
 import { AnalyticsService } from '../../core/services/analytics.service';
@@ -62,7 +62,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
   schemas: [CUSTOM_ELEMENTS_SCHEMA],
   template: `
     @if (entity(); as e) {
-      <aside class="detail-panel">
+      <aside class="detail-panel" #card>
         <!-- Header: who, what, and how fresh -->
         <div class="panel-header">
           <div class="header-top">
@@ -683,7 +683,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
                     <iframe
                       title="3D model"
                       [srcdoc]="modelViewerHtml()"
-                      style="width:100%;height:200px;display:block;border:none;border-radius:8px;background:transparent"
+                      style="width:100%;height:200px;display:block;border:none;border-radius:0;background:transparent"
                     ></iframe>
                   </div>
                 }
@@ -854,27 +854,29 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
     }
   `,
   styles: [`
+    /* The track card: a translucent glass readout at the top right. */
     .detail-panel {
       position: absolute;
-      top: 12px;
-      right: 12px;
-      bottom: calc(var(--status-bar-height, 28px) + 12px);
-      width: var(--panel-width, 600px);
+      top: 92px;
+      right: 16px;
+      bottom: auto;
+      width: 320px;
+      max-height: 60vh;
       z-index: 100;
       background: var(--bg-panel);
-      backdrop-filter: blur(20px);
-      border: 1px solid var(--border-color);
-      border-radius: var(--radius-lg);
-      box-shadow: var(--shadow-lg);
+      backdrop-filter: blur(2px);
+      border: 1px solid var(--border-active);
+      border-radius: 0;
+      box-shadow: none;
+      animation: none;
       display: flex;
       flex-direction: column;
-      animation: slideInRight 250ms ease;
       overflow: hidden;
+      font-family: var(--font-mono);
     }
 
-    @keyframes slideInRight {
-      from { transform: translateX(100%); opacity: 0; }
-      to   { transform: translateX(0);    opacity: 1; }
+    .chip {
+      border-radius: 0;
     }
 
     /* --- Header --- */
@@ -893,9 +895,10 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
     }
 
     .entity-name {
-      font-size: 1rem;
-      font-weight: 600;
-      color: var(--text-primary);
+      font: 500 13px var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--accent-cyan);
       margin: 0;
       min-width: 0;
       overflow: hidden;
@@ -915,7 +918,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      border-radius: var(--radius-sm);
+      border-radius: 0;
       background: transparent;
       color: var(--text-secondary);
       transition: all var(--transition-fast);
@@ -946,7 +949,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       align-items: center;
       gap: 6px;
       padding: 2px 8px 2px 6px;
-      border-radius: 100px;
+      border-radius: 0;
       font-size: 0.7rem;
       font-weight: 600;
       white-space: nowrap;
@@ -966,22 +969,24 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
 
     /* --- Classification banner --- */
     .classification-banner {
-      height: 20px;
+      height: 18px;
       display: flex;
       align-items: center;
       justify-content: center;
+      white-space: nowrap;
       font-family: var(--font-mono);
-      font-size: 0.65rem;
+      font-size: 10px;
       font-weight: 700;
-      letter-spacing: 0.12em;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
-      border-top: 1px solid transparent;
-      border-bottom: 1px solid transparent;
+      background: transparent;
+      border-top: 1px solid var(--border-color);
+      border-bottom: 1px solid var(--border-color);
 
-      &.UNCLASSIFIED { background: color-mix(in srgb, var(--accent-green) 12%, transparent); color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 25%, transparent); }
-      &.CONFIDENTIAL { background: color-mix(in srgb, var(--accent-blue) 12%, transparent); color: var(--accent-blue); border-color: color-mix(in srgb, var(--accent-blue) 25%, transparent); }
-      &.SECRET { background: color-mix(in srgb, var(--accent-red) 12%, transparent); color: var(--accent-red); border-color: color-mix(in srgb, var(--accent-red) 25%, transparent); }
-      &.TOP_SECRET { background: color-mix(in srgb, var(--accent-yellow) 12%, transparent); color: var(--accent-yellow); border-color: color-mix(in srgb, var(--accent-yellow) 25%, transparent); }
+      &.UNCLASSIFIED { color: var(--accent-green); }
+      &.CONFIDENTIAL { color: var(--accent-blue); }
+      &.SECRET { color: var(--accent-red); }
+      &.TOP_SECRET { color: var(--accent-yellow); }
     }
 
     .panel-body {
@@ -1002,7 +1007,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
 
     .fact {
       padding: 10px 12px;
-      border-radius: var(--radius-md);
+      border-radius: 0;
       background: var(--bg-primary);
       border: 1px solid var(--border-color);
       display: flex;
@@ -1013,7 +1018,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
 
     .fact-label {
       font-family: var(--font-mono);
-      font-size: 0.65rem;
+      font-size: 11px;
       letter-spacing: 0.1em;
       text-transform: uppercase;
       color: var(--text-muted);
@@ -1182,7 +1187,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       color: var(--text-secondary);
       background: transparent;
       border: 1px solid var(--border-color, rgba(148, 163, 184, 0.3));
-      border-radius: 4px;
+      border-radius: 0;
       cursor: pointer;
 
       &.active {
@@ -1218,7 +1223,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
     .tle-lines {
       margin: 4px 0 0;
       padding: 6px 8px;
-      border-radius: 4px;
+      border-radius: 0;
       background: var(--bg-primary);
       font-size: 0.66rem;
       line-height: 1.4;
@@ -1241,7 +1246,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
       justify-content: space-between;
       gap: 8px;
       padding: 3px 6px;
-      border-radius: 4px;
+      border-radius: 0;
       font-size: 0.78rem;
       cursor: pointer;
 
@@ -1290,7 +1295,7 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
     .finding-item {
       padding: 8px 10px;
       border: 1px solid color-mix(in srgb, var(--text-muted) 35%, transparent);
-      border-radius: var(--radius-md);
+      border-radius: 0;
       background: color-mix(in srgb, var(--text-muted) 7%, transparent);
 
       &.critical { border-color: color-mix(in srgb, var(--accent-red) 35%, transparent); background: color-mix(in srgb, var(--accent-red) 7%, transparent); }
@@ -1450,26 +1455,12 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
 
     .chip-affiliation-id {
       font-size: 0.7rem;
-      &.friendly {
-        background: color-mix(in srgb, var(--accent-blue) 15%, transparent);
-        color: var(--accent-blue);
-        border-color: color-mix(in srgb, var(--accent-blue) 30%, transparent);
-      }
-      &.hostile {
-        background: color-mix(in srgb, var(--accent-red) 15%, transparent);
-        color: var(--accent-red);
-        border-color: color-mix(in srgb, var(--accent-red) 30%, transparent);
-      }
-      &.neutral {
-        background: color-mix(in srgb, var(--accent-green) 15%, transparent);
-        color: var(--accent-green);
-        border-color: color-mix(in srgb, var(--accent-green) 30%, transparent);
-      }
-      &.unknown {
-        background: color-mix(in srgb, var(--text-muted) 15%, transparent);
-        color: var(--text-muted);
-        border-color: color-mix(in srgb, var(--text-muted) 30%, transparent);
-      }
+      background: transparent;
+      border-color: var(--border-color);
+      border-radius: 0;
+      color: var(--accent-cyan);
+      &.hostile { color: var(--accent-red); }
+      &.unknown { color: var(--accent-yellow); }
     }
 
     .chip-op-status {
@@ -1638,6 +1629,8 @@ export class EntityDetailPanelComponent {
   /** undefined while loading, null when the service has no baseline yet. */
   protected baseline = signal<EntityBaseline | null | undefined>(undefined);
   protected findings = signal<Finding[]>([]);
+  /** The track card, measured into --track-card-height so the track stack sits below it. */
+  private readonly card = viewChild<ElementRef<HTMLElement>>('card');
   protected canReview = computed(() => this.auth.hasAnyRole('sentinel-analyst', 'sentinel-admin'));
 
   /** Wall clock, ticking each second, so the freshness label keeps counting. */
@@ -1654,6 +1647,24 @@ export class EntityDetailPanelComponent {
   constructor() {
     const tick = setInterval(() => this.now.set(Date.now()), 1000);
     this.destroyRef.onDestroy(() => clearInterval(tick));
+
+    // Publish the card's height while it is shown, so the track stack can sit
+    // under it; take it back when the card hides or the panel goes away.
+    const rootStyle = document.documentElement.style;
+    afterRenderEffect((onCleanup) => {
+      const el = this.card()?.nativeElement;
+      if (!el) {
+        rootStyle.removeProperty('--track-card-height');
+        return;
+      }
+      const publish = () => rootStyle.setProperty('--track-card-height', `${el.offsetHeight}px`);
+      publish();
+      if (typeof ResizeObserver === 'undefined') return;
+      const observer = new ResizeObserver(publish);
+      observer.observe(el);
+      onCleanup(() => observer.disconnect());
+    });
+    this.destroyRef.onDestroy(() => rootStyle.removeProperty('--track-card-height'));
 
     // These two follow which entity is shown, not its every update: the map
     // hands the panel a newer copy of the selection with each fix.
@@ -2005,12 +2016,12 @@ export class EntityDetailPanelComponent {
     return `${Number(powerDbm.toFixed(1))} dBm`;
   }
 
+  /** The affiliation chip's colour class: red for a threat, amber while undecided, cyan otherwise. */
   protected affiliationColor = computed(() => {
     switch (this.entity()?.affiliation) {
-      case 'FRIENDLY': case 'ASSUMED_FRIENDLY': return 'friendly';
       case 'HOSTILE': case 'SUSPECT': return 'hostile';
-      case 'NEUTRAL': return 'neutral';
-      default: return 'unknown';
+      case 'UNKNOWN': case 'PENDING': return 'unknown';
+      default: return 'other';
     }
   });
 }

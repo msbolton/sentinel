@@ -66,6 +66,7 @@
       <button class="control-btn control-btn--danger" (click)="clearAllEntities()" title="Clear All Entities">
         <app-icon name="trash" />
       </button>
+      <app-layers-pill></app-layers-pill>
     </div>
   </div>
 
@@ -89,6 +90,9 @@
       (cancel)="cancelDrawing()"
     />
   }
+
+  <!-- Selection brackets and reticle, under the track card -->
+  <app-selection-reticle />
 
   <!-- Entity Detail Panel -->
   <app-entity-detail-panel

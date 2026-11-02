@@ -106,11 +106,18 @@ Tracks unacknowledged alerts for the badge counter on the sidebar.
 
 ## Layout
 
-The app uses a fixed layout with three zones:
+The app is a glass cockpit: the map fills the window and everything else floats over it.
 
-1. **Sidebar** (left, 48px) — Navigation buttons, settings, user profile
-2. **Main content** (center) — CesiumJS map as persistent background + feature panels as overlays
-3. **Status bar** (bottom, 28px) — WebSocket connection status, entity count, classification level, username, UTC clock
+- **Map**: full screen, always rendered behind the routes that use it (CesiumJS).
+- **Tool rail**: a 40px column of icons centred on the left edge. Labels, badge counts and keyboard shortcuts show in a flyout on hover or focus. The map controls (reset view, my location, 3D buildings, terrain, fullscreen, geofences, clear, and the data-layers toggle) sit in a column beside it. The layers toggle is a square button; it opens the per-feed visibility panel to its right.
+- **HUD readouts**: one small monospace block in each corner of the map, plus the classification word centred at the top. Top left: operation name, the demo badge for guests, the DTG clock and feed health. Top right: track and alert counts, the user menu and your clearance. Bottom left: cursor position, MGRS and the view width and altitude. Bottom right: bearing and range from the cursor to the selected track, and the WebSocket state. The readouts ignore the pointer, so the map keeps every click and drag.
+- **Alert ticker**: open alerts in a strip along the top centre. Clicking one selects its track.
+- **Track card**: selecting a track opens a translucent card at the top right, 92px down, with bracket corners and a reticle on the map. The **track stack** under it lists the ten freshest tracks in view; clicking a row selects that track.
+- **Route panels**: Search, Alerts, Findings, Geofences, Link analysis, Locations and the other map routes open as panels on the right, 380px wide. While one is open the right-hand HUD readouts and the track stack shift left by its width.
+- **Timeline strip**: the timeline along the bottom of the map, starting at the right edge of the rail.
+- **Pages**: Settings, Connections, Admin and Feeds render as full pages with a left margin for the rail.
+
+The theme picker (Normal, CRT, Night Vision, FLIR White Hot, FLIR Iron Bow) lives in **Settings → Profile → Display**. The choice is stored per browser.
 
 ## Environments and runtime config
 

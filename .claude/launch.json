@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "client", "runtimeExecutable": "npx", "runtimeArgs": ["nx", "serve", "client"], "port": 4200 },
+    { "name": "api-gateway", "runtimeExecutable": "npx", "runtimeArgs": ["nx", "serve", "api-gateway"], "port": 3000 }
+  ]
+}

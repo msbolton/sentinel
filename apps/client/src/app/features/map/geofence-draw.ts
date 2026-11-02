@@ -1,5 +1,6 @@
 import { LngLat } from '../../shared/models/geofence.model';
 import { DrawSession, liveMeasure, previewRing } from './geofence-draw-state';
+import { monoFont } from '../../shared/mono-font';
 
 /**
  * Draws a geofence session on the globe while it is being drawn: the shape
@@ -51,7 +52,7 @@ export class GeofenceDrawTool {
         show: new Cesium.CallbackProperty(() => this.measure !== '' && (this.cursor !== null || this.ring.length > 0), false),
         label: {
           text: new Cesium.CallbackProperty(() => this.measure, false),
-          font: '11px JetBrains Mono, monospace',
+          font: `11px ${monoFont()}`,
           fillColor: this.color,
           outlineColor: Cesium.Color.BLACK,
           outlineWidth: 2,
