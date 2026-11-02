@@ -171,7 +171,7 @@ Every frame is a JSON envelope: `{ "type": string, "data": object, "ts": RFC3339
 | `entity:batch` | `EntityEvent[]` | Created, updated and position events coalesced over 200 ms, filtered per client; every entity carries `feedId`, `ageoutState`, `identities` and `lastObservedAt` (`exercise: true` when the entity is exercise data, omitted when false) |
 | `entity:deleted` | `EntityEvent` | Broadcast to all clients; `bulk` and `count` are set for a clear-all |
 | `events.entity.stale`, `events.entity.agedout`, `events.entity.restored` | `{ id, feedId, ageoutState, lastSeenAt }[]` | Broadcast to all clients, coalesced into one array frame per type per 200 ms flush (the ageout pass can emit a thousand per cycle) |
-| `alert:new` | `Alert` | New alert from `alerts.events`, whichever service produced it |
+| `alert:new` | `Alert` | An alert from `alerts.events`, whichever service produced it: new when triggered, and again with `acknowledged` (and `acknowledgedBy`) or `resolvedAt` set when an operator acknowledges or resolves it through `PATCH /api/v1/alerts/{id}/acknowledge` or `/resolve`. The `Alert` is the same shape `GET /api/v1/alerts` returns, so clients merge by `id` |
 | `error` | `{ code, message }` | Rejected inbound frame |
 
 `EntityEvent` is `{ type: 'created' | 'updated' | 'deleted', entity: Entity, timestamp }` with the same `Entity` shape the REST API returns. A client whose send buffer fills (256 frames) is disconnected and reconnects.

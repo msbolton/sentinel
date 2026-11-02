@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,30 +14,82 @@ import (
 	"github.com/sentinel/go-common/classification"
 )
 
-// AlertRecord represents an alert row from the database.
+// AlertRecord is an alert row as the API serves it. Its JSON is the shape
+// the client's Alert model and the gateway's WebSocket alert frame share
+// (apps/api-gateway/internal/stream/bridge.go ClientAlert), so a row from
+// the list and an alert from the stream merge by id.
 type AlertRecord struct {
-	ID               string            `json:"alertId"`
+	ID               string            `json:"id"`
 	AlertType        string            `json:"alertType"`
 	Severity         string            `json:"severity"`
 	Title            string            `json:"title"`
-	Description      *string           `json:"description,omitempty"`
+	Description      *string           `json:"message,omitempty"`
 	EntityID         string            `json:"entityId"`
 	RelatedEntityIDs []string          `json:"relatedEntityIds"`
 	Position         *GeoPoint         `json:"position,omitempty"`
 	RuleID           *string           `json:"ruleId,omitempty"`
 	Metadata         map[string]string `json:"metadata"`
 	CreatedAt        string            `json:"createdAt"`
-	AcknowledgedAt   *string           `json:"acknowledgedAt,omitempty"`
-	AcknowledgedBy   *string           `json:"acknowledgedBy,omitempty"`
-	ResolvedAt       *string           `json:"resolvedAt,omitempty"`
-	Classification   string            `json:"classification"`
-	Exercise         bool              `json:"exercise"`
+	// UpdatedAt is the latest of created, acknowledged and resolved.
+	UpdatedAt      string  `json:"updatedAt"`
+	Acknowledged   bool    `json:"acknowledged"`
+	AcknowledgedAt *string `json:"acknowledgedAt,omitempty"`
+	AcknowledgedBy *string `json:"acknowledgedBy,omitempty"`
+	ResolvedAt     *string `json:"resolvedAt,omitempty"`
+	Classification string  `json:"classification"`
+	Exercise       bool    `json:"exercise"`
 }
 
-// GeoPoint represents a geographic point.
+// GeoPoint is where an alert fired, in the client's field names.
 type GeoPoint struct {
-	Lat float64 `json:"lat"`
-	Lon float64 `json:"lon"`
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+}
+
+// finish derives the fields the API exposes but the table does not store.
+func (rec *AlertRecord) finish(lat, lng *float64) {
+	if lat != nil && lng != nil {
+		rec.Position = &GeoPoint{Latitude: *lat, Longitude: *lng}
+	}
+	if rec.Metadata == nil {
+		rec.Metadata = map[string]string{}
+	}
+	rec.CreatedAt = rfc3339(rec.CreatedAt)
+	for _, t := range []*string{rec.AcknowledgedAt, rec.ResolvedAt} {
+		if t != nil {
+			*t = rfc3339(*t)
+		}
+	}
+	rec.Acknowledged = rec.AcknowledgedAt != nil
+	rec.UpdatedAt = rec.CreatedAt
+	for _, t := range []*string{rec.AcknowledgedAt, rec.ResolvedAt} {
+		if t != nil && *t > rec.UpdatedAt {
+			rec.UpdatedAt = *t
+		}
+	}
+}
+
+// TimeLayouts are the forms a timestamp takes in this service: RFC 3339 on
+// the wire and Postgres text (timestamptz::text) from the store.
+var TimeLayouts = []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999-07", "2006-01-02 15:04:05.999999999-07:00", "2006-01-02 15:04:05-07"}
+
+// ParseTime reads a timestamp in any of TimeLayouts, as UTC.
+func ParseTime(s string) (time.Time, bool) {
+	for _, l := range TimeLayouts {
+		if t, err := time.Parse(l, s); err == nil {
+			return t.UTC(), true
+		}
+	}
+	return time.Time{}, false
+}
+
+// rfc3339 rewrites a Postgres text timestamp as RFC 3339 UTC, which every
+// browser's Date parses; an unparseable value is passed through.
+func rfc3339(s string) string {
+	if t, ok := ParseTime(s); ok {
+		return t.Format(time.RFC3339Nano)
+	}
+	return s
 }
 
 // AlertRuleRecord represents an alert rule row from the database.
@@ -529,9 +582,7 @@ func scanAlert(row pgx.Row) (*AlertRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scan alert: %w", err)
 	}
-	if lat != nil && lng != nil {
-		rec.Position = &GeoPoint{Lat: *lat, Lon: *lng}
-	}
+	rec.finish(lat, lng)
 	return &rec, nil
 }
 
@@ -548,9 +599,7 @@ func scanAlertRow(rows pgx.Rows) (*AlertRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scan alert row: %w", err)
 	}
-	if lat != nil && lng != nil {
-		rec.Position = &GeoPoint{Lat: *lat, Lon: *lng}
-	}
+	rec.finish(lat, lng)
 	return &rec, nil
 }
 
