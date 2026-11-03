@@ -65,9 +65,9 @@ func main() {
 	// Set up HTTP server.
 	mux := http.NewServeMux()
 
-	healthHandler := health.NewHandler("sentinel-track-service", logger, func() error {
-		return trackStore.Ping(context.Background())
-	})
+	healthHandler := health.NewHandler("sentinel-track-service", logger)
+	healthHandler.AddCheck("database", func() error { return trackStore.Ping(context.Background()) })
+	healthHandler.AddCheck("kafka", posConsumer.Health)
 	healthHandler.RegisterRoutes(mux)
 
 	trackHandler := handler.NewTrackHandler(trackStore, logger)

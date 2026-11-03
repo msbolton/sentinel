@@ -71,6 +71,9 @@ func (b *Bridge) Start() {
 	}()
 }
 
+// Health reports why the bridge is not consuming, or nil.
+func (b *Bridge) Health() error { return b.bc.Health() }
+
 // Stop ends the loop and closes the consumer.
 func (b *Bridge) Stop() {
 	b.stopOnce.Do(func() {

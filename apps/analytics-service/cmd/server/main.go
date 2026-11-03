@@ -127,9 +127,9 @@ func main() {
 	posConsumer.Start()
 
 	mux := http.NewServeMux()
-	healthHandler := health.NewHandler("sentinel-analytics-service", logger, func() error {
-		return entityStore.Ping(context.Background())
-	})
+	healthHandler := health.NewHandler("sentinel-analytics-service", logger)
+	healthHandler.AddCheck("database", func() error { return entityStore.Ping(context.Background()) })
+	healthHandler.AddCheck("kafka", posConsumer.Health)
 	healthHandler.RegisterRoutes(mux)
 
 	api := handler.NewAnalyticsHandler(counters, coverageStore, baselineStore, entityStore, findingStore, engine, logger)

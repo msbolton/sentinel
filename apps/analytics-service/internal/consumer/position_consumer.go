@@ -74,6 +74,9 @@ func (c *PositionConsumer) Start() {
 	}()
 }
 
+// Health reports why the consumer is not consuming, or nil.
+func (c *PositionConsumer) Health() error { return c.bc.Health() }
+
 // Stop ends consumption.
 func (c *PositionConsumer) Stop() {
 	if c.cancel != nil {
