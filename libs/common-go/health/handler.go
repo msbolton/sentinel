@@ -3,6 +3,7 @@ package health
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -19,22 +20,50 @@ type Handler struct {
 	logger      *zap.Logger
 	startTime   time.Time
 	checkers    []Checker
+	names       []string
 }
 
-// NewHandler creates a new health handler for the named service.
+// NewHandler creates a new health handler for the named service. Checkers
+// gate readiness; /health stays 200 but reports the failing ones, so a
+// dependency outage is visible without the liveness probe restarting the
+// process. Use AddCheck to name a checker; unnamed ones are numbered.
 func NewHandler(serviceName string, logger *zap.Logger, checkers ...Checker) *Handler {
-	return &Handler{
+	h := &Handler{
 		serviceName: serviceName,
 		logger:      logger,
 		startTime:   time.Now(),
-		checkers:    checkers,
 	}
+	for i, c := range checkers {
+		h.AddCheck("check"+strconv.Itoa(i), c)
+	}
+	return h
+}
+
+// AddCheck registers a named readiness checker.
+func (h *Handler) AddCheck(name string, check Checker) {
+	h.checkers = append(h.checkers, check)
+	h.names = append(h.names, name)
 }
 
 type healthResponse struct {
-	Status  string `json:"status"`
-	Uptime  string `json:"uptime"`
-	Service string `json:"service"`
+	Status  string            `json:"status"`
+	Uptime  string            `json:"uptime"`
+	Service string            `json:"service"`
+	Checks  map[string]string `json:"checks,omitempty"`
+}
+
+// failures runs every checker and returns the failed ones by name.
+func (h *Handler) failures() map[string]string {
+	var failed map[string]string
+	for i, check := range h.checkers {
+		if err := check(); err != nil {
+			if failed == nil {
+				failed = map[string]string{}
+			}
+			failed[h.names[i]] = err.Error()
+		}
+	}
+	return failed
 }
 
 // RegisterRoutes registers health, readiness, and metrics routes.
@@ -55,6 +84,10 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 		Uptime:  time.Since(h.startTime).Round(time.Second).String(),
 		Service: h.serviceName,
 	}
+	if failed := h.failures(); len(failed) > 0 {
+		resp.Status = "degraded"
+		resp.Checks = failed
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -66,18 +99,17 @@ func (h *Handler) handleReady(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, check := range h.checkers {
-		if err := check(); err != nil {
-			resp := healthResponse{
-				Status:  "not ready",
-				Uptime:  time.Since(h.startTime).Round(time.Second).String(),
-				Service: h.serviceName,
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(resp)
-			return
+	if failed := h.failures(); len(failed) > 0 {
+		resp := healthResponse{
+			Status:  "not ready",
+			Uptime:  time.Since(h.startTime).Round(time.Second).String(),
+			Service: h.serviceName,
+			Checks:  failed,
 		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(resp)
+		return
 	}
 
 	resp := healthResponse{

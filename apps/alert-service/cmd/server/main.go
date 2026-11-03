@@ -13,14 +13,14 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/sentinel/go-common/health"
-	"github.com/sentinel/go-common/kafka"
-	"github.com/sentinel/go-common/middleware"
 	"github.com/sentinel/alert-service/internal/config"
 	"github.com/sentinel/alert-service/internal/consumer"
 	"github.com/sentinel/alert-service/internal/evaluator"
 	"github.com/sentinel/alert-service/internal/handler"
 	"github.com/sentinel/alert-service/internal/store"
+	"github.com/sentinel/go-common/health"
+	"github.com/sentinel/go-common/kafka"
+	"github.com/sentinel/go-common/middleware"
 )
 
 func main() {
@@ -71,9 +71,9 @@ func main() {
 	// Set up HTTP server.
 	mux := http.NewServeMux()
 
-	healthHandler := health.NewHandler("sentinel-alert-service", logger, func() error {
-		return alertStore.Ping(context.Background())
-	})
+	healthHandler := health.NewHandler("sentinel-alert-service", logger)
+	healthHandler.AddCheck("database", func() error { return alertStore.Ping(context.Background()) })
+	healthHandler.AddCheck("kafka", posConsumer.Health)
 	healthHandler.RegisterRoutes(mux)
 
 	alertHandler := handler.NewAlertHandler(alertStore, logger)

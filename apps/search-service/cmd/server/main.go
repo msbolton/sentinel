@@ -74,9 +74,9 @@ func main() {
 	// Set up HTTP server.
 	mux := http.NewServeMux()
 
-	healthHandler := health.NewHandler("sentinel-search-service", logger, func() error {
-		return osClient.Ping(context.Background())
-	})
+	healthHandler := health.NewHandler("sentinel-search-service", logger)
+	healthHandler.AddCheck("opensearch", func() error { return osClient.Ping(context.Background()) })
+	healthHandler.AddCheck("kafka", indexer.Health)
 	healthHandler.RegisterRoutes(mux)
 
 	searchHandler := handler.NewSearchHandler(osClient, logger)
