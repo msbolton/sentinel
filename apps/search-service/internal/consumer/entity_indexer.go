@@ -61,6 +61,9 @@ func (e *EntityIndexer) Start() {
 	}()
 }
 
+// Health reports why the consumer is not consuming, or nil.
+func (e *EntityIndexer) Health() error { return e.bc.Health() }
+
 // Stop ends consumption.
 func (e *EntityIndexer) Stop() {
 	if e.cancel != nil {

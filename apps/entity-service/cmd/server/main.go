@@ -99,9 +99,9 @@ func main() {
 	// Set up HTTP server.
 	mux := http.NewServeMux()
 
-	healthHandler := health.NewHandler("sentinel-entity-service", logger, func() error {
-		return entityStore.Ping(context.Background())
-	})
+	healthHandler := health.NewHandler("sentinel-entity-service", logger)
+	healthHandler.AddCheck("database", func() error { return entityStore.Ping(context.Background()) })
+	healthHandler.AddCheck("kafka", obsConsumer.Health)
 	healthHandler.RegisterRoutes(mux)
 
 	entityHandler := handler.NewEntityHandler(entityStore, observationStore, publisher, resolver, logger)

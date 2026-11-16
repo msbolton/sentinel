@@ -59,6 +59,9 @@ func (c *ObservationConsumer) Run(ctx context.Context) error {
 // Close shuts the consumer down.
 func (c *ObservationConsumer) Close() error { return c.bc.Close() }
 
+// Health reports why the consumer is not consuming, or nil.
+func (c *ObservationConsumer) Health() error { return c.bc.Health() }
+
 func (c *ObservationConsumer) handle(ctx context.Context, msgs []*ckafka.Message) error {
 	observations := make([]*sentinelv1.Observation, 0, len(msgs))
 	for _, m := range msgs {

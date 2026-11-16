@@ -160,6 +160,7 @@ func main() {
 		}},
 		ReadyChecks: map[string]func() error{
 			"database": func() error { return locStore.Ping(context.Background()) },
+			"kafka":    bridge.Health,
 		},
 	})
 
