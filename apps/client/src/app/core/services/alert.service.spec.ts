@@ -42,6 +42,32 @@ describe('AlertService', () => {
 
   afterEach(() => http.verify());
 
+  it('sends the alert API\'s own query parameter names', () => {
+    service.getAlerts({ severity: AlertSeverity.HIGH, alertType: AlertType.UNSPECIFIED, acknowledged: false, pageSize: 100, page: 2 }).subscribe();
+    const req = http.expectOne((r) => r.url === '/api/v1/alerts');
+    expect(req.request.params.get('severity')).toBe('HIGH');
+    expect(req.request.params.get('types')).toBe(AlertType.UNSPECIFIED);
+    expect(req.request.params.get('acknowledged')).toBe('false');
+    expect(req.request.params.get('pageSize')).toBe('100');
+    expect(req.request.params.get('page')).toBe('2');
+    expect(req.request.params.has('limit')).toBe(false);
+    req.flush({ data: [], total: 0 });
+  });
+
+  it('counts new stream alerts and re-reads the count when one arrives acknowledged', () => {
+    const counts: number[] = [];
+    service.unacknowledgedCount$.subscribe((c) => counts.push(c));
+    ws.next(alert('a'));
+    ws.next(alert('b'));
+    expect(counts.at(-1)).toBe(2);
+
+    ws.next(alert('a', { acknowledged: true }));
+    const req = http.expectOne((r) => r.url === '/api/v1/alerts' && r.params.get('acknowledged') === 'false');
+    expect(req.request.params.get('pageSize')).toBe('1');
+    req.flush({ data: [], total: 1 });
+    expect(counts.at(-1)).toBe(1);
+  });
+
   it('streams the websocket alerts', () => {
     const seen: Alert[] = [];
     service.alertStream$.subscribe((a) => seen.push(a));

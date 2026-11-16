@@ -71,6 +71,11 @@ const DEFAULT_SECTIONS: Record<SectionKey, boolean> = {
               <button type="button" class="icon-btn" (click)="flyTo.emit(e)" title="Go to location" aria-label="Go to location">
                 <app-icon name="navigation" />
               </button>
+              @if (canReview()) {
+                <button type="button" class="icon-btn" (click)="openLinks()" title="Links" aria-label="Show links">
+                  <app-icon name="link" />
+                </button>
+              }
               <button type="button" class="icon-btn" (click)="close.emit()" title="Close" aria-label="Close">
                 <app-icon name="x" />
               </button>
@@ -1549,6 +1554,12 @@ export class EntityDetailPanelComponent {
 
   /** Emplacements are edited inside their connection, which operators and admins manage. */
   protected canOpenConnection = computed(() => this.auth.hasAnyRole('sentinel-operator', 'sentinel-admin'));
+
+  /** Opens link analysis on this track; the panel's route is for analysts and admins. */
+  protected openLinks(): void {
+    const id = this.entity()?.id;
+    if (id) void this.router.navigate(['/link-graph'], { queryParams: { entity: id } });
+  }
 
   protected openConnection(): void {
     const feedId = this.connectionId();

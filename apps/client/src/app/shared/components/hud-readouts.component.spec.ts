@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { signal } from '@angular/core';
+import { WritableSignal, signal } from '@angular/core';
 import { BehaviorSubject, of } from 'rxjs';
 import { HudReadoutsComponent } from './hud-readouts.component';
 import { AlertService } from '../../core/services/alert.service';
@@ -9,9 +9,11 @@ import { AuthService, UserProfile } from '../../core/services/auth.service';
 import { EntityService } from '../../core/services/entity.service';
 import { FeedService } from '../../core/services/feed.service';
 import { MapCursorService } from '../../core/services/map-cursor.service';
+import { ReplayService } from '../../core/services/replay.service';
 import { SelectionService } from '../../core/services/selection.service';
 import { WebSocketService } from '../../core/services/websocket.service';
 import { Classification, Entity, EntitySource, EntityType } from '../models/entity.model';
+import { formatDtg } from '../dtg';
 
 const base: Entity = {
   id: 'trk-1',
@@ -37,11 +39,15 @@ describe('HudReadoutsComponent', () => {
   let selection: SelectionService;
   let poll: jest.Mock;
   let release: jest.Mock;
+  let replayMode: WritableSignal<'live' | 'replay'>;
+  let replayCursor: WritableSignal<Date>;
 
   beforeEach(async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-11-01T14:32:00Z'));
     release = jest.fn();
     poll = jest.fn(() => release);
+    replayMode = signal<'live' | 'replay'>('live');
+    replayCursor = signal(new Date('2026-10-31T09:05:00Z'));
     const profile: UserProfile = { username: 'w.operator', roles: ['sentinel-operator'], classificationLevel: 'SECRET' };
     await TestBed.configureTestingModule({
       imports: [HudReadoutsComponent],
@@ -58,6 +64,7 @@ describe('HudReadoutsComponent', () => {
           },
         },
         { provide: FeedService, useValue: { feeds: signal([]), poll } },
+        { provide: ReplayService, useValue: { mode: replayMode, cursor: replayCursor } },
       ],
     }).compileComponents();
 
@@ -115,7 +122,40 @@ describe('HudReadoutsComponent', () => {
 
   it('lifts the bottom readouts above the timeline strip', () => {
     const source = readFileSync(join(__dirname, 'hud-readouts.component.ts'), 'utf-8');
-    expect(source).toMatch(/:host\(\.timeline-open\) \.hud-bl,\s*:host\(\.timeline-open\) \.hud-br \{\s*bottom: var\(--timeline-height, 80px\);/);
+    expect(source).toMatch(/:host\(\.timeline-open\) \.hud-bl,\s*:host\(\.timeline-open\) \.hud-br \{\s*bottom: var\(--timeline-height, 96px\);/);
+  });
+
+  it('shows the live DTG while the replay is off', () => {
+    fixture.detectChanges();
+    const el = (fixture.nativeElement as HTMLElement).querySelector('[data-readout="dtg"]')!;
+    expect(readout('dtg')).toContain('011432Z NOV 26');
+    expect(readout('dtg')).not.toContain('REPLAY');
+    expect(el.classList).not.toContain('replay');
+    expect(el.querySelector('.replay-tag')).toBeNull();
+  });
+
+  it('reads REPLAY with the cursor time while replaying', () => {
+    replayMode.set('replay');
+    fixture.detectChanges();
+    const el = (fixture.nativeElement as HTMLElement).querySelector('[data-readout="dtg"]')!;
+    expect(el.textContent!.replace(/\s+/g, ' ').trim()).toBe(`REPLAY ${formatDtg(replayCursor())}`);
+    expect(el.textContent).not.toContain('011432Z NOV 26');
+    expect(el.classList).toContain('replay');
+    expect(el.querySelector('span.replay-tag')?.textContent).toBe('REPLAY');
+
+    replayCursor.set(new Date('2026-10-31T09:06:00Z'));
+    fixture.detectChanges();
+    expect(readout('dtg')).toContain(formatDtg(new Date('2026-10-31T09:06:00Z')));
+
+    replayMode.set('live');
+    fixture.detectChanges();
+    expect(readout('dtg')).toContain('011432Z NOV 26');
+    expect(el.classList).not.toContain('replay');
+  });
+
+  it('colours the replay readout yellow', () => {
+    const source = readFileSync(join(__dirname, 'hud-readouts.component.ts'), 'utf-8');
+    expect(source).toMatch(/\.replay-tag,\s*\.replay \{ color: var\(--accent-yellow\); \}/);
   });
 
   it('shows dashes when the cursor is off the globe', () => {

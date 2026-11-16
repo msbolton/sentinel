@@ -36,6 +36,11 @@ import { ENTITY_TYPE_BILLBOARD_SVGS, svgToDataUrl } from './cesium-config';
 import { BearingLayer } from './bearing-layer';
 import { locationDotDataUrl } from './location-dot';
 import { blurPosition } from '../../shared/blur';
+import { ReplayService } from '../../core/services/replay.service';
+import { ReplayLayer } from './replay-layer';
+
+// The layer is covered by replay-layer.spec.ts; here only the map's use of it matters.
+jest.mock('./replay-layer');
 
 function covFromEllipse(semiMajorM: number, semiMinorM: number, orientationDeg: number) {
   const s1 = semiMajorM / ELLIPSE_95;
@@ -119,6 +124,24 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     welcomeShown: ReturnType<typeof signal<boolean>>;
     reportPosition: jest.Mock;
   };
+  let replay: ReturnType<typeof fakeReplayService>;
+
+  function fakeReplayService() {
+    const start = new Date('2026-11-02T10:00:00Z');
+    const end = new Date('2026-11-02T11:00:00Z');
+    return {
+      mode: signal<'live' | 'replay'>('live'),
+      replay: signal<unknown>(null),
+      cursor: signal(start),
+      playing: signal(false),
+      speed: signal(60),
+      clockBounds: signal({ start, end }),
+      range: signal<{ start: Date; end: Date } | null>(null),
+      seekRequested: signal({ n: 0, at: start }),
+      seekApplied: jest.fn(),
+      tick: jest.fn(),
+    };
+  }
 
   beforeEach(() => {
     feedsSignal = signal<Feed[]>([]);
@@ -126,6 +149,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
     addedEntities = [];
     terrainOn = signal(false);
     guest = false;
+    replay = fakeReplayService();
     demo = {
       ownEmplacementId: signal<string | null>(null),
       ownPosition: signal<DemoPosition | null>(null),
@@ -153,6 +177,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
             ageoutEvents$: EMPTY,
             densityEvents$: EMPTY,
             serverNow: () => Date.now(),
+            sendViewportUpdate: jest.fn(),
           },
         },
         { provide: ThemeService, useValue: { activeTheme$: of(ThemePreset.NORMAL) } },
@@ -175,7 +200,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
             showFootprint: signal(false),
           },
         },
-        { provide: MapViewportService, useValue: { updateBounds: jest.fn(), bounds: () => null } },
+        { provide: MapViewportService, useValue: { updateBounds: jest.fn(), set: jest.fn(), bounds: () => null } },
         {
           provide: GeofenceService,
           useValue: {
@@ -218,6 +243,7 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
         },
         { provide: AuthService, useValue: { isGuest: () => guest } },
         { provide: DemoService, useValue: demo },
+        { provide: ReplayService, useValue: replay },
       ],
     });
 
@@ -1181,6 +1207,350 @@ describe('MapComponent — SIGNAL covariance ellipse & MIL-STD-2525D paths', () 
 
       expect(selection.entity()).toBe(picked);
       expect(selection.screenPoint()).toEqual({ x: 1, y: 2 });
+    });
+  });
+
+  describe('replay mode', () => {
+    let viewer: any;
+    let clock: any;
+    const at = (iso: string) => new Date(iso);
+
+    beforeEach(() => {
+      Object.assign(fakeCesium as any, {
+        JulianDate: {
+          fromDate: (d: Date) => ({ d }),
+          toDate: (j: { d: Date }) => j.d,
+          now: () => ({ d: 'now' }),
+        },
+        ClockRange: { UNBOUNDED: 0, CLAMPED: 1, LOOP_STOP: 2 },
+        Rectangle: jest.fn(),
+        Math: { ...fakeCesium.Math, toDegrees: (r: number) => (r * 180) / Math.PI },
+      });
+      clock = {
+        startTime: null,
+        stopTime: null,
+        currentTime: null,
+        clockRange: 0,
+        multiplier: 1,
+        shouldAnimate: false,
+        onTick: { addEventListener: jest.fn() },
+      };
+      viewer = (component as any).viewer;
+      viewer.clock = clock;
+      viewer.dataSources = { add: jest.fn(), remove: jest.fn() };
+      viewer.camera = { computeViewRectangle: jest.fn(() => undefined) };
+      viewer.scene.globe = { ellipsoid: {} };
+      (component as any).clusterSources = new Map(
+        [EntityType.AIRCRAFT, EntityType.VESSEL].map((t) => [
+          t,
+          { show: true, entities: { add: jest.fn((o: any) => ({ ...o })), remove: jest.fn(), suspendEvents: jest.fn(), resumeEvents: jest.fn() } },
+        ]),
+      );
+      (component as any).densitySource = { show: true, entities: {} };
+      (ReplayLayer as jest.MockedClass<typeof ReplayLayer>).mockClear();
+    });
+
+    const layer = () => (component as any).replayLayer as jest.Mocked<ReplayLayer>;
+    const sources = () => [...(component as any).clusterSources.values()];
+    function enter() {
+      replay.mode.set('replay');
+      fixture.detectChanges();
+    }
+
+    it('hides the live layers, stops the frame loop and drops live entity events', () => {
+      const cancel = jest.spyOn(window, 'cancelAnimationFrame');
+      (component as any).drFrame = 42;
+      const live = baseSignalEntity({ id: 'ac-1', entityType: EntityType.AIRCRAFT });
+      (component as any).addOrUpdateCesiumEntity(live);
+      expect((component as any).entityMap.has('ac-1')).toBe(true);
+
+      enter();
+
+      expect(ReplayLayer).toHaveBeenCalledTimes(1);
+      expect(sources().every((s) => s.show === false)).toBe(true);
+      expect((component as any).densitySource.show).toBe(false);
+      expect(cancel).toHaveBeenCalledWith(42);
+      expect((component as any).drFrame).toBeNull();
+      expect((component as any).entityMap.size).toBe(0);
+
+      (component as any).processCesiumBatch([
+        { type: 'created', entity: baseSignalEntity({ id: 'ac-2', entityType: EntityType.AIRCRAFT }), timestamp: '2026-11-02T10:00:00Z' },
+      ]);
+      expect((component as any).entityMap.size).toBe(0);
+    });
+
+    it('draws each replay response on the replay layer', () => {
+      enter();
+      const response = { entities: [], startTime: 'a', endTime: 'b', truncated: false };
+      replay.replay.set(response);
+      fixture.detectChanges();
+
+      expect(layer().build).toHaveBeenCalledWith(response);
+    });
+
+    it('still reports the viewport but fetches no live entities while replaying', () => {
+      enter();
+      const entities = TestBed.inject(EntityService);
+      (entities.getEntities as jest.Mock).mockClear();
+
+      (component as any).sendViewportBounds();
+
+      expect(entities.getEntities).not.toHaveBeenCalled();
+      expect(TestBed.inject(WebSocketService).sendViewportUpdate).toHaveBeenCalled();
+      expect(TestBed.inject(MapViewportService).set).toHaveBeenCalled();
+    });
+
+    it('binds the clock to the bounds, range, speed, play state and seeks', () => {
+      enter();
+      expect(clock.startTime).toEqual({ d: at('2026-11-02T10:00:00Z') });
+      expect(clock.stopTime).toEqual({ d: at('2026-11-02T11:00:00Z') });
+      expect(clock.clockRange).toBe(1); // CLAMPED over a bare window
+      expect(clock.currentTime).toEqual({ d: at('2026-11-02T10:00:00Z') }); // the cursor on entering
+
+      replay.speed.set(600);
+      replay.playing.set(true);
+      fixture.detectChanges();
+      expect(clock.multiplier).toBe(600);
+      expect(clock.shouldAnimate).toBe(true);
+
+      const range = { start: at('2026-11-02T10:10:00Z'), end: at('2026-11-02T10:20:00Z') };
+      replay.range.set(range);
+      replay.clockBounds.set(range);
+      fixture.detectChanges();
+      expect(clock.startTime).toEqual({ d: range.start });
+      expect(clock.stopTime).toEqual({ d: range.end });
+      expect(clock.clockRange).toBe(2); // LOOP_STOP over a range
+
+      replay.cursor.set(at('2026-11-02T10:15:00Z'));
+      fixture.detectChanges();
+      expect(clock.currentTime).toEqual({ d: at('2026-11-02T10:00:00Z') }); // a cursor move alone is not a seek
+      replay.seekRequested.set({ n: 1, at: at('2026-11-02T10:15:00Z') });
+      fixture.detectChanges();
+      expect(clock.currentTime).toEqual({ d: at('2026-11-02T10:15:00Z') });
+    });
+
+    it('a seek sets the clock to the request target, not the cursor, then reports it applied', () => {
+      enter();
+      replay.seekApplied.mockClear();
+
+      // A clock report moved the cursor after the seek was requested.
+      replay.cursor.set(at('2026-11-02T10:40:00Z'));
+      replay.seekRequested.set({ n: 1, at: at('2026-11-02T10:12:00Z') });
+      fixture.detectChanges();
+
+      expect(clock.currentTime).toEqual({ d: at('2026-11-02T10:12:00Z') });
+      expect(replay.seekApplied).toHaveBeenCalledTimes(1);
+    });
+
+    it('entering replay starts the clock at the cursor and clears any pending seek', () => {
+      replay.cursor.set(at('2026-11-02T10:05:00Z'));
+      enter();
+      expect(clock.currentTime).toEqual({ d: at('2026-11-02T10:05:00Z') });
+      expect(replay.seekApplied).toHaveBeenCalled();
+    });
+
+    it('a stale request does not move the clock after entering, but entering again starts at the cursor', () => {
+      replay.seekRequested.set({ n: 3, at: at('2026-11-02T10:50:00Z') });
+      replay.cursor.set(at('2026-11-02T10:05:00Z'));
+      enter();
+      expect(clock.currentTime).toEqual({ d: at('2026-11-02T10:05:00Z') });
+
+      replay.mode.set('live');
+      fixture.detectChanges();
+      replay.cursor.set(at('2026-11-02T10:07:00Z'));
+      enter();
+      expect(clock.currentTime).toEqual({ d: at('2026-11-02T10:07:00Z') });
+    });
+
+    it('clears the replay layer when the response goes away', () => {
+      enter();
+      replay.replay.set({ entities: [], startTime: 'a', endTime: 'b', truncated: false });
+      fixture.detectChanges();
+      layer().clear.mockClear();
+
+      replay.replay.set(null);
+      fixture.detectChanges();
+
+      expect(layer().clear).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves the clock alone in live mode', () => {
+      replay.speed.set(600);
+      replay.seekRequested.set({ n: 1, at: at('2026-11-02T10:15:00Z') });
+      fixture.detectChanges();
+
+      expect(clock.multiplier).toBe(1);
+      expect(clock.currentTime).toBeNull();
+      expect(ReplayLayer).not.toHaveBeenCalled();
+    });
+
+    it('applies the replay state once the viewer exists, for a page opened on the timeline', () => {
+      (component as any).viewer = null;
+      replay.mode.set('replay');
+      replay.speed.set(10);
+      fixture.detectChanges();
+      expect(ReplayLayer).not.toHaveBeenCalled();
+
+      (component as any).viewer = viewer;
+      (component as any).bindReplayClock();
+
+      expect(clock.onTick.addEventListener).toHaveBeenCalledTimes(1);
+      expect(ReplayLayer).toHaveBeenCalledTimes(1);
+      expect(clock.multiplier).toBe(10);
+      expect(sources().every((s) => s.show === false)).toBe(true);
+    });
+
+    it('reports clock ticks to the service while playing, at most every 100 ms', () => {
+      (component as any).bindReplayClock();
+      const onTick = clock.onTick.addEventListener.mock.calls[0][0];
+      const now = jest.spyOn(Date, 'now');
+
+      clock.shouldAnimate = true;
+      now.mockReturnValue(1_000);
+      onTick(clock);
+      expect(replay.tick).not.toHaveBeenCalled(); // live mode
+
+      enter();
+      clock.shouldAnimate = true;
+      clock.currentTime = { d: at('2026-11-02T10:05:00Z') }; // where the clock has run to
+      onTick(clock);
+      now.mockReturnValue(1_050);
+      onTick(clock);
+      now.mockReturnValue(1_150);
+      onTick(clock);
+      expect(replay.tick).toHaveBeenCalledTimes(2);
+      expect(replay.tick).toHaveBeenCalledWith(at('2026-11-02T10:05:00Z'));
+
+      clock.shouldAnimate = false;
+      now.mockReturnValue(5_000);
+      onTick(clock);
+      expect(replay.tick).toHaveBeenCalledTimes(2);
+      now.mockRestore();
+    });
+
+    it('reports where the clock stopped when playback pauses, past the throttle', () => {
+      (component as any).bindReplayClock();
+      const onTick = clock.onTick.addEventListener.mock.calls[0][0];
+      const now = jest.spyOn(Date, 'now');
+      enter();
+      replay.playing.set(true);
+      fixture.detectChanges();
+      clock.currentTime = { d: at('2026-11-02T10:05:00Z') };
+      now.mockReturnValue(1_000);
+      onTick(clock);
+      clock.currentTime = { d: at('2026-11-02T10:06:00Z') };
+      now.mockReturnValue(1_050);
+      onTick(clock); // held back by the throttle
+      expect(replay.tick).toHaveBeenCalledTimes(1);
+
+      replay.playing.set(false);
+      fixture.detectChanges();
+
+      expect(clock.shouldAnimate).toBe(false);
+      expect(replay.tick).toHaveBeenCalledTimes(2);
+      expect(replay.tick).toHaveBeenLastCalledWith(at('2026-11-02T10:06:00Z'));
+      now.mockRestore();
+    });
+
+    it('adds no live entity mid-replay when an emplacement disappears', () => {
+      const site = baseSignalEntity({
+        id: 'site-1', entityType: EntityType.SENSOR, identities: [{ type: 'EMPLACEMENT', value: 'emp-1' }],
+        position: { latitude: 10, longitude: 20 },
+      } as Partial<Entity>);
+      enter();
+      (component as any).loadedEmplacementIds = new Set(['emp-1']);
+      (component as any).emplacementEntities.set('site-1', site);
+
+      (component as any).syncLoadedEmplacements(); // the 30 s refresh no longer lists emp-1
+
+      expect((component as any).entityMap.size).toBe(0);
+    });
+
+    it('selects the replayed track under a click, placed at the cursor', () => {
+      const actions = new Map<unknown, (e: any) => void>();
+      (fakeCesium as any).ScreenSpaceEventHandler = function () {
+        return { setInputAction: (fn: (e: any) => void, type: unknown) => actions.set(type, fn) };
+      };
+      (fakeCesium as any).ScreenSpaceEventType = { LEFT_CLICK: 'L', LEFT_DOUBLE_CLICK: 'D', MOUSE_MOVE: 'M', LEFT_DOWN: 'DN', LEFT_UP: 'UP' };
+      (fakeCesium as any).defined = (x: unknown) => x != null;
+      viewer.scene.canvas = document.createElement('canvas');
+      viewer.scene.pick = jest.fn(() => ({ id: { id: 'replay:ac-1' } }));
+      enter();
+      const placed = baseSignalEntity({ id: 'ac-1', entityType: EntityType.AIRCRAFT });
+      layer().entityAt.mockReturnValue(placed);
+      replay.cursor.set(at('2026-11-02T10:30:00Z'));
+
+      (component as any).setupEventHandlers();
+      actions.get('L')!({ position: { x: 1, y: 2 } });
+
+      expect(layer().entityAt).toHaveBeenCalledWith('replay:ac-1', at('2026-11-02T10:30:00Z'));
+      expect(component.selectedEntity()).toBe(placed);
+    });
+
+    it('restores live mode on leaving: clears the replay, resets the clock and refetches once', () => {
+      enter();
+      replay.playing.set(true);
+      fixture.detectChanges();
+      const replayLayer = layer();
+      const replayed = baseSignalEntity({ id: 'ac-1', entityType: EntityType.AIRCRAFT });
+      (component as any).replaySelection = replayed;
+      component.selectedEntity.set(replayed);
+      const entities = TestBed.inject(EntityService);
+      (entities.getEntities as jest.Mock).mockClear();
+
+      replay.mode.set('live');
+      replay.playing.set(false);
+      fixture.detectChanges();
+
+      expect(replayLayer.clear).toHaveBeenCalled();
+      expect((component as any).replayLayer).toBeNull();
+      expect(clock.shouldAnimate).toBe(false);
+      expect(clock.currentTime).toEqual({ d: 'now' });
+      expect(clock.clockRange).toBe(0); // UNBOUNDED
+      expect(clock.multiplier).toBe(1);
+      expect(sources().every((s) => s.show === true)).toBe(true);
+      expect((component as any).densitySource.show).toBe(true);
+      expect(entities.getEntities).toHaveBeenCalledTimes(1);
+      expect(component.selectedEntity()).toBeNull(); // a replayed track is gone with the replay
+      expect((component as any).inReplay()).toBe(false); // live events flow again
+    });
+
+    it('draws no drop line, flight path or bearing lines while replaying', () => {
+      const bearingLayer = { sync: jest.fn(), destroy: jest.fn() };
+      (component as any).bearingLayer = bearingLayer;
+      const fields = {
+        bearings: JSON.stringify([{ trackId: 't1', azimuthDeg: 90, elevationDeg: 0, lengthM: 1000, reason: 'no_ground_intersection', observedAt: new Date().toISOString() }]),
+        bearingTtlSec: '60',
+      };
+      (component as any).emplacementEntities.set(
+        'site-1',
+        baseSignalEntity({ id: 'site-1', entityType: EntityType.SENSOR, position: { latitude: 10, longitude: 20 }, platformData: { generic: { fields } } } as Partial<Entity>),
+      );
+      enter();
+      expect(bearingLayer.sync).toHaveBeenLastCalledWith([], expect.anything(), expect.any(Number));
+
+      component.selectedEntity.set(baseSignalEntity({ id: 'ac-1', entityType: EntityType.AIRCRAFT, position: { latitude: 50, longitude: -1, altitude: 9000 } }));
+      (TestBed.inject(FlightPathService).state as any).set({
+        status: 'ready',
+        entityId: 'ac-1',
+        path: { hex: 'abc', days: 1, points: [{ lat: 1, lon: 1, height: 1, ts: 1 }, { lat: 2, lon: 2, height: 2, ts: 2 }] },
+      });
+      fixture.detectChanges();
+
+      expect((component as any).dropLine.forId).toBeNull();
+      expect((component as any).flightPathLines).toHaveLength(0);
+    });
+
+    it('clears a live selection on entering, so no live track card or overlay shows in replay', () => {
+      const live = baseSignalEntity({ id: 'sig-1' });
+      component.selectedEntity.set(live);
+      enter();
+
+      expect(component.selectedEntity()).toBeNull();
+
+      replay.mode.set('live');
+      fixture.detectChanges();
+      expect(component.selectedEntity()).toBeNull();
     });
   });
 });

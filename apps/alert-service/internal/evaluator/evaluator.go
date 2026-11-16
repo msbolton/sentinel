@@ -218,16 +218,23 @@ func (e *Evaluator) evaluateSpeed(ctx context.Context, entityID string, speedKno
 	}
 }
 
-// publishAlert emits a typed AlertEvent to alerts.events.
+// publishAlert emits a TRIGGERED AlertEvent to alerts.events.
 func (e *Evaluator) publishAlert(entityID string, alert *store.AlertRecord) {
+	e.PublishAlertEvent(alert, sentinelv1.AlertEventType_ALERT_EVENT_TYPE_TRIGGERED)
+}
+
+// PublishAlertEvent emits the alert's lifecycle event to alerts.events, keyed
+// by its entity so a track's alerts stay in order. Acknowledged and resolved
+// events let every connected client update the alert in place.
+func (e *Evaluator) PublishAlertEvent(alert *store.AlertRecord, eventType sentinelv1.AlertEventType) {
 	ev := &sentinelv1.AlertEvent{
 		Alert:     AlertProto(alert),
-		EventType: sentinelv1.AlertEventType_ALERT_EVENT_TYPE_TRIGGERED,
+		EventType: eventType,
 		Producer:  ProducerName,
 		EventTime: timestamppb.Now(),
 	}
-	if err := e.producer.ProduceProto(kafka.TopicAlertEvents, entityID, ev, ProducerName, nil); err != nil {
-		e.logger.Error("failed to publish alert", zap.Error(err))
+	if err := e.producer.ProduceProto(kafka.TopicAlertEvents, alert.EntityID, ev, ProducerName, nil); err != nil {
+		e.logger.Error("failed to publish alert", zap.String("eventType", eventType.String()), zap.Error(err))
 	}
 }
 
@@ -314,7 +321,7 @@ func AlertProto(a *store.AlertRecord) *sentinelv1.Alert {
 		out.RuleId = *a.RuleID
 	}
 	if a.Position != nil {
-		out.Position = &sentinelv1.Coordinate{Latitude: a.Position.Lat, Longitude: a.Position.Lon}
+		out.Position = &sentinelv1.Coordinate{Latitude: a.Position.Latitude, Longitude: a.Position.Longitude}
 	}
 	if t, ok := parseTime(a.CreatedAt); ok {
 		out.CreatedAt = timestamppb.New(t)
@@ -335,16 +342,7 @@ func parseEnum[E interface {
 	return v
 }
 
-var timeLayouts = []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999-07", "2006-01-02 15:04:05.999999999-07:00", "2006-01-02 15:04:05-07"}
-
-func parseTime(s string) (time.Time, bool) {
-	for _, l := range timeLayouts {
-		if t, err := time.Parse(l, s); err == nil {
-			return t.UTC(), true
-		}
-	}
-	return time.Time{}, false
-}
+func parseTime(s string) (time.Time, bool) { return store.ParseTime(s) }
 
 func deref(s *string) string {
 	if s == nil {

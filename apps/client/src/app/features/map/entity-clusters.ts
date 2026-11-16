@@ -5,8 +5,10 @@ import { monoFont } from '../../shared/mono-font';
  * Types that collapse into a counted disc when their pins crowd together on
  * screen. Cesium clusters per data source, so each gets its own; everything
  * else stays in the viewer's default collection.
+ * Satellites are in the set because a constellation (Starlink, GPS) fills a
+ * wide view with hundreds of pins that sit on top of the aircraft below.
  */
-export const CLUSTERED_TYPES: EntityType[] = [EntityType.AIRCRAFT, EntityType.VESSEL, EntityType.VEHICLE];
+export const CLUSTERED_TYPES: EntityType[] = [EntityType.AIRCRAFT, EntityType.VESSEL, EntityType.VEHICLE, EntityType.SATELLITE];
 
 const CLUSTERED = new Set<string>(CLUSTERED_TYPES);
 

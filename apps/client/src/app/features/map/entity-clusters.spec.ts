@@ -2,15 +2,16 @@ import { EntityType } from '../../shared/models/entity.model';
 import { CLUSTERED_TYPES, clusterDiscSpec, clusterGroupFor, syncLabelGlyphClusterShow } from './entity-clusters';
 
 describe('clusterGroupFor', () => {
-  it('routes aircraft, vessels and vehicles to their own cluster group', () => {
+  it('routes aircraft, vessels, vehicles and satellites to their own cluster group', () => {
     expect(clusterGroupFor(EntityType.AIRCRAFT)).toBe(EntityType.AIRCRAFT);
     expect(clusterGroupFor(EntityType.VESSEL)).toBe(EntityType.VESSEL);
     expect(clusterGroupFor(EntityType.VEHICLE)).toBe(EntityType.VEHICLE);
-    expect(CLUSTERED_TYPES).toEqual([EntityType.AIRCRAFT, EntityType.VESSEL, EntityType.VEHICLE]);
+    expect(clusterGroupFor(EntityType.SATELLITE)).toBe(EntityType.SATELLITE);
+    expect(CLUSTERED_TYPES).toEqual([EntityType.AIRCRAFT, EntityType.VESSEL, EntityType.VEHICLE, EntityType.SATELLITE]);
   });
 
   it('leaves every other type in the default collection', () => {
-    for (const type of [EntityType.SATELLITE, EntityType.FACILITY, EntityType.PERSON, EntityType.SIGNAL, EntityType.DRONE, EntityType.UNKNOWN]) {
+    for (const type of [EntityType.FACILITY, EntityType.PERSON, EntityType.SIGNAL, EntityType.DRONE, EntityType.UNKNOWN]) {
       expect(clusterGroupFor(type)).toBeNull();
     }
   });

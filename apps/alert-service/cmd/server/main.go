@@ -76,7 +76,7 @@ func main() {
 	healthHandler.AddCheck("kafka", posConsumer.Health)
 	healthHandler.RegisterRoutes(mux)
 
-	alertHandler := handler.NewAlertHandler(alertStore, logger)
+	alertHandler := handler.NewAlertHandler(alertStore, eval, logger)
 	alertHandler.RegisterRoutes(mux)
 
 	corsMiddleware := middleware.CORS(cfg.CORSOrigin)

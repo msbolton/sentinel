@@ -45,7 +45,6 @@ export class EntityService implements OnDestroy {
   private static readonly EVICTION_INTERVAL_MS = 30_000;
 
   private readonly apiUrl = '/api/v1/entities';
-  private readonly searchUrl = '/api/v1/search';
   private readonly wsSubscription: Subscription;
   private readonly ageoutSubscription: Subscription;
   private readonly evictionSubscription: Subscription;
@@ -166,11 +165,6 @@ export class EntityService implements OnDestroy {
         this.entitiesSubject.next(map);
       }),
     );
-  }
-
-  searchEntities(query: string): Observable<PaginatedResponse<Entity>> {
-    const params = new HttpParams().set('q', query);
-    return this.http.get<PaginatedResponse<Entity>>(this.searchUrl, { params });
   }
 
   getEntityById(id: string): Entity | undefined {

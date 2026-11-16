@@ -45,3 +45,26 @@ type BufferedPoint struct {
 	ObservationID  *string
 	EntityType     *string
 }
+
+// BBox is a geographic box in degrees. West > East means it crosses the
+// antimeridian.
+type BBox struct{ West, South, East, North float64 }
+
+// ReplayEntity is one track in a replay; Points are
+// [epochMs, lon, lat, altM|null, headingDeg|null].
+type ReplayEntity struct {
+	EntityID       string        `json:"entityId"`
+	EntityType     string        `json:"entityType"`
+	Name           string        `json:"name"`
+	Classification string        `json:"classification"`
+	Points         [][5]*float64 `json:"points"`
+}
+
+// ReplayResponse is the body of GET /api/v1/tracks/replay. Truncated is set
+// when more tracks matched than were returned.
+type ReplayResponse struct {
+	StartTime time.Time      `json:"startTime"`
+	EndTime   time.Time      `json:"endTime"`
+	Entities  []ReplayEntity `json:"entities"`
+	Truncated bool           `json:"truncated"`
+}

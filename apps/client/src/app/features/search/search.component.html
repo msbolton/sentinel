@@ -95,14 +95,21 @@
       </div>
     }
 
-    @if (!loading() && results().length === 0 && searchQuery()) {
+    @if (!loading() && failed()) {
+      <div class="empty-state">
+        <span class="empty-icon"><app-icon name="alert-triangle" [size]="32" [strokeWidth]="1.5" /></span>
+        <p>Search is unavailable. Try again in a moment.</p>
+      </div>
+    }
+
+    @if (!loading() && !failed() && results().length === 0 && searchQuery().trim().length >= 2) {
       <div class="empty-state">
         <span class="empty-icon"><app-icon name="search" [size]="32" [strokeWidth]="1.5" /></span>
         <p>No entities found matching "{{ searchQuery() }}"</p>
       </div>
     }
 
-    @if (!loading() && results().length === 0 && !searchQuery()) {
+    @if (!loading() && results().length === 0 && searchQuery().trim().length < 2) {
       <div class="empty-state">
         <span class="empty-icon"><app-icon name="search" [size]="32" [strokeWidth]="1.5" /></span>
         <p>Enter a search term to find entities</p>
@@ -110,7 +117,7 @@
     }
 
     @for (entity of results(); track entity.id) {
-      <div class="entity-card" (click)="selectEntity(entity)">
+      <button type="button" class="entity-card" [class.selected]="isSelected(entity)" [attr.aria-pressed]="isSelected(entity)" (click)="selectEntity(entity)">
         <div class="entity-card-header">
           <span
             class="entity-dot"
@@ -141,7 +148,7 @@
             </span>
           }
         </div>
-      </div>
+      </button>
     }
   </div>
 </div>

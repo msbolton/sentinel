@@ -125,6 +125,21 @@ describe('EntityDetailPanelComponent', () => {
     nowSpy.mockRestore();
   });
 
+  it('hides link analysis from a viewer', () => {
+    fixture.componentRef.setInput('entity', makeEntity({ id: 'ent-1' }));
+    fixture.detectChanges();
+    expect(el.querySelector('button[aria-label="Show links"]')).toBeNull();
+  });
+
+  it('opens link analysis on the track for an analyst', () => {
+    auth.hasAnyRole.mockReturnValue(true);
+    fixture.componentRef.setInput('entity', makeEntity({ id: 'ent-2' }));
+    fixture.detectChanges();
+    const navigate = jest.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    (el.querySelector('button[aria-label="Show links"]') as HTMLButtonElement).click();
+    expect(navigate).toHaveBeenCalledWith(['/link-graph'], { queryParams: { entity: 'ent-2' } });
+  });
+
   it('shows the origin rows for an entity that came through TAK', () => {
     fixture.componentRef.setInput(
       'entity',

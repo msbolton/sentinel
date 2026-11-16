@@ -1,10 +1,12 @@
-import { Component, OnInit, OnDestroy, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, OnInit, OnDestroy, signal, ChangeDetectionStrategy, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { IconComponent, IconName } from '../../shared/components/icon.component';
 import { Subscription } from 'rxjs';
 import { Alert, AlertSeverity, AlertType } from '../../shared/models/alert.model';
 import { AlertService } from '../../core/services/alert.service';
+import { EntityService } from '../../core/services/entity.service';
+import { SelectionService } from '../../core/services/selection.service';
 
 @Component({
   selector: 'app-alerts',
@@ -26,11 +28,15 @@ export class AlertsComponent implements OnInit, OnDestroy {
   alertTypes = Object.values(AlertType);
 
   private subscriptions = new Subscription();
+  private readonly selection = inject(SelectionService);
+  private readonly entities = inject(EntityService);
 
   constructor(private readonly alertService: AlertService) {}
 
   ngOnInit(): void {
     this.loadAlerts();
+    // The service's first count ran at app start, which may have been before login.
+    this.alertService.refreshUnacknowledgedCount();
 
     // Subscribe to real-time alerts
     const alertSub = this.alertService.alertStream$.subscribe((alert) => {
@@ -56,7 +62,7 @@ export class AlertsComponent implements OnInit, OnDestroy {
         severity: this.selectedSeverity() ?? undefined,
         alertType: this.selectedType() ?? undefined,
         acknowledged: this.showAcknowledged() ? undefined : false,
-        limit: 100,
+        pageSize: 100,
       })
       .subscribe({
         next: (response) => {
@@ -112,11 +118,25 @@ export class AlertsComponent implements OnInit, OnDestroy {
     this.loadAlerts();
   }
 
+  /**
+   * Selects the alerted track: from the map's cache when it is loaded, else
+   * fetched from the API; when there is no track to show, flies to where the
+   * alert fired.
+   */
   flyToAlert(alert: Alert): void {
-    if (alert.position) {
-      console.log('Fly to alert position:', alert.position);
-      // TODO: communicate with map component to fly to position
+    const flyToPosition = () => {
+      if (alert.position) this.selection.flyTo({ lat: alert.position.latitude, lon: alert.position.longitude });
+    };
+    if (!alert.entityId) {
+      flyToPosition();
+      return;
     }
+    if (this.selection.selectById(alert.entityId)) return;
+    const sub = this.entities.getEntity(alert.entityId).subscribe({
+      next: (entity) => this.selection.select(entity),
+      error: flyToPosition,
+    });
+    this.subscriptions.add(sub);
   }
 
   getSeverityIcon(severity: AlertSeverity): IconName {

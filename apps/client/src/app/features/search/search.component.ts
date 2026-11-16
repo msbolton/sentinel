@@ -1,31 +1,47 @@
-import { Component, OnInit, OnDestroy, signal, computed, ChangeDetectionStrategy } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
+import { toObservable } from '@angular/core/rxjs-interop';
+import { Subject, Subscription, catchError, debounceTime, map, of, switchMap } from 'rxjs';
 import { IconComponent } from '../../shared/components/icon.component';
-import { Subject, Subscription, debounceTime, distinctUntilChanged, switchMap, of } from 'rxjs';
-import {
-  Entity,
-  EntityType,
-  EntitySource,
-  Classification,
-  PaginatedResponse,
-} from '../../shared/models/entity.model';
+import { Classification, Entity, EntitySource, EntityType } from '../../shared/models/entity.model';
+import { SearchHit, SearchRequest, hitToEntity } from '../../shared/models/search.model';
 import { EntityService } from '../../core/services/entity.service';
-import { MapComponent } from '../map/map.component';
+import { MapViewportService } from '../../core/services/map-viewport.service';
+import { SearchService } from '../../core/services/search.service';
+import { SelectionService } from '../../core/services/selection.service';
 
+/** Shorter queries are not sent; the index needs two characters to match anything. */
+const MIN_QUERY_LENGTH = 2;
+const DEBOUNCE_MS = 300;
+export const RESULTS_PAGE_SIZE = 50;
+
+/**
+ * Full-text search over the track index. The query, filters and the viewport
+ * toggle feed one request; clicking a hit selects the track on the map, from
+ * the live cache when it is there, else fetched, else by flying to where the
+ * index last saw it.
+ */
 @Component({
   selector: 'app-search',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule, IconComponent],
+  imports: [CommonModule, IconComponent],
   templateUrl: './search.component.html',
   styleUrls: ['./search.component.scss'],
 })
-export class SearchComponent implements OnInit, OnDestroy {
+export class SearchComponent implements OnInit {
+  private readonly search = inject(SearchService);
+  private readonly entities = inject(EntityService);
+  private readonly selection = inject(SelectionService);
+  private readonly viewport = inject(MapViewportService);
+  private readonly destroyRef = inject(DestroyRef);
+
   searchQuery = signal<string>('');
   results = signal<Entity[]>([]);
   totalResults = signal<number>(0);
   loading = signal<boolean>(false);
+  /** The last request failed; the empty state says so instead of "no matches". */
+  failed = signal<boolean>(false);
   selectedEntityTypes = signal<Set<EntityType>>(new Set());
   selectedSources = signal<Set<EntitySource>>(new Set());
   selectedClassification = signal<Classification | null>(null);
@@ -35,76 +51,71 @@ export class SearchComponent implements OnInit, OnDestroy {
   entitySources = Object.values(EntitySource);
   classifications = Object.values(Classification);
 
-  private searchSubject = new Subject<string>();
-  private subscriptions = new Subscription();
+  /** The request the current inputs describe, or null while the query is too short. */
+  readonly request = computed<SearchRequest | null>(() => {
+    const q = this.searchQuery().trim();
+    if (q.length < MIN_QUERY_LENGTH) return null;
+    const types = [...this.selectedEntityTypes()];
+    const sources = [...this.selectedSources()];
+    const cls = this.selectedClassification();
+    const bounds = this.geoBounded() ? this.viewport.bounds() : null;
+    return {
+      q,
+      ...(types.length ? { types } : {}),
+      ...(sources.length ? { sources } : {}),
+      ...(cls ? { classifications: [cls] } : {}),
+      ...(bounds ? { bounds } : {}),
+      pageSize: RESULTS_PAGE_SIZE,
+    };
+  });
 
-  constructor(private readonly entityService: EntityService) {}
+  /** Typing re-arms the debounce; filter and toggle changes go through the same pipe. */
+  private readonly requests$ = toObservable(this.request);
+  private readonly selectRequests = new Subject<Entity>();
+  private readonly subscriptions = new Subscription();
 
   ngOnInit(): void {
-    const sub = this.searchSubject
-      .pipe(
-        debounceTime(300),
-        distinctUntilChanged(),
-        switchMap((query) => {
-          if (!query || query.trim().length < 2) {
-            return of({ data: [], total: 0 } as PaginatedResponse<Entity>);
-          }
-          this.loading.set(true);
-          return this.entityService.searchEntities(query);
+    this.subscriptions.add(
+      this.requests$
+        .pipe(
+          debounceTime(DEBOUNCE_MS),
+          switchMap((req) => {
+            if (!req) return of({ hits: [] as SearchHit[], total: 0, failed: false });
+            this.loading.set(true);
+            return this.search.search(req).pipe(
+              map((res) => ({ hits: res.hits, total: res.total, failed: false })),
+              catchError(() => of({ hits: [] as SearchHit[], total: 0, failed: true })),
+            );
+          }),
+        )
+        .subscribe(({ hits, total, failed }) => {
+          this.results.set(hits.map(hitToEntity));
+          this.totalResults.set(total);
+          this.failed.set(failed);
+          this.loading.set(false);
         }),
-      )
-      .subscribe({
-        next: (response) => {
-          this.results.set(response.data);
-          this.totalResults.set(response.pagination?.total ?? response.total ?? 0);
-          this.loading.set(false);
-        },
-        error: () => {
-          this.loading.set(false);
-        },
-      });
-    this.subscriptions.add(sub);
-  }
-
-  ngOnDestroy(): void {
-    this.subscriptions.unsubscribe();
+    );
+    this.destroyRef.onDestroy(() => this.subscriptions.unsubscribe());
   }
 
   onSearchInput(value: string): void {
     this.searchQuery.set(value);
-    this.searchSubject.next(value);
   }
 
   toggleEntityType(type: EntityType): void {
-    const current = new Set(this.selectedEntityTypes());
-    if (current.has(type)) {
-      current.delete(type);
-    } else {
-      current.add(type);
-    }
-    this.selectedEntityTypes.set(current);
-    this.applyFilters();
+    this.selectedEntityTypes.update((current) => toggled(current, type));
   }
 
   toggleSource(source: EntitySource): void {
-    const current = new Set(this.selectedSources());
-    if (current.has(source)) {
-      current.delete(source);
-    } else {
-      current.add(source);
-    }
-    this.selectedSources.set(current);
-    this.applyFilters();
+    this.selectedSources.update((current) => toggled(current, source));
   }
 
   setClassification(classification: Classification | null): void {
     this.selectedClassification.set(classification);
-    this.applyFilters();
   }
 
   toggleGeoBounded(): void {
-    this.geoBounded.set(!this.geoBounded());
-    this.applyFilters();
+    this.geoBounded.update((on) => !on);
   }
 
   clearFilters(): void {
@@ -112,7 +123,6 @@ export class SearchComponent implements OnInit, OnDestroy {
     this.selectedSources.set(new Set());
     this.selectedClassification.set(null);
     this.geoBounded.set(false);
-    this.applyFilters();
   }
 
   hasActiveFilters(): boolean {
@@ -124,9 +134,24 @@ export class SearchComponent implements OnInit, OnDestroy {
     );
   }
 
+  /**
+   * Selects the hit's track: the live one when the map has it, else the
+   * entity service's copy, else the indexed position (the track may have
+   * aged out of the live set but still be in the index).
+   */
   selectEntity(entity: Entity): void {
-    // TODO: Fly to entity on map
-    console.log('Selected entity:', entity.id, entity.name);
+    if (this.selection.selectById(entity.id)) return;
+    const fallback = () => this.selection.select(entity);
+    this.subscriptions.add(
+      this.entities.getEntity(entity.id).subscribe({
+        next: (live) => this.selection.select(live),
+        error: fallback,
+      }),
+    );
+  }
+
+  isSelected(entity: Entity): boolean {
+    return this.selection.entity()?.id === entity.id;
   }
 
   getEntityTypeColor(type: EntityType): string {
@@ -144,29 +169,11 @@ export class SearchComponent implements OnInit, OnDestroy {
     };
     return colorMap[type] ?? 'var(--text-muted)';
   }
+}
 
-  private applyFilters(): void {
-    // Re-trigger search with current query
-    const query = this.searchQuery();
-    if (query && query.trim().length >= 2) {
-      this.loading.set(true);
-      this.entityService.getEntities({
-        entityTypes: this.selectedEntityTypes().size > 0
-          ? [...this.selectedEntityTypes()]
-          : undefined,
-        sources: this.selectedSources().size > 0
-          ? [...this.selectedSources()]
-          : undefined,
-        classification: this.selectedClassification() ?? undefined,
-        pageSize: 50,
-      }).subscribe({
-        next: (response) => {
-          this.results.set(response.data);
-          this.totalResults.set(response.pagination?.total ?? response.total ?? 0);
-          this.loading.set(false);
-        },
-        error: () => this.loading.set(false),
-      });
-    }
-  }
+function toggled<T>(current: Set<T>, value: T): Set<T> {
+  const next = new Set(current);
+  if (next.has(value)) next.delete(value);
+  else next.add(value);
+  return next;
 }

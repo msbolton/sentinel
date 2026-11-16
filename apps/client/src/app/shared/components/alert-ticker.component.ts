@@ -93,7 +93,7 @@ export class AlertTickerComponent {
 
   constructor() {
     this.service
-      .getAlerts({ acknowledged: false, limit: TICKER_MAX })
+      .getAlerts({ acknowledged: false, pageSize: TICKER_MAX })
       .pipe(
         catchError(() => of({ data: [] as Alert[] })),
         takeUntilDestroyed(),

@@ -1,6 +1,6 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
-import { BehaviorSubject, Observable, Subject, Subscription, map, merge, scan, startWith } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, Subscription, map, merge } from 'rxjs';
 import { WebSocketService } from './websocket.service';
 import {
   Alert,
@@ -29,14 +29,12 @@ export class AlertService implements OnDestroy {
   ) {
     this.alertStream$ = merge(this.wsService.alertStream$, this.localUpdates);
 
-    // Track unacknowledged count from real-time alerts
-    this.wsSubscription = this.wsService.alertStream$.pipe(
-      scan((count, alert) => alert.acknowledged ? count : count + 1, 0),
-      startWith(0),
-    ).subscribe((count) => {
-      this.unacknowledgedCountSubject.next(
-        this.unacknowledgedCountSubject.value + (count > 0 ? 1 : 0),
-      );
+    // A new alert on the stream is one more to acknowledge. An acknowledged
+    // one is an update (ours echoed back, or another operator's), and the
+    // server knows the count.
+    this.wsSubscription = this.wsService.alertStream$.subscribe((alert) => {
+      if (alert.acknowledged) this.refreshUnacknowledgedCount();
+      else this.unacknowledgedCountSubject.next(this.unacknowledgedCountSubject.value + 1);
     });
 
     // Also load initial count
@@ -51,11 +49,11 @@ export class AlertService implements OnDestroy {
     let params = new HttpParams();
     if (query) {
       if (query.severity) params = params.set('severity', query.severity);
-      if (query.alertType) params = params.set('alertType', query.alertType);
+      if (query.alertType) params = params.set('types', query.alertType);
       if (query.acknowledged !== undefined) params = params.set('acknowledged', query.acknowledged.toString());
       if (query.entityId) params = params.set('entityId', query.entityId);
-      if (query.limit !== undefined) params = params.set('limit', query.limit.toString());
-      if (query.offset !== undefined) params = params.set('offset', query.offset.toString());
+      if (query.page !== undefined) params = params.set('page', query.page.toString());
+      if (query.pageSize !== undefined) params = params.set('pageSize', query.pageSize.toString());
     }
 
     return this.http.get<PaginatedResponse<Alert>>(this.apiUrl, { params });
@@ -81,7 +79,7 @@ export class AlertService implements OnDestroy {
       .get<PaginatedResponse<Alert>>(this.apiUrl, {
         params: new HttpParams()
           .set('acknowledged', 'false')
-          .set('limit', '0'),
+          .set('pageSize', '1'),
       })
       .subscribe({
         next: (response) => this.unacknowledgedCountSubject.next(response.total ?? 0),

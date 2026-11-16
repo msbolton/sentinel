@@ -1,326 +1,252 @@
 import {
-  Component,
-  OnInit,
-  OnDestroy,
   AfterViewInit,
-  ViewChild,
-  ElementRef,
-  signal,
-  NgZone,
   ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  OnDestroy,
+  OnInit,
+  computed,
+  inject,
+  signal,
+  viewChild,
 } from '@angular/core';
-import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
+import {
+  REPLAY_SPEEDS,
+  ReplayService,
+  WINDOW_PRESETS,
+  WindowPreset,
+} from '../../core/services/replay.service';
 import { IconComponent } from '../../shared/components/icon.component';
-import { HttpClient, HttpParams } from '@angular/common/http';
-import { Subscription, interval } from 'rxjs';
-import { PlaybackState, TimelineEvent } from '../../shared/models/track.model';
-import { monoFont } from '../../shared/mono-font';
+import { formatDtg } from '../../shared/dtg';
+import { stackBuckets, tickLabels, timeToX, typeColorVar, xToTime } from './timeline-scale';
 
+/** The svg's drawing height; bars sit above the baseline and tick labels below it. */
+const SVG_HEIGHT = 48;
+const BAR_HEIGHT = 34;
+const TICK_Y = 46;
+/** Used until the ResizeObserver reports a width (and always in jsdom). */
+const FALLBACK_WIDTH = 600;
+/** A press this close to the playhead grabs it to scrub; Shift, or a press elsewhere, brushes a range. */
+const PLAYHEAD_GRAB_PX = 6;
+/** Movement below this is still a click. */
+const DRAG_THRESHOLD_PX = 3;
+
+interface Drag {
+  kind: 'scrub' | 'brush';
+  startX: number;
+  anchor: Date;
+  moved: boolean;
+  /** Playback was running when the scrub began and resumes when it ends. */
+  resume: boolean;
+}
+
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+const hhmm = (d: Date): string => `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+
+/**
+ * The replay strip along the bottom of the map. Opening it puts the map into
+ * replay; it reads and drives {@link ReplayService} and holds no time of its own.
+ */
 @Component({
   selector: 'app-timeline',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule, IconComponent],
+  imports: [IconComponent],
   templateUrl: './timeline.component.html',
   styleUrls: ['./timeline.component.scss'],
 })
-export class TimelineComponent implements OnInit, OnDestroy, AfterViewInit {
-  @ViewChild('timelineCanvas', { static: true })
-  timelineCanvas!: ElementRef<HTMLCanvasElement>;
+export class TimelineComponent implements OnInit, AfterViewInit, OnDestroy {
+  protected readonly replay = inject(ReplayService);
+  private readonly router = inject(Router);
 
-  @ViewChild('brushOverlay', { static: true })
-  brushOverlay!: ElementRef<HTMLDivElement>;
+  private readonly histogram = viewChild.required<ElementRef<HTMLElement>>('histogram');
+  private resizeObserver: ResizeObserver | null = null;
+  private drag: Drag | null = null;
 
-  playing = signal<boolean>(false);
-  speed = signal<number>(1);
-  currentTime = signal<Date>(new Date());
-  startTime = signal<Date>(new Date(Date.now() - 24 * 60 * 60 * 1000)); // 24h ago
-  endTime = signal<Date>(new Date());
-  brushStart = signal<Date | null>(null);
-  brushEnd = signal<Date | null>(null);
-  entityCountAtTime = signal<number>(0);
-  timelineEvents = signal<TimelineEvent[]>([]);
+  protected readonly presets = Object.keys(WINDOW_PRESETS) as WindowPreset[];
+  protected readonly speeds = REPLAY_SPEEDS;
+  protected readonly svgHeight = SVG_HEIGHT;
+  protected readonly barHeight = BAR_HEIGHT;
+  protected readonly tickY = TICK_Y;
+  protected readonly typeColorVar = typeColorVar;
 
-  speeds = [0.5, 1, 2, 5, 10, 30, 60];
+  protected readonly width = signal(FALLBACK_WIDTH);
 
-  private playbackSubscription: Subscription | null = null;
-  private subscriptions = new Subscription();
-  private d3: any = null;
-  private canvasCtx: CanvasRenderingContext2D | null = null;
-  private isDragging = false;
-  private dragStartX = 0;
+  protected readonly columns = computed(() => {
+    const buckets = this.replay.buckets();
+    return stackBuckets(buckets, BAR_HEIGHT, this.width()).map((bar, i) => ({
+      ...bar,
+      drawWidth: bar.width > 2 ? bar.width - 1 : bar.width,
+      title: `${formatDtg(new Date(buckets[i].timestamp))} · ${buckets[i].count}`,
+    }));
+  });
 
-  constructor(
-    private readonly ngZone: NgZone,
-    private readonly http: HttpClient,
-  ) {}
+  protected readonly ticks = computed(() => {
+    const width = this.width();
+    const labels = tickLabels(this.replay.window());
+    return labels.map((t, i) => ({
+      x: t.x * width,
+      label: t.label,
+      anchor: i === 0 ? 'start' : i === labels.length - 1 ? 'end' : 'middle',
+    }));
+  });
+
+  protected readonly playheadX = computed(() => timeToX(this.replay.cursor(), this.replay.window(), this.width()));
+  protected readonly capPoints = computed(() => {
+    const x = this.playheadX();
+    return `${x - 3},0 ${x + 3},0 ${x},5`;
+  });
+
+  protected readonly rangeBand = computed(() => {
+    const range = this.replay.range();
+    if (!range) return null;
+    const x = timeToX(range.start, this.replay.window(), this.width());
+    return { x, width: timeToX(range.end, this.replay.window(), this.width()) - x };
+  });
+
+  /** Either request in flight: the histogram and the replay arrive separately. */
+  protected readonly loading = computed(
+    () => this.replay.bucketsStatus() === 'loading' || this.replay.replayStatus() === 'loading',
+  );
+  /** Either request failed: there is nothing trustworthy to play until a retry succeeds. */
+  protected readonly failed = computed(
+    () => this.replay.bucketsStatus() === 'failed' || this.replay.replayStatus() === 'failed',
+  );
+  protected readonly empty = computed(
+    () => this.replay.bucketsStatus() === 'ready' && this.replay.buckets().every((b) => b.count === 0),
+  );
+  protected readonly transportDisabled = computed(() => this.empty() || this.failed());
+
+  protected readonly dtg = computed(() => formatDtg(this.replay.cursor()));
+  protected readonly rangeText = computed(() => {
+    const range = this.replay.range();
+    return range ? `${hhmm(range.start)} – ${hhmm(range.end)}` : null;
+  });
 
   ngOnInit(): void {
-    this.loadTimelineData();
+    this.replay.enter();
   }
 
-  async ngAfterViewInit(): Promise<void> {
-    this.setupCanvas();
-    this.setupBrushInteraction();
-    this.renderTimeline();
+  ngAfterViewInit(): void {
+    if (typeof ResizeObserver === 'undefined') return;
+    this.resizeObserver = new ResizeObserver(([entry]) => {
+      const width = Math.round(entry.contentRect.width);
+      if (width > 0) this.width.set(width);
+    });
+    this.resizeObserver.observe(this.histogram().nativeElement);
   }
 
   ngOnDestroy(): void {
-    this.pause();
-    this.subscriptions.unsubscribe();
+    this.resizeObserver?.disconnect();
+    this.replay.exit();
   }
 
-  private setupCanvas(): void {
-    const canvas = this.timelineCanvas.nativeElement;
-    const rect = canvas.parentElement?.getBoundingClientRect();
-    if (rect) {
-      canvas.width = rect.width;
-      canvas.height = rect.height;
+  protected playPause(): void {
+    if (this.transportDisabled()) return;
+    // Never toggle(): play() rewinds from the end of the bounds, toggle() does not.
+    if (this.replay.playing()) this.replay.pause();
+    else this.replay.play();
+  }
+
+  protected step(n: number): void {
+    if (this.transportDisabled()) return;
+    if (n > 0) this.replay.stepForward(n);
+    else this.replay.stepBack(-n);
+  }
+
+  protected goLive(): void {
+    this.replay.exit();
+    void this.router.navigate(['/map']);
+  }
+
+  protected onKeydown(e: KeyboardEvent): void {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    switch (e.key) {
+      case ' ':
+        // A focused button activates itself on Space.
+        if (e.target instanceof HTMLButtonElement) return;
+        this.playPause();
+        break;
+      case 'ArrowLeft':
+        this.step(e.shiftKey ? -10 : -1);
+        break;
+      case 'ArrowRight':
+        this.step(e.shiftKey ? 10 : 1);
+        break;
+      case 'Escape':
+        this.replay.clearRange();
+        break;
+      case 'l':
+      case 'L':
+        this.goLive();
+        break;
+      case '1':
+      case '2':
+      case '3':
+      case '4':
+        this.replay.setSpeed(REPLAY_SPEEDS[Number(e.key) - 1]);
+        break;
+      default:
+        return;
     }
-    this.canvasCtx = canvas.getContext('2d');
+    e.preventDefault();
   }
 
-  private setupBrushInteraction(): void {
-    const overlay = this.brushOverlay.nativeElement;
+  protected onPointerDown(e: PointerEvent): void {
+    if (e.button !== 0) return;
+    const x = this.localX(e);
+    const grabsPlayhead = Math.abs(x - this.playheadX()) <= PLAYHEAD_GRAB_PX;
+    this.drag = {
+      kind: grabsPlayhead && !e.shiftKey ? 'scrub' : 'brush',
+      startX: x,
+      anchor: this.timeAt(x),
+      moved: false,
+      resume: false,
+    };
+    const target = e.currentTarget as Element;
+    if (e.pointerId !== undefined) target.setPointerCapture?.(e.pointerId);
+  }
 
-    overlay.addEventListener('mousedown', (e: MouseEvent) => {
-      this.isDragging = true;
-      this.dragStartX = e.offsetX;
-      this.brushStart.set(this.xToTime(e.offsetX));
-      this.brushEnd.set(null);
-    });
-
-    overlay.addEventListener('mousemove', (e: MouseEvent) => {
-      if (!this.isDragging) return;
-      this.brushEnd.set(this.xToTime(e.offsetX));
-      this.renderTimeline();
-    });
-
-    overlay.addEventListener('mouseup', () => {
-      this.isDragging = false;
-      if (this.brushStart() && this.brushEnd()) {
-        // Ensure start < end
-        const s = this.brushStart()!;
-        const e = this.brushEnd()!;
-        if (s > e) {
-          this.brushStart.set(e);
-          this.brushEnd.set(s);
-        }
+  protected onPointerMove(e: PointerEvent): void {
+    const drag = this.drag;
+    if (!drag) return;
+    const x = this.localX(e);
+    if (!drag.moved) {
+      if (Math.abs(x - drag.startX) < DRAG_THRESHOLD_PX) return;
+      drag.moved = true;
+      if (drag.kind === 'scrub' && this.replay.playing()) {
+        drag.resume = true;
+        this.replay.pause();
       }
-    });
-
-    overlay.addEventListener('dblclick', () => {
-      // Clear brush
-      this.brushStart.set(null);
-      this.brushEnd.set(null);
-      this.renderTimeline();
-    });
-  }
-
-  private loadTimelineData(): void {
-    const params = new HttpParams()
-      .set('startTime', this.startTime().toISOString())
-      .set('endTime', this.endTime().toISOString())
-      .set('buckets', '100');
-
-    this.http
-      .get<TimelineEvent[]>('/api/v1/tracks/timeline', { params })
-      .subscribe({
-        next: (events) => {
-          this.timelineEvents.set(events);
-          this.renderTimeline();
-        },
-        error: () => {
-          // Generate placeholder data for visualization
-          this.generatePlaceholderData();
-          this.renderTimeline();
-        },
-      });
-  }
-
-  private generatePlaceholderData(): void {
-    const events: TimelineEvent[] = [];
-    const start = this.startTime().getTime();
-    const end = this.endTime().getTime();
-    const step = (end - start) / 100;
-
-    for (let i = 0; i < 100; i++) {
-      const t = start + i * step;
-      events.push({
-        timestamp: new Date(t).toISOString(),
-        count: Math.floor(Math.random() * 50 + 10),
-        entityTypes: {
-          PERSON: Math.floor(Math.random() * 15),
-          VEHICLE: Math.floor(Math.random() * 10),
-          VESSEL: Math.floor(Math.random() * 8),
-          AIRCRAFT: Math.floor(Math.random() * 5),
-          FACILITY: Math.floor(Math.random() * 3),
-        },
-      });
     }
-    this.timelineEvents.set(events);
-  }
-
-  renderTimeline(): void {
-    if (!this.canvasCtx) return;
-
-    const ctx = this.canvasCtx;
-    const canvas = this.timelineCanvas.nativeElement;
-    const w = canvas.width;
-    const h = canvas.height;
-
-    // Clear
-    ctx.clearRect(0, 0, w, h);
-
-    // Background
-    ctx.fillStyle = '#111827';
-    ctx.fillRect(0, 0, w, h);
-
-    const events = this.timelineEvents();
-    if (events.length === 0) return;
-
-    const maxCount = Math.max(...events.map((e) => e.count), 1);
-    const barWidth = w / events.length;
-    const padding = 8;
-
-    // Draw histogram bars
-    events.forEach((event, i) => {
-      const barHeight = ((event.count / maxCount) * (h - padding * 2));
-      const x = i * barWidth;
-      const y = h - padding - barHeight;
-
-      // Bar color based on density
-      const intensity = event.count / maxCount;
-      if (intensity > 0.8) {
-        ctx.fillStyle = 'rgba(239, 68, 68, 0.6)';
-      } else if (intensity > 0.5) {
-        ctx.fillStyle = 'rgba(245, 158, 11, 0.5)';
-      } else if (intensity > 0.2) {
-        ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
-      } else {
-        ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
-      }
-
-      ctx.fillRect(x + 0.5, y, barWidth - 1, barHeight);
-    });
-
-    // Draw brush selection
-    if (this.brushStart() && this.brushEnd()) {
-      const sx = this.timeToX(this.brushStart()!);
-      const ex = this.timeToX(this.brushEnd()!);
-      ctx.fillStyle = 'rgba(59, 130, 246, 0.15)';
-      ctx.fillRect(Math.min(sx, ex), 0, Math.abs(ex - sx), h);
-      ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(Math.min(sx, ex), 0, Math.abs(ex - sx), h);
-    }
-
-    // Draw current time indicator
-    const currentX = this.timeToX(this.currentTime());
-    if (currentX >= 0 && currentX <= w) {
-      ctx.strokeStyle = '#ef4444';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(currentX, 0);
-      ctx.lineTo(currentX, h);
-      ctx.stroke();
-    }
-
-    // Time labels
-    ctx.fillStyle = '#5a6a80';
-    ctx.font = `10px ${monoFont()}`;
-    ctx.textAlign = 'center';
-
-    const labelCount = 6;
-    for (let i = 0; i <= labelCount; i++) {
-      const x = (w / labelCount) * i;
-      const time = this.xToTime(x);
-      const label = time.toISOString().substring(11, 16); // HH:mm
-      ctx.fillText(label, x, h - 1);
+    if (drag.kind === 'scrub') this.replay.seek(this.timeAt(x));
+    else {
+      const t = this.timeAt(x);
+      if (t < drag.anchor) this.replay.setRange(t, drag.anchor);
+      else this.replay.setRange(drag.anchor, t);
     }
   }
 
-  play(): void {
-    if (this.playing()) return;
-
-    this.playing.set(true);
-    const stepMs = 60000 * this.speed(); // 1 minute * speed
-
-    this.playbackSubscription = interval(100).subscribe(() => {
-      const next = new Date(this.currentTime().getTime() + stepMs);
-      if (next > this.endTime()) {
-        this.currentTime.set(this.startTime());
-      } else {
-        this.currentTime.set(next);
-      }
-      this.renderTimeline();
-    });
+  protected onPointerUp(e: PointerEvent): void {
+    const drag = this.drag;
+    if (!drag) return;
+    this.drag = null;
+    if (!drag.moved) this.replay.seek(this.timeAt(this.localX(e)));
+    else if (drag.resume) this.replay.play();
   }
 
-  pause(): void {
-    this.playing.set(false);
-    if (this.playbackSubscription) {
-      this.playbackSubscription.unsubscribe();
-      this.playbackSubscription = null;
-    }
+  protected onPointerCancel(): void {
+    if (this.drag?.resume) this.replay.play();
+    this.drag = null;
   }
 
-  togglePlayback(): void {
-    if (this.playing()) {
-      this.pause();
-    } else {
-      this.play();
-    }
+  private localX(e: MouseEvent): number {
+    const svg = e.currentTarget as Element;
+    return e.clientX - svg.getBoundingClientRect().left;
   }
 
-  setSpeed(speed: number): void {
-    this.speed.set(speed);
-    if (this.playing()) {
-      this.pause();
-      this.play();
-    }
-  }
-
-  skipBackward(): void {
-    const step = 5 * 60000 * this.speed();
-    const next = new Date(this.currentTime().getTime() - step);
-    this.currentTime.set(next < this.startTime() ? this.startTime() : next);
-    this.renderTimeline();
-  }
-
-  skipForward(): void {
-    const step = 5 * 60000 * this.speed();
-    const next = new Date(this.currentTime().getTime() + step);
-    this.currentTime.set(next > this.endTime() ? this.endTime() : next);
-    this.renderTimeline();
-  }
-
-  resetTime(): void {
-    this.pause();
-    this.currentTime.set(new Date());
-    this.brushStart.set(null);
-    this.brushEnd.set(null);
-    this.renderTimeline();
-  }
-
-  formatTime(date: Date): string {
-    return date.toISOString().replace('T', ' ').substring(0, 19) + 'Z';
-  }
-
-  private timeToX(time: Date): number {
-    const canvas = this.timelineCanvas.nativeElement;
-    const start = this.startTime().getTime();
-    const end = this.endTime().getTime();
-    const ratio = (time.getTime() - start) / (end - start);
-    return ratio * canvas.width;
-  }
-
-  private xToTime(x: number): Date {
-    const canvas = this.timelineCanvas.nativeElement;
-    const start = this.startTime().getTime();
-    const end = this.endTime().getTime();
-    const ratio = x / canvas.width;
-    return new Date(start + ratio * (end - start));
+  private timeAt(x: number): Date {
+    return xToTime(x, this.replay.window(), this.width());
   }
 }

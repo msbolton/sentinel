@@ -1,11 +1,13 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { BehaviorSubject } from 'rxjs';
 import { TrackStackComponent } from './track-stack.component';
 import { EntityService } from '../../core/services/entity.service';
 import { MapViewportService } from '../../core/services/map-viewport.service';
 import { SelectionService } from '../../core/services/selection.service';
+import { ReplayMode, ReplayService } from '../../core/services/replay.service';
 import { Affiliation, Classification, Entity, EntitySource, EntityType } from '../models/entity.model';
 
 const NOW = Date.parse('2026-11-01T14:32:00Z');
@@ -33,6 +35,7 @@ describe('TrackStackComponent', () => {
   let entities$: BehaviorSubject<Map<string, Entity>>;
   let viewport: MapViewportService;
   let selection: SelectionService;
+  let mode: ReturnType<typeof signal<ReplayMode>>;
   let fixture: ComponentFixture<TrackStackComponent>;
 
   const rows = (): HTMLButtonElement[] => Array.from(fixture.nativeElement.querySelectorAll('.row'));
@@ -40,9 +43,13 @@ describe('TrackStackComponent', () => {
   beforeEach(async () => {
     jest.useFakeTimers().setSystemTime(NOW);
     entities$ = new BehaviorSubject(new Map<string, Entity>());
+    mode = signal<ReplayMode>('live');
     await TestBed.configureTestingModule({
       imports: [TrackStackComponent],
-      providers: [{ provide: EntityService, useValue: { currentEntities$: entities$, getEntityById: () => undefined } }],
+      providers: [
+        { provide: EntityService, useValue: { currentEntities$: entities$, getEntityById: () => undefined } },
+        { provide: ReplayService, useValue: { mode } },
+      ],
     }).compileComponents();
     viewport = TestBed.inject(MapViewportService);
     selection = TestBed.inject(SelectionService);
@@ -58,6 +65,21 @@ describe('TrackStackComponent', () => {
   function load(...list: Entity[]): void {
     entities$.next(new Map(list.map((e) => [e.id, e])));
   }
+
+  it('renders nothing while the map replays, and the live rows again after', () => {
+    load(track('trk-1', { lastSeenAt: seenAgo(5) }));
+    viewport.set(view);
+    fixture.detectChanges();
+    expect(rows()).toHaveLength(1);
+
+    mode.set('replay');
+    fixture.detectChanges();
+    expect(rows()).toHaveLength(0);
+
+    mode.set('live');
+    fixture.detectChanges();
+    expect(rows()).toHaveLength(1);
+  });
 
   it('renders nothing before the map has reported a viewport', () => {
     load(track('trk-1', { lastSeenAt: seenAgo(5) }));
